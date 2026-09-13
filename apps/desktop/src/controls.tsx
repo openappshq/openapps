@@ -19,7 +19,7 @@ export function Level({
       minValue={0}
       maxValue={100}
       value={drag ?? value}
-      aria-busy={disabled}
+      isDisabled={disabled}
       onChange={(v) => setDrag(Number(v))}
       onChangeEnd={(v) => {
         setDrag(null);

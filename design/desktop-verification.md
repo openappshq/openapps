@@ -166,3 +166,18 @@ No horizontal overflow or missing images were found in the phone check.
 Repository lint and both frontend builds pass; five JavaScript tests and eleven native tests pass, with the opt-in hardware audio test still excluded.
 Sound copies, logo bytes, PNG checksums, and local documentation links were checked.
 The Three.js bundle still produces the existing large-chunk warning and dependency deprecation warnings; these are not presented as performance measurements.
+
+## Desktop settings redesign
+
+The desktop settings UI has been rebuilt from the Tactile Studio reference after the first branding pass only added motion.
+The new implementation uses the exported K mark, shared semantic colors, Bricolage Grotesque, Instrument Sans, and IBM Plex Mono.
+Navigation separates Sound library, My presets, Key assignments, Rules, and Settings.
+Sound selection, preview, and applying remain independent; the library now has a dedicated inspector and persistent local favorites.
+System, Light, and Dark appearance are stored locally without modifying sound presets.
+The native audio engine, app rules, pack versions, and saved key assignments use their existing storage and APIs.
+
+The rebuilt native window was inspected in light and dark modes across Library, Presets, Key assignments, Rules, and Settings.
+Previewing NovelKeys Cream left the active Brown PBT preset and Space override intact.
+The saved Portable QA preset retained its exact stored volume; the interface rounds only the displayed percentage.
+Search-field and macOS select styling were corrected after native visual inspection.
+The standard test suite and type-aware lint passed; the development-signed release bundle built successfully.

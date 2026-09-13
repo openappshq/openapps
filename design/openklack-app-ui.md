@@ -5,7 +5,8 @@ Most days, someone should only need mute, volume, and a favorite preset.
 The settings window is where they discover a sound, give Space its own character, and make OpenKlack fit their routine.
 
 This is the complete target UI specification for the Tactile Studio redesign.
-The native utility already implements much of the behavior, but its current interface has not been replaced by this specification.
+The native settings interface now uses this design system, with five destinations, the current-preset keyboard summary, a sound list and inspector, and light, dark, and system appearances.
+The detailed behavior below remains the target specification; items such as the welcome flow and fully styled menu popover are not all implemented.
 The Figma file contains the light and dark Library composition and two menu states; the remaining screens and states below extend those same components.
 Release verification and remaining hardware checks remain tracked in [desktop-verification.md](desktop-verification.md).
 
@@ -299,7 +300,7 @@ Check the full first-launch path and permission loss, sleep/wake, long idle, aud
 Test the menu's volume and resume controls on a real Mac, not solely in a browser facsimile.
 Verify the first keystroke and resource use with the settings window closed and open.
 Do not publish invented latency, memory, or battery claims based on the marketing animation.
-The website now follows the new identity; this specification and the Figma components define the next desktop UI implementation.
+The website and desktop settings now follow the new identity; this specification and the Figma components also describe the remaining product states.
 
 ## Motion implementation now available
 
@@ -307,4 +308,6 @@ The website and current desktop interface use Motion through the shared `package
 The website includes CTA press feedback, introductory reveals, theme-preview fades, smooth FAQ and playback disclosure, pack-title changes, and assignment-chip movement.
 The desktop includes moving sidebar selection, brief page entry, sound-card and preset-list position changes, favorite feedback, and inline form entry.
 Page changes remove the outgoing native keyboard view immediately, so animation does not delay its listener cleanup.
-These additions preserve the current desktop layout; they do not imply that every target screen above has been implemented.
+The desktop layout has now been rebuilt around the Figma composition, including the five destinations, live current-preset summary, selectable sound rows, preview/apply inspector, pack favorites, and appearance controls.
+The existing native menu remains native and uses the new template icon.
+The onboarding flow and custom menu composition are still design targets.

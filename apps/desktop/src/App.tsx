@@ -8,37 +8,50 @@ import {
   BookOpen,
   Check,
   Keyboard,
-  Play,
-  RotateCcw,
   Settings2,
   ShieldCheck,
-  Square,
   Volume2,
   VolumeX,
   X,
   SlidersHorizontal,
+  Library,
 } from "lucide-react";
-import { useDesktop, packLabel } from "./useDesktop";
-import { Level, Toggle } from "./controls";
-import { keyCodes, keyLabel } from "@openklack/keyboard-layout";
+import { useDesktop } from "./useDesktop";
+import { KeyAssignments } from "./KeyAssignments";
+import { CurrentPreset } from "./CurrentPreset";
+import klackMark from "../../../design/assets/openklack/symbol-paper.svg";
 import { SoundLibrary } from "./SoundLibrary";
 import { Presets } from "./Presets";
 import { AppRules } from "./AppRules";
-import { KeyboardPreview } from "./KeyboardPreview";
 import { General } from "./General";
 
 const pages = [
-  { id: "keyboard", label: "Keyboard", icon: Keyboard },
-  { id: "presets", label: "Presets", icon: BookOpen },
-  { id: "rules", label: "App rules", icon: Settings2 },
-  { id: "general", label: "General", icon: SlidersHorizontal },
+  { id: "library", label: "Sound library", icon: Library },
+  { id: "presets", label: "My presets", icon: BookOpen },
+  { id: "keyboard", label: "Key assignments", icon: Keyboard },
+  { id: "rules", label: "Rules", icon: Settings2 },
+  { id: "general", label: "Settings", icon: SlidersHorizontal },
 ] as const;
 
 export default function App() {
   const desktop = useDesktop();
   const { snapshot, packs, busy } = desktop;
-  const [page, setPage] = useState<(typeof pages)[number]["id"]>("keyboard");
+  const [page, setPage] = useState<(typeof pages)[number]["id"]>("library");
   const [key, setKey] = useState("Space");
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem("openklack-theme");
+    return saved === "light" || saved === "dark" ? saved : "system";
+  });
+  useEffect(() => {
+    const system = matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      document.documentElement.dataset.theme =
+        theme === "system" ? (system.matches ? "dark" : "light") : theme;
+    };
+    apply();
+    system.addEventListener("change", apply);
+    return () => system.removeEventListener("change", apply);
+  }, [theme]);
   const errorMessage = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (desktop.error) errorMessage.current?.scrollIntoView({ block: "nearest" });
@@ -65,7 +78,9 @@ export default function App() {
   if (!snapshot || !prefs || !preset)
     return (
       <main className="starting">
-        <div className="brand-mark">K</div>
+        <div className="brand-mark">
+          <img src={klackMark} alt="" />
+        </div>
         <h1>OpenKlack</h1>
         <p role={desktop.error ? "alert" : "status"}>{desktop.error || "Preparing your sounds…"}</p>
         {desktop.error && (
@@ -75,9 +90,6 @@ export default function App() {
         )}
       </main>
     );
-  const assignment = preset.overrides[key];
-  const change = (patch: Parameters<typeof desktop.changePreset>[1]) =>
-    void desktop.changePreset(preset.id, patch);
   return (
     <div className="app-shell">
       <a className="skip-link" href="#content">
@@ -85,8 +97,14 @@ export default function App() {
       </a>
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">K</span>
-          <strong>OpenKlack</strong>
+          <span className="brand-mark">
+            <img src={klackMark} alt="OpenKlack" />
+          </span>
+          <strong>
+            Your kind of
+            <br />
+            click.
+          </strong>
         </div>
         <nav aria-label="Settings">
           {pages.map(({ id, label, icon: Icon }) => (
@@ -109,23 +127,18 @@ export default function App() {
             </Button>
           ))}
         </nav>
-        <div className="sidebar-note">
-          <span className="small-key" aria-hidden="true">
-            ⌘
-          </span>
-          <p>
-            A little character.
-            <br />
-            Every keystroke.
-          </p>
-        </div>
         <div className="sidebar-bottom">
-          <span>Open source. Yours.</span>
-          <span className="mono">macOS / {snapshot.version}</span>
+          <div className="status" role="status">
+            <span className={`status-dot ${snapshot.pauseReason ? "paused" : ""}`} />
+            <span>{snapshot.pauseReason ?? "Ready to play"}</span>
+          </div>
+          <span className="mono">AN OPENAPPS HQ APP</span>
+          <span>Free. Open. Yours.</span>
         </div>
       </aside>
       <div className="main-column">
         <div className="topbar">
+          <span className="topbar-title">OpenKlack</span>
           <div className="status" role="status">
             <span className={`status-dot ${snapshot.pauseReason ? "paused" : ""}`} />
             {snapshot.pauseReason ??
@@ -219,183 +232,69 @@ export default function App() {
             </div>
           )}
           <motion.div key={page} {...enter} className="page-transition">
-            {page === "keyboard" && (
+            {(page === "library" || page === "keyboard") && (
               <>
                 <header className="page-heading">
-                  <div>
-                    <span className="eyebrow">Your everyday keyboard</span>
-                    <h1>{preset.name}</h1>
-                  </div>
-                  <Button variant="ghost" onPress={() => setPage("presets")}>
-                    Manage presets<span aria-hidden="true">↗</span>
+                  <h1>{page === "library" ? "Sound library" : "Key assignments"}</h1>
+                  <Button
+                    variant="secondary"
+                    isDisabled={busy}
+                    onPress={() => void desktop.importSounds()}
+                  >
+                    Import sounds
                   </Button>
                 </header>
                 {effective?.id !== preset.id && (
                   <p className="inline-hint">
-                    An app rule is using “{effective?.name}”. You are editing the default preset, “
-                    {preset.name}”.
+                    An app rule is using “{effective?.name}”. You are editing “{preset.name}”.
                   </p>
                 )}
-                <KeyboardPreview
-                  onError={desktop.setError}
-                  canPick={snapshot.runtime.inputPermission && !snapshot.runtime.secureInput}
+                <CurrentPreset
+                  desktop={desktop}
+                  preset={preset}
+                  pack={pack}
                   selected={key}
-                  assignments={Object.keys(preset.overrides)}
                   onSelect={setKey}
+                  compact={page === "library"}
                 />
-                <section className="sound-settings" aria-label="Preset playback">
-                  <div className="current-sound">
-                    <div
-                      className="mini-key"
-                      style={{ "--key-color": pack.color } as React.CSSProperties}
-                      aria-hidden="true"
-                    >
-                      <span>+</span>
-                    </div>
-                    <div>
-                      <span className="eyebrow">Default sound</span>
-                      <h2>{packLabel(pack)}</h2>
-                      <p>
-                        {pack.supportsKeyUp
-                          ? "Recorded press + release"
-                          : "Recorded press · silent release"}
-                      </p>
-                    </div>
-                    <Button
-                      isIconOnly
-                      variant="ghost"
-                      isDisabled={busy}
-                      aria-label={
-                        desktop.preview === pack.id ? "Stop preview" : "Preview default sound"
-                      }
-                      onPress={() => void desktop.audition(pack.id)}
-                    >
-                      {desktop.preview === pack.id ? <Square size={17} /> : <Play size={17} />}
-                    </Button>
-                  </div>
-                  <Level
-                    label="Volume"
-                    value={preset.volume}
-                    disabled={busy}
-                    onChange={(value) => change({ volume: value })}
+                {page === "library" ? (
+                  <SoundLibrary desktop={desktop} preset={preset} />
+                ) : (
+                  <KeyAssignments
+                    desktop={desktop}
+                    preset={preset}
+                    pack={pack}
+                    selected={key}
+                    onSelect={setKey}
                   />
-                </section>
-                <section className="key-settings settings-panel" aria-label="Key assignment">
-                  <div className="section-heading">
-                    <div>
-                      <h2>Key sounds</h2>
-                      <p>Give a key its own sound. The rest keep your default.</p>
-                    </div>
-                    <span className="count-label">
-                      {Object.keys(preset.overrides).length} customized
-                    </span>
-                  </div>
-                  <div className="assignment-fields">
-                    <label>
-                      Key
-                      <select value={key} onChange={(e) => setKey(e.target.value)}>
-                        {[
-                          ...new Set([
-                            ...keyCodes.filter(
-                              (code) =>
-                                !code.startsWith("Numpad") &&
-                                code !== "PrintScreen" &&
-                                code !== "NumLock",
-                            ),
-                            ...Object.keys(preset.overrides),
-                            key,
-                          ]),
-                        ].map((code) => (
-                          <option key={code} value={code}>
-                            {keyLabel(code)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      Sound
-                      <select
-                        value={assignment?.packId ?? ""}
-                        disabled={busy}
-                        onChange={(e) => {
-                          const overrides = { ...preset.overrides };
-                          if (e.target.value)
-                            overrides[key] = {
-                              packId: e.target.value,
-                              volume: assignment?.volume ?? 100,
-                            };
-                          else delete overrides[key];
-                          change({ overrides });
-                        }}
-                      >
-                        <option value="">Default · {packLabel(pack)}</option>
-                        {packs.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {packLabel(p)} · {p.version.slice(0, 6)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <Button
-                      isIconOnly
-                      variant="secondary"
-                      isDisabled={busy || !assignment}
-                      aria-label={`Reset ${keyLabel(key)} to the default sound`}
-                      onPress={() => {
-                        const overrides = { ...preset.overrides };
-                        delete overrides[key];
-                        change({ overrides });
-                      }}
-                    >
-                      <RotateCcw size={15} />
-                    </Button>
-                  </div>
-                  {assignment && (
-                    <Level
-                      label={`${keyLabel(key)} volume`}
-                      value={assignment.volume}
-                      disabled={busy}
-                      onChange={(volume) =>
-                        change({
-                          overrides: { ...preset.overrides, [key]: { ...assignment, volume } },
-                        })
-                      }
-                    />
-                  )}
-                  <details className="playback-details">
-                    <summary>Playback details</summary>
-                    <div className="playback-options">
-                      <Level
-                        label="Key release volume"
-                        value={preset.releaseVolume}
-                        disabled={busy}
-                        onChange={(value) => change({ releaseVolume: value })}
-                      />
-                      <Toggle
-                        label="Vary each keystroke"
-                        description="Cycle through recorded variations for a more natural feel."
-                        selected={preset.variation}
-                        disabled={busy}
-                        onChange={(variation) => change({ variation })}
-                      />
-                    </div>
-                    <p>
-                      Recording levels are matched across packs. Holding a key does not repeat its
-                      sound.
-                    </p>
-                  </details>
-                </section>
-                <SoundLibrary desktop={desktop} preset={preset} />
+                )}
               </>
             )}
             {page === "presets" && <Presets desktop={desktop} active={preset} />}
             {page === "rules" && <AppRules desktop={desktop} />}
-            {page === "general" && <General desktop={desktop} />}
+            {page === "general" && (
+              <General
+                desktop={desktop}
+                theme={theme}
+                onThemeChange={(value) => {
+                  try {
+                    localStorage.setItem("openklack-theme", value);
+                    setTheme(value);
+                  } catch {
+                    desktop.setError("Your appearance could not be saved. Please try again.");
+                  }
+                }}
+              />
+            )}
           </motion.div>
           <footer>
             <span>
               <Check size={13} />
-              Saved on this Mac
+              {busy
+                ? "Saving changes…"
+                : desktop.error
+                  ? "Review the error above"
+                  : "Saved on this Mac"}
             </span>
             <span>
               <AudioLines size={13} />

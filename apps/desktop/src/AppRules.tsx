@@ -19,7 +19,7 @@ export function AppRules({ desktop }: { desktop: Desktop }) {
     <section>
       <div className="section-heading">
         <div>
-          <h1>App rules</h1>
+          <h1>Rules</h1>
           <p>Sound that follows your day, with you in control.</p>
         </div>
       </div>

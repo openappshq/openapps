@@ -2,11 +2,23 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@heroui/react";
 import { Download, RefreshCw } from "lucide-react";
-import { Toggle } from "./controls";
+import { Level, Toggle } from "./controls";
 import { Updates } from "./Updates";
 import type { Desktop } from "./useDesktop";
 
-export function General({ desktop }: { desktop: Desktop }) {
+export function General({
+  desktop,
+  theme,
+  onThemeChange,
+}: {
+  desktop: Desktop;
+  theme: string;
+  onThemeChange: (theme: string) => void;
+}) {
+  const snapshot = desktop.snapshot!;
+  const preset = snapshot.preferences.presets.find(
+    (p) => p.id === snapshot.preferences.activePresetId,
+  )!;
   const { setError } = desktop;
   const [startup, setStartup] = useState<boolean>();
   const [report, setReport] = useState("");
@@ -28,9 +40,60 @@ export function General({ desktop }: { desktop: Desktop }) {
     <section className="general-settings">
       <div className="section-heading">
         <div>
-          <h1>General</h1>
+          <h1>Settings</h1>
           <p>A small utility. At home on your Mac.</p>
         </div>
+      </div>
+      <div className="settings-panel">
+        <div className="section-heading">
+          <div>
+            <h2>Make yourself at home</h2>
+            <p>One identity, in your light.</p>
+          </div>
+        </div>
+        <div className="appearance-options" role="group" aria-label="Appearance">
+          {["system", "light", "dark"].map((mode) => (
+            <Button
+              key={mode}
+              variant="secondary"
+              aria-pressed={theme === mode}
+              onPress={() => onThemeChange(mode)}
+            >
+              <span className={`theme-swatch ${mode}`} aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+              {mode[0].toUpperCase() + mode.slice(1)}
+            </Button>
+          ))}
+        </div>
+        <p className="inline-hint">Animations follow your Mac’s Reduce Motion setting.</p>
+      </div>
+      <div className="settings-panel playback-panel">
+        <h2>Playback</h2>
+        <Level
+          label="Master volume"
+          value={preset.volume}
+          disabled={desktop.busy}
+          onChange={(volume) => void desktop.changePreset(preset.id, { volume })}
+        />
+        <Level
+          label="Key release volume"
+          value={preset.releaseVolume}
+          disabled={desktop.busy}
+          onChange={(releaseVolume) => void desktop.changePreset(preset.id, { releaseVolume })}
+        />
+        <Toggle
+          label="Vary each keystroke"
+          description="Use alternate recordings where available. Key release volume affects packs with recorded releases."
+          selected={preset.variation}
+          disabled={desktop.busy}
+          onChange={(variation) => void desktop.changePreset(preset.id, { variation })}
+        />
+        <p className="inline-hint">
+          Sound follows your Mac’s active output, including speakers when headphones disconnect.
+        </p>
       </div>
       <div className="settings-panel">
         <Toggle
@@ -44,6 +107,28 @@ export function General({ desktop }: { desktop: Desktop }) {
             )
           }
         />
+      </div>
+      <div className="settings-panel">
+        <h2>Permissions</h2>
+        <p className="inline-hint">
+          {snapshot.runtime.inputPermission
+            ? "Input Monitoring is enabled."
+            : "Input Monitoring is needed to hear keys in other apps."}{" "}
+          Your typing stays on this Mac.
+        </p>
+        <p className="inline-hint">
+          {snapshot.runtime.secureInput
+            ? "Secure input is active. Sounds return when macOS clears it."
+            : "Secure input is inactive."}
+        </p>
+        <div className="actions">
+          <Button
+            variant="secondary"
+            onPress={() => void desktop.perform(() => invoke("request_input_permission"))}
+          >
+            Open Input Monitoring
+          </Button>
+        </div>
       </div>
       <Updates onError={setError} disabled={desktop.busy} />
       <div className="section-heading">

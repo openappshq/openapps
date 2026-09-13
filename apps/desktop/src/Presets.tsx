@@ -2,7 +2,7 @@ import { motion } from "motion/react";
 import { enter } from "@openklack/ui/transitions";
 import { useState } from "react";
 import { Button } from "@heroui/react";
-import { Check, Copy, Download, Star, Trash2, Upload } from "lucide-react";
+import { Check, Copy, Download, Star, Plus, Trash2, Upload } from "lucide-react";
 import { type Desktop, type Preset, packLabel } from "./useDesktop";
 
 export function Presets({ desktop, active }: { desktop: Desktop; active: Preset }) {
@@ -10,30 +10,44 @@ export function Presets({ desktop, active }: { desktop: Desktop; active: Preset 
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
-  async function duplicate(preset: Preset) {
+  async function duplicate(preset: Preset, fresh = false) {
     const copy = {
       ...structuredClone(preset),
       id: crypto.randomUUID(),
-      name: `${preset.name.slice(0, 100)} copy`,
+      name: fresh ? "Untitled preset" : `${preset.name.slice(0, 100)} copy`,
       favorite: false,
     };
-    await desktop.save((p) => ({ ...p, presets: [...p.presets, copy] }));
+    const saved = await desktop.save((p) => ({ ...p, presets: [...p.presets, copy] }));
+    if (saved && fresh) {
+      setName(copy.name);
+      setEditing(copy.id);
+    }
   }
   return (
     <section aria-labelledby="presets-title">
       <div className="section-heading">
         <div>
-          <h1 id="presets-title">Presets</h1>
+          <h1 id="presets-title">My presets</h1>
           <p>Save a keyboard you love, then come back to it.</p>
         </div>
-        <Button
-          variant="secondary"
-          isDisabled={desktop.busy}
-          onPress={() => void desktop.importSounds()}
-        >
-          <Upload size={15} />
-          Import preset
-        </Button>
+        <div className="heading-actions">
+          <Button
+            variant="primary"
+            isDisabled={desktop.busy}
+            onPress={() => void duplicate(active, true)}
+          >
+            <Plus size={16} />
+            New preset
+          </Button>
+          <Button
+            variant="secondary"
+            isDisabled={desktop.busy}
+            onPress={() => void desktop.importSounds()}
+          >
+            <Upload size={15} />
+            Import preset
+          </Button>
+        </div>
       </div>
       <div className="preset-list">
         {prefs.presets.map((preset) => {

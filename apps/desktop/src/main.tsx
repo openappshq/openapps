@@ -1,8 +1,9 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { AppMotion } from "@openklack/ui/motion";
-import "@fontsource-variable/geist";
-import "@fontsource-variable/geist-mono";
+import "@fontsource-variable/bricolage-grotesque";
+import "@fontsource-variable/instrument-sans";
+import "@fontsource/ibm-plex-mono/400.css";
 import "./styles.css";
 
 createRoot(document.getElementById("root")!).render(

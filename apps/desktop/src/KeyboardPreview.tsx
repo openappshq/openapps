@@ -12,12 +12,14 @@ export function KeyboardPreview({
   assignments,
   onSelect,
   canPick,
+  compact = false,
 }: {
   onError: (message: string) => void;
   selected: string;
   assignments: string[];
   onSelect: (code: string) => void;
   canPick: boolean;
+  compact?: boolean;
 }) {
   const [pressed, setPressed] = useState<Set<string>>(new Set());
   const [pointerKey, setPointerKey] = useState<string | null>(null);
@@ -105,7 +107,10 @@ export function KeyboardPreview({
       ?.focus();
   }
   return (
-    <div ref={stage} className={`keyboard-stage ${pressed.size || pointerKey ? "is-playing" : ""}`}>
+    <div
+      ref={stage}
+      className={`keyboard-stage ${compact ? "compact-keyboard" : ""} ${pressed.size || pointerKey ? "is-playing" : ""}`}
+    >
       <div className="keyboard-glow" aria-hidden="true" />
       <div className="keyboard-case" aria-label="Keyboard key selector. Use arrow keys to move.">
         <div className="case-engraving" aria-hidden="true">
@@ -146,21 +151,23 @@ export function KeyboardPreview({
           </div>
         ))}
       </div>
-      <div className="keyboard-caption">
-        <p role="status">
-          {picking
-            ? "Press one physical key to select it."
-            : "Type to see it come alive. Select a key to give it a different sound."}
-        </p>
-        <Button
-          variant="ghost"
-          isDisabled={!canPick}
-          aria-pressed={picking}
-          onPress={() => choose(!picking)}
-        >
-          {picking ? "Cancel key selection" : "Choose by typing"}
-        </Button>
-      </div>
+      {!compact && (
+        <div className="keyboard-caption">
+          <p role="status">
+            {picking
+              ? "Press one physical key to select it."
+              : "Type to see it come alive. Select a key to give it a different sound."}
+          </p>
+          <Button
+            variant="ghost"
+            isDisabled={!canPick}
+            aria-pressed={picking}
+            onPress={() => choose(!picking)}
+          >
+            {picking ? "Cancel key selection" : "Choose by typing"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
