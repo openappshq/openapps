@@ -4,7 +4,7 @@ import { defineConfig, lazyPlugins } from "vite-plus";
 
 // https://vite.dev/config/
 export default defineConfig({
-  fmt: { ignorePatterns: ["public/draco/**"] },
+  fmt: { ignorePatterns: ["public/draco/**", "src/soundpacks.json"] },
   lint: {
     ignorePatterns: ["public/draco/**"],
     plugins: ["react", "typescript", "oxc"],

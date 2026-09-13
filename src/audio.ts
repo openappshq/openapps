@@ -1,72 +1,69 @@
-import sprite from "./sound-sprite.json";
-import { profiles, type Profile } from "./keyboard";
+import { Howl, Howler } from "howler";
+import { getPack, sampleFor } from "./soundpacks";
+import type { KeyVoice, Settings } from "./keyboard";
 
-// All profiles are pitch/EQ treatments of the reference recording, not separate switch recordings.
+export type PlayingSound = { packId: string; id: number };
+
 export function createAudio() {
-  let context: AudioContext | undefined;
-  let buffer: AudioBuffer | undefined;
-  let loading: Promise<void> | undefined;
-  let master: GainNode | undefined;
-  let volume = 0.65;
-  let muted = true;
-  const voices = new Map<Profile, BiquadFilterNode>();
+  const cache = new Map<string, { howl: Howl; ready: Promise<Howl> }>();
+  let enabled = false;
 
-  async function unlock() {
-    if (!context) {
-      context = new AudioContext({ latencyHint: "interactive" });
-      master = context.createGain();
-      master.gain.value = muted ? 0 : volume * 2;
-      master.connect(context.destination);
-      for (const [name, profile] of Object.entries(profiles)) {
-        const filter = context.createBiquadFilter();
-        filter.type = "lowpass";
-        filter.frequency.value = profile.frequency;
-        filter.connect(master);
-        voices.set(name as Profile, filter);
-      }
-    }
-    const resume = context.resume();
-    if (!loading)
-      loading = fetch("/keyboard/switches.ogg")
-        .then((response) => {
-          if (!response.ok) throw new Error("Sound could not be loaded.");
-          return response.arrayBuffer();
-        })
-        .then((data) => context!.decodeAudioData(data))
-        .then((decoded) => {
-          buffer = decoded;
-        })
-        .catch((error) => {
-          loading = undefined;
-          throw error;
-        });
-    await Promise.all([resume, loading]);
+  function load(packId: string) {
+    const existing = cache.get(packId);
+    if (existing) return existing.ready;
+    const pack = getPack(packId);
+    const howl = new Howl({
+      src: [`/sounds/${pack.id}.ogg`, `/sounds/${pack.id}.mp3`],
+      sprite: pack.sprite,
+      preload: false,
+      pool: 16,
+    });
+    const ready = new Promise<Howl>((resolve, reject) => {
+      howl.once("load", () => resolve(howl));
+      howl.once("loaderror", () => {
+        cache.delete(packId);
+        howl.unload();
+        reject(
+          new Error(
+            `Couldn’t load ${pack.brand} ${pack.name}. Check your connection and try again.`,
+          ),
+        );
+      });
+    });
+    cache.set(packId, { howl, ready });
+    howl.load();
+    return ready;
   }
 
   return {
-    unlock,
-    configure(nextVolume: number, enabled: boolean) {
-      volume = nextVolume / 100;
-      muted = !enabled;
-      if (context && master)
-        master.gain.setTargetAtTime(muted ? 0 : volume * 2, context.currentTime, 0.015);
+    load,
+    async unlock(packIds: string[]) {
+      const loading = [...new Set(packIds)].map(load);
+      await Promise.all([...loading, Howler.ctx?.resume()]);
     },
-    play(code: string, down: boolean, profile: Profile) {
-      if (!context || !buffer || muted || context.state !== "running") return;
-      const aliases: Record<string, keyof typeof sprite> = {
-        MetaLeft: "AltLeft",
-        MetaRight: "AltLeft",
-        AltRight: "AltLeft",
-        ControlRight: "ControlLeft",
-      };
-      const ranges = sprite[(aliases[code] ?? code) as keyof typeof sprite] ?? sprite.KeyA;
-      const [start, end] = ranges[down ? 0 : 1];
-      const source = context.createBufferSource();
-      source.buffer = buffer;
-      source.playbackRate.value = profiles[profile].rate;
-      source.connect(voices.get(profile)!);
-      source.onended = () => source.disconnect();
-      source.start(0, start / 1000, (end - start) / 1000);
+    configure(volume: number, nextEnabled: boolean) {
+      Howler.volume(volume / 100);
+      if (enabled && !nextEnabled) Howler.stop();
+      enabled = nextEnabled;
+    },
+    play(
+      voice: KeyVoice,
+      code: string,
+      down: boolean,
+      settings: Pick<Settings, "variation" | "releaseVolume">,
+      preview = false,
+    ): PlayingSound | undefined {
+      if (!enabled && !preview) return;
+      const howl = cache.get(voice.packId)?.howl;
+      if (!howl || howl.state() !== "loaded") return;
+      const sample = sampleFor(getPack(voice.packId), code, down, settings.variation);
+      if (!sample) return;
+      const id = howl.play(sample);
+      howl.volume((voice.volume / 100) * (down ? 1 : settings.releaseVolume / 100), id);
+      return { packId: voice.packId, id };
+    },
+    stop(sound: PlayingSound) {
+      cache.get(sound.packId)?.howl.stop(sound.id);
     },
   };
 }

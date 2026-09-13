@@ -101,7 +101,8 @@ function Scene({ input, finish, selected, reducedMotion, onPress, onRelease, onR
       const isKey = object.name !== "static";
       const material = new MeshBasicNodeMaterial();
       const unlit = texture(base).rgb;
-      const styled = isKey ? mix(unlit, vec3(1).sub(unlit).mul(tint), recolor) : unlit;
+      const lightKeycap = max(vec3(0), vec3(1).sub(unlit.mul(6))).mul(tint);
+      const styled = isKey ? mix(unlit, lightKeycap, recolor) : unlit;
       material.colorNode = styled
         .add(texture(rgb).rgb.sub(unlit).mul(strength.mul(motion.intensity)))
         .mul(materialColor);
@@ -131,7 +132,7 @@ function Scene({ input, finish, selected, reducedMotion, onPress, onRelease, onR
   }, [scene, finish]);
   useEffect(() => {
     // Fit the complete keyboard when the editor opens or the viewport narrows.
-    const distance = Math.max(2.3, 7.25 / (size.width / size.height));
+    const distance = Math.max(2.65, 7.25 / (size.width / size.height));
     camera.position.set(0, distance, distance * 0.43);
     camera.lookAt(0, 0, 0);
     camera.updateProjectionMatrix();
@@ -158,7 +159,7 @@ function Scene({ input, finish, selected, reducedMotion, onPress, onRelease, onR
       key.mesh.position.copy(key.rest).addScaledVector(key.axis, key.depth);
       const material = key.mesh.material as MeshBasicNodeMaterial;
       material.color
-        .set(selected === key.code ? "#b0e5cd" : "#ffffff")
+        .set(selected === key.code ? "#f2efab" : "#ffffff")
         .multiplyScalar(1 - (key.depth / motion.travel) * 0.4);
     }
   });
@@ -240,6 +241,7 @@ export default function Keyboard(props: Props) {
     >
       <SceneBoundary fallback={fallback}>
         <Canvas
+          aria-hidden="true"
           camera={{ position: [0, 4.5, 1.9], fov: 25, near: 0.1, far: 50 }}
           dpr={[1, 2]}
           frameloop={visible ? "always" : "demand"}

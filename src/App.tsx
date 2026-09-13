@@ -1,355 +1,298 @@
-import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
+import { Button, Label, Modal, Radio, RadioGroup, Slider, Switch } from "@heroui/react";
 import {
-  Button,
-  Description,
-  Label,
-  Modal,
-  Radio,
-  RadioGroup,
-  Slider,
-  Switch,
-} from "@heroui/react";
-import {
+  ArrowDown,
   ArrowUpRight,
   AudioLines,
   Check,
   ChevronDown,
+  Info,
   Keyboard as KeyboardIcon,
+  LoaderCircle,
   Play,
   RotateCcw,
+  Search,
   SlidersHorizontal,
+  Square,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
-import { createAudio } from "./audio";
-import {
-  acceptsKeyboardEvent,
-  createInput,
-  defaults,
-  isProfile,
-  keyCodes,
-  keyLabel,
-  profileForKey,
-  profiles,
-  readSettings,
-  type Finish,
-  type InputSource,
-  type Profile,
-} from "./keyboard";
+import { keyCodes, keyLabel, voiceForKey, type Finish } from "./keyboard";
+import { getPack, packLabel, soundpacks, type SoundPack } from "./soundpacks";
+import { useStudio } from "./useStudio";
 
 const Keyboard = lazy(() => import("./KeyboardScene"));
-const storageKey = "openklack:settings:v1";
-const profileNames = Object.keys(profiles) as Profile[];
+const kinds = ["All", "Linear", "Tactile", "Clicky"] as const;
 const finishNames: Finish[] = ["graphite", "chalk", "sage"];
+const displayName = (pack: SoundPack) => (pack.name === "Unknown" ? "Unknown model" : pack.name);
 
-function SoundOptions({
+function Level({
+  label,
   value,
   onChange,
-  detailed = false,
+  className = "",
 }: {
-  value: Profile;
-  onChange: (profile: Profile) => void;
-  detailed?: boolean;
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  className?: string;
 }) {
   return (
-    <RadioGroup
-      aria-label="Sound profile"
-      orientation={detailed ? "vertical" : "horizontal"}
+    <Slider
+      className={`level ${className}`}
+      minValue={0}
+      maxValue={100}
       value={value}
-      onChange={(value) => {
-        if (isProfile(value)) onChange(value);
-      }}
-      className={detailed ? "sound-list" : "sound-segments"}
+      onChange={(value) => onChange(Number(value))}
     >
-      {profileNames.map((name) => (
-        <Radio key={name} value={name} className="sound-option">
-          <Radio.Content className="sound-option-content">
-            {detailed && (
-              <Radio.Control>
-                <Radio.Indicator />
-              </Radio.Control>
-            )}
-            <span>
-              {profiles[name].label}
-              {detailed && <Description>{profiles[name].description}</Description>}
-            </span>
-            {detailed && <AudioLines size={18} className="profile-wave" />}
-          </Radio.Content>
-        </Radio>
-      ))}
-    </RadioGroup>
+      <div className="level-label">
+        <Label>{label}</Label>
+        <Slider.Output>
+          {value}
+          <span>%</span>
+        </Slider.Output>
+      </div>
+      <Slider.Track>
+        <Slider.Fill />
+        <Slider.Thumb />
+      </Slider.Track>
+    </Slider>
   );
 }
 
 export default function App() {
-  const [settings, setSettings] = useState(() => {
-    try {
-      return readSettings(localStorage.getItem(storageKey));
-    } catch {
-      return defaults;
-    }
-  });
-  const [audio] = useState(createAudio);
-  const [input] = useState(createInput);
-  const [enabled, setEnabled] = useState(false);
-  const [audioLoading, setAudioLoading] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [editor, setEditor] = useState(false);
-  const [selected, setSelected] = useState("Space");
-  const [help, setHelp] = useState(false);
-  const [error, setError] = useState("");
-  const [saveError, setSaveError] = useState(false);
-  const [reducedMotion, setReducedMotion] = useState(
-    () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+  const studio = useStudio();
+  const { settings, setSettings, selectedKey, setSelectedKey } = studio;
+  const [filter, setFilter] = useState<(typeof kinds)[number]>("All");
+  const [search, setSearch] = useState("");
+  const [playbackOpen, setPlaybackOpen] = useState(false);
+  const voice = voiceForKey(settings, selectedKey ?? "");
+  const activePack = getPack(voice.packId);
+  const assignments = Object.entries(settings.overrides);
+  const filtered = useMemo(
+    () =>
+      soundpacks.filter(
+        (pack) =>
+          (filter === "All" || pack.kind === filter) &&
+          `${pack.brand} ${pack.name} ${pack.kind}`
+            .toLowerCase()
+            .includes(search.toLowerCase().trim()),
+      ),
+    [filter, search],
   );
-  const latest = useRef({ settings, enabled, editor });
-  const editorRef = useRef<HTMLElement>(null);
-  const customizeRef = useRef<HTMLButtonElement>(null);
-  const sampleTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
-  useEffect(() => {
-    latest.current = { settings, enabled, editor };
-    audio.configure(settings.volume, enabled);
-  }, [settings, enabled, editor, audio]);
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(settings));
-      setSaveError(false);
-    } catch {
-      setSaveError(true);
-    }
-  }, [settings]);
-  useEffect(() => {
-    const query = matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setReducedMotion(query.matches);
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-  useEffect(() => {
-    if (editor) editorRef.current?.focus();
-  }, [editor]);
-
-  const press = useCallback(
-    (code: string, source: InputSource) => {
-      if (!input.press(code, source)) return;
-      if (latest.current.editor) setSelected(code);
-      audio.play(code, true, profileForKey(latest.current.settings, code));
-    },
-    [audio, input],
-  );
-  const release = useCallback(
-    (code: string, source: InputSource) => {
-      if (input.release(code, source))
-        audio.play(code, false, profileForKey(latest.current.settings, code));
-    },
-    [audio, input],
-  );
-  const closeEditor = useCallback(() => {
-    setEditor(false);
-    customizeRef.current?.focus();
-  }, []);
-  const onKeyboard = useEffectEvent((event: KeyboardEvent) => {
-    if (event.code === "Escape" && editor) {
-      closeEditor();
-      return;
-    }
-    if (help || !acceptsKeyboardEvent(event)) return;
-    if (
-      !event.metaKey &&
-      !event.ctrlKey &&
-      ["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)
-    )
-      event.preventDefault();
-    press(event.code, "keyboard");
-  });
-  useEffect(() => {
-    const down = (event: KeyboardEvent) => onKeyboard(event);
-    const up = (event: KeyboardEvent) => {
-      release(event.code, "keyboard");
-      if (event.code.startsWith("Meta")) input.clear("keyboard");
-    };
-    const clear = () => input.clear();
-    const clearPointer = () => {
-      for (const code of [...input.pressed]) release(code, "pointer");
-    };
-    const visibility = () => {
-      if (document.hidden) clear();
-    };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    window.addEventListener("blur", clear);
-    document.addEventListener("visibilitychange", visibility);
-    window.addEventListener("pointerup", clearPointer);
-    window.addEventListener("pointercancel", clearPointer);
-    return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-      window.removeEventListener("blur", clear);
-      document.removeEventListener("visibilitychange", visibility);
-      window.removeEventListener("pointerup", clearPointer);
-      window.removeEventListener("pointercancel", clearPointer);
-      sampleTimers.current.forEach(clearTimeout);
-      clear();
-    };
-  }, [input, press, release]);
-  const sceneReady = useCallback(() => setReady(true), []);
-
-  async function enableSound(next: boolean) {
-    if (!next) {
-      setEnabled(false);
-      return;
-    }
-    setAudioLoading(true);
-    setError("");
-    try {
-      await audio.unlock();
-      setEnabled(true);
-    } catch {
-      setError("Sound couldn’t load. Try enabling it again.");
-    } finally {
-      setAudioLoading(false);
-    }
-  }
-  async function preview(profile: Profile, code = "Space") {
-    setError("");
-    try {
-      await audio.unlock();
-      setEnabled(true);
-      audio.configure(latest.current.settings.volume, true);
-      audio.play(code, true, profile);
-      input.press(code, "pointer");
-      const timer = setTimeout(() => {
-        input.release(code, "pointer");
-        audio.play(code, false, profile);
-        sampleTimers.current.delete(timer);
-      }, 100);
-      sampleTimers.current.add(timer);
-    } catch {
-      setError("Sound couldn’t load. Try enabling it again.");
-    }
-  }
-  function setProfile(profile: Profile) {
-    setSettings((current) => ({ ...current, profile }));
-    void preview(profile);
-  }
-  function setOverride(profile: Profile) {
-    setSettings((current) => ({
-      ...current,
-      overrides: { ...current.overrides, [selected]: profile },
-    }));
-    void preview(profile, selected);
-  }
-  const override = settings.overrides[selected];
-  const activeProfile = profileForKey(settings, selected);
+  const selectedOverride = selectedKey ? settings.overrides[selectedKey] : undefined;
 
   return (
-    <div className="app-shell">
-      <header className="site-header">
+    <div className="studio-shell">
+      <a className="skip-link" href="#keyboard-studio">
+        Skip to keyboard studio
+      </a>
+      <header className="studio-header">
         <a className="wordmark" href="/" aria-label="OpenKlack home">
-          <span className="brand-key">
-            <AudioLines size={23} strokeWidth={1.8} />
-          </span>
-          openklack<span className="beta-label">PLAYGROUND</span>
+          <AudioLines size={25} strokeWidth={1.5} />
+          openklack<span className="wordmark-period">.</span>
         </a>
+        <span className="header-caption">A keyboard sound studio</span>
         <div className="header-actions">
-          <Button variant="ghost" className="how-button" onPress={() => setHelp(true)}>
-            How it works <ArrowUpRight size={15} />
-          </Button>
-          <span className="header-divider" />
-          <Switch
-            isSelected={enabled}
-            onChange={enableSound}
-            isDisabled={audioLoading}
-            className="sound-switch"
-            aria-label="Keyboard sound"
+          <Button
+            isIconOnly
+            variant="ghost"
+            className="about-button"
+            aria-label="About OpenKlack"
+            onPress={() => studio.setHelp(true)}
           >
-            <Switch.Content>
-              <span className="sound-switch-label">
-                {audioLoading ? "Loading…" : enabled ? "Sound on" : "Sound off"}
-              </span>
-              <Switch.Control>
-                <Switch.Thumb />
-              </Switch.Control>
-            </Switch.Content>
-          </Switch>
+            <Info size={19} strokeWidth={1.5} />
+          </Button>
+          <Button
+            className={`power-button ${studio.enabled ? "is-on" : ""}`}
+            onPress={() => studio.enableSound(!studio.enabled)}
+            isPending={studio.enabling}
+            aria-pressed={studio.enabled}
+          >
+            {studio.enabled ? <Volume2 size={17} /> : <VolumeX size={17} />}{" "}
+            {studio.enabling ? "Loading sounds" : studio.enabled ? "Sound on" : "Enable sound"}
+          </Button>
         </div>
       </header>
 
-      <main className={`playground${editor ? " is-editing" : ""}`}>
-        <div className="play-area">
-          <section className="intro" aria-labelledby="page-title">
-            <p className="eyebrow">A LITTLE JOY, EVERY KEYSTROKE</p>
-            <h1 id="page-title">
-              {editor ? (
-                <>
-                  A little character
-                  <br />
-                  in every key.
-                </>
-              ) : (
-                <>
-                  Your keys.
-                  <br className="mobile-break" /> Your kind of click.
-                </>
-              )}
-            </h1>
-            <p className="subtitle">
-              {editor
-                ? "Keep the sound you love. Give a few keys their own voice."
-                : "Mechanical sounds. A keyboard that feels like you."}
-            </p>
-            <div className="typing-prompt">
-              {ready ? <span className="live-dot" /> : <span className="loading-dot" />}
-              <span>
-                {!ready
-                  ? "Setting your keyboard on the desk…"
-                  : editor
-                    ? "Press or click a key to make it yours."
-                    : "Go on, type something."}
-              </span>
+      <main id="keyboard-studio" className="studio-main">
+        <section className="workbench" aria-labelledby="pack-title">
+          <div className="workbench-topline">
+            <span className="eyebrow">
+              {selectedKey ? `A sound for ${keyLabel(selectedKey)}` : "On your keyboard"}
+            </span>
+            <span className="edition-label">Vol. 01 — The switch collection</span>
+          </div>
+          <div className="current-sound">
+            <div className="current-title">
+              <p className="pack-maker">{activePack.brand}</p>
+              <h1 id="pack-title">
+                {displayName(activePack)}
+                <span className="title-dot" style={{ background: activePack.color }} />
+              </h1>
             </div>
-          </section>
+            <div className="current-details">
+              <span className="mechanism">
+                {activePack.kind}
+                <span> / </span>
+                {activePack.supportsKeyUp ? "Press + release" : "Press recordings"}
+              </span>
+              <p>{activePack.description}</p>
+              <Button
+                variant="ghost"
+                className="listen-button"
+                onPress={() =>
+                  studio.auditionId === activePack.id
+                    ? studio.stopPreview()
+                    : studio.choosePack(activePack.id, true)
+                }
+              >
+                {studio.auditionId === activePack.id ? (
+                  <Square size={12} fill="currentColor" />
+                ) : (
+                  <Play size={13} fill="currentColor" />
+                )}{" "}
+                {studio.auditionId === activePack.id ? "Stop preview" : "Listen to this switch"}
+              </Button>
+            </div>
+          </div>
 
-          <section className="keyboard-stage" aria-label="Keyboard playground">
+          <div className="keyboard-stage">
             <div className="keyboard-shadow" />
-            <Suspense fallback={<div className="scene-fallback">Loading your keyboard…</div>}>
+            <Suspense fallback={<div className="scene-fallback">Setting up the keyboard…</div>}>
               <Keyboard
-                input={input}
+                input={studio.input}
                 finish={settings.finish}
-                selected={editor ? selected : null}
-                reducedMotion={reducedMotion}
-                onPress={press}
-                onRelease={release}
-                onReady={sceneReady}
+                selected={selectedKey}
+                reducedMotion={studio.reducedMotion}
+                onPress={studio.press}
+                onRelease={studio.release}
+                onReady={studio.sceneReady}
               />
             </Suspense>
-            <div className="keyboard-caption">
-              <span>
-                THE REFERENCE <span className="caption-slash">/</span>{" "}
-                {settings.finish.toUpperCase()}
-              </span>
-              <span>75% LAYOUT</span>
-            </div>
-          </section>
+          </div>
+          <div className="keyboard-baseline">
+            <span className="board-spec">
+              75% <span>—</span> ANSI
+            </span>
+            <span className="typing-cue">
+              {studio.ready
+                ? selectedKey
+                  ? "Press or select a key to edit its sound"
+                  : "Go ahead. Type something."
+                : "Loading the keyboard…"}
+            </span>
+            <span className="board-spec">{settings.finish}</span>
+          </div>
 
-          <section className="control-dock" aria-label="Keyboard settings">
-            <div className="dock-group sound-group">
-              <span className="control-label">Your sound</span>
-              <SoundOptions value={settings.profile} onChange={setProfile} />
+          <div className={`assignment-bar ${selectedKey ? "is-editing" : ""}`}>
+            <div className="assignment-label">
+              <KeyboardIcon size={19} strokeWidth={1.5} />
+              <div>
+                <span>{selectedKey ? "Editing one key" : "Make it your own"}</span>
+                <p>
+                  {selectedKey
+                    ? "Choose its sound from the library."
+                    : "A different switch for your spacebar? Why not."}
+                </p>
+              </div>
             </div>
-            <div className="dock-group finish-group">
-              <span className="control-label">
-                Keycaps <span className="finish-name">{settings.finish}</span>
-              </span>
+            {selectedKey ? (
+              <div className="key-target">
+                <label className="sr-only" htmlFor="key-target">
+                  Key to customize
+                </label>
+                <select
+                  id="key-target"
+                  value={selectedKey}
+                  onChange={(event) => setSelectedKey(event.target.value)}
+                >
+                  {keyCodes.map((code) => (
+                    <option key={code} value={code}>
+                      {keyLabel(code)}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+                <Button
+                  isIconOnly
+                  variant="ghost"
+                  aria-label="Finish editing keys"
+                  onPress={() => setSelectedKey(null)}
+                >
+                  <X size={17} />
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="secondary"
+                className="edit-keys-button"
+                onPress={() => setSelectedKey("Space")}
+              >
+                Customize a key <ArrowUpRight size={15} />
+              </Button>
+            )}
+          </div>
+
+          {selectedKey && (
+            <div className="key-adjustments">
+              <Level
+                label={`${keyLabel(selectedKey)} volume`}
+                value={voice.volume}
+                onChange={(volume) =>
+                  setSettings((current) => ({
+                    ...current,
+                    overrides: {
+                      ...current.overrides,
+                      [selectedKey]: { ...voiceForKey(current, selectedKey), volume },
+                    },
+                  }))
+                }
+              />
+              <Button
+                variant="ghost"
+                className="reset-key"
+                isDisabled={!selectedOverride}
+                onPress={() => studio.resetKey(selectedKey)}
+              >
+                <RotateCcw size={14} /> Use keyboard default
+              </Button>
+            </div>
+          )}
+          {assignments.length > 0 && (
+            <div className="assignments" aria-label="Custom key sounds">
+              {assignments.map(([code, custom]) => (
+                <div className="assignment-chip" key={code}>
+                  <Button variant="ghost" onPress={() => setSelectedKey(code)}>
+                    <kbd>{keyLabel(code)}</kbd>
+                    <span>{getPack(custom.packId).name}</span>
+                  </Button>
+                  <Button
+                    isIconOnly
+                    variant="ghost"
+                    aria-label={`Reset ${keyLabel(code)} to keyboard default`}
+                    onPress={() => studio.resetKey(code)}
+                  >
+                    <X size={12} />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="workbench-controls">
+            <div className="finish-control">
+              <span className="control-label">Keycaps</span>
               <RadioGroup
+                className="swatches"
                 aria-label="Keycap finish"
-                orientation="horizontal"
                 value={settings.finish}
+                orientation="horizontal"
                 onChange={(value) => {
                   if (finishNames.includes(value as Finish))
                     setSettings((current) => ({ ...current, finish: value as Finish }));
                 }}
-                className="swatches"
               >
                 {finishNames.map((finish) => (
                   <Radio
@@ -359,187 +302,233 @@ export default function App() {
                     aria-label={finish}
                   >
                     <Radio.Content aria-label={finish}>
-                      <Check size={13} />
+                      <Check size={12} />
                     </Radio.Content>
                   </Radio>
                 ))}
               </RadioGroup>
             </div>
-            <Slider
-              minValue={0}
-              maxValue={100}
+            <Level
+              label="Volume"
               value={settings.volume}
-              onChange={(value) =>
-                setSettings((current) => ({ ...current, volume: Number(value) }))
-              }
-              className="dock-volume"
-            >
-              <div className="volume-heading">
-                <Label>Volume</Label>
-                <Slider.Output>{settings.volume}%</Slider.Output>
-              </div>
-              <div className="volume-track">
-                {settings.volume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
-                <Slider.Track>
-                  <Slider.Fill />
-                  <Slider.Thumb aria-label="Volume" />
-                </Slider.Track>
-              </div>
-            </Slider>
-            <Button
-              ref={customizeRef}
-              variant="secondary"
-              className="customize-button"
-              onPress={() => (editor ? closeEditor() : setEditor(true))}
-              aria-expanded={editor}
-              aria-controls="key-editor"
-            >
-              <SlidersHorizontal size={16} /> {editor ? "Close editor" : "Customize keys"}
-              {Object.keys(settings.overrides).length > 0 && (
-                <span className="override-count">{Object.keys(settings.overrides).length}</span>
-              )}
-            </Button>
-          </section>
-          {!enabled && (
+              onChange={(volume) => setSettings((current) => ({ ...current, volume }))}
+              className="master-volume"
+            />
             <Button
               variant="ghost"
-              size="sm"
-              className="enable-hint"
-              onPress={() => enableSound(true)}
-              isPending={audioLoading}
+              className="playback-trigger"
+              aria-expanded={playbackOpen}
+              aria-controls="playback-settings"
+              onPress={() => setPlaybackOpen(!playbackOpen)}
             >
-              <Volume2 size={15} /> Enable sound to hear your keyboard
+              <SlidersHorizontal size={15} /> Playback <ChevronDown size={13} />
             </Button>
-          )}
-          {error && (
-            <p role="alert" className="status-error">
-              {error}
-            </p>
-          )}
-          {saveError && (
-            <p role="status" className="status-error">
-              Your changes work here, but this browser couldn’t save them.
-            </p>
-          )}
-        </div>
-
-        {editor && (
-          <aside
-            className="key-editor"
-            id="key-editor"
-            aria-labelledby="editor-title"
-            tabIndex={-1}
-            ref={editorRef}
-          >
-            <div className="editor-heading">
-              <h2 id="editor-title">KEY SOUND</h2>
-              <Button
-                isIconOnly
-                variant="ghost"
-                size="sm"
-                onPress={closeEditor}
-                aria-label="Close key editor"
-              >
-                <X size={18} />
-              </Button>
-            </div>
-            <div className="selected-key">
-              <span>{keyLabel(selected)}</span>
-            </div>
-            <label className="key-selector-label" htmlFor="key-selector">
-              Choose a key
-            </label>
-            <div className="key-selector">
-              <select
-                id="key-selector"
-                value={selected}
-                onChange={(event) => setSelected(event.target.value)}
-              >
-                {keyCodes.map((code) => (
-                  <option key={code} value={code}>
-                    {keyLabel(code)}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
-            </div>
-            <p className="key-description">Give {keyLabel(selected)} its own voice.</p>
-            <SoundOptions value={activeProfile} onChange={setOverride} detailed />
-            <Button
-              variant="secondary"
-              className="preview-button"
-              onPress={() => preview(activeProfile, selected)}
-            >
-              <Play size={14} fill="currentColor" /> Preview {keyLabel(selected)}
-            </Button>
-            <p className="global-note">
-              The rest of your keyboard stays on <strong>{profiles[settings.profile].label}</strong>
-              .
-            </p>
-            <div className="editor-bottom">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="reset-button"
-                isDisabled={!override}
-                onPress={() =>
-                  setSettings((current) => {
-                    const overrides = { ...current.overrides };
-                    delete overrides[selected];
-                    return { ...current, overrides };
-                  })
+          </div>
+          {playbackOpen && (
+            <div className="playback-settings" id="playback-settings">
+              <Level
+                label="Release volume"
+                value={settings.releaseVolume}
+                onChange={(releaseVolume) =>
+                  setSettings((current) => ({ ...current, releaseVolume }))
                 }
-              >
-                <RotateCcw size={14} /> Use keyboard sound instead
-              </Button>
-              <Button onPress={closeEditor} className="done-button">
-                Done <Check size={15} />
-              </Button>
-              <span className="saved-note">
-                {saveError ? "Changes for this visit" : "Saved on this device"}
-              </span>
+              />
+              <div className="variation-setting">
+                <Switch
+                  isSelected={settings.variation}
+                  onChange={(variation) => setSettings((current) => ({ ...current, variation }))}
+                >
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                    <span>Sample variation</span>
+                  </Switch.Content>
+                </Switch>
+                <p>Use the pack’s alternate samples when available.</p>
+              </div>
+              <p className="release-note">
+                Release volume applies to packs with recorded key-up sounds.
+              </p>
             </div>
-          </aside>
-        )}
+          )}
+          <div className="studio-message" role="status">
+            {studio.saveError
+              ? "Changes work for this visit, but this browser couldn’t save them."
+              : selectedKey
+                ? `${keyLabel(selectedKey)} uses ${packLabel(voice.packId)}${selectedOverride ? " · Custom assignment" : " · Keyboard default"}`
+                : ""}
+          </div>
+          <div className="error-message" role="alert">
+            {studio.error}
+          </div>
+        </section>
+
+        <aside className="sound-library" aria-labelledby="library-title">
+          <div className="library-heading">
+            <div>
+              <span className="eyebrow">Find your signature</span>
+              <h2 id="library-title">
+                Sound library<span>{soundpacks.length.toString().padStart(2, "0")}</span>
+              </h2>
+            </div>
+            <AudioLines size={27} strokeWidth={1.2} />
+          </div>
+          <div className="library-target">
+            <span>Apply to</span>
+            <Button
+              variant="ghost"
+              onPress={() => (selectedKey ? setSelectedKey(null) : setSelectedKey("Space"))}
+            >
+              {selectedKey ? keyLabel(selectedKey) : "Whole keyboard"}
+              {selectedKey ? <X size={12} /> : <ChevronDown size={13} />}
+            </Button>
+          </div>
+          <div className="library-search">
+            <label className="sr-only" htmlFor="pack-search">
+              Search sound library
+            </label>
+            <Search size={15} strokeWidth={1.5} />
+            <input
+              id="pack-search"
+              type="search"
+              placeholder="Find a switch…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              autoComplete="off"
+            />
+          </div>
+          <div className="library-filters" role="group" aria-label="Filter by switch type">
+            {kinds.map((kind) => (
+              <Button
+                key={kind}
+                variant="ghost"
+                aria-pressed={filter === kind}
+                onPress={() => setFilter(kind)}
+              >
+                {kind}
+              </Button>
+            ))}
+          </div>
+          <div className="library-list">
+            <RadioGroup
+              aria-label={
+                selectedKey ? `Sound for ${keyLabel(selectedKey)}` : "Keyboard sound pack"
+              }
+              value={voice.packId}
+              onChange={(id) => studio.choosePack(id)}
+              className="pack-options"
+            >
+              {filtered.map((pack, index) => (
+                <div
+                  className={`pack-row ${pack.id === voice.packId ? "is-selected" : ""}`}
+                  key={pack.id}
+                >
+                  <span className="pack-number">{String(index + 1).padStart(2, "0")}</span>
+                  <Radio value={pack.id} className="pack-radio">
+                    <Radio.Content>
+                      <span className="switch-swatch" style={{ background: pack.color }} />
+                      <span className="pack-row-label">
+                        <span className="pack-brand">{pack.brand}</span>
+                        <span className="pack-name">{displayName(pack)}</span>
+                      </span>
+                      {pack.id === voice.packId && <Check size={14} className="pack-check" />}
+                    </Radio.Content>
+                  </Radio>
+                  <Button
+                    isIconOnly
+                    variant="ghost"
+                    className="pack-preview"
+                    aria-label={`${studio.auditionId === pack.id ? "Stop preview of" : "Preview"} ${pack.brand} ${pack.name}`}
+                    onPress={() =>
+                      studio.auditionId === pack.id
+                        ? studio.stopPreview()
+                        : studio.choosePack(pack.id, true)
+                    }
+                  >
+                    {studio.loadingPackId === pack.id ? (
+                      <LoaderCircle size={15} className="loading-icon" />
+                    ) : studio.auditionId === pack.id ? (
+                      <Square size={11} fill="currentColor" />
+                    ) : (
+                      <Play size={12} fill="currentColor" />
+                    )}
+                  </Button>
+                </div>
+              ))}
+            </RadioGroup>
+            {filtered.length === 0 && (
+              <div className="library-empty">
+                <p>No switches match “{search || filter}”.</p>
+                <Button
+                  variant="secondary"
+                  onPress={() => {
+                    setSearch("");
+                    setFilter("All");
+                  }}
+                >
+                  Clear filters
+                </Button>
+              </div>
+            )}
+          </div>
+          <div className="library-footer">
+            <span>{filtered.length} sounds to explore</span>
+            <ArrowDown size={13} />
+            <a
+              href="https://github.com/kamillobinski/thock-soundpacks"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Via Thock <ArrowUpRight size={12} />
+            </a>
+          </div>
+        </aside>
       </main>
 
-      <footer className="site-footer">
-        <span>Just type. Stay a while.</span>
-        <span>
-          <KeyboardIcon size={14} /> Sound plays while this tab is active.
-        </span>
+      <footer className="studio-footer">
+        <span>Good sound is a small pleasure.</span>
+        <span>Browser only. Settings stay on this device.</span>
+        <Button variant="ghost" className="mobile-about" onPress={() => studio.setHelp(true)}>
+          About OpenKlack
+        </Button>
+        <a href="/sounds/NOTICE.txt" target="_blank" rel="noreferrer">
+          Sound credits <ArrowUpRight size={12} />
+        </a>
       </footer>
 
-      <Modal.Backdrop isOpen={help} onOpenChange={setHelp}>
+      <Modal.Backdrop isOpen={studio.help} onOpenChange={studio.setHelp}>
         <Modal.Container size="sm">
           <Modal.Dialog className="help-dialog">
             <Modal.CloseTrigger />
             <Modal.Header>
-              <span className="brand-key">
-                <AudioLines size={23} />
-              </span>
-              <Modal.Heading>Make yourself heard.</Modal.Heading>
+              <span className="eyebrow">OpenKlack / Sound studio</span>
+              <Modal.Heading>A little more character.</Modal.Heading>
             </Modal.Header>
             <Modal.Body>
               <p>
-                Turn sound on, then type or click the keyboard. Each press has its own movement,
-                light, and sound.
+                Enable sound and type, or use a play button to preview a pack. Previewing lets you
+                compare sounds without changing your keyboard.
               </p>
               <p>
-                Choose a sound for the whole keyboard, or open <strong>Customize keys</strong> to
-                give individual keys a different voice. Your choices are saved on this device.
+                The collection includes 18 sound packs from Thock, originally from Mechvibes and
+                kbsim. ABS and PBT packs use different keycap recordings. Some packs include
+                separate release sounds and alternate samples.
               </p>
               <p>
-                OpenKlack works in this page while it’s focused. Typing in other apps needs a future
-                desktop companion.
+                Choose <strong>Customize a key</strong> to mix switches across your keyboard. You
+                can also lower that key’s volume. Your choices are saved on this device.
               </p>
-              <p className="reference-note">
-                This prototype uses Raycast’s keyboard model and recording from the supplied
-                reference. Deep, Crisp, and Clicky are three treatments of that recording.
+              <p>
+                Typing sounds work while this page is focused. The 3D keyboard uses the supplied
+                Raycast reference model.
               </p>
+              <a href="/sounds/NOTICE.txt" target="_blank" rel="noreferrer">
+                Read sound credits and licenses <ArrowUpRight size={13} />
+              </a>
             </Modal.Body>
             <Modal.Footer>
-              <Button onPress={() => setHelp(false)}>Back to the keyboard</Button>
+              <Button onPress={() => studio.setHelp(false)}>Back to the studio</Button>
             </Modal.Footer>
           </Modal.Dialog>
         </Modal.Container>
