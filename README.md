@@ -43,9 +43,11 @@ The native engine handles input and audio independently of the React settings wi
   <img src="design/assets/openklack/ui/settings-light.png" alt="Proposed OpenKlack desktop settings: sound library, selected pack, Apply control, and live keyboard." width="100%" />
 </picture>
 
-The image is the target design from Figma, not a screenshot of the current native settings UI.
+The image above is the Figma design reference for the desktop interface.
 The [complete app UI specification](design/openklack-app-ui.md) covers onboarding, permissions, the menu bar, library, presets, key assignments, rules, settings, recovery, and accessibility.
-The website already uses the new identity; the desktop layout redesign is a separate next step.
+The website and native desktop settings now share this identity.
+The desktop includes five destinations, a live current-preset keyboard, the sound list and inspector, and System, Light, and Dark appearance.
+The welcome flow and custom menu composition remain design targets.
 
 ## Try it locally
 

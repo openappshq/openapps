@@ -151,7 +151,8 @@ The test imports are local artifacts; the user's subsequently chosen Brown PBT p
 The marketing site now lives in `apps/website`, alongside `apps/desktop`.
 Both consume `packages/soundpacks`; their logical-key data remains in `packages/keyboard-layout`.
 The exact Figma logo exports, light/dark tokens, UI previews, and branded README cover are preserved in `design/assets` and `design/tokens.json`.
-The complete target desktop UI is described in `design/openklack-app-ui.md`; it is not presented as an already implemented native layout.
+The initial branding pass documented the target desktop UI in `design/openklack-app-ui.md`.
+The later desktop settings redesign below records its implementation.
 
 Motion now supplies website disclosures, theme-preview fades, button feedback, and entry transitions, plus desktop navigation, card, favorite, and inline-form transitions.
 Both apps use the shared `packages/ui` reduced-motion policy and Figma timing scale.
