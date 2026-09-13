@@ -34,7 +34,7 @@ type Props = {
   onReady: () => void;
 };
 
-export const motion = {
+const motion = {
   travel: 0.025,
   damping: 0.0175,
   pulseDuration: 0.9,

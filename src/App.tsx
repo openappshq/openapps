@@ -510,42 +510,40 @@ export default function App() {
         </span>
       </footer>
 
-      <Modal isOpen={help} onOpenChange={setHelp}>
-        <Modal.Backdrop>
-          <Modal.Container size="sm">
-            <Modal.Dialog className="help-dialog">
-              <Modal.CloseTrigger />
-              <Modal.Header>
-                <span className="brand-key">
-                  <AudioLines size={23} />
-                </span>
-                <Modal.Heading>Make yourself heard.</Modal.Heading>
-              </Modal.Header>
-              <Modal.Body>
-                <p>
-                  Turn sound on, then type or click the keyboard. Each press has its own movement,
-                  light, and sound.
-                </p>
-                <p>
-                  Choose a sound for the whole keyboard, or open <strong>Customize keys</strong> to
-                  give individual keys a different voice. Your choices are saved on this device.
-                </p>
-                <p>
-                  OpenKlack works in this page while it’s focused. Typing in other apps needs a
-                  future desktop companion.
-                </p>
-                <p className="reference-note">
-                  This prototype uses Raycast’s keyboard model and recording from the supplied
-                  reference. Deep, Crisp, and Clicky are three treatments of that recording.
-                </p>
-              </Modal.Body>
-              <Modal.Footer>
-                <Button onPress={() => setHelp(false)}>Back to the keyboard</Button>
-              </Modal.Footer>
-            </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
+      <Modal.Backdrop isOpen={help} onOpenChange={setHelp}>
+        <Modal.Container size="sm">
+          <Modal.Dialog className="help-dialog">
+            <Modal.CloseTrigger />
+            <Modal.Header>
+              <span className="brand-key">
+                <AudioLines size={23} />
+              </span>
+              <Modal.Heading>Make yourself heard.</Modal.Heading>
+            </Modal.Header>
+            <Modal.Body>
+              <p>
+                Turn sound on, then type or click the keyboard. Each press has its own movement,
+                light, and sound.
+              </p>
+              <p>
+                Choose a sound for the whole keyboard, or open <strong>Customize keys</strong> to
+                give individual keys a different voice. Your choices are saved on this device.
+              </p>
+              <p>
+                OpenKlack works in this page while it’s focused. Typing in other apps needs a future
+                desktop companion.
+              </p>
+              <p className="reference-note">
+                This prototype uses Raycast’s keyboard model and recording from the supplied
+                reference. Deep, Crisp, and Clicky are three treatments of that recording.
+              </p>
+            </Modal.Body>
+            <Modal.Footer>
+              <Button onPress={() => setHelp(false)}>Back to the keyboard</Button>
+            </Modal.Footer>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
     </div>
   );
 }
