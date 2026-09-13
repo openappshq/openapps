@@ -1,12 +1,10 @@
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
-import { defineConfig, lazyPlugins } from "vite-plus";
+import { defineConfig } from "vite-plus";
 
 // https://vite.dev/config/
 export default defineConfig({
-  fmt: { ignorePatterns: ["public/draco/**", "src/soundpacks.json"] },
+  fmt: { ignorePatterns: ["apps/website/public/draco/**", "packages/soundpacks/catalog.json"] },
   lint: {
-    ignorePatterns: ["public/draco/**"],
+    ignorePatterns: ["apps/website/public/draco/**"],
     plugins: ["react", "typescript", "oxc"],
     rules: {
       "react/rules-of-hooks": "error",
@@ -29,5 +27,4 @@ export default defineConfig({
       },
     ],
   },
-  plugins: lazyPlugins(() => [react(), tailwindcss()]),
 });

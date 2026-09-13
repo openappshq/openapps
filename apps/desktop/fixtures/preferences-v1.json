@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "muted": false,
+  "pauseOnMicrophone": true,
+  "activePresetId": "everyday",
+  "presets": [
+    {
+      "id": "everyday",
+      "name": "Everyday",
+      "packId": "cherry-mx-brown-pbt",
+      "volume": 45.0,
+      "releaseVolume": 65.0,
+      "variation": true,
+      "favorite": true,
+      "overrides": {
+        "Space": { "packId": "novelkeys-cream", "volume": 71.0 },
+        "Char:å": { "packId": "novelkeys-cream", "volume": 50.0 }
+      }
+    }
+  ],
+  "appRules": [
+    { "bundleId": "org.example.editor", "name": "Editor", "presetId": "everyday", "mute": false },
+    { "bundleId": "org.example.call", "name": "Call", "presetId": null, "mute": true }
+  ]
+}

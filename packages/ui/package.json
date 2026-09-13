@@ -1,0 +1,16 @@
+{
+  "name": "@openklack/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./motion": "./motion.tsx",
+    "./transitions": "./transitions.ts"
+  },
+  "dependencies": {
+    "motion": "^13.2.0"
+  },
+  "peerDependencies": {
+    "react": "~19.2.8"
+  }
+}

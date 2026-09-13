@@ -1,0 +1,272 @@
+#import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
+#import <Carbon/Carbon.h>
+#import <CoreAudio/CoreAudio.h>
+#include <stdatomic.h>
+
+typedef void (*OKCallback)(int kind, unsigned short key, const char *value);
+static OKCallback callback;
+static CFMachPortRef keyTap;
+static CFRunLoopSourceRef keySource;
+static char logicalKeys[128][40];
+static NSMutableSet<NSNumber *> *processes;
+static AudioObjectPropertyListenerBlock inputListener;
+static int lastPermission = -1, lastSecure = -1, lastMic = -1;
+static dispatch_source_t permissionTimer;
+static unsigned int suspensionReasons;
+
+char *ok_application_id(const char *path) {
+    @autoreleasepool {
+        NSString *identifier = [NSBundle bundleWithPath:[NSString stringWithUTF8String:path]].bundleIdentifier;
+        return identifier ? strdup(identifier.UTF8String) : NULL;
+    }
+}
+void ok_free_string(char *value) { free(value); }
+
+typedef void (*OKVolumeCallback)(const char *preset, double volume);
+@interface OKVolumeView : NSView
+@property(nonatomic, copy) NSString *preset;
+@property(nonatomic) OKVolumeCallback changed;
+@property(nonatomic, strong) NSTextField *label;
+@end
+@implementation OKVolumeView
+- (void)changeVolume:(NSSlider *)slider {
+    self.label.stringValue = [NSString stringWithFormat:@"Volume · %.0f%%", slider.doubleValue];
+    self.changed(self.preset.UTF8String, slider.doubleValue);
+}
+@end
+
+void ok_tray_volume(void *status, const char *preset, double volume, OKVolumeCallback changed) {
+    NSStatusItem *item = (__bridge NSStatusItem *)status;
+    for (NSMenuItem *entry in item.menu.itemArray) {
+        if (![entry.title hasPrefix:@"Volume ·"]) continue;
+        OKVolumeView *view = [[OKVolumeView alloc] initWithFrame:NSMakeRect(0, 0, 240, 62)];
+        view.preset = [NSString stringWithUTF8String:preset];
+        view.changed = changed;
+        view.label = [NSTextField labelWithString:entry.title];
+        view.label.frame = NSMakeRect(18, 37, 208, 18);
+        view.label.font = [NSFont menuFontOfSize:13];
+        [view addSubview:view.label];
+        NSSlider *slider = [NSSlider sliderWithValue:volume minValue:0 maxValue:100 target:view action:@selector(changeVolume:)];
+        slider.frame = NSMakeRect(16, 10, 208, 22);
+        slider.continuous = NO;
+        slider.accessibilityLabel = @"Keyboard sound volume";
+        [view addSubview:slider];
+        entry.submenu = nil;
+        entry.view = view;
+        break;
+    }
+}
+
+static void microphoneState(int state) {
+    if (state != lastMic) { lastMic = state; if (callback) callback(101, state, ""); }
+}
+
+static AudioObjectPropertyAddress address(AudioObjectPropertySelector selector) {
+    return (AudioObjectPropertyAddress){selector, kAudioObjectPropertyScopeGlobal,
+                                       kAudioObjectPropertyElementMain};
+}
+
+static void sendState(int kind, int state) {
+    if (callback) callback(kind, state, "");
+}
+
+static NSString *specialKey(unsigned short code) {
+    switch (code) {
+        case 36: case 76: return @"Enter";
+        case 48: return @"Tab"; case 49: return @"Space";
+        case 51: return @"Backspace"; case 53: return @"Escape";
+        case 54: return @"MetaRight"; case 55: return @"MetaLeft";
+        case 56: return @"ShiftLeft"; case 57: return @"CapsLock";
+        case 58: return @"AltLeft"; case 59: return @"ControlLeft";
+        case 60: return @"ShiftRight"; case 61: return @"AltRight";
+        case 62: return @"ControlRight"; case 63: return @"Fn";
+        case 96: return @"F5"; case 97: return @"F6"; case 98: return @"F7";
+        case 99: return @"F3"; case 100: return @"F8"; case 101: return @"F9";
+        case 103: return @"F11"; case 109: return @"F10"; case 111: return @"F12";
+        case 118: return @"F4"; case 120: return @"F2"; case 122: return @"F1";
+        case 105: return @"F13"; case 107: return @"F14"; case 113: return @"F15";
+        case 106: return @"F16"; case 64: return @"F17"; case 79: return @"F18";
+        case 80: return @"F19"; case 90: return @"F20";
+        case 115: return @"Home"; case 116: return @"PageUp";
+        case 117: return @"Delete"; case 119: return @"End";
+        case 121: return @"PageDown"; case 123: return @"ArrowLeft";
+        case 124: return @"ArrowRight"; case 125: return @"ArrowDown";
+        case 126: return @"ArrowUp";
+        default: return nil;
+    }
+}
+
+static void updateLayout(void) {
+    TISInputSourceRef source = TISCopyCurrentKeyboardLayoutInputSource();
+    CFDataRef data = source ? TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) : NULL;
+    const UCKeyboardLayout *layout = data ? (const UCKeyboardLayout *)CFDataGetBytePtr(data) : NULL;
+    NSDictionary *punctuation = @{@"`": @"Backquote", @"-": @"Minus", @"=": @"Equal",
+        @"[": @"BracketLeft", @"]": @"BracketRight", @"\\": @"Backslash", @";": @"Semicolon",
+        @"'": @"Quote", @",": @"Comma", @".": @"Period", @"/": @"Slash"};
+    for (unsigned short code = 0; code < 128; code++) {
+        NSString *name = specialKey(code);
+        if (!name && layout) {
+            UInt32 dead = 0; UniChar chars[4]; UniCharCount count = 0;
+            OSStatus result = UCKeyTranslate(layout, code, kUCKeyActionDown, 0,
+                LMGetKbdType(), kUCKeyTranslateNoDeadKeysBit, &dead, 4, &count, chars);
+            if (result == noErr && count > 0) {
+                NSString *base = [[NSString stringWithCharacters:chars length:count] lowercaseString];
+                if (count == 1 && chars[0] >= 'a' && chars[0] <= 'z')
+                    name = [@"Key" stringByAppendingString:base.uppercaseString];
+                else if (count == 1 && chars[0] >= '0' && chars[0] <= '9')
+                    name = [@"Digit" stringByAppendingString:base];
+                else name = punctuation[base] ?: [@"Char:" stringByAppendingString:base];
+            }
+        }
+        strlcpy(logicalKeys[code], name.UTF8String ?: "Unknown", sizeof(logicalKeys[code]));
+    }
+    if (source) CFRelease(source);
+}
+
+static CGEventRef keyEvent(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *context) {
+    (void)proxy; (void)context;
+    if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+        sendState(2, 0);
+        if (keyTap) CGEventTapEnable(keyTap, true);
+        return event;
+    }
+    unsigned short code = (unsigned short)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
+    if (code >= 128 || !callback) return event;
+    bool down = type == kCGEventKeyDown;
+    if (type == kCGEventFlagsChanged) {
+        if (code == 57) {
+            callback(0, code, logicalKeys[code]);
+            callback(1, code, logicalKeys[code]);
+            return event;
+        }
+        down = CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, code);
+    }
+    if (down && CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat)) return event;
+    callback(down ? 0 : 1, code, logicalKeys[code]);
+    return event;
+}
+
+static void ensureTap(void) {
+    int allowed = CGPreflightListenEventAccess();
+    if (allowed != lastPermission) { lastPermission = allowed; sendState(100, allowed); }
+    int secure = IsSecureEventInputEnabled();
+    if (secure != lastSecure) { lastSecure = secure; sendState(105, secure); sendState(2, 0); }
+    if (!allowed) return;
+    if (keyTap && CFMachPortIsValid(keyTap)) {
+        if (!CGEventTapIsEnabled(keyTap)) CGEventTapEnable(keyTap, true);
+        return;
+    }
+    if (keySource) {
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), keySource, kCFRunLoopCommonModes);
+        CFRelease(keySource); keySource = NULL;
+    }
+    if (keyTap) { CFRelease(keyTap); keyTap = NULL; }
+    keyTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionListenOnly,
+        CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp) | CGEventMaskBit(kCGEventFlagsChanged),
+        keyEvent, NULL);
+    if (!keyTap) { sendState(100, 0); return; }
+    keySource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, keyTap, 0);
+    CFRunLoopAddSource(CFRunLoopGetMain(), keySource, kCFRunLoopCommonModes);
+    CGEventTapEnable(keyTap, true);
+}
+
+static void readMicrophone(void) {
+    int state = 0;
+    AudioObjectPropertyAddress running = address(kAudioProcessPropertyIsRunningInput);
+    for (NSNumber *process in processes) {
+        UInt32 active = 0, size = sizeof(active);
+        OSStatus result = AudioObjectGetPropertyData(process.unsignedIntValue, &running, 0, NULL, &size, &active);
+        if (result != noErr) state = 2;
+        else if (active) { state = 1; break; }
+    }
+    microphoneState(state);
+}
+
+static void refreshProcesses(void) {
+    AudioObjectPropertyAddress list = address(kAudioHardwarePropertyProcessObjectList);
+    UInt32 size = 0;
+    if (!AudioObjectHasProperty(kAudioObjectSystemObject, &list)) {
+        microphoneState(3); return;
+    }
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &list, 0, NULL, &size) != noErr) {
+        microphoneState(2); return;
+    }
+    NSMutableData *storage = [NSMutableData dataWithLength:size];
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &list, 0, NULL, &size, storage.mutableBytes) != noErr) {
+        microphoneState(2); return;
+    }
+    NSMutableSet<NSNumber *> *next = [NSMutableSet set];
+    AudioObjectID *ids = storage.mutableBytes;
+    AudioObjectPropertyAddress running = address(kAudioProcessPropertyIsRunningInput);
+    for (UInt32 index = 0; index < size / sizeof(AudioObjectID); index++) {
+        NSNumber *process = @(ids[index]);
+        [next addObject:process];
+        if (![processes containsObject:process])
+            AudioObjectAddPropertyListenerBlock(ids[index], &running, dispatch_get_main_queue(), inputListener);
+    }
+    for (NSNumber *process in processes)
+        if (![next containsObject:process])
+            AudioObjectRemovePropertyListenerBlock(process.unsignedIntValue, &running, dispatch_get_main_queue(), inputListener);
+    processes = next;
+    readMicrophone();
+}
+
+void ok_request_permission(void) {
+    CGRequestListenEventAccess();
+    ensureTap();
+    if (!CGPreflightListenEventAccess())
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"]];
+}
+
+void ok_start(OKCallback receive) {
+    callback = receive;
+    updateLayout();
+    NSNotificationCenter *workspace = NSWorkspace.sharedWorkspace.notificationCenter;
+    [workspace addObserverForName:NSWorkspaceDidActivateApplicationNotification object:nil queue:NSOperationQueue.mainQueue
+        usingBlock:^(NSNotification *note) {
+            NSRunningApplication *app = note.userInfo[NSWorkspaceApplicationKey];
+            if (callback) callback(104, 0, app.bundleIdentifier.UTF8String ?: "");
+        }];
+    NSArray<NSString *> *pauseNames = @[NSWorkspaceWillSleepNotification, NSWorkspaceScreensDidSleepNotification,
+                                        NSWorkspaceSessionDidResignActiveNotification];
+    for (NSUInteger index = 0; index < pauseNames.count; index++) {
+        NSString *name = pauseNames[index];
+        [workspace addObserverForName:name object:nil queue:NSOperationQueue.mainQueue
+            usingBlock:^(NSNotification *note) {
+                (void)note; suspensionReasons |= (1u << index); sendState(102, 1); sendState(2, 0);
+            }];
+    }
+    NSArray<NSString *> *resumeNames = @[NSWorkspaceDidWakeNotification, NSWorkspaceScreensDidWakeNotification,
+                                         NSWorkspaceSessionDidBecomeActiveNotification];
+    for (NSUInteger index = 0; index < resumeNames.count; index++) {
+        NSString *name = resumeNames[index];
+        [workspace addObserverForName:name object:nil queue:NSOperationQueue.mainQueue
+            usingBlock:^(NSNotification *note) {
+                (void)note; suspensionReasons &= ~(1u << index);
+                sendState(102, suspensionReasons != 0);
+                if (!suspensionReasons) sendState(103, 0);
+                ensureTap(); refreshProcesses();
+            }];
+    }
+    [[NSDistributedNotificationCenter defaultCenter]
+        addObserverForName:(__bridge NSString *)kTISNotifySelectedKeyboardInputSourceChanged object:nil
+        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) { (void)note; updateLayout(); }];
+    processes = [NSMutableSet set];
+    inputListener = ^(UInt32 count, const AudioObjectPropertyAddress *properties) {
+        (void)count; (void)properties; readMicrophone();
+    };
+    AudioObjectPropertyAddress list = address(kAudioHardwarePropertyProcessObjectList);
+    AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &list, dispatch_get_main_queue(),
+        ^(UInt32 count, const AudioObjectPropertyAddress *properties) { (void)count; (void)properties; refreshProcesses(); });
+    AudioObjectPropertyAddress output = address(kAudioHardwarePropertyDefaultOutputDevice);
+    AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &output, dispatch_get_main_queue(),
+        ^(UInt32 count, const AudioObjectPropertyAddress *properties) { (void)count; (void)properties; sendState(103, 0); });
+    refreshProcesses();
+    callback(104, 0, NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier.UTF8String ?: "");
+    ensureTap();
+    permissionTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(permissionTimer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 4);
+    dispatch_source_set_event_handler(permissionTimer, ^{ ensureTap(); });
+    dispatch_resume(permissionTimer);
+}

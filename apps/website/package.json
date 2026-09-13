@@ -1,0 +1,34 @@
+{
+  "name": "@openklack/website",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "assets": "node scripts/prepare-assets.mjs",
+    "dev": "pnpm assets && vp dev",
+    "build": "pnpm assets && tsc -b && vp build",
+    "preview": "vp preview",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@heroui/react": "^3.2.5",
+    "@heroui/styles": "^3.2.5",
+    "@openklack/keyboard-layout": "workspace:*",
+    "@openklack/soundpacks": "workspace:*",
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "howler": "^2.2.4",
+    "lucide-react": "^1.45.0",
+    "maath": "^0.10.8",
+    "motion": "^13.2.0",
+    "react": "~19.2.8",
+    "react-dom": "~19.2.8",
+    "tailwindcss": "^4.3.3",
+    "three": "^0.186.0",
+    "@openklack/ui": "workspace:*"
+  }
+}

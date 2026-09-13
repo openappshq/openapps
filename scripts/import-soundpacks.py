@@ -47,7 +47,7 @@ CHARACTER = {
 def import_packs(source: Path):
     registry = json.loads((source / 'manifest.json').read_text())
     revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
-    output = ROOT / 'public/sounds'
+    output = ROOT / 'packages/soundpacks/sounds'
     output.mkdir(parents=True, exist_ok=True)
     catalog = []
     for pack in registry['soundpacks']['keyboard']:
@@ -108,7 +108,7 @@ def import_packs(source: Path):
             })
             print(slug, len(files), 'samples')
     assert len(catalog) == 18
-    (ROOT / 'src/soundpacks.json').write_text(json.dumps(catalog, separators=(',', ':')) + '\n')
+    (ROOT / 'packages/soundpacks/catalog.json').write_text(json.dumps(catalog, separators=(',', ':')) + '\n')
     print('Built 18 packs,', sum(p.stat().st_size for p in output.iterdir() if p.suffix in ('.mp3', '.ogg')), 'audio bytes')
 
 

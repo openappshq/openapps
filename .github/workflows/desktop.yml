@@ -1,0 +1,145 @@
+name: Desktop
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      notarize:
+        description: Build a signed, notarized release candidate (does not publish)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@12.4.1
+      - run: pnpm install --frozen-lockfile
+      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.97.1
+      - run: pnpm exec vp lint
+      - run: pnpm test
+      - run: pnpm build
+      - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: pnpm --filter @openklack/desktop tauri build --debug --bundles app
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+      - name: Archive development app
+        run: ditto -c -k --sequesterRsrc --keepParent apps/desktop/src-tauri/target/debug/bundle/macos/OpenKlack.app OpenKlack-development.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenKlack-development-apple-silicon
+          path: OpenKlack-development.zip
+          retention-days: 7
+
+  release-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.notarize
+    needs: checks
+    runs-on: macos-15
+    timeout-minutes: 45
+    environment: desktop-release
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@12.4.1
+      - run: pnpm install --frozen-lockfile
+      - run: rustup toolchain install 1.97.1 --profile minimal
+      - run: rustup default 1.97.1
+      - name: Configure signed updates
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const { TAURI_UPDATER_PUBLIC_KEY: pubkey, GITHUB_SERVER_URL, GITHUB_REPOSITORY, RUNNER_TEMP } = process.env;
+          if (!pubkey?.trim()) throw new Error('Configure TAURI_UPDATER_PUBLIC_KEY in desktop-release.');
+          const endpoint = new URL(`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/latest/download/latest.json`);
+          if (endpoint.protocol !== 'https:') throw new Error('Updates require HTTPS.');
+          writeFileSync(join(RUNNER_TEMP, 'openklack-release.json'), JSON.stringify({
+            bundle: { createUpdaterArtifacts: true },
+            plugins: { updater: { pubkey: pubkey.trim(), endpoints: [endpoint.href] } }
+          }));
+          JS
+      - name: Import release certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$KEYCHAIN_PASSWORD"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/openklack.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/openklack.keychain-db"
+          security set-keychain-settings -lut 3600 "$RUNNER_TEMP/openklack.keychain-db"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/openklack.keychain-db"
+          security import "$RUNNER_TEMP/openklack.p12" -k "$RUNNER_TEMP/openklack.keychain-db" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/openklack.keychain-db"
+          security list-keychains -d user -s "$RUNNER_TEMP/openklack.keychain-db"
+      - name: Build and notarize
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          case "$APPLE_SIGNING_IDENTITY" in 'Developer ID Application:'*) ;; *) exit 1 ;; esac
+          test -n "$APPLE_ID"
+          test -n "$APPLE_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          pnpm --filter @openklack/desktop tauri build --config "$RUNNER_TEMP/openklack-release.json" --bundles app,dmg
+          codesign --verify --deep --strict apps/desktop/src-tauri/target/release/bundle/macos/OpenKlack.app
+          xcrun stapler validate apps/desktop/src-tauri/target/release/bundle/macos/OpenKlack.app
+          spctl --assess --type execute apps/desktop/src-tauri/target/release/bundle/macos/OpenKlack.app
+      - name: Prepare update manifest
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, statSync, writeFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+          const directory = 'apps/desktop/src-tauri/target/release/bundle/macos';
+          const filename = 'OpenKlack.app.tar.gz';
+          const bytes = statSync(`${directory}/${filename}`).size;
+          if (!bytes || bytes > 128 * 1024 * 1024) throw new Error('Update archive exceeds the app download limit or is empty.');
+          const signature = readFileSync(`${directory}/${filename}.sig`, 'utf8').trim();
+          if (!signature) throw new Error('Missing update signature.');
+          const url = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/releases/download/v${version}/${filename}`;
+          writeFileSync(`${directory}/latest.json`, JSON.stringify({
+            version, pub_date: new Date().toISOString(),
+            platforms: { 'darwin-aarch64': { url, signature } }
+          }, null, 2) + '\n');
+          JS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenKlack-release-candidate-apple-silicon
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            apps/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            apps/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+            apps/desktop/src-tauri/target/release/bundle/macos/latest.json
+          if-no-files-found: error
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/openklack.keychain-db" || true
+          rm -f "$RUNNER_TEMP/openklack.p12"

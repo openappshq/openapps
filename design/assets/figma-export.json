@@ -1,0 +1,101 @@
+{
+  "figmaFile": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio",
+  "exportedOn": "2026-09-14",
+  "assets": [
+    {
+      "file": "openapps-hq/app-icon.svg",
+      "source": "Brand/OpenApps HQ/App icon-openapps-hq-app-icon.svg",
+      "sha256": "1bd4864583c8b1306769a192791e805cac4b9f5254a45e31095844fe5ea6a17f",
+      "viewBox": "0 0 280 280"
+    },
+    {
+      "file": "openklack/app-icon.svg",
+      "source": "Brand/OpenKlack/App icon-openklack-app-icon.svg",
+      "sha256": "0c6c9727965ecbe922b4c3f9474f27b99c574bb3b32dd0123ccd47b6f0f82c26",
+      "viewBox": "0 0 280 280"
+    },
+    {
+      "file": "openapps-hq/symbol-ink.svg",
+      "source": "Brand/OpenApps HQ/Brand/OpenApps HQ/Tone=Ink-openapps-hq-symbol-ink.svg",
+      "sha256": "172b9432406c3680951636757545728cad26830d18befed475abdf19eefb5e20",
+      "viewBox": "0 0 128 128"
+    },
+    {
+      "file": "openapps-hq/symbol-paper.svg",
+      "source": "Brand/OpenApps HQ/Brand/OpenApps HQ/Tone=Paper-openapps-hq-symbol-paper.svg",
+      "sha256": "b959416bb58335d369f751ca13198d0af3d5e6b43924b548e362c7f86f88f6b6",
+      "viewBox": "0 0 128 128"
+    },
+    {
+      "file": "openklack/symbol-ink.svg",
+      "source": "Brand/OpenKlack/Brand/OpenKlack/Tone=Ink-openklack-symbol-ink.svg",
+      "sha256": "d0b3b2a76cde86e4d476691729fa60c036fab9cd0e6374dd347bfb2248672539",
+      "viewBox": "0 0 128 128"
+    },
+    {
+      "file": "openklack/symbol-paper.svg",
+      "source": "Brand/OpenKlack/Brand/OpenKlack/Tone=Paper-openklack-symbol-paper.svg",
+      "sha256": "71ebd7aa331d49c5c33f1b0b517ab2a42b4bdea781d25a52ef7b678b740daf19",
+      "viewBox": "0 0 128 128"
+    },
+    {
+      "file": "openapps-hq/wordmark-ink.svg",
+      "source": "Brand/OpenApps HQ/Brand/OpenApps HQ/Tone=Ink-openapps-hq-wordmark-ink.svg",
+      "sha256": "8f416bf2aeb96d23200acfa3fd2719e04d3876c70ed77d24906fdb7721c480e4",
+      "viewBox": "0 0 383 68"
+    },
+    {
+      "file": "openapps-hq/wordmark-paper.svg",
+      "source": "Brand/OpenApps HQ/Brand/OpenApps HQ/Tone=Paper-openapps-hq-wordmark-paper.svg",
+      "sha256": "f38624198e3e01636a127745c2e0a255469af0aab7e02bc4f91d95c0010acfc4",
+      "viewBox": "0 0 383 68"
+    },
+    {
+      "file": "openklack/wordmark-ink.svg",
+      "source": "Brand/OpenKlack/Brand/OpenKlack/Tone=Ink-openklack-wordmark-ink.svg",
+      "sha256": "4d762798a7c03534e33bfbda1e5e758d59f9ada8cd81e6cbcd949e2230dda7eb",
+      "viewBox": "0 0 299 68"
+    },
+    {
+      "file": "openklack/wordmark-paper.svg",
+      "source": "Brand/OpenKlack/Brand/OpenKlack/Tone=Paper-openklack-wordmark-paper.svg",
+      "sha256": "e7d7330ad6e68e67a18572c97b138990c06cc84be59f9e277962bcea61ccc7ae",
+      "viewBox": "0 0 299 68"
+    },
+    {
+      "file": "openapps-hq/app-icon-1120.png",
+      "source": "Brand/OpenApps HQ/App icon-openapps-hq-app-icon-1024.png",
+      "sha256": "216d88f5c1889fad22971579ff8f4ff1c9d0fef674be9ca39f3ab6cd4bddf632",
+      "width": 1120,
+      "height": 1120
+    },
+    {
+      "file": "openklack/app-icon-1120.png",
+      "source": "Brand/OpenKlack/App icon-openklack-app-icon-1024.png",
+      "sha256": "d1d204f622d4fff0a0a0cfc00fa056b74057490da11868854b678d40dc8b916f",
+      "width": 1120,
+      "height": 1120
+    }
+  ],
+  "menuTemplate": {
+    "file": "openklack/menu-template@2x.png",
+    "nodeId": "2:112",
+    "export": {
+      "format": "PNG",
+      "constraint": {
+        "type": "WIDTH",
+        "value": 36
+      }
+    },
+    "sha256": "03d35efcbe695ee336aa16f52c0149564f75932efb1b5b1776078b4293f3d257"
+  },
+  "githubCover": {
+    "file": "openklack/github-cover.png",
+    "nodeId": "3:769",
+    "export": {
+      "format": "PNG",
+      "scale": 1
+    },
+    "sha256": "f1d05a091254c0263edfb4ce1146bfe87302e9e798afe651d42aaa5bd867bb30"
+  }
+}

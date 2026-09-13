@@ -1,0 +1,31 @@
+{
+  "name": "@openklack/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "web:dev": "vp dev --host 127.0.0.1 --port 1420 --strictPort",
+    "web:build": "tsc --noEmit && vp build",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@heroui/react": "^3.2.5",
+    "@heroui/styles": "^3.2.5",
+    "@openklack/keyboard-layout": "workspace:*",
+    "@tauri-apps/api": "^2.0.0",
+    "lucide-react": "^1.45.0",
+    "motion": "^13.2.0",
+    "react": "~19.2.8",
+    "react-dom": "~19.2.8",
+    "@openklack/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.0.0",
+    "tailwindcss": "^4.3.3"
+  }
+}

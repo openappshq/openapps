@@ -10,6 +10,11 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+apps/website/public/brand/
+apps/website/public/sounds/
+.sites-runtime/
+target/
+apps/desktop/src-tauri/gen/
 *.local
 
 # Editor directories and files
