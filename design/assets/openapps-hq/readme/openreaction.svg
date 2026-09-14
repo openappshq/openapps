@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480" role="img" aria-labelledby="title desc">
+<title id="title">OpenReaction: type a shortcode, get an emoji</title><desc id="desc">An illustration of typing :heart: and replacing it with a heart. OpenReaction works across text fields on your Mac.</desc>
+<rect width="800" height="480" rx="24" fill="#F3A0DC"/>
+<text x="40" y="56" fill="#141414" font-family="'IBM Plex Mono',monospace" font-size="17" letter-spacing="2">A LITTLE MORE EXPRESSION.</text>
+<rect x="40" y="100" width="720" height="260" rx="20" fill="#141414"/>
+<g fill="#F3F3F3" font-family="'IBM Plex Mono',monospace" font-size="51"><text x="87" y="247">:heart:</text></g>
+<path d="M376 231H424M410 217L424 231L410 245" fill="none" stroke="#858585" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="494" y="154" width="154" height="154" rx="36" fill="#292929"/>
+<path d="M571 274L531 235C502 207 541 177 571 207C601 177 640 207 611 235Z" fill="#F3A0DC"/>
+<path d="M40 405H760" stroke="#141414" stroke-opacity=".2"/>
+<text x="42" y="447" fill="#141414" font-family="'Instrument Sans',Arial,sans-serif" font-size="23">Type it. Pick it. Get back to your sentence.</text>
+<path d="M718 431H751M738 419L751 431L738 443" fill="none" stroke="#141414" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

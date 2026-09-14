@@ -24,6 +24,7 @@ The website copies masters to ignored public assets during dev/build.
 - `features/*.svg`: code-generated illustrations, not screenshots or Figma exports.
 
 Captures/illustrations are outside the Figma checksum manifest.
+`openapps-hq/readme/` contains the organization’s GitHub cover (composed from Figma logo masters) and an OpenReaction illustration; both are authored SVGs, not app screenshots.
 Use the labeled [archive](../archive/README.md) for obsolete layouts.
 Generate Mac icons with `pnpm openklack:icons`; keyboard, sound, and typing illustrations with `node scripts/generate-readme-visuals.mjs`.
 Edit `features/menu.svg` directly.
