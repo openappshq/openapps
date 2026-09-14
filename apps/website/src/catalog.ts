@@ -4,6 +4,8 @@ export type Product = {
   name: string;
   description: string;
   platform: string;
+  /** What this app costs, once. Apps are priced individually. */
+  price: string;
   icon: string;
   accent: "cobalt" | "orchid";
   brandSource: string;
@@ -28,6 +30,7 @@ export const products: Product[] = [
     name: "OpenKlack",
     description: "Mechanical keyboard sounds. For the keyboard you already own.",
     platform: "macOS",
+    price: "$5",
     icon: "/brand/openklack/app-icon.svg",
     accent: "cobalt",
     brandSource: "design/assets/openklack",
@@ -73,6 +76,7 @@ export const products: Product[] = [
     name: "OpenReaction",
     description: "Type :tada: in any text field on your Mac. Get 🎉.",
     platform: "macOS",
+    price: "$5",
     icon: "/brand/openreaction/app-icon.svg",
     accent: "orchid",
     brandSource: "apps/openreaction/design/assets",

@@ -6,15 +6,15 @@ import { enter } from "@openapps/ui/transitions";
 import { MarketingHeader, MarketingFooter, Legend } from "../shared/MarketingChrome";
 import KeyToken from "../shared/KeyToken";
 import { products, type Product } from "../catalog";
-import { MACS_PER_LICENSE, PRICE, TRIAL_DAYS } from "../shared/licensing";
+import { MACS_PER_LICENSE, TRIAL_DAYS } from "../shared/licensing";
 import { GITHUB_URL } from "../shared/github";
 import "./styles.css";
 
 const principles: { icon: ReactNode; title: string; body: string }[] = [
   {
     icon: <Gift size={18} />,
-    title: `${PRICE}, once`,
-    body: `Per app, for ${MACS_PER_LICENSE} Macs. No subscriptions, no accounts.`,
+    title: "Pay once",
+    body: `One price per app, for ${MACS_PER_LICENSE} Macs. No subscriptions, no accounts.`,
   },
   { icon: <Code2 size={18} />, title: "Open source", body: "MIT licensed, built in the open." },
   {
@@ -43,7 +43,7 @@ function AppRow({ app, index }: { app: Product; index: number }) {
         <span className="app-row-meta">
           <span className="app-row-spec">{app.platform}</span>
           <span className="app-row-spec">
-            {PRICE} · {TRIAL_DAYS}-day trial
+            {app.price} · {TRIAL_DAYS}-day trial
           </span>
         </span>
         <span className="app-row-go" aria-hidden="true">

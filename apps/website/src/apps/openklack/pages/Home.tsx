@@ -6,7 +6,7 @@ import { Check, Download } from "lucide-react";
 import Questions from "../../../shared/Questions";
 import HqBadge from "../../../shared/HqBadge";
 import BuyButtons from "../../../shared/BuyButtons";
-import { MACS_PER_LICENSE, OFFLINE_GRACE, PRICE, TRIAL_DAYS } from "../../../shared/licensing";
+import { licensingFor, MACS_PER_LICENSE, OFFLINE_GRACE, TRIAL_DAYS } from "../../../shared/licensing";
 import SoundStudio from "../SoundStudio";
 import Marquee from "../../../shared/Marquee";
 import KeyToken from "../../../shared/KeyToken";
@@ -15,6 +15,8 @@ import { SiteHeader, SiteFooter } from "../SiteChrome";
 import { Legend } from "../../../shared/MarketingChrome";
 
 import "../styles.css";
+
+const { price: PRICE } = licensingFor("openklack");
 
 const questions = [
   [

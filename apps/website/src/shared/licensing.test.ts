@@ -52,6 +52,13 @@ describe("licensingFor", () => {
     }
   });
 
+  it("quotes each app's own price rather than one price for the catalogue", () => {
+    for (const product of products) {
+      expect(product.price, product.id).toMatch(/^\$\d/);
+      expect(licensingFor(product.id).price, product.id).toBe(product.price);
+    }
+  });
+
   it("rejects apps that are not in the catalog", () => {
     expect(() => licensingFor("nope")).toThrow("Unknown app");
   });

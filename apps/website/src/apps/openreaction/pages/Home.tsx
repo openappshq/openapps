@@ -20,7 +20,7 @@ import BuyButtons from "../../../shared/BuyButtons";
 import {
   MACS_PER_LICENSE,
   OFFLINE_GRACE,
-  PRICE,
+  licensingFor,
   TRIAL_DAYS,
 } from "../../../shared/licensing";
 
@@ -31,6 +31,8 @@ const shortcodes: [string, string][] = [
   ["brain", "🧠"], ["wave", "👋"], ["clap", "👏"], ["100", "💯"], ["thinking", "🤔"],
   ["party", "🥳"], ["bulb", "💡"], ["lock", "🔒"], ["zap", "⚡"], ["star", "⭐"],
 ];
+
+const { price: PRICE } = licensingFor("openreaction");
 
 const questions = [
   [

@@ -7,7 +7,6 @@ export const DODO_CHECKOUT_ORIGIN = "https://checkout.dodopayments.com";
 /** Placeholder until the user sets a real support address. */
 export const SUPPORT_URL = "mailto:support@openapps.space";
 
-export const PRICE = "$5";
 export const TRIAL_DAYS = 3;
 export const MACS_PER_LICENSE = 3;
 export const OFFLINE_GRACE = "a week";
@@ -50,6 +49,8 @@ export interface AppLicensing {
   scheme: string;
   /** The app's page on this site, e.g. `/openreaction/`. */
   pageUrl: string;
+  /** What this app costs, once. */
+  price: string;
   /** Where paid checkout returns. */
   thanksUrl: string;
   /** Where trial checkout returns; a separate path so the page knows the kind. */
@@ -84,6 +85,7 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
     name: product.name,
     scheme: appId,
     pageUrl: `${product.route}/`,
+    price: product.price,
     thanksUrl,
     trialThanksUrl,
     officialBuildAvailable: available,
