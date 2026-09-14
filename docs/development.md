@@ -73,7 +73,7 @@ Start with the [design checklist](../design/system.md#adding-a-product) so the n
 5. Restart `pnpm dev`, or run `pnpm build`.
    The app card, page metadata, static routes, and asset copies come from the catalog automatically.
 
-New desktop apps can have their own native stack and release workflow.
+New desktop apps can have their own native stack and release workflow; OpenReaction's is [`openreaction.yml`](../.github/workflows/openreaction.yml), documented in [its release guide](../apps/openreaction/RELEASING.md).
 Do not copy OpenKlack's signing identifier, preference storage, or keyboard dependencies into an unrelated app.
 Use app-specific release tags and updater channels so one app's release cannot become another app's update.
 

@@ -1,0 +1,270 @@
+name: OpenReaction
+
+# Checks on every change to the app; a signed, notarized universal release
+# when an `openreaction-v<MAJOR.MINOR.PATCH>` tag is pushed (or on manual
+# dispatch, which publishes only when asked). See apps/openreaction/RELEASING.md.
+#
+# The paths filter applies to branch pushes and pull requests; tag pushes
+# always run, which is what the release needs.
+on:
+  pull_request:
+    paths:
+      - apps/openreaction/**
+      - .github/workflows/openreaction.yml
+  push:
+    branches: [main]
+    tags: [openreaction-v*]
+    paths:
+      - apps/openreaction/**
+      - .github/workflows/openreaction.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build as MAJOR.MINOR.PATCH (ignored when running from an openreaction-v* tag)
+        type: string
+        default: ""
+      publish:
+        description: Publish a GitHub Release (creates the openreaction-v<version> tag at this commit if it does not exist)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: apps/openreaction
+
+env:
+  # The checks job compiles the licensed flavour against Dodo test mode with
+  # placeholder product IDs; nothing built with these is ever published.
+  PLACEHOLDER_PAID_PRODUCT_ID: pdt_placeholder_openreaction
+
+jobs:
+  checks:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Select Xcode 26
+        run: |
+          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then echo "Xcode 26 (macOS 26 SDK) is required."; exit 1; fi
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+          swift --version
+      # Only suites that never post CGEvents or install an event tap run here:
+      # the whole core library, the gate runner shutdown suite and, in the
+      # licensed flavour, the preferences journal suite. KeyboardTapTests and
+      # anything else that touches real input stay out of CI.
+      - name: Build and test the source flavour
+        run: swift test --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests'
+      - name: Build and test the licensed flavour
+        env:
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_DODO_ENV: test
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
+        run: |
+          scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
+          swift test --scratch-path .build/licensed \
+            --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests|OpenReactionTests.DefaultsInvalidationJournalTests'
+      - name: Build an ad-hoc signed development app and DMG
+        env:
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_DODO_ENV: test
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
+          UNIVERSAL: "1"
+        run: |
+          scripts/bundle.sh
+          scripts/make-dmg.sh
+          scripts/verify-release.sh dist/OpenReaction-*.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenReaction-development-unsigned
+          path: apps/openreaction/dist/*.dmg
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/openreaction-v') || github.event_name == 'workflow_dispatch'
+    needs: checks
+    runs-on: macos-26
+    timeout-minutes: 90
+    environment: openreaction-release
+    permissions:
+      contents: write
+    env:
+      KEYCHAIN_NAME: openreaction-release.keychain-db
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # Full history: the build number is the commit count on HEAD.
+          fetch-depth: 0
+      - name: Select Xcode 26
+        run: |
+          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then echo "Xcode 26 (macOS 26 SDK) is required."; exit 1; fi
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+      - name: Resolve the release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/openreaction-v*)
+              version="${GITHUB_REF#refs/tags/openreaction-v}"
+              publish=true ;;
+            *)
+              version="$INPUT_VERSION"
+              publish="${INPUT_PUBLISH:-false}"
+              if [ -z "$version" ]; then echo "Give a version, or run from an openreaction-v* tag."; exit 1; fi ;;
+          esac
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Version must be MAJOR.MINOR.PATCH (got '$version')."; exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=openreaction-v$version"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building OpenReaction $version (publish: $publish)"
+      - name: Check release configuration
+        # Everything the release needs is checked up front, so a missing
+        # secret fails here with its name and never produces an unsigned build.
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
+          OPENAPPS_DODO_TRIAL_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_TRIAL_PRODUCT_ID }}
+          OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
+          OPENAPPS_TRIAL_URL: ${{ vars.OPENAPPS_TRIAL_URL }}
+          OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
+        run: |
+          missing=0
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openreaction-release environment."; missing=1; fi
+          done
+          if [ -z "$OPENAPPS_DODO_PAID_PRODUCT_ID" ]; then
+            echo "::error::Variable OPENAPPS_DODO_PAID_PRODUCT_ID is not set in the openreaction-release environment."; missing=1
+          fi
+          [ "$missing" = 0 ] || exit 1
+          case "$APPLE_SIGNING_IDENTITY" in
+            'Developer ID Application:'*) ;;
+            *) echo "::error::APPLE_SIGNING_IDENTITY must be a 'Developer ID Application: …' identity; releases are never signed with anything else."; exit 1 ;;
+          esac
+          case "$OPENAPPS_DODO_PAID_PRODUCT_ID" in
+            pdt_*) ;;
+            *) echo "::error::OPENAPPS_DODO_PAID_PRODUCT_ID must be a Dodo product ID (pdt_…)."; exit 1 ;;
+          esac
+          if [ -n "$OPENAPPS_DODO_TRIAL_PRODUCT_ID" ]; then
+            case "$OPENAPPS_DODO_TRIAL_PRODUCT_ID" in
+              pdt_*) ;;
+              *) echo "::error::OPENAPPS_DODO_TRIAL_PRODUCT_ID must be a Dodo product ID (pdt_…) or unset."; exit 1 ;;
+            esac
+          fi
+          # The generator validates the URLs' shape; this only reports what is configured.
+          for name in OPENAPPS_DODO_TRIAL_PRODUCT_ID OPENAPPS_BUY_URL OPENAPPS_TRIAL_URL OPENAPPS_SUPPORT_URL; do
+            if [ -n "${!name}" ]; then echo "$name: set"; else echo "$name: not set (optional)"; fi
+          done
+      - name: Import the Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/$KEYCHAIN_NAME"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/openreaction.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/openreaction.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/openreaction.p12"
+          if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -Fq "$APPLE_SIGNING_IDENTITY"; then
+            echo "::error::APPLE_CERTIFICATE does not contain the identity named by APPLE_SIGNING_IDENTITY."
+            security find-identity -v -p codesigning "$KEYCHAIN"
+            exit 1
+          fi
+      - name: Build the signed universal release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          UNIVERSAL: "1"
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_DODO_ENV: live
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
+          OPENAPPS_DODO_TRIAL_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_TRIAL_PRODUCT_ID }}
+          OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
+          OPENAPPS_TRIAL_URL: ${{ vars.OPENAPPS_TRIAL_URL }}
+          OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
+        run: scripts/bundle.sh
+      - name: Notarize and staple the app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/notarize.sh build/OpenReaction.app
+      - name: Build the DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: scripts/make-dmg.sh
+      - name: Notarize and staple the DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/notarize.sh "dist/OpenReaction-$VERSION.dmg"
+      - name: Verify the download
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          scripts/verify-release.sh --notarized "dist/OpenReaction-$VERSION.dmg"
+          cd dist
+          shasum -a 256 "OpenReaction-$VERSION.dmg" | tee "OpenReaction-$VERSION.dmg.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenReaction-${{ steps.version.outputs.version }}-signed
+          path: |
+            apps/openreaction/dist/*.dmg
+            apps/openreaction/dist/*.sha256
+          if-no-files-found: error
+      - name: Publish the GitHub Release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          cd dist
+          files=("OpenReaction-$VERSION.dmg" "OpenReaction-$VERSION.dmg.sha256")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; replacing its assets."
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            case "$GITHUB_REF" in
+              refs/tags/*) ref=(--verify-tag) ;;
+              *) ref=(--target "$GITHUB_SHA") ;;
+            esac
+            gh release create "$TAG" "${files[@]}" --title "OpenReaction $VERSION" --generate-notes "${ref[@]}"
+          fi
+          gh release view "$TAG" --json url --jq .url
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/$KEYCHAIN_NAME" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/openreaction.p12"
