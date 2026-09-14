@@ -23,14 +23,15 @@ Physical-key selection is explicit and cancellable; Done restores sound choices.
 Menu: mute, volume, starred sounds, More sounds, Open OpenKlack.
 Automatic pauses show their cause and temporary Resume on home and menu.
 
-| Settings                | Behavior                                                                                 |
-| ----------------------- | ---------------------------------------------------------------------------------------- |
-| Open at login           | Opt-in                                                                                   |
-| Microphone pause        | Default on; includes calls, dictation, recording                                         |
-| Muted apps              | Pause for a chosen foreground app; removal offers Undo                                   |
-| Appearance              | System / Light / Dark                                                                    |
-| Sounds & settings files | Import compatible packs, audio, or settings; export current setup with audio and credits |
-| About & help            | Permissions, version/updates, credits, reviewable local diagnostics                      |
+| Settings                | Behavior                                                                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Open at login           | Opt-in                                                                                                                               |
+| Microphone pause        | Default on; includes calls, dictation, recording                                                                                     |
+| Muted apps              | Pause for a chosen foreground app; removal offers Undo                                                                               |
+| Appearance              | System / Light / Dark                                                                                                                |
+| Sounds & settings files | Import compatible packs, audio, or settings; export current setup with audio and credits                                             |
+| License                 | Official builds only, per [LICENSING.md](../../LICENSING.md): state, trial days, key field, Remove this Mac; hidden in source builds |
+| About & help            | Permissions, version/updates, credits, reviewable local diagnostics                                                                  |
 
 Imported settings become active without discarding recordings or the prior stored setup.
 Retain legacy tuning and app-specific sound rules for compatibility; label legacy rules, while new rules only mute.

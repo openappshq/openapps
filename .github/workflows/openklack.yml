@@ -36,6 +36,17 @@ jobs:
       - run: cargo fmt --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml -- --check
       - run: cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml
       - run: cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Test and lint the licensed build flavour
+        # Placeholder configuration: the shared test cases run against a fake Dodo client.
+        env:
+          OPENKLACK_LICENSE_ENV: test
+          OPENKLACK_DODO_PAID_PRODUCT_ID: pdt_placeholder_openklack
+          OPENKLACK_DODO_TRIAL_PRODUCT_ID: pdt_placeholder_openklack_trial
+          OPENKLACK_BUY_URL: https://openapps.space/OpenKlack/
+          OPENKLACK_TRIAL_URL: https://openapps.space/OpenKlack/
+        run: |
+          cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features licensing
+          cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features licensing -- -D warnings
       - run: pnpm --filter @openapps/openklack-desktop tauri build --debug --bundles app
         env:
           APPLE_SIGNING_IDENTITY: "-"
@@ -80,6 +91,19 @@ jobs:
             plugins: { updater: { pubkey: pubkey.trim(), endpoints: [endpoint.href] } }
           }));
           JS
+      - name: Check licensing configuration
+        # Official builds compile the Dodo live product IDs and checkout links in; the build fails without them.
+        env:
+          OPENKLACK_DODO_PAID_PRODUCT_ID: ${{ vars.OPENKLACK_DODO_PAID_PRODUCT_ID }}
+          OPENKLACK_DODO_TRIAL_PRODUCT_ID: ${{ vars.OPENKLACK_DODO_TRIAL_PRODUCT_ID }}
+          OPENKLACK_BUY_URL: ${{ vars.OPENKLACK_BUY_URL }}
+          OPENKLACK_TRIAL_URL: ${{ vars.OPENKLACK_TRIAL_URL }}
+        run: |
+          for name in OPENKLACK_DODO_PAID_PRODUCT_ID OPENKLACK_DODO_TRIAL_PRODUCT_ID OPENKLACK_BUY_URL OPENKLACK_TRIAL_URL; do
+            if [ -z "${!name}" ]; then echo "Configure $name in the openklack-release environment."; exit 1; fi
+          done
+          case "$OPENKLACK_DODO_PAID_PRODUCT_ID" in pdt_*) ;; *) echo "OPENKLACK_DODO_PAID_PRODUCT_ID must be a Dodo product ID."; exit 1 ;; esac
+          case "$OPENKLACK_DODO_TRIAL_PRODUCT_ID" in pdt_*) ;; *) echo "OPENKLACK_DODO_TRIAL_PRODUCT_ID must be a Dodo product ID."; exit 1 ;; esac
       - name: Import release certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -103,13 +127,18 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          OPENKLACK_LICENSE_ENV: live
+          OPENKLACK_DODO_PAID_PRODUCT_ID: ${{ vars.OPENKLACK_DODO_PAID_PRODUCT_ID }}
+          OPENKLACK_DODO_TRIAL_PRODUCT_ID: ${{ vars.OPENKLACK_DODO_TRIAL_PRODUCT_ID }}
+          OPENKLACK_BUY_URL: ${{ vars.OPENKLACK_BUY_URL }}
+          OPENKLACK_TRIAL_URL: ${{ vars.OPENKLACK_TRIAL_URL }}
         run: |
           case "$APPLE_SIGNING_IDENTITY" in 'Developer ID Application:'*) ;; *) exit 1 ;; esac
           test -n "$APPLE_ID"
           test -n "$APPLE_PASSWORD"
           test -n "$APPLE_TEAM_ID"
           test -n "$TAURI_SIGNING_PRIVATE_KEY"
-          pnpm --filter @openapps/openklack-desktop tauri build --config "$RUNNER_TEMP/openklack-release.json" --bundles app,dmg
+          pnpm --filter @openapps/openklack-desktop tauri build --config "$RUNNER_TEMP/openklack-release.json" --bundles app,dmg --features licensing
           codesign --verify --deep --strict apps/openklack-desktop/src-tauri/target/release/bundle/macos/OpenKlack.app
           xcrun stapler validate apps/openklack-desktop/src-tauri/target/release/bundle/macos/OpenKlack.app
           spctl --assess --type execute apps/openklack-desktop/src-tauri/target/release/bundle/macos/OpenKlack.app

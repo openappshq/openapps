@@ -206,6 +206,30 @@ Tauri's `CI=true` bundling mode skips Finder decoration while retaining the app 
 The `--ci` CLI flag alone does not select that behavior; the bundler checks the environment variable.
 See the [Tauri DMG bundler](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-bundler/src/bundle/macos/dmg/mod.rs).
 
+### Licensed builds
+
+Licensing follows the shared [licensing contract](../LICENSING.md) and is compiled in only with the `licensing` cargo feature.
+The default build from source has no License section, makes no license network calls, and plays sounds without restriction; `cargo test` covers the shared test cases in `src-tauri/src/licensing/core.rs` in both flavours.
+A licensed build reads its configuration from the environment at build time and fails with a list of what is missing:
+
+| Variable                                   | Value                                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------- |
+| `OPENKLACK_LICENSE_ENV`                    | `test` for development builds against Dodo test mode, `live` for releases |
+| `OPENKLACK_DODO_PAID_PRODUCT_ID`           | The `OpenKlack` product ID for that environment                           |
+| `OPENKLACK_DODO_TRIAL_PRODUCT_ID`          | The `OpenKlack Trial` product ID for that environment                     |
+| `OPENKLACK_BUY_URL`, `OPENKLACK_TRIAL_URL` | The https checkout links opened by Buy for $5 and Start 3-day trial       |
+| `OPENKLACK_SUPPORT_URL`                    | Optional; Contact support link, defaults to the OpenKlack page            |
+
+```sh
+OPENKLACK_LICENSE_ENV=test OPENKLACK_DODO_PAID_PRODUCT_ID=pdt_… OPENKLACK_DODO_TRIAL_PRODUCT_ID=pdt_… \
+OPENKLACK_BUY_URL=https://… OPENKLACK_TRIAL_URL=https://… \
+pnpm --filter @openapps/openklack-desktop tauri dev --features licensing
+```
+
+The Dodo products are not created yet, so no real IDs exist; the workflow's checks job uses placeholders to compile and test the licensed flavour, and the release job requires `OPENKLACK_DODO_PAID_PRODUCT_ID`, `OPENKLACK_DODO_TRIAL_PRODUCT_ID`, `OPENKLACK_BUY_URL` and `OPENKLACK_TRIAL_URL` as variables in the `openklack-release` environment before it builds with `OPENKLACK_LICENSE_ENV=live`.
+The license record lives in the Keychain item `space.openapps.openklack.license`; a development build signed with a different identity than an installed copy asks for Keychain access on first launch.
+`openklack://activate?key=…` (registered in `Info.plist`) opens Settings with the key pre-filled; the user confirms before anything is sent. Source builds only open Settings.
+
 Public distribution requires Developer ID signing and notarization.
 The [desktop workflow](../.github/workflows/openklack.yml) runs checks on an Apple Silicon Mac runner and can produce a signed release candidate through manual dispatch.
 It does not publish a GitHub release or deploy the website.
