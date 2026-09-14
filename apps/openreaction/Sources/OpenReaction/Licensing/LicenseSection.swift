@@ -60,7 +60,7 @@ struct LicenseSection: View {
     /// Without a license the key field is always there, next to Buy.
     private var needsKeyField: Bool {
         switch license.state {
-        case .trialUnavailable, .trial, .trialNeedsConnection, .trialEnded: true
+        case .trialUnavailable, .trial, .trialNeedsConnection, .trialClockBehind, .trialEnded: true
         case .licensed, .grace, .checkRequired, .revoked: false
         }
     }
@@ -85,6 +85,7 @@ struct LicenseSection: View {
             license.storageError == nil && license.trialStorageError == nil ? "Starting your free trial…" : "Free trial unavailable"
         case .trial(let days): LicenseController.trialText(daysLeft: days)
         case .trialNeedsConnection: "Connect to the internet to continue your free trial"
+        case .trialClockBehind: LicenseController.clockBehindText
         case .trialEnded: "Your free trial has ended"
         case .licensed: "Licensed"
         case .grace(let days, let warn):
@@ -108,6 +109,9 @@ struct LicenseSection: View {
                 Spacer()
             case .trialNeedsConnection:
                 tryAgainButton
+                buyButton
+                Spacer()
+            case .trialClockBehind:
                 buyButton
                 Spacer()
             case .licensed, .grace:

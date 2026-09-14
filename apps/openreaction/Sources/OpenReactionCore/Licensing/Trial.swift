@@ -30,10 +30,15 @@ public struct TrialRecord: Codable, Equatable, Sendable {
         case fallbackDeviceID = "device_id"
     }
 
-    /// `max(now, last_seen_at) − started_at`: setting the clock back never
-    /// gives time back.
+    /// `last_seen_at − started_at`, or the wall clock if it is already past
+    /// `last_seen_at` between ticks: setting the clock back never gives time back.
     public func elapsed(now: Date) -> TimeInterval {
         max(0, max(now, lastSeenAt).timeIntervalSince(startedAt))
+    }
+
+    /// The wall clock is more than an hour earlier than time already observed.
+    public func clockBehind(now: Date) -> Bool {
+        now < lastSeenAt.addingTimeInterval(-LicensePolicy.clockRollbackTolerance)
     }
 }
 

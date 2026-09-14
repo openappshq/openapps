@@ -101,9 +101,16 @@ struct LicenseEnforcementTests {
     final class Clock: @unchecked Sendable {
         private let lock = NSLock()
         private var _now: Date
+        private var _uptime: TimeInterval = 1_000
         init(_ now: Date) { _now = now }
         var now: Date { lock.withLock { _now } }
-        func advance(_ seconds: TimeInterval) { lock.withLock { _now = _now.addingTimeInterval(seconds) } }
+        var uptime: TimeInterval { lock.withLock { _uptime } }
+        func advance(_ seconds: TimeInterval) {
+            lock.withLock {
+                _now = _now.addingTimeInterval(seconds)
+                _uptime += max(0, seconds)
+            }
+        }
     }
 
     private static func manager(
@@ -112,7 +119,8 @@ struct LicenseEnforcementTests {
     ) -> LicenseManager {
         LicenseManager(
             products: LicenseProducts(paid: ["pdt_P"]), client: Client(), store: store, journal: journal,
-            trialStore: trialStore, registry: registry, device: Device(), now: { clock?.now ?? Date() }
+            trialStore: trialStore, registry: registry, device: Device(), now: { clock?.now ?? Date() },
+            uptime: { clock?.uptime ?? LicenseManager.continuousUptime() }
         )
     }
 
@@ -268,7 +276,7 @@ struct LicenseEnforcementTests {
         #expect(await manager.state == .trialEnded)
     }
 
-    @Test("20. A registration that extends the trial is not published while its save hangs past 24 h")
+    @Test("29. A registration that extends the trial is not published while its save hangs past 24 h")
     func anExtensionWaitsForItsSave() async {
         let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
         let hour: TimeInterval = 3600

@@ -110,7 +110,7 @@ final class LicenseController {
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.wakeOrNetwork() }
+            MainActor.assumeIsolated { self?.didWake() }
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: .NSSystemClockDidChange, object: nil, queue: .main
@@ -203,6 +203,15 @@ final class LicenseController {
 
     /// Wake from sleep or the network back: an unregistered trial asks the
     /// registry now.
+    /// Wake from sleep: also checks the clock against the trial's last seen time.
+    private func didWake() {
+        refresh()
+        Task {
+            await manager.wake()
+            refresh()
+        }
+    }
+
     private func wakeOrNetwork() {
         // Local deadlines first: a trial that ended while asleep is off now.
         refresh()
@@ -261,6 +270,8 @@ final class LicenseController {
 
     // MARK: - Copy
 
+    static let clockBehindText = "Your Mac’s clock is behind. Set the correct date and time to keep using your free trial"
+
     /// "Free trial: N days left", or "less than a day left" on the last day.
     static func trialText(daysLeft days: Int) -> String {
         days <= 1 ? "Free trial: less than a day left" : "Free trial: \(days) days left"
@@ -281,6 +292,7 @@ final class LicenseController {
             }
         case .trial(let days): Self.trialText(daysLeft: days)
         case .trialNeedsConnection: "Connect to the internet to continue your free trial"
+        case .trialClockBehind: Self.clockBehindText
         case .trialEnded: "Your free trial has ended — buy in Settings"
         case .grace(let days, let warn): warn ? "Connect to the internet within \(days) day\(days == 1 ? "" : "s") to keep using OpenReaction" : nil
         case .checkRequired: "Connect to the internet to verify your license"

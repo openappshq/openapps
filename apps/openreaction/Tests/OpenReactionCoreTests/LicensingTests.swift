@@ -18,7 +18,12 @@ struct LicensingTests {
     final class Clock: @unchecked Sendable {
         static let start = Date(timeIntervalSince1970: 1_800_000_000)
         var now = Clock.start
-        func advance(_ seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
+        /// The monotonic clock: moves forward with `advance`, never back.
+        var uptime: TimeInterval = 1_000
+        func advance(_ seconds: TimeInterval) {
+            now = now.addingTimeInterval(seconds)
+            uptime += max(0, seconds)
+        }
         static let day: TimeInterval = 86_400
     }
 
@@ -182,7 +187,7 @@ struct LicensingTests {
         let clock = self.clock
         let manager = LicenseManager(
             products: Self.products, client: client, store: store, journal: journal,
-            trialStore: trialStore, registry: registry, device: device, now: { clock.now }
+            trialStore: trialStore, registry: registry, device: device, now: { clock.now }, uptime: { clock.uptime }
         )
         manager.load()
         return manager

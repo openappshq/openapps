@@ -96,6 +96,11 @@ public enum LicenseState: Equatable, Sendable {
     /// An unregistered trial past its offline limit: "Connect to the
     /// internet to continue your free trial".
     case trialNeedsConnection
+    /// At launch or wake the clock was more than an hour behind
+    /// `last_seen_at`: "Your Mac's clock is behind. Set the correct date and
+    /// time to keep using your free trial". Lifts once the clock is back
+    /// within the hour; the trial is not ended and gains no time.
+    case trialClockBehind
     case trialEnded
     case licensed
     /// Offline for a while; `daysLeft` until a check is required. The
@@ -108,7 +113,7 @@ public enum LicenseState: Equatable, Sendable {
     public var isFeatureEnabled: Bool {
         switch self {
         case .trial, .licensed, .grace: true
-        case .trialUnavailable, .trialNeedsConnection, .trialEnded, .checkRequired, .revoked: false
+        case .trialUnavailable, .trialNeedsConnection, .trialClockBehind, .trialEnded, .checkRequired, .revoked: false
         }
     }
 }
@@ -148,11 +153,14 @@ public enum LicensePolicy {
         return .checkRequired
     }
 
-    /// Derives the trial's state: ended at `duration` of elapsed time, and an
-    /// unregistered trial stops at its offline limit until the registry answers.
-    public static func trialState(_ trial: TrialRecord, timing: TrialTiming, now: Date) -> LicenseState {
+    /// Derives the trial's state: ended at `duration` of elapsed time; off
+    /// while a clock found behind at launch or wake (`clockBehind`) still is;
+    /// and an unregistered trial stops at its offline limit until the
+    /// registry answers.
+    public static func trialState(_ trial: TrialRecord, timing: TrialTiming, clockBehind: Bool = false, now: Date) -> LicenseState {
         let elapsed = trial.elapsed(now: now)
         if elapsed >= timing.duration { return .trialEnded }
+        if clockBehind, trial.clockBehind(now: now) { return .trialClockBehind }
         if !trial.registered, elapsed >= timing.offlineLimit { return .trialNeedsConnection }
         let days = Int(ceil((timing.duration - elapsed) / timing.day))
         return .trial(daysLeft: min(3, max(1, days)))
@@ -168,14 +176,20 @@ public enum LicensePolicy {
         return candidates.min()
     }
 
-    /// The next moment the trial's state changes on the local clock: a
-    /// day boundary (days left, the offline limit) or the end. Elapsed time
-    /// only moves once the clock is past `last_seen_at`.
-    public static func nextTrialDeadline(_ trial: TrialRecord, timing: TrialTiming, now: Date) -> Date? {
+    /// The next moment, on the wall clock, the trial's state may change: a
+    /// day boundary (days left, the offline limit) or the end, counted from
+    /// the time already observed — so a clock running behind `last_seen_at`
+    /// still gets a timer when the boundary is due — or, while the clock is
+    /// behind, the moment it would be back within the hour.
+    public static func nextTrialDeadline(_ trial: TrialRecord, timing: TrialTiming, clockBehind: Bool = false, now: Date) -> Date? {
+        if clockBehind, trial.clockBehind(now: now) {
+            return trial.lastSeenAt.addingTimeInterval(-clockRollbackTolerance)
+        }
         let observed = max(now, trial.lastSeenAt)
         return (1...3).map { trial.startedAt.addingTimeInterval(Double($0) * timing.day) }
             .filter { $0 > observed }
             .min()
+            .map { now.addingTimeInterval($0.timeIntervalSince(observed)) }
     }
 
     /// Backoff after `failures` consecutive failed checks: 1 min doubling to 1 h.
@@ -391,6 +405,8 @@ public struct LicenseSnapshot: Equatable, Sendable {
     /// The trial record could not be read or saved.
     public var trialStorageError: LicenseStoreError?
     public var trialTiming: TrialTiming
+    /// The clock was found behind `last_seen_at` at launch or wake.
+    public var trialClockBehind: Bool
     /// When the app layer should call `tick` next (absolute, so a timer
     /// re-armed later from the same snapshot does not drift), if anything
     /// is scheduled.
@@ -402,8 +418,9 @@ public struct LicenseSnapshot: Equatable, Sendable {
         record: LicenseRecord? = nil, licenseRead: Bool = false, isRestricted: Bool = false,
         storageError: LicenseStoreError? = nil, journalError: Bool = false, journalUnreadable: Bool = false,
         trial: TrialRecord? = nil, trialStorageError: LicenseStoreError? = nil, trialTiming: TrialTiming = .standard,
-        nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
+        trialClockBehind: Bool = false, nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
     ) {
+        self.trialClockBehind = trialClockBehind
         self.record = record
         self.licenseRead = licenseRead
         self.isRestricted = isRestricted
@@ -427,7 +444,7 @@ public struct LicenseSnapshot: Equatable, Sendable {
             return policy
         }
         guard licenseRead, let trial else { return .trialUnavailable }
-        return LicensePolicy.trialState(trial, timing: trialTiming, now: now)
+        return LicensePolicy.trialState(trial, timing: trialTiming, clockBehind: trialClockBehind, now: now)
     }
 }
 

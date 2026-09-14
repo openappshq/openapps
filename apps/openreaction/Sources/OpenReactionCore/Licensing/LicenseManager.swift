@@ -42,6 +42,13 @@ public final class LicenseManager {
     private let registry: any TrialRegistryClient
     private let device: any DeviceIdentity
     private let now: @Sendable () -> Date
+    /// Seconds on a monotonic clock that keeps counting through sleep.
+    private let uptime: @Sendable () -> TimeInterval
+
+    /// `CLOCK_MONOTONIC`, which on macOS keeps counting while asleep.
+    public nonisolated static func continuousUptime() -> TimeInterval {
+        TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1_000_000_000
+    }
 
     public private(set) var record: LicenseRecord?
     /// The license record was read, present or positively absent. No trial
@@ -78,6 +85,11 @@ public final class LicenseManager {
     /// A registry answer (the start on the local clock) whose record could
     /// not be saved yet. Retried on ticks; the registry is not asked again.
     private var pendingRegistrationStart: Date?
+    /// The monotonic reading at the last tick that counted trial time.
+    private var lastTickUptime: TimeInterval?
+    /// The clock was more than an hour behind `last_seen_at` at launch or
+    /// wake; the core stays off until it is within the hour again.
+    public private(set) var trialClockBehind = false
     /// The fallback device id the store is known to hold; only that id is
     /// ever sent.
     private var durableFallbackID: String?
@@ -157,8 +169,10 @@ public final class LicenseManager {
     public nonisolated init(
         products: LicenseProducts, client: any LicenseClient, store: any LicenseStore,
         journal: any InvalidationJournal, trialStore: any TrialStore, registry: any TrialRegistryClient,
-        device: any DeviceIdentity, trialTiming: TrialTiming = .standard, now: @escaping @Sendable () -> Date = Date.init
+        device: any DeviceIdentity, trialTiming: TrialTiming = .standard, now: @escaping @Sendable () -> Date = Date.init,
+        uptime: @escaping @Sendable () -> TimeInterval = LicenseManager.continuousUptime
     ) {
+        self.uptime = uptime
         self.products = products
         self.client = client
         self.store = store
@@ -260,6 +274,7 @@ public final class LicenseManager {
             record: record, licenseRead: licenseRead, isRestricted: isRestricted, storageError: storageError,
             journalError: journalError, journalUnreadable: journalUnreadable,
             trial: trial, trialStorageError: trialApplies ? trialStorageError : nil, trialTiming: trialTiming,
+            trialClockBehind: trialClockBehind,
             nextCheckAt: nextCheckDelay.map { current.addingTimeInterval($0) },
             nextDeadline: nextDeadline, hasPendingCleanups: !pendingCleanups.isEmpty
         )
@@ -277,7 +292,7 @@ public final class LicenseManager {
     public var nextDeadline: Date? {
         if let record { return LicensePolicy.nextDeadline(record: record, now: now()) }
         guard licenseRead, let trial else { return nil }
-        return LicensePolicy.nextTrialDeadline(trial, timing: trialTiming, now: now())
+        return LicensePolicy.nextTrialDeadline(trial, timing: trialTiming, clockBehind: trialClockBehind, now: now())
     }
 
     /// The trial is what decides the state: no license record, and that is known.
@@ -734,7 +749,21 @@ public final class LicenseManager {
     /// (wake from sleep, the network back, "Try again") asks the registry
     /// without waiting out the backoff; a `Retry-After` still holds.
     public func tick(wake: Bool = false) async {
+        await housekeeping(prompted: wake, woke: false)
+    }
+
+    /// Wake from sleep: a tick that asks the registry at once and first
+    /// checks whether the clock is now more than an hour behind the trial's
+    /// `last_seen_at`.
+    public func wake() async {
+        await housekeeping(prompted: true, woke: true)
+    }
+
+    private func housekeeping(prompted wake: Bool, woke: Bool) async {
         await perform {
+            if woke, self.trialApplies, let trial = self.trial, trial.clockBehind(now: self.now()) {
+                self.trialClockBehind = true
+            }
             self.retryStorage()
             self.settleTrial()
             self.commitPendingRegistration()
@@ -892,6 +921,9 @@ public final class LicenseManager {
                 trial = stored
                 trialLoad = .present
                 lastTrialSaveAt = now()
+                // Launch: a clock far behind what was already seen keeps the core off.
+                trialClockBehind = stored.clockBehind(now: now())
+                lastTickUptime = uptime()
             } else {
                 trial = nil
                 trialLoad = .absent
@@ -931,6 +963,8 @@ public final class LicenseManager {
         trialDirty = false
         trialSaveRequired = false
         trialEndSaved = false
+        trialClockBehind = false
+        lastTickUptime = uptime()
         trialGeneration += 1
         lastTrialSaveAt = current
         registryFailures = 0
@@ -956,13 +990,28 @@ public final class LicenseManager {
         }
     }
 
-    /// Raises `last_seen_at` in memory; saves it hourly, once when the trial
-    /// has ended, whenever a save is owed, and on quit (`force`).
+    /// Raises `last_seen_at` in memory to `max(last_seen_at + monotonic time
+    /// since the last tick, now)`, so a frozen or set-back wall clock never
+    /// pauses the trial; saves it hourly, once when the trial has ended,
+    /// whenever a save is owed, and on quit (`force`). While a clock found
+    /// behind at launch or wake still is, nothing is added or saved.
     private func noteTrialTime(force: Bool = false) {
         guard trialApplies, var updated = trial else { return }
         let current = now()
-        if current > updated.lastSeenAt {
-            updated.lastSeenAt = current
+        let upNow = uptime()
+        if trialClockBehind {
+            lastTickUptime = upNow // time spent behind is never added
+            guard !updated.clockBehind(now: current) else {
+                notify()
+                return
+            }
+            trialClockBehind = false
+        }
+        let moved = lastTickUptime.map { max(0, upNow - $0) } ?? 0
+        lastTickUptime = upNow
+        let observed = max(updated.lastSeenAt.addingTimeInterval(moved), current)
+        if observed > updated.lastSeenAt {
+            updated.lastSeenAt = observed
             trial = updated
             trialDirty = true
         }

@@ -65,23 +65,69 @@ extension LicensingTests {
         #expect(manager.nextCheckDelay == nil)
     }
 
-    @Test("14. Setting the clock back never gives trial time back")
+    @Test("14. A clock set back 5 days at relaunch: core off with \"clock is behind\", nothing saved; corrected, Trial with 1 day left")
     func case14_clockSetBack() async {
         trialStore.record = trialRecord(elapsed: 2 * Day.day)
         #expect(makeManager().state == .trial(daysLeft: 1))
         clock.advance(-5 * Day.day)
         let relaunched = makeManager()
+        #expect(relaunched.state == .trialClockBehind)
+        #expect(!relaunched.isFeatureEnabled)
+        #expect(relaunched.nextDeadline == Clock.start.addingTimeInterval(-3600))
+        await relaunched.checkOnLaunch()
+        for _ in 0..<3 {
+            clock.uptime += 3600 // the app keeps running with the clock still wrong
+            await relaunched.tick()
+        }
+        relaunched.saveTrialBeforeQuit()
+        #expect(relaunched.state == .trialClockBehind)
+        #expect(trialStore.saves.isEmpty) // nothing saved
+        #expect(relaunched.trial?.lastSeenAt == Clock.start) // no time added, trial not ended
+        // Corrected to within the hour: back on, with the day that was left.
+        clock.now = Clock.start.addingTimeInterval(-30 * 60)
         #expect(relaunched.state == .trial(daysLeft: 1))
-        #expect(relaunched.isFeatureEnabled)
         await relaunched.tick()
-        #expect(trialStore.record?.lastSeenAt == Clock.start) // never lowered
-        // Time used stays used while the clock is behind ...
-        clock.advance(4 * Day.day)
+        #expect(!relaunched.trialClockBehind)
         #expect(relaunched.state == .trial(daysLeft: 1))
         #expect(relaunched.trial?.elapsed(now: clock.now) == 2 * Day.day)
-        // ... and runs on once the clock passes what was seen.
-        clock.advance(2 * Day.day + 60) // the saved mark plus 1 day and a minute
-        #expect(relaunched.state == .trialEnded)
+    }
+
+    @Test("28. A frozen or set-back wall clock does not pause a running trial: monotonic time ends it", arguments: [0, -2 * 3600] as [TimeInterval])
+    func case28_monotonicTimeKeepsCounting(wallChange: TimeInterval) async {
+        trialStore.record = trialRecord(elapsed: Day.day)
+        let manager = makeManager()
+        clock.now = clock.now.addingTimeInterval(wallChange) // frozen from here on
+        for hour in 1...48 {
+            clock.uptime += 3600
+            await manager.tick()
+            if hour == 24 {
+                #expect(manager.state == .trial(daysLeft: 1))
+                // The end is a day of observed time away: the timer is armed for it.
+                #expect(manager.nextDeadline == clock.now.addingTimeInterval(Day.day))
+            }
+        }
+        #expect(manager.state == .trialEnded)
+        #expect(!manager.isFeatureEnabled)
+        #expect(manager.trial?.lastSeenAt == Clock.start.addingTimeInterval(2 * Day.day))
+        #expect(trialStore.record?.lastSeenAt == Clock.start.addingTimeInterval(2 * Day.day)) // saved at the end
+        #expect(!manager.trialClockBehind) // running, not launched or woken
+    }
+
+    @Test("A clock found behind on wake turns the core off until it is within the hour; running without a wake keeps counting")
+    func clockBehindOnWake() async {
+        trialStore.record = trialRecord(elapsed: Day.day)
+        let manager = makeManager()
+        clock.now = clock.now.addingTimeInterval(-3 * 3600)
+        await manager.tick()
+        #expect(manager.state == .trial(daysLeft: 2)) // no wake: not checked
+        await manager.wake()
+        #expect(manager.state == .trialClockBehind)
+        #expect(!manager.isFeatureEnabled)
+        clock.advance(2.5 * 3600) // within the hour again
+        #expect(manager.state == .trial(daysLeft: 2))
+        await manager.tick()
+        #expect(!manager.trialClockBehind)
+        #expect(manager.trial?.lastSeenAt == Clock.start) // the time behind added nothing
     }
 
     @Test("15. The core switches off on time, from memory, while saves fail and the registry is down")
@@ -246,7 +292,7 @@ extension LicensingTests {
         #expect(trialStore.record?.startedAt == Clock.start) // the earlier, provisional start
     }
 
-    @Test("20. A registration that extends a running trial is saved before it counts: it still stops at 24 h while the save fails")
+    @Test("29. A registration that extends a running trial is saved before it counts: it still stops at 24 h while the save fails")
     func case20_extensionSavedFirst() async {
         trialStore.record = trialRecord(elapsed: 23 * 3600, registered: false)
         registry.result = .registered(startedAt: clock.now, now: clock.now) // the registry agrees on the start
@@ -344,7 +390,7 @@ extension LicensingTests {
         #expect(request == ["app": "openreaction", "device": hardwareHash, "env": "test"])
     }
 
-    @Test("A stored record for a retired trial key, or for another product, is not a license: the trial rules apply", arguments: [true, false])
+    @Test("31. A stored record for a retired trial key, or for another product, is not a license: the trial rules apply", arguments: [true, false])
     func nonPaidRecordIsNotALicense(legacyTrialKind: Bool) async throws {
         let paid = paidRecord(lastSuccessAge: 3600)
         var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(paid)) as? [String: Any])
@@ -424,7 +470,7 @@ extension LicensingTests {
         #expect(Set(registry.devices).count == 1)
     }
 
-    @Test("A fallback id is saved before it is ever sent")
+    @Test("30. A fallback id is saved before every registry request that uses it")
     func fallbackDeviceIDSavedFirst() async {
         trialStore.record = trialRecord(elapsed: 3600, registered: false) // made while the UUID was readable
         device.uuid = nil
