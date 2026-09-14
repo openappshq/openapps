@@ -300,29 +300,20 @@ public struct InputGate: Sendable {
         /// The destination was found changed; waiting for it to come back
         /// or for the user to discard.
         var destinationChanged = false
-        /// The focus generation each held event was typed under.
-        var heldGeneration: [Int: Int] = [:]
-        /// Key code and direction of each held key event, so a dropped press
-        /// takes its release with it.
-        var heldKeys: [Int: HeldKey] = [:]
-
-        struct HeldKey: Equatable {
-            let keyCode: UInt16
-            let isDown: Bool
-        }
-        /// Generations at which the origin was found *not* focused: input
-        /// held under them was typed elsewhere and never goes to the origin.
-        var mismatchedGenerations: Set<Int> = []
+        /// The focus has changed since the batch formed: nothing typed from
+        /// here on joins it (a new press passes straight through to whatever
+        /// is focused), only releases of presses it already holds do. So the
+        /// batch only ever holds what was typed in the origin before focus
+        /// left, and it is replayed or discarded as a whole.
+        var frozen = false
 
         var waitsForDestination: Bool { awaitingDestination || destinationChanged }
 
         /// Appends an event, tracking presses chronologically so their
         /// releases are held too (a release then a new press counts again).
-        mutating func hold(_ event: HeldEvent, generation: Int) {
+        mutating func hold(_ event: HeldEvent) {
             held.append(event)
-            heldGeneration[event.id] = generation
             if case .key(let key) = event {
-                heldKeys[event.id] = HeldKey(keyCode: key.keyCode, isDown: key.isDown)
                 if key.isDown { heldDownKeys.insert(key.keyCode) } else { heldDownKeys.remove(key.keyCode) }
             }
         }
@@ -404,12 +395,13 @@ public struct InputGate: Sendable {
             if !event.isDown, !ownsPress {
                 return KeyResult(decision: .pass, effects: [])
             }
-            if current.destinationChanged, !ownsPress {
-                // The origin is not focused: this was typed into whatever is,
-                // and goes there now. It never joins the origin's batch.
+            if current.frozen, event.isDown {
+                // The focus has left the origin since the batch formed: this
+                // was typed into whatever is focused now and goes there at
+                // once. Only releases of presses the batch holds join it.
                 return KeyResult(decision: .pass, effects: [])
             }
-            current.hold(.key(event), generation: focusGeneration)
+            current.hold(.key(event))
             transaction = current
             var effects: [GateEffect] = []
             if event.secureInput, current.phase.isBeforeCommit {
@@ -448,7 +440,7 @@ public struct InputGate: Sendable {
             let effects = typed(string)
             if !wasHolding, var started = transaction, case .tokenStart = started.kind {
                 // A boundary colon: hold it (and what follows) until the probe answers.
-                started.hold(.key(event), generation: focusGeneration)
+                started.hold(.key(event))
                 transaction = started
                 return KeyResult(decision: .hold, effects: effects)
             }
@@ -534,8 +526,8 @@ public struct InputGate: Sendable {
         if isShuttingDown, targetsOwnApp {
             return KeyResult(decision: .pass, effects: [])
         }
-        if var current = transaction, current.phase.holdsMouse, !current.destinationChanged {
-            current.hold(.mouse(id: id, kind: kind), generation: focusGeneration)
+        if var current = transaction, current.phase.holdsMouse, !current.frozen {
+            current.hold(.mouse(id: id, kind: kind))
             transaction = current
             return KeyResult(decision: .hold, effects: [])
         }
@@ -552,6 +544,12 @@ public struct InputGate: Sendable {
     /// Focus may have moved (app activation, Accessibility notification).
     public mutating func focusMayHaveMoved() -> [GateEffect] {
         var effects = closeGate()
+        if var current = transaction, isShuttingDown || current.cancelled {
+            // The batch is frozen from the first focus change on: what is
+            // typed now goes where it is typed, not into the origin's batch.
+            current.frozen = true
+            transaction = current
+        }
         if var current = transaction, current.destinationChanged {
             // Maybe the field is back: ask again.
             current.destinationChanged = false
@@ -829,31 +827,15 @@ public struct InputGate: Sendable {
         var effects: [GateEffect] = []
         let pending = current.pendingReplay
         if matches {
+            // The whole batch: it only ever holds what was typed in the origin
+            // before focus left (`frozen`), presses and their releases together.
             current.pendingReplay = []
-            // What was typed while the origin was known not to be focused
-            // was meant for another field: it never goes into this one. A
-            // dropped press takes its release with it.
-            var elsewhere: [Int] = []
-            var droppedPresses: Set<UInt16> = []
-            for eventID in pending {
-                let key = current.heldKeys[eventID]
-                let typedElsewhere = current.mismatchedGenerations.contains(current.heldGeneration[eventID] ?? -1)
-                if typedElsewhere || (key.map { !$0.isDown && droppedPresses.contains($0.keyCode) } ?? false) {
-                    elsewhere.append(eventID)
-                    if let key, key.isDown { droppedPresses.insert(key.keyCode) }
-                } else if let key {
-                    if key.isDown { droppedPresses.remove(key.keyCode) }
-                }
-            }
-            current.replayingDownKeys.subtract(droppedPresses)
-            let batch = pending.filter { !elsewhere.contains($0) }
-            if !elsewhere.isEmpty { effects += [.drop(eventIDs: elsewhere), .inputLost(eventCount: elsewhere.count)] }
-            if !batch.isEmpty { effects.append(.replayGuarded(eventIDs: batch, transaction: id)) }
+            if !pending.isEmpty { effects.append(.replayGuarded(eventIDs: pending, transaction: id)) }
         } else if isShuttingDown {
             // Kept, not sent elsewhere: the focus may come back, or the user
             // may discard. Nothing else moves meanwhile.
             current.destinationChanged = true
-            current.mismatchedGenerations.insert(focusGeneration)
+            current.frozen = true
             transaction = current
             return [.destinationChanged(transaction: id)]
         } else {
@@ -880,7 +862,7 @@ public struct InputGate: Sendable {
         current.pendingReplay = eventIDs + current.pendingReplay
         current.awaitingDestination = false
         current.destinationChanged = true
-        current.mismatchedGenerations.insert(focusGeneration)
+        current.frozen = true
         transaction = current
         return [.destinationChanged(transaction: id)]
     }
@@ -1018,7 +1000,6 @@ public struct InputGate: Sendable {
         nextTokenID += 1
         var next = Transaction(id: nextTransactionID, kind: .tokenStart(tokenID: nextTokenID), focusGeneration: focusGeneration, phase: .probing)
         next.held = held
-        for entry in held { next.heldGeneration[entry.id] = focusGeneration }
         next.recomputeHeldDownKeys()
         if case .open(_, let target) = capture { next.origin = target }
         transaction = next
@@ -1032,7 +1013,6 @@ public struct InputGate: Sendable {
         let id = nextTransactionID
         var next = Transaction(id: id, kind: .replacement(typed: typed, target: target), focusGeneration: focusGeneration, phase: .verifying)
         next.held = held
-        for entry in held { next.heldGeneration[entry.id] = focusGeneration }
         next.recomputeHeldDownKeys()
         next.origin = target
         transaction = next

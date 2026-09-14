@@ -242,6 +242,27 @@ struct GateRunnerShutdownTests {
         #expect(fixture.runner.isIdle)
     }
 
+    @Test func returningToTheFieldBeforeTheLookupAnswersReplaysOnlyTheOriginalTyping() {
+        // Scenario 1 through the runner: A→B, lookup out, x typed in B, back
+        // to A before the answer, stale → re-check → A: x is not in the batch.
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        fixture.runner.focusMayHaveMoved() // B
+        fixture.runner.flushAck(transaction: 1) // asks
+        #expect(fixture.key(7, "x") == .pass) // typed in B, routed there by the OS
+        #expect(fixture.key(7, down: false) == .pass)
+        fixture.runner.focusMayHaveMoved() // back to A before the answer
+        fixture.answerDestination() // stale: asked again
+        #expect(fixture.main.destinationChecks.count == 2)
+        fixture.answerDestination() // A
+        #expect(fixture.poster.ops == [.flush(1), .replay(1), .flush(1)]) // the colon alone
+        fixture.poster.runQueue()
+        #expect(fixture.poster.runs == [.posted(1)])
+        fixture.runner.flushAck(transaction: 1)
+        #expect(fixture.runner.isIdle)
+        #expect(fixture.main.lostInput.isEmpty)
+    }
+
     @Test func theFeatureLockReachesARunnerCreatedAfterItWasHandedOut() {
         // The app hands the lock to the license layer before `start()`
         // creates the runner (the real order in AppDelegate).

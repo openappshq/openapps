@@ -1242,21 +1242,18 @@ struct InputGateTests {
         // The release of the held Backspace still belongs to its press.
         #expect(harness.release(KeyCode.delete).decision == .hold)
         let backspaceUp = harness.nextID
-        // The field comes back: every focus change asks again. The colon batch
-        // (typed before the stop) goes in; the Backspace was typed under the
-        // generation the lookup found focused elsewhere — nobody knows where
-        // it was meant to go, so it is dropped with its release, and reported.
+        // The field comes back: every focus change asks again. The batch is
+        // what was typed before focus left — the colon and the Backspace —
+        // and the Backspace's release follows its press, never split from it.
         let asked = harness.run(harness.gate.focusMayHaveMoved())
         #expect(asked.contains(.checkDestination(transaction: 1, target: field)))
         let out = harness.answerDestination(matches: true)
-        #expect(guardedReplays(out) == [Array(1...6)])
-        #expect(out.contains(.drop(eventIDs: [backspace])))
-        #expect(out.contains(.inputLost(eventCount: 1)))
+        #expect(guardedReplays(out) == [Array(1...6) + [backspace]])
+        #expect(!out.contains { if case .inputLost = $0 { return true } else { return false } })
         #expect(out.last == .confirmReplay(transaction: 1))
         harness.run(harness.gate.replayExecuted(transaction: 1))
         let rest = harness.answerDestination(matches: true)
-        #expect(guardedReplays(rest).isEmpty)
-        #expect(rest.contains(.drop(eventIDs: [backspaceUp])))
+        #expect(guardedReplays(rest) == [[backspaceUp]])
         let done = harness.run(harness.gate.replayExecuted(transaction: 1))
         #expect(ended(done, 1, recorded: false))
         #expect(harness.gate.shutdownOutcome == .interrupted)
@@ -1287,23 +1284,67 @@ struct InputGateTests {
         #expect(!harness.gate.isHolding)
     }
 
-    @Test func aKeyHeldDuringALookupThatFindsAnotherFieldIsNeverSentToTheOriginal() {
+    @Test func aKeyTypedInAnotherFieldWhileTheLookupIsOutGoesThereAndIsNeverLost() {
+        // Scenario 2: A→B, lookup outstanding, x typed in B, mismatch, back to A.
         var harness = makeHarness()
         harness.type(":ta")
         harness.run(harness.gate.beginShutdown())
-        harness.run(harness.gate.focusMayHaveMoved()) // B, unbeknown to the gate's batch
+        harness.run(harness.gate.focusMayHaveMoved()) // B: the batch is frozen from here
         harness.ack() // asks
-        #expect(harness.press(7, "x").decision == .hold) // typed in B while the lookup is out
-        let x = harness.nextID
+        #expect(harness.press(7, "x").decision == .pass) // typed in B: goes to B now
+        #expect(harness.release(7).decision == .pass)
         harness.answerDestination(matches: false) // the lookup found B
         harness.run(harness.gate.focusMayHaveMoved()) // back to A
         let out = harness.answerDestination(matches: true)
+        #expect(guardedReplays(out) == [Array(1...6)]) // the batch: A's typing only
+        harness.ack()
+        #expect(!harness.gate.isHolding)
+        #expect(!harness.log.contains { if case .inputLost = $0 { return true } else { return false } })
+    }
+
+    @Test func returningBeforeTheLookupAnswersNeverLetsTheOtherFieldsTypingIn() {
+        // Scenario 1: A→B, lookup outstanding, x typed in B, back to A before
+        // the (stale) answer; the re-check matches A: x must not be in the batch.
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        harness.run(harness.gate.focusMayHaveMoved()) // B
+        harness.ack() // asks
+        #expect(harness.press(7, "x").decision == .pass)
+        #expect(harness.release(7).decision == .pass)
+        harness.run(harness.gate.focusMayHaveMoved()) // back to A before the answer
+        harness.run(harness.gate.destinationStale(transaction: 1)) // the runner found the answer stale
+        harness.answeredDestinationChecks += 1
+        let out = harness.answerDestination(matches: true)
         #expect(guardedReplays(out) == [Array(1...6)])
-        harness.ack() // the colon's flush; x is drained next — and x was typed in B
-        let next = harness.answerDestination(matches: true)
-        #expect(next.contains(.drop(eventIDs: [x])))
-        #expect(next.contains(.inputLost(eventCount: 1)))
-        #expect(guardedReplays(next).isEmpty)
+        harness.ack()
+        #expect(!harness.gate.isHolding)
+        #expect(harness.gate.shutdownOutcome == .delivered)
+    }
+
+    @Test func aReleaseInAnotherFieldFollowsItsPressIntoTheOriginal() {
+        // Scenario 3: a press held in A, shutdown, B, mismatch, the key released
+        // in B, back to A: the down and its up are replayed together.
+        var harness = makeHarness()
+        harness.press(41, ":", modifiers: .shift) // held, still down
+        harness.run(harness.gate.beginShutdown())
+        harness.run(harness.gate.focusMayHaveMoved()) // B
+        harness.ack()
+        harness.answerDestination(matches: false)
+        #expect(harness.release(41, modifiers: .shift).decision == .hold) // its press is in the batch
+        let colonUp = harness.nextID
+        // Scenario 4: a press made in B has no batch entry: it and its release pass.
+        #expect(harness.press(7, "x").decision == .pass)
+        #expect(harness.release(7).decision == .pass)
+        harness.run(harness.gate.focusMayHaveMoved()) // back to A
+        let out = harness.answerDestination(matches: true)
+        #expect(guardedReplays(out) == [[1]]) // the down ...
+        harness.ack()
+        let rest = harness.answerDestination(matches: true)
+        #expect(guardedReplays(rest) == [[colonUp]]) // ... and its up, never split
+        harness.ack()
+        #expect(!harness.gate.isHolding)
+        #expect(!harness.log.contains { if case .inputLost = $0 { return true } else { return false } })
     }
 
     @Test func aRefusedReplayGoesBackToWaitingAndIsNeverDelivered() {
@@ -1402,13 +1443,11 @@ struct InputGateTests {
         let effects = harness.answerDestination(matches: false)
         #expect(effects == [.destinationChanged(transaction: id)])
         #expect(!harness.log.contains(.replayGuarded(eventIDs: [c], transaction: id)))
-        // Back in the field: `c` was typed under the generation found focused
-        // elsewhere, so it cannot be trusted to belong here — dropped, reported.
+        // Back in the field: `c` was typed before any focus change was seen,
+        // so it belongs to the batch and goes in with it.
         harness.run(harness.gate.focusMayHaveMoved())
         let out = harness.answerDestination(matches: true)
-        #expect(guardedReplays(out).isEmpty)
-        #expect(out.contains(.drop(eventIDs: [c])))
-        #expect(out.contains(.inputLost(eventCount: 1)))
+        #expect(guardedReplays(out) == [[c]])
         harness.run(harness.gate.replayExecuted(transaction: id))
         #expect(harness.gate.shutdownOutcome == .failed)
     }
