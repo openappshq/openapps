@@ -272,15 +272,22 @@ public protocol InvalidationJournal: Sendable {
     /// or the entry is unreadable.
     func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry?
     /// Written synchronously, before the record is touched, unless the
-    /// journal already holds a newer entry (a later revocation is never
-    /// downgraded). True when the journal now durably holds an entry with
-    /// at least this sequence.
+    /// journal already holds a readable newer entry (a later revocation is
+    /// never downgraded). Replaces atomically: the new entry is durable and
+    /// read back before anything older — readable or not — is retired, so
+    /// a failure at any step leaves what was there. True when the journal
+    /// now durably holds an entry with at least this sequence.
     func record(instanceID: String, entry: JournalEntry) -> Bool
-    /// Removes the entry only if its sequence is at most `seq` — a newer
-    /// revocation survives an older clear. An entry that cannot be read is
-    /// removed too: only an authoritative answer asks for a clear. True when
-    /// the journal now durably holds no entry with a sequence up to `seq`.
+    /// Removes a readable entry whose sequence is at most `seq` — a newer
+    /// revocation survives an older clear, and an entry that cannot be read
+    /// is never removed by a clear (false: nothing changed). True when the
+    /// journal now durably holds no readable entry with a sequence up to `seq`.
     func clear(instanceID: String, upTo seq: UInt64) -> Bool
+    /// Settles an entry that cannot be read with an authoritative answer:
+    /// `entry` (a fresh revocation) or nil (Dodo said valid). Atomic like
+    /// `record`: the replacement is durable before the unreadable data is
+    /// retired. True when durable; no change when the entry is readable.
+    func replaceUnreadable(instanceID: String, with entry: JournalEntry?) -> Bool
 }
 
 /// What the journal keeps per dead activation.

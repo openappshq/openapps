@@ -100,21 +100,38 @@ struct LicensingTests {
     final class MemoryJournal: InvalidationJournal, @unchecked Sendable {
         var entries: [String: JournalEntry] = [:]
         var failsWrites = false
+        /// Activations whose entry reads as corrupt (whatever `entries` holds
+        /// for them stands in for the unreadable bytes).
+        var unreadable: Set<String> = []
+        /// A read error for every activation.
         var readError: LicenseStoreError?
         func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry? {
             if let readError { throw readError }
+            if unreadable.contains(instanceID) { throw .corrupt }
             return entries[instanceID]
         }
+        private func isUnreadable(_ instanceID: String) -> Bool { readError != nil || unreadable.contains(instanceID) }
         func record(instanceID: String, entry: JournalEntry) -> Bool {
-            if let existing = entries[instanceID], existing.seq >= entry.seq { return true }
+            if !isUnreadable(instanceID), let existing = entries[instanceID], existing.seq >= entry.seq { return true }
             guard !failsWrites else { return false }
             entries[instanceID] = entry
+            unreadable.remove(instanceID)
+            if readError != nil { readError = nil } // the rebuilt journal is readable again
             return true
         }
         func clear(instanceID: String, upTo seq: UInt64) -> Bool {
+            if isUnreadable(instanceID) { return false }
             if let existing = entries[instanceID], existing.seq > seq { return true }
             guard !failsWrites else { return false }
             entries[instanceID] = nil
+            return true
+        }
+        func replaceUnreadable(instanceID: String, with entry: JournalEntry?) -> Bool {
+            guard isUnreadable(instanceID) else { return true }
+            guard !failsWrites else { return false }
+            entries[instanceID] = entry
+            unreadable.remove(instanceID)
+            readError = nil
             return true
         }
     }
@@ -1355,6 +1372,127 @@ struct LicensingTests {
         #expect(journal.entries["inst_1"] == JournalEntry(seq: 2))
         journal.readError = nil
         #expect(makeManager().state == .revoked)
+    }
+
+    // MARK: G1–G3 — recovery from an unreadable journal
+
+    @Test("G1. A failed recovery clear never outranks a later revocation")
+    func failedRecoveryClearDoesNotOutrankALaterRevocation() async {
+        // Record seq 1 protected by an unreadable entry. valid:true queues a
+        // failed rebuild while the Keychain refuses; invalid then journals
+        // seq 3; once the journal writes again, the retry must not erase it.
+        store.record = paidRecord(lastSuccessAge: 60)
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
+        journal.unreadable = ["inst_1"]
+        let manager = makeManager()
+        #expect(manager.state == .checkRequired)
+        journal.failsWrites = true
+        store.failsWrites = true
+        client.validation = .valid(serverDate: clock.now)
+        await manager.check()
+        #expect(manager.state == .licensed)
+        #expect(manager.journalError)
+        client.validation = .invalid
+        await manager.check()
+        #expect(manager.state == .revoked)
+        journal.failsWrites = false
+        await manager.tick() // the newest request (the revocation) runs, not the stale rebuild
+        #expect(journal.entries["inst_1"] == JournalEntry(seq: 3))
+        #expect(!journal.unreadable.contains("inst_1"))
+        client.validation = .unreachable
+        let restarted = makeManager()
+        #expect(restarted.state == .revoked)
+        await restarted.checkOnLaunch()
+        #expect(!restarted.isFeatureEnabled)
+    }
+
+    @Test("G2. A new paid activation is not locked by the old activation's unreadable journal")
+    func newActivationIsNotLockedByOldUnreadableJournal() async {
+        store.record = paidRecord(lastSuccessAge: 60)
+        journal.unreadable = ["inst_1"]
+        client.activation = .activated(activation(Self.paid, instance: "inst_new"))
+        let manager = makeManager()
+        #expect(manager.state == .checkRequired)
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(manager.state == .licensed)
+        #expect(manager.isFeatureEnabled)
+        #expect(!manager.journalUnreadable)
+        #expect(store.record?.instanceID == "inst_new")
+        #expect(manager.nextCheckDelay == LicensePolicy.checkInterval)
+        // The old activation's unreadable entry is left alone; it is not
+        // this activation's business.
+        #expect(journal.unreadable.contains("inst_1"))
+    }
+
+    @Test("G2. A new activation whose own journal entry is unreadable is restricted until Dodo settles it")
+    func newActivationWithUnreadableEntryIsRestricted() async {
+        journal.unreadable = ["inst_new"]
+        client.activation = .activated(activation(Self.paid, instance: "inst_new"))
+        let manager = makeManager()
+        #expect(await manager.activate(key: "KEY-PAID") == .activated(.paid))
+        #expect(manager.state == .checkRequired)
+        #expect(manager.isCheckDue)
+        #expect(manager.nextCheckDelay == 0)
+        client.validation = .valid(serverDate: clock.now)
+        await manager.tick()
+        #expect(manager.state == .licensed)
+        #expect(!journal.unreadable.contains("inst_new"))
+    }
+
+    @Test("G2. Being due means the next timer is now")
+    func dueMeansNow() {
+        store.record = paidRecord(lastSuccessAge: 25 * 3600)
+        let manager = makeManager()
+        #expect(manager.isCheckDue)
+        #expect(manager.nextCheckDelay == 0)
+    }
+
+    @Test("G3. Recovery with valid:false keeps the unreadable protection until the revocation is durable")
+    func recoveryWithInvalidIsAtomic() async {
+        store.record = paidRecord(lastSuccessAge: 60)
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
+        journal.unreadable = ["inst_1"]
+        let manager = makeManager()
+        // The replacement write fails and so does the Keychain save.
+        journal.failsWrites = true
+        store.failsWrites = true
+        client.validation = .invalid
+        await manager.check()
+        #expect(manager.state == .revoked)
+        #expect(journal.unreadable.contains("inst_1")) // still protecting
+        #expect(manager.journalError)
+        client.validation = .unreachable
+        let restarted = makeManager()
+        #expect(restarted.state == .checkRequired)
+        #expect(!restarted.isFeatureEnabled)
+        await restarted.checkOnLaunch()
+        #expect(!restarted.isFeatureEnabled)
+        // The journal takes the replacement later: the revocation is durable there.
+        journal.failsWrites = false
+        await manager.tick()
+        #expect(journal.entries["inst_1"] == JournalEntry(seq: 2))
+        #expect(!journal.unreadable.contains("inst_1"))
+        #expect(makeManager().state == .revoked)
+    }
+
+    @Test("G3. Recovery with valid:true replaces the unreadable entry atomically")
+    func recoveryWithValidIsAtomic() async {
+        store.record = paidRecord(lastSuccessAge: 60)
+        journal.unreadable = ["inst_1"]
+        let manager = makeManager()
+        journal.failsWrites = true
+        client.validation = .valid(serverDate: clock.now)
+        await manager.check()
+        #expect(manager.state == .licensed)
+        #expect(journal.unreadable.contains("inst_1")) // replacement not durable: still there
+        #expect(manager.journalUnreadable)
+        #expect(makeManager().state == .checkRequired)
+        journal.failsWrites = false
+        await manager.tick()
+        #expect(!journal.unreadable.contains("inst_1"))
+        #expect(journal.entries["inst_1"] == nil)
+        #expect(!manager.journalUnreadable)
+        #expect(makeManager().state == .licensed)
     }
 
     @Test("F4. A new activation after a failed delete clears the old tombstone too")
