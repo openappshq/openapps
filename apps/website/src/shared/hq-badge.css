@@ -1,0 +1,44 @@
+/* Shared "An OpenApps HQ original" badge. Pages supply the neutral tokens. */
+.hq-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px 0 7px;
+  border: 1px solid var(--color-border-subtle, var(--border));
+  border-radius: 999px;
+  background: var(--color-bg-surface, var(--surface));
+  color: var(--color-text-primary, var(--foreground));
+  font: 13px/1 var(--font-mono);
+  white-space: nowrap;
+}
+.hq-badge img {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+/* Extend the touch target to 44px without changing the visible pill. */
+.hq-badge::after {
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+}
+@media (hover: hover) {
+  .hq-badge:hover {
+    background: var(--color-bg-hover, var(--hover));
+    border-color: var(--color-border-control, var(--muted));
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hq-badge {
+    transition:
+      background-color var(--motion-fast, 100ms),
+      border-color var(--motion-fast, 100ms);
+  }
+}
+@media (forced-colors: active) {
+  .hq-badge {
+    border-color: LinkText;
+  }
+}
