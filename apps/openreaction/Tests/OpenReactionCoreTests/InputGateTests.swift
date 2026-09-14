@@ -156,6 +156,18 @@ struct InputGateTests {
             log += effects
             return effects
         }
+
+        /// The most recent destination check, if any.
+        var lastDestinationCheck: (transaction: Int, target: FocusTarget)? {
+            log.reversed().lazy.compactMap { if case .checkDestination(let t, let target) = $0 { return (t, target) } else { return nil } }.first
+        }
+
+        /// Answers the latest destination check.
+        @discardableResult
+        mutating func answerDestination(matches: Bool) -> [Effect] {
+            guard let check = lastDestinationCheck else { return [] }
+            return run(gate.destinationChecked(transaction: check.transaction, matches: matches))
+        }
     }
 
     let anchor = CGRect(x: 10, y: 20, width: 0, height: 18)
@@ -1036,7 +1048,12 @@ struct InputGateTests {
         // macOS disabled the tap: the acknowledgement may never come. What is
         // owed is replayed in order — and the gate keeps holding until the app
         // layer confirms that the replay actually ran.
-        let effects = harness.run(harness.gate.tapInterrupted())
+        let asked = harness.run(harness.gate.tapInterrupted())
+        // First: is the focus still where the input was typed? Nothing is
+        // replayed until the app layer says so.
+        #expect(asked == [.checkDestination(transaction: 1, target: field)])
+        #expect(harness.gate.isHolding)
+        let effects = harness.answerDestination(matches: true)
         #expect(replays(effects) == [Array(1...6) + [backspace]])
         #expect(effects.last == .confirmReplay(transaction: 1))
         #expect(!ended(effects, 1, recorded: false))
@@ -1050,8 +1067,9 @@ struct InputGateTests {
         // Timeouts and late flush acks change nothing now.
         #expect(harness.run(harness.gate.timeout(transaction: 1)).isEmpty)
         #expect(harness.ack().isEmpty)
-        // The replay ran: the fresh input goes out after it, the same way.
-        let next = harness.run(harness.gate.replayExecuted(transaction: 1))
+        // The replay ran: the fresh input is checked and goes out after it.
+        #expect(harness.run(harness.gate.replayExecuted(transaction: 1)) == [.checkDestination(transaction: 1, target: field)])
+        let next = harness.answerDestination(matches: true)
         #expect(replays(next) == [fresh])
         #expect(next.last == .confirmReplay(transaction: 1))
         #expect(harness.gate.isHolding)
@@ -1070,14 +1088,16 @@ struct InputGateTests {
         let xDown = harness.nextID
         harness.run(harness.gate.beginShutdown())
         // The insertion queue could not create the flush marker.
-        let effects = harness.run(harness.gate.streamFailed(transaction: id))
+        #expect(harness.run(harness.gate.streamFailed(transaction: id)) == [.checkDestination(transaction: id, target: field)])
+        let effects = harness.answerDestination(matches: true)
         #expect(replays(effects) == [[xDown]])
         #expect(effects.last == .confirmReplay(transaction: id))
         #expect(harness.gate.isHolding)
         #expect(harness.gate.shutdownOutcome == nil)
         #expect(harness.press(8, "c").decision == .hold)
         let cDown = harness.nextID
-        let next = harness.run(harness.gate.replayExecuted(transaction: id))
+        harness.run(harness.gate.replayExecuted(transaction: id))
+        let next = harness.answerDestination(matches: true)
         #expect(replays(next) == [[cDown]])
         let done = harness.run(harness.gate.replayExecuted(transaction: id))
         #expect(ended(done, id, recorded: false))
@@ -1106,14 +1126,16 @@ struct InputGateTests {
         let backspace = harness.nextID
         // The app layer stopped waiting for acks: same protocol as an
         // interruption, outcome .failed.
-        let effects = harness.run(harness.gate.acknowledgementAbandoned())
+        harness.run(harness.gate.acknowledgementAbandoned())
+        let effects = harness.answerDestination(matches: true)
         #expect(replays(effects) == [Array(1...6) + [backspace]])
         #expect(effects.last == .confirmReplay(transaction: 1))
         #expect(harness.gate.isHolding)
         #expect(harness.press(7, "x").decision == .hold)
         let x = harness.nextID
         #expect(harness.run(harness.gate.acknowledgementAbandoned()).isEmpty) // already replaying
-        let next = harness.run(harness.gate.replayExecuted(transaction: 1))
+        harness.run(harness.gate.replayExecuted(transaction: 1))
+        let next = harness.answerDestination(matches: true)
         #expect(replays(next) == [[x]])
         harness.run(harness.gate.replayExecuted(transaction: 1))
         #expect(harness.gate.shutdownOutcome == .failed)
@@ -1128,7 +1150,68 @@ struct InputGateTests {
         harness.type(":ta")
         harness.run(harness.gate.beginShutdown())
         harness.run(harness.gate.tapInterrupted())
+        #expect(harness.run(harness.gate.destinationChecked(transaction: 99, matches: true)).isEmpty)
+        harness.answerDestination(matches: true)
         #expect(harness.run(harness.gate.replayExecuted(transaction: 99)).isEmpty)
+        #expect(harness.gate.isHolding)
+    }
+
+    // MARK: F3 — a delayed replay goes only where the input was typed
+
+    @Test func heldInputIsDroppedWhenTheFocusedFieldChangedBeforeADelayedReplay() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        harness.press(KeyCode.delete)
+        let backspace = harness.nextID
+        harness.run(harness.gate.tapInterrupted())
+        #expect(harness.lastDestinationCheck?.target == field)
+        // Focus moved (another app, a dialog, a password field): nothing is
+        // posted there. The held events are released and the user is told.
+        let effects = harness.answerDestination(matches: false)
+        #expect(replays(effects).isEmpty)
+        #expect(effects == [.drop(eventIDs: Array(1...6) + [backspace]), .inputLost(eventCount: 7), .confirmReplay(transaction: 1)])
+        #expect(harness.gate.isHolding) // still owns the stream until the queue confirms
+        let done = harness.run(harness.gate.replayExecuted(transaction: 1))
+        #expect(ended(done, 1, recorded: false))
+        #expect(harness.gate.shutdownOutcome == .interrupted)
+        #expect(!harness.gate.isHolding)
+    }
+
+    @Test func everyDelayedReplayBatchIsCheckedAgainstTheOriginalField() {
+        var harness = harnessWithToken()
+        let id = postReplacement(&harness)
+        harness.press(7, "x")
+        let x = harness.nextID
+        harness.run(harness.gate.beginShutdown())
+        harness.run(harness.gate.streamFailed(transaction: id))
+        #expect(harness.lastDestinationCheck?.target == field) // the replacement's target
+        harness.answerDestination(matches: true)
+        harness.press(8, "c")
+        let c = harness.nextID
+        // The next batch is checked on its own; this time the field changed.
+        harness.run(harness.gate.replayExecuted(transaction: id))
+        #expect(harness.lastDestinationCheck?.transaction == id)
+        let effects = harness.answerDestination(matches: false)
+        #expect(effects.contains(.drop(eventIDs: [c])))
+        #expect(effects.contains(.inputLost(eventCount: 1)))
+        #expect(!effects.contains(.replay(eventIDs: [c])))
+        #expect(!effects.contains(.replay(eventIDs: [x])))
+        harness.run(harness.gate.replayExecuted(transaction: id))
+        #expect(harness.gate.shutdownOutcome == .failed)
+    }
+
+    @Test func aDelayedReplayWithNoKnownOriginIsDropped() {
+        // Capture closed before the transaction had an origin cannot happen for
+        // a real token (a colon starts one only in an open capture); a held
+        // mouse-only transaction still answers "changed" and drops.
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        // Answers for the wrong transaction or outside a check are ignored.
+        #expect(harness.run(harness.gate.destinationChecked(transaction: 1, matches: true)).isEmpty)
+        harness.run(harness.gate.tapInterrupted())
+        #expect(harness.run(harness.gate.replayExecuted(transaction: 1)).isEmpty) // waiting for the check, not a run
         #expect(harness.gate.isHolding)
     }
 

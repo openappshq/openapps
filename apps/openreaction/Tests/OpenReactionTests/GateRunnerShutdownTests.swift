@@ -58,15 +58,40 @@ struct GateRunnerShutdownTests {
         func repost(keyCode: UInt16) {}
     }
 
+    /// The main actor's side: records effects; the test answers destination
+    /// checks the way the app layer's focus lookup would.
+    final class MainRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _effects: [GateRunner.MainEffect] = []
+        var effects: [GateRunner.MainEffect] { lock.withLock { _effects } }
+        func append(_ effects: [GateRunner.MainEffect]) { lock.withLock { _effects += effects } }
+
+        var destinationChecks: [(transaction: Int, target: FocusTarget)] {
+            effects.compactMap { if case .checkDestination(let t, let target) = $0 { return (t, target) } else { return nil } }
+        }
+
+        var lostInput: [Int] {
+            effects.compactMap { if case .inputLost(let count) = $0 { return count } else { return nil } }
+        }
+    }
+
     struct Fixture {
+        static let field = FocusTarget(pid: 1, element: 1)
         let poster = FakePoster()
+        let main = MainRecorder()
         let runner: GateRunner
 
         init() {
-            runner = GateRunner(gate: InputGate(), poster: poster) { _ in }
+            let main = self.main
+            runner = GateRunner(gate: InputGate(), poster: poster) { main.append($0) }
             runner.focusTracking(active: true)
-            // The probe request went to the (ignored) main handler; answer generation 0.
-            runner.probeResult(generation: 0, tokenID: nil, .editable(anchor: .zero, target: FocusTarget(pid: 1, element: 1)))
+            runner.probeResult(generation: 0, tokenID: nil, .editable(anchor: .zero, target: Self.field))
+        }
+
+        /// The fake focus lookup: answers the latest destination check.
+        func answerDestination(focusedOn target: FocusTarget? = Fixture.field) {
+            guard let check = main.destinationChecks.last else { return }
+            runner.destinationChecked(transaction: check.transaction, matches: target == check.target)
         }
 
         @discardableResult
@@ -91,16 +116,23 @@ struct GateRunnerShutdownTests {
         let waiter = Task { await fixture.runner.waitForShutdown() }
         await Task.yield()
 
-        // macOS disabled the tap: the colon is replayed, best effort.
+        // macOS disabled the tap: the colon is replayed, best effort — once
+        // the focus is confirmed to still be the field it was typed in.
         fixture.runner.tapInterrupted()
+        #expect(fixture.poster.ops == [.flush(1)])
+        #expect(fixture.main.destinationChecks.last?.target == Fixture.field)
+        fixture.answerDestination()
         #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm])
         // A fresh Backspace while that replay is only enqueued: held, not passed.
         #expect(fixture.key(KeyCode.delete) == .hold)
         #expect(fixture.key(KeyCode.delete, down: false) == .hold)
         #expect(!fixture.runner.isIdle)
 
-        // The queue runs the replay: only now does the Backspace go out, after it.
+        // The queue runs the replay: only now does the Backspace go out, after
+        // it, and only after its own destination check.
         fixture.poster.runQueue()
+        #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm])
+        fixture.answerDestination()
         #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm, .replay(2), .confirm])
         #expect(!fixture.runner.isIdle)
         #expect(!waiter.isCancelled)
@@ -120,6 +152,7 @@ struct GateRunnerShutdownTests {
 
         // The queue runs the flush: the marker cannot be made.
         fixture.poster.runQueue()
+        fixture.answerDestination()
         #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm])
         #expect(!fixture.runner.isIdle)
         fixture.poster.runQueue()
@@ -147,11 +180,12 @@ struct GateRunnerShutdownTests {
         let fixture = Fixture()
         fixture.holdColonAndBeginShutdown()
         let stop = Task {
-            await fixture.runner.awaitShutdown(acknowledgementBound: .milliseconds(50), replayBound: .seconds(5))
+            await fixture.runner.awaitShutdown(acknowledgementBound: .milliseconds(50), replayBound: .seconds(5)) {}
         }
         // The acknowledgement bound passes: the colon is replayed in order,
         // best effort, with the tap still installed.
-        while fixture.poster.ops.count < 3 { await Task.yield() }
+        while fixture.main.destinationChecks.isEmpty { await Task.yield() }
+        fixture.answerDestination()
         #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm])
         #expect(!fixture.runner.isIdle)
         #expect(!stop.isCancelled)
@@ -160,6 +194,7 @@ struct GateRunnerShutdownTests {
         #expect(fixture.key(KeyCode.delete, down: false) == .hold)
         // The replay runs; the Backspace follows it; its own replay must run too.
         fixture.poster.runQueue()
+        fixture.answerDestination()
         #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm, .replay(2), .confirm])
         #expect(!fixture.runner.isIdle)
         fixture.poster.runQueue()
@@ -171,20 +206,56 @@ struct GateRunnerShutdownTests {
         #expect(fixture.poster.ops.count == before)
     }
 
-    @Test func aPostingQueueThatNeverRunsTheReplayIsAbandoned() async {
+    @Test func aPostingQueueThatDoesNotRunTheReplayKeepsOwnershipAndIsReported() async {
         let fixture = Fixture()
         fixture.holdColonAndBeginShutdown()
-        let outcome = await fixture.runner.awaitShutdown(acknowledgementBound: .milliseconds(20), replayBound: .milliseconds(50))
-        #expect(outcome == .abandoned)
-        #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm]) // enqueued, never run
+        let stuck = Stuck()
+        let stop = Task {
+            await fixture.runner.awaitShutdown(acknowledgementBound: .milliseconds(20), replayBound: .milliseconds(50)) { stuck.fire() }
+        }
+        while fixture.main.destinationChecks.isEmpty { await Task.yield() }
+        fixture.answerDestination()
+        // The replay bound passes with the queue idle: the app layer is told,
+        // and nothing else happens — no outcome, the tap still owns the stream.
+        while !stuck.fired { await Task.yield() }
+        try? await Task.sleep(for: .milliseconds(30))
         #expect(!fixture.runner.isIdle)
+        #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm]) // enqueued, not run
+        #expect(fixture.key(KeyCode.delete) == .hold) // still held behind the replay
+        // Only the queue running the replay ends the stop (quit is approved after this).
+        fixture.poster.runQueue()
+        fixture.answerDestination()
+        fixture.poster.runQueue()
+        #expect(await stop.value == .failed)
+        #expect(fixture.runner.isIdle)
+    }
+
+    final class Stuck: @unchecked Sendable {
+        private(set) var fired = false
+        func fire() { fired = true }
+    }
+
+    @Test func aDelayedReplayIntoAChangedFieldIsDroppedAndReported() async {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        let waiter = Task { await fixture.runner.waitForShutdown() }
+        await Task.yield()
+        fixture.runner.tapInterrupted()
+        // The focus lookup finds another field (or a password field): the
+        // held colon is not posted anywhere.
+        fixture.answerDestination(focusedOn: FocusTarget(pid: 7, element: 9))
+        #expect(fixture.poster.ops == [.flush(1), .confirm])
+        #expect(fixture.main.lostInput == [1])
+        fixture.poster.runQueue()
+        #expect(await waiter.value == .interrupted)
+        #expect(fixture.runner.isIdle)
     }
 
     @Test func anAcknowledgementThatArrivesInTimeIsDelivered() async {
         let fixture = Fixture()
         fixture.holdColonAndBeginShutdown()
         let stop = Task {
-            await fixture.runner.awaitShutdown(acknowledgementBound: .seconds(5), replayBound: .seconds(5))
+            await fixture.runner.awaitShutdown(acknowledgementBound: .seconds(5), replayBound: .seconds(5)) {}
         }
         await Task.yield()
         fixture.runner.flushAck(transaction: 1)

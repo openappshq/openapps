@@ -27,6 +27,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             guard let self else { return }
             _ = self.controller.isReady
             _ = self.controller.licenseStatusLine
+            _ = self.controller.inputNotice
             _ = self.controller.permissions.snapshot
         } onChange: { [weak self] in
             self?.updateButton()
@@ -92,6 +93,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private var statusText: String {
         let permissions = controller.permissions
+        if let notice = controller.inputNotice { return notice }
         if PermissionKind.allCases.contains(where: { permissions.status($0) == .stale }) { return "Permission needs a reset" }
         if controller.needsRelaunch { return "Needs a relaunch" }
         if !permissions.allGranted { return "Needs permissions" }

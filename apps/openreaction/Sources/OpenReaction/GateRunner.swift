@@ -20,6 +20,8 @@ final class GateRunner: @unchecked Sendable {
         case beginInsertion(transaction: Int, source: InsertionSource, typed: String, target: FocusTarget)
         case armWatchdog(transaction: Int)
         case transactionEnded(transaction: Int, recordUse: Bool)
+        case checkDestination(transaction: Int, target: FocusTarget)
+        case inputLost(eventCount: Int)
     }
 
     private struct HeldCopy: @unchecked Sendable {
@@ -128,13 +130,21 @@ final class GateRunner: @unchecked Sendable {
     /// Drives a shutdown begun with `beginShutdown` to its outcome. Waits for
     /// the tap's acknowledgements up to `acknowledgementBound`; past it the
     /// gate replays what is owed best effort (`.failed`) while the tap is
-    /// still installed and new input stays held behind it, and the wait
-    /// continues for that replay to actually run, up to `replayBound`. Only
-    /// if the posting queue itself never runs it is the shutdown `.abandoned`.
-    func awaitShutdown(acknowledgementBound: Duration, replayBound: Duration) async -> InputGate.ShutdownOutcome {
+    /// still installed and new input stays held behind it. The wait then
+    /// continues until that replay has actually run: if it has not within
+    /// `replayBound`, `onStuck` is called (once) so the app layer can say so,
+    /// and the wait goes on. It never returns with a replay still queued.
+    func awaitShutdown(acknowledgementBound: Duration, replayBound: Duration, onStuck: @Sendable () -> Void) async -> InputGate.ShutdownOutcome {
         if let outcome = await waitForShutdown(bound: acknowledgementBound) { return outcome }
         state.withLock { state in dispatch(state.gate.acknowledgementAbandoned(), state: &state) }
-        return await waitForShutdown(bound: replayBound) ?? .abandoned
+        if let outcome = await waitForShutdown(bound: replayBound) { return outcome }
+        onStuck()
+        return await waitForShutdown() ?? .failed
+    }
+
+    /// Answer to `MainEffect.checkDestination`.
+    func destinationChecked(transaction id: Int, matches: Bool) {
+        state.withLock { state in dispatch(state.gate.destinationChecked(transaction: id, matches: matches), state: &state) }
     }
 
     /// The outcome of a shutdown begun with `beginShutdown`, once the gate
@@ -260,6 +270,10 @@ final class GateRunner: @unchecked Sendable {
                 main.append(.armWatchdog(transaction: transaction))
             case .transactionEnded(let transaction, let recordUse):
                 main.append(.transactionEnded(transaction: transaction, recordUse: recordUse))
+            case .checkDestination(let transaction, let target):
+                main.append(.checkDestination(transaction: transaction, target: target))
+            case .inputLost(let eventCount):
+                main.append(.inputLost(eventCount: eventCount))
             case .post(let transaction, let deleteCount, let text):
                 poster.postReplacement(transaction: transaction, deleteCount: deleteCount, text: text, commit: { [weak self] in
                     self?.commit(transaction: transaction, secureInput: IsSecureEventInputEnabled()) ?? false

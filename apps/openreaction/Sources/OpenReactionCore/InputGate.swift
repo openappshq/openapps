@@ -107,6 +107,13 @@ public enum GateEffect: Equatable, Sendable {
     /// actually been posted (the insertion queue ran it). Used only when the
     /// stream can no longer acknowledge, during a shutdown.
     case confirmReplay(transaction: Int)
+    /// Before a delayed (best-effort) replay: look up the focused element
+    /// and call `destinationChecked` with whether it is still `target`.
+    /// Held input is never replayed anywhere else.
+    case checkDestination(transaction: Int, target: FocusTarget)
+    /// Held input was dropped because its destination changed: tell the user
+    /// that some typing could not be restored.
+    case inputLost(eventCount: Int)
     /// Send a synthetic press of this key; the tap swallowed a physical one
     /// the picker could not use.
     case repost(keyCode: UInt16)
@@ -194,9 +201,6 @@ public struct InputGate: Sendable {
         /// app layer's bound; what was owed was replayed in order and the
         /// replay ran, unacknowledged.
         case failed
-        /// The app layer gave up waiting for the replay itself to run: input
-        /// may be lost. Reported by the app layer, never by the gate.
-        case abandoned
     }
 
     // MARK: State
@@ -270,6 +274,10 @@ public struct InputGate: Sendable {
         /// How the shutdown ends if this transaction is its last: set when
         /// the stream stopped acknowledging.
         var bestEffortOutcome: ShutdownOutcome?
+        /// Where the held input was typed; a delayed replay goes nowhere else.
+        var origin: FocusTarget?
+        /// A `checkDestination` is out; held input waits for its answer.
+        var awaitingDestination = false
 
         /// Appends an event, tracking presses chronologically so their
         /// releases are held too (a release then a new press counts again).
@@ -688,7 +696,7 @@ public struct InputGate: Sendable {
             if isShuttingDown { return recover() }
             return current.missedAcks > Self.recoveryAttempts ? giveUp() : recover()
         case .bestEffort:
-            return [] // Nothing to time out: waiting for the replay to run.
+            return [] // Nothing to time out: waiting for the destination or the replay to run.
         }
     }
 
@@ -730,37 +738,70 @@ public struct InputGate: Sendable {
     }
 
     /// The insertion queue has run every replay posted before the matching
-    /// `confirmReplay`. Input held meanwhile goes out the same way; when
-    /// nothing is left the shutdown ends with the recorded outcome.
+    /// `confirmReplay`. Input held meanwhile goes out the same way (after
+    /// its own destination check); when nothing is left the shutdown ends
+    /// with the recorded outcome.
     public mutating func replayExecuted(transaction id: Int) -> [GateEffect] {
-        guard var current = transaction, current.id == id, current.phase == .bestEffort else { return [] }
+        guard var current = transaction, current.id == id, current.phase == .bestEffort, !current.awaitingDestination else { return [] }
         current.replayingDownKeys = []
         guard current.held.isEmpty else {
-            let ids = Self.replayAllHeld(&current)
             transaction = current
-            return [.replay(eventIDs: ids), .confirmReplay(transaction: id)]
+            return requestDestinationCheck()
         }
         transaction = nil
         shutdownOutcome = current.bestEffortOutcome ?? .interrupted
         return [.transactionEnded(transaction: id, recordUse: false)] + forgetTyping()
     }
 
+    /// Answer to `checkDestination`. Held input goes out only into the field
+    /// it was typed in; otherwise it is dropped and the user is told.
+    public mutating func destinationChecked(transaction id: Int, matches: Bool) -> [GateEffect] {
+        guard var current = transaction, current.id == id, current.phase == .bestEffort, current.awaitingDestination else { return [] }
+        current.awaitingDestination = false
+        var effects: [GateEffect] = []
+        if matches {
+            let ids = Self.replayAllHeld(&current)
+            if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
+        } else {
+            let ids = current.held.map(\.id)
+            current.held = []
+            current.heldDownKeys = []
+            if !ids.isEmpty { effects += [.drop(eventIDs: ids), .inputLost(eventCount: ids.count)] }
+        }
+        transaction = current
+        return effects + [.confirmReplay(transaction: id)]
+    }
+
     /// Shutting down and the stream cannot acknowledge: replay what is held
-    /// and wait for the app layer to confirm that the replay ran. New input
-    /// keeps being held behind it.
+    /// — after checking it still goes where it was typed — and wait for the
+    /// app layer to confirm that the replay ran. New input keeps being held
+    /// behind it.
     private mutating func bestEffortReplay(outcome: ShutdownOutcome) -> [GateEffect] {
         guard var current = transaction else {
             if shutdownOutcome == nil { shutdownOutcome = .delivered }
             return []
         }
         if current.phase == .bestEffort { return [] } // already waiting for the replay to run
-        let ids = Self.replayAllHeld(&current)
         current.phase = .bestEffort
         current.bestEffortOutcome = outcome
+        current.replayingDownKeys = []
         transaction = current
-        var effects: [GateEffect] = []
-        if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
-        return effects + [.confirmReplay(transaction: current.id)]
+        if current.held.isEmpty {
+            return [.confirmReplay(transaction: current.id)]
+        }
+        return requestDestinationCheck()
+    }
+
+    /// Asks where the focus is before a delayed replay. Without a known
+    /// origin nothing is replayed: the answer counts as "changed".
+    private mutating func requestDestinationCheck() -> [GateEffect] {
+        guard var current = transaction else { return [] }
+        current.awaitingDestination = true
+        transaction = current
+        guard let origin = current.origin else {
+            return destinationChecked(transaction: current.id, matches: false)
+        }
+        return [.checkDestination(transaction: current.id, target: origin)]
     }
 
     /// Moves everything held to "replayed, unacknowledged": releases of the
@@ -828,6 +869,7 @@ public struct InputGate: Sendable {
         var next = Transaction(id: nextTransactionID, kind: .tokenStart(tokenID: nextTokenID), focusGeneration: focusGeneration, phase: .probing)
         next.held = held
         next.recomputeHeldDownKeys()
+        if case .open(_, let target) = capture { next.origin = target }
         transaction = next
         return [.requestProbe(generation: focusGeneration, tokenID: nextTokenID), .armWatchdog(transaction: nextTransactionID)]
     }
@@ -840,6 +882,7 @@ public struct InputGate: Sendable {
         var next = Transaction(id: id, kind: .replacement(typed: typed, target: target), focusGeneration: focusGeneration, phase: .verifying)
         next.held = held
         next.recomputeHeldDownKeys()
+        next.origin = target
         transaction = next
         session = nil
         return [

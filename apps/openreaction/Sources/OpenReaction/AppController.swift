@@ -15,6 +15,9 @@ final class AppController {
     private(set) var isTapRunning = false
     /// Set when `relaunch()` could not start a new instance.
     private(set) var relaunchError: String?
+    /// Something the user should know about held typing: it could not be
+    /// restored, or restoring it is taking unusually long.
+    private(set) var inputNotice: String?
 
     /// Permissions report granted but macOS still refuses the tap.
     var needsRelaunch: Bool { permissions.snapshot.isTapFailing }
@@ -201,8 +204,9 @@ final class AppController {
     /// it what is owed is replayed unacknowledged (`.failed`) while the tap
     /// is still installed. Never "delivered".
     static let acknowledgementBound: Duration = .seconds(10)
-    /// How long it then waits for the posting queue to run that replay;
-    /// past it the stop is `.abandoned` (input may be lost, logged).
+    /// How long it then waits for the posting queue to run that replay
+    /// before saying that it is taking unusually long. The wait itself goes
+    /// on: the tap is never stopped with a replay still queued.
     static let replayBound: Duration = .seconds(10)
     private static let log = Logger(subsystem: "com.openappshq.openreaction", category: "tap")
 
@@ -216,14 +220,25 @@ final class AppController {
     /// acknowledged everything; `.interrupted` when macOS disabled the tap and
     /// the best-effort replay has run; `.failed` when a flush could not be
     /// posted, or no acknowledgement came within `acknowledgementBound`, and
-    /// the replay has run anyway; `.abandoned` only if the posting queue never
-    /// ran that replay within `replayBound`. Anything but delivery is logged.
+    /// the replay has run anyway. A replay the posting queue has not run
+    /// within `replayBound` is reported to the user and waited for: the tap
+    /// stays installed and holding until it ran (or the user force-quits).
+    /// Anything but delivery is logged.
     @discardableResult
     private func stopTapDraining() async -> InputGate.ShutdownOutcome {
         guard let tap, let runner, tap.isRunning else { return .delivered }
         focusMonitor.stop()
         runner.beginShutdown()
-        let outcome = await runner.awaitShutdown(acknowledgementBound: Self.acknowledgementBound, replayBound: Self.replayBound)
+        let outcome = await runner.awaitShutdown(
+            acknowledgementBound: Self.acknowledgementBound, replayBound: Self.replayBound
+        ) {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    Self.log.error("Held typing is still being restored; the tap stays installed until it is.")
+                    self.inputNotice = "Still restoring typing that was held back… If this never finishes, force-quit OpenReaction; the held keystrokes are then lost."
+                }
+            }
+        }
         if outcome != .delivered {
             Self.log.error("Tap stopped without confirmed delivery of held input: \(String(describing: outcome), privacy: .public)")
         }
@@ -276,6 +291,18 @@ final class AppController {
                     let info = await locator.focusInfo()
                     runner?.probeResult(generation: generation, tokenID: tokenID, focusResult(info))
                 }
+            case .checkDestination(let transaction, let target):
+                // A delayed replay goes only into the field it was typed in;
+                // a password field or an unreadable focus never matches.
+                Task {
+                    let info = await locator.focusInfo()
+                    let matches: Bool
+                    if case .editable(_, let current) = focusResult(info) { matches = current == target } else { matches = false }
+                    runner?.destinationChecked(transaction: transaction, matches: matches)
+                }
+            case .inputLost(let eventCount):
+                Self.log.error("Dropped \(eventCount) held key events: the focused field changed before they could be restored.")
+                inputNotice = "Some typing couldn’t be restored: the focused field changed while OpenReaction was stopping."
             case .presentPicker(let query, let anchor):
                 let suggestions = provider.suggestions(for: query, usage: frecency.scores(), limit: PickerMetrics.maxItems)
                 if suggestions.isEmpty {
