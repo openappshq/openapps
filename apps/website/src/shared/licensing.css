@@ -24,23 +24,38 @@
 }
 .buy-note {
   flex-basis: 100%;
-  margin: 0;
+  margin: 2px 0 0;
   font-size: 14px;
   color: var(--color-text-secondary);
+}
+.buy-note span {
+  margin-inline: 4px;
+  opacity: 0.5;
 }
 .button-link.secondary {
   border: 1px solid var(--color-border-control);
   background: var(--color-bg-canvas);
   color: var(--color-text-primary);
 }
-.button-link.is-disabled {
+/* Not yet on sale. A washed-out accent button reads as a rendering fault, so an
+   unavailable action drops to a quiet surface with the reason stamped under the
+   label rather than trailing it. */
+.button-link.is-disabled,
+.button-link.primary.is-disabled {
   cursor: default;
-  opacity: 0.55;
+  flex-direction: column;
+  gap: 2px;
+  padding-block: 8px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-surface);
+  box-shadow: none;
+  color: var(--color-text-secondary);
 }
 .button-link.is-disabled small {
-  font: 12px/1 var(--font-mono);
-  font-weight: 400;
-  opacity: 0.85;
+  font: 400 11px/1 var(--font-mono);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  opacity: 0.8;
 }
 @media (hover: hover) {
   .button-link.secondary:hover {
@@ -115,7 +130,7 @@
   padding-inline: 14px;
   border: 0;
   border-radius: var(--radius-small);
-  background: var(--color-bg-canvas);
+  background: var(--control-face);
   color: var(--color-text-primary);
   font-size: 14px;
   font-weight: 600;

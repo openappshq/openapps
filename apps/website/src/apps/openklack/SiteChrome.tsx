@@ -1,19 +1,22 @@
 import { Download } from "lucide-react";
-import { MarketingHeader } from "../../shared/MarketingChrome";
-export { MarketingFooter as SiteFooter } from "../../shared/MarketingChrome";
+import { MarketingFooter, MarketingHeader } from "../../shared/MarketingChrome";
+
+export function SiteFooter() {
+  return <MarketingFooter productId="openklack" />;
+}
 
 export function SiteHeader() {
   return (
     <MarketingHeader
       productId="openklack"
       links={[
-        { label: "Try the sounds", href: "/OpenKlack/#playground" },
-        { label: "The Mac app", href: "/OpenKlack/#desktop" },
-        { label: "Questions", href: "/OpenKlack/#questions" },
+        { label: "Try the sounds", href: "/openklack/#playground" },
+        { label: "The Mac app", href: "/openklack/#desktop" },
+        { label: "Questions", href: "/openklack/#questions" },
       ]}
       action={{
         label: "Download for Mac",
-        href: "/OpenKlack/download/",
+        href: "/openklack/download/",
         icon: <Download size={16} />,
       }}
     />

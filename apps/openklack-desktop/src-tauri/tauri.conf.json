@@ -17,11 +17,40 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
     "category": "Utility",
     "shortDescription": "Mechanical keyboard sound, everywhere you type.",
-    "resources": { "../../../packages/soundpacks/sounds/": "sounds/", "../../../packages/soundpacks/catalog.json": "soundpacks.json" },
-    "macOS": { "minimumSystemVersion": "14.0", "infoPlist": "Info.plist" }
+    "resources": {
+      "../../../packages/soundpacks/sounds/": "sounds/",
+      "../../../packages/soundpacks/catalog.json": "soundpacks.json"
+    },
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "infoPlist": "Info.plist",
+      "dmg": {
+        "background": "dmg-background.png",
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        }
+      }
+    }
   }
 }

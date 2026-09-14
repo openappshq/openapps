@@ -1,0 +1,84 @@
+/* The download page runs on the same hero and surfaces as the rest of the site;
+   only the two things unique to it live here. */
+.download-page {
+  padding-bottom: var(--section-pad);
+}
+
+/* --- Install ---------------------------------------------------------------
+   One window instead of three cards. It is sized like the thing it depicts, and
+   the sentence sits directly under it rather than across a column of nothing. */
+.install-section {
+  padding-block: var(--section-pad);
+}
+.install-section h2 {
+  font-size: clamp(34px, 4.2vw, 60px);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+  margin-bottom: 28px;
+}
+.install-figure {
+  max-width: 660px;
+}
+.install-figure p {
+  margin-top: 20px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+
+@media (max-width: 600px) {
+  .install-section h2 {
+    margin-bottom: 22px;
+  }
+  .install-figure p {
+    margin-top: 16px;
+    font-size: 16px;
+  }
+  .site-header .button-link svg {
+    display: none;
+  }
+}
+
+/* --- Share -----------------------------------------------------------------
+   The closing colour field, carrying the one thing worth asking for after a
+   download. The draft is shown, not hidden behind the button. */
+.share-field {
+  max-width: 620px;
+}
+.share-draft {
+  margin: 20px 0 28px;
+  padding: 18px 22px;
+  border-radius: var(--radius-soft);
+  background: oklch(1 0 0 / 0.14);
+  font-size: 17px;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+.share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.share-actions .button-link {
+  gap: 10px;
+}
+.share-link {
+  background: oklch(1 0 0 / 0.14);
+  color: var(--brand-on);
+}
+@media (hover: hover) and (pointer: fine) {
+  .share-link:hover {
+    background: oklch(1 0 0 / 0.22);
+  }
+}
+@media (max-width: 600px) {
+  .share-draft {
+    margin: 16px 0 22px;
+    padding: 16px 18px;
+    font-size: 16px;
+  }
+  .share-actions .button-link {
+    width: 100%;
+  }
+}

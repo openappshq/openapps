@@ -9,11 +9,12 @@ test("each product owns its routes and adding another product cannot shadow Open
   const next = { ...products[0]!, id: "another-app", route: "/another_route", name: "Another app" };
   const combined = productPages([...products, next]);
   expect(combined.map((page) => page.path)).toEqual([
-    "/OpenKlack/",
-    "/OpenKlack/download/",
-    "/OpenKlack/thanks/",
-    "/OpenKlack/thanks/trial/",
+    "/openklack/",
+    "/openklack/download/",
+    "/openklack/thanks/",
+    "/openklack/thanks/trial/",
     "/openreaction/",
+    "/openreaction/download/",
     "/openreaction/thanks/",
     "/openreaction/thanks/trial/",
     "/another_route/",
@@ -21,14 +22,14 @@ test("each product owns its routes and adding another product cannot shadow Open
     "/another_route/thanks/",
     "/another_route/thanks/trial/",
   ]);
-  expect(combined[7]?.productId).toBe("another-app");
-  expect(findPage("/OpenKlack/download/")?.productId).toBe("openklack");
-  expect(combined[7]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(combined[8]?.productId).toBe("another-app");
+  expect(findPage("/openklack/download/")?.productId).toBe("openklack");
+  expect(combined[8]?.module).toBe("./apps/another-app/pages/Home.tsx");
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
-  for (const path of ["/OpenKlack", "/OpenKlack/", "/openklack/index.html"])
+  for (const path of ["/openklack", "/openklack/", "/openklack/index.html"])
     expect(findPage(path)?.entry).toBe("Home");
-  expect(findPage("/OpenKlack/download/")?.entry).toBe("Download");
-  expect(findPage("/OpenKlack/not-a-page")).toBeUndefined();
+  expect(findPage("/openklack/download/")?.entry).toBe("Download");
+  expect(findPage("/openklack/not-a-page")).toBeUndefined();
   expect(findPage("/unknown")).toBeUndefined();
   expect(() => productPages([...products, { ...next, route: "/openklack" }])).toThrow(
     "Duplicate product route",
@@ -65,8 +66,8 @@ test("catalog routes emit separate static HTML entries with product metadata", (
     for (const file of [
       "thanks",
       "openreaction/thanks",
-      "OpenKlack/thanks",
-      "OpenKlack/thanks/trial",
+      "openklack/thanks",
+      "openklack/thanks/trial",
     ]) {
       const html = readFileSync(join(root, `${file}/index.html`), "utf8");
       const head = html.slice(html.indexOf("<head>") + 6);
@@ -81,14 +82,14 @@ test("catalog routes emit separate static HTML entries with product metadata", (
     expect(readFileSync(join(root, "openreaction/index.html"), "utf8")).not.toContain(
       "__openappsCheckout",
     );
-    expect(inputs).toContain(join(root, "OpenKlack/download/index.html"));
-    expect(readFileSync(join(root, "OpenKlack/download/index.html"), "utf8")).toContain(
+    expect(inputs).toContain(join(root, "openklack/download/index.html"));
+    expect(readFileSync(join(root, "openklack/download/index.html"), "utf8")).toContain(
       "Download for Mac · OpenKlack",
     );
-    expect(readFileSync(join(root, "OpenKlack/download/index.html"), "utf8")).toContain(
-      'content="Get OpenKlack for Mac.',
+    expect(readFileSync(join(root, "openklack/download/index.html"), "utf8")).toContain(
+      'content="Your OpenKlack download,',
     );
-    expect(readFileSync(join(root, "OpenKlack/index.html"), "utf8")).toContain(
+    expect(readFileSync(join(root, "openklack/index.html"), "utf8")).toContain(
       'property="og:site_name" content="OpenKlack"',
     );
     const home = readFileSync(join(root, "index.html"), "utf8");

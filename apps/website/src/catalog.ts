@@ -4,7 +4,6 @@ export type Product = {
   name: string;
   description: string;
   platform: string;
-  status: "In development" | "Available";
   icon: string;
   accent: "cobalt" | "orchid";
   brandSource: string;
@@ -25,11 +24,10 @@ export type Product = {
 export const products: Product[] = [
   {
     id: "openklack",
-    route: "/OpenKlack",
+    route: "/openklack",
     name: "OpenKlack",
     description: "Mechanical keyboard sounds. For the keyboard you already own.",
     platform: "macOS",
-    status: "In development",
     icon: "/brand/openklack/app-icon.svg",
     accent: "cobalt",
     brandSource: "design/assets/openklack",
@@ -49,8 +47,7 @@ export const products: Product[] = [
         path: "download",
         entry: "Download",
         title: "Download for Mac · OpenKlack",
-        description:
-          "Get OpenKlack for Mac. Installation steps, release information, and ways to support the app.",
+        description: "Your OpenKlack download, and the three steps to set it up.",
       },
       {
         path: "thanks",
@@ -76,7 +73,6 @@ export const products: Product[] = [
     name: "OpenReaction",
     description: "Type :tada: in any text field on your Mac. Get 🎉.",
     platform: "macOS",
-    status: "In development",
     icon: "/brand/openreaction/app-icon.svg",
     accent: "orchid",
     brandSource: "apps/openreaction/design/assets",
@@ -90,6 +86,13 @@ export const products: Product[] = [
         title: "OpenReaction · Emoji shortcodes, everywhere on your Mac",
         description:
           "Type :tada in any text field on your Mac and get 🎉. OpenReaction is an open-source menu-bar app for emoji shortcodes everywhere. No account, no telemetry.",
+        template: "src/apps/openreaction/template.html",
+      },
+      {
+        path: "download",
+        entry: "Download",
+        title: "Download for Mac · OpenReaction",
+        description: "Your OpenReaction download, and the three steps to set it up.",
         template: "src/apps/openreaction/template.html",
       },
       {

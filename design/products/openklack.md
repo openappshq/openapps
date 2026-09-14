@@ -38,7 +38,7 @@ Retain legacy tuning and app-specific sound rules for compatibility; label legac
 
 ## Marketing only
 
-At `/OpenKlack/`, prioritize Download for Mac → `/OpenKlack/download/`.
+At `/openklack/`, prioritize Download for Mac → `/openklack/download/`.
 An unconfigured installer URL shows unreleased status; a configured URL attempts download and offers manual retry, without claiming completion.
 GitHub and editable social-post links are secondary actions; never auto-star or auto-post.
 

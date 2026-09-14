@@ -12,6 +12,7 @@
     "theme": "node scripts/generate-theme.mjs",
     "design:check": "node scripts/check-design.mjs",
     "keyboard:assets": "node scripts/build-keyboard-assets.mjs",
+    "dmg:backgrounds": "node scripts/build-dmg-backgrounds.mjs",
     "openklack:dev": "pnpm --filter @openapps/openklack-desktop dev",
     "openklack:build": "pnpm --filter @openapps/openklack-desktop build",
     "openklack:test": "cargo test --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml",

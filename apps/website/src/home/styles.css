@@ -1,271 +1,325 @@
-/* Hero */
-.hq-hero {
-  padding-block: 72px 56px;
-}
+/* --- Hero ------------------------------------------------------------------ */
 .hq-hero h1 {
-  margin-top: 16px;
-  font-size: clamp(48px, 7vw, 96px);
-  line-height: 0.98;
-  letter-spacing: -0.06em;
+  font-size: clamp(52px, 8.2vw, 112px);
+  line-height: 1.12;
+  letter-spacing: -0.058em;
 }
 .hq-hero h1 .hero-quiet {
   color: var(--muted);
 }
-/* Light: ink text over a marker stroke (yellow text fails contrast on white). Dark: yellow text. */
-.hero-accent {
-  padding-inline: 0.06em;
-  margin-inline: -0.06em;
-  background: linear-gradient(transparent 58%, var(--color-brand-hq) 58% 94%, transparent 94%);
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
-}
-@media (prefers-color-scheme: dark) {
-  .hero-accent {
-    background: none;
-    color: var(--color-brand-hq);
-  }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .hero-accent {
-    background-repeat: no-repeat;
-    background-size: 100% 100%;
-    animation: marker-draw 260ms cubic-bezier(0.23, 1, 0.32, 1) 120ms both;
-  }
-}
-@keyframes marker-draw {
-  from {
-    background-size: 0% 100%;
-  }
-}
-@media (forced-colors: active) {
-  .hero-accent {
-    background: none;
-    color: inherit;
-  }
-}
-.hq-hero p {
-  max-width: 520px;
-  margin-top: 24px;
-  font-size: 18px;
-  color: var(--muted);
-}
 
-/* App grid */
+/* --- The apps --------------------------------------------------------------
+   Each app is a wide key: its tile, its facts, and one way in. They lift on
+   hover and seat on press, so the list behaves like the thing it advertises. */
 .apps-section {
-  padding-block: 24px 72px;
+  padding-block: var(--section-pad);
 }
-.apps-section .section-heading {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-}
-.apps-section .section-heading h2 {
-  font-size: 28px;
-  line-height: 1.1;
-}
-.app-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 20px;
-  padding-top: 24px;
-}
-.app-card {
-  --tile-glow: var(--color-brand-hq);
-  position: relative;
+.app-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  padding: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-panel);
-  background: var(--surface);
-  box-shadow: 0 2px 4px #00000005;
+  gap: 12px;
 }
-.app-card[data-accent="cobalt"] {
-  --tile-glow: var(--color-brand-klack);
+.app-row {
+  --accent-line: var(--color-brand-hq);
+  position: relative;
+  display: grid;
+  grid-template-columns: 52px 64px minmax(0, 1fr) auto 40px;
+  align-items: center;
+  gap: 28px;
+  width: 100%;
+  padding: 26px 28px;
+  border-radius: var(--radius-soft);
+  background: var(--surface-face);
+  box-shadow: var(--keycap-rest);
+  color: var(--foreground);
 }
-.app-card[data-accent="orchid"] {
-  --tile-glow: var(--color-brand-orchid);
+.app-row[data-accent="cobalt"] {
+  --accent-line: var(--color-brand-klack);
+}
+.app-row[data-accent="orchid"] {
+  --accent-line: var(--color-brand-orchid);
+}
+/* The backlight: the app's own colour lighting up along the key's edge. */
+.app-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 0;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent-line);
+  transform: translateY(-50%);
+}
+.app-row .status-dot {
+  background: var(--accent-line);
+}
+.app-row-index {
+  font: 400 12px/1 var(--font-mono);
+  letter-spacing: 0.13em;
+  color: var(--muted);
 }
 .app-tile {
-  width: 72px;
-  height: 72px;
-  margin: -6px 0 18px -6px;
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
 }
-.app-card h3 {
-  font-size: 26px;
-  line-height: 1.1;
-  letter-spacing: -0.035em;
-}
-.app-card p {
-  margin-top: 8px;
-  color: var(--muted);
-}
-.app-meta {
+.app-row-text {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  margin-top: auto;
-  padding-top: 24px;
-  font: 13px/20px var(--font-mono);
-  color: var(--muted);
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }
-.app-meta dd {
+.app-row-name {
+  font: 800 30px/1.05 var(--font-heading);
+  letter-spacing: -0.04em;
+}
+.app-row-desc {
+  font-size: 16px;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.app-row-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: end;
+  gap: 5px;
+  text-align: right;
+}
+.app-row-spec {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  font: 400 11px/1.4 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-.status-dot {
-  width: 8px;
-  height: 8px;
+.app-row-go {
+  display: inline-grid;
+  place-items: center;
+  justify-self: end;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  background: var(--tile-glow);
-}
-.app-cta {
-  position: absolute;
-  top: 24px;
-  right: 24px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 14px;
-  font-weight: 600;
+  background: var(--control-face);
+  box-shadow: var(--keycap-rest);
   color: var(--muted);
 }
 
-/* Principles */
+/* --- Principles ------------------------------------------------------------
+   HQ's one committed colour field, closing the page the way each product page
+   closes on its own signature colour. */
 .principles {
-  padding-block: 8px 72px;
+  padding-block: var(--section-pad);
 }
-.principles ul {
+.principles-field {
+  position: relative;
+  overflow: hidden;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 20px;
-  padding: 28px 32px;
-  border-radius: var(--radius-panel);
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: 48px 64px;
+  padding: 56px 64px;
+  border-radius: var(--radius-soft);
   background: var(--color-brand-hq);
   color: var(--palette-neutral-950);
 }
+.principles-head .legend {
+  color: rgb(20 20 20 / 0.62);
+}
+.principles-head .legend-index {
+  color: var(--palette-neutral-950);
+}
+.principles-head h2 {
+  margin-top: 20px;
+  font-size: clamp(34px, 3.6vw, 52px);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+}
+.principles ul {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px 40px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  align-content: center;
+}
 .principles li {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   align-items: start;
 }
 .principle-icon {
   display: inline-grid;
   place-items: center;
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-control);
-  background: rgb(20 20 20 / 0.1);
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: rgb(255 255 255 / 0.5);
+  box-shadow: 0 1px 2px rgb(20 20 20 / 0.08);
 }
 .principles h3 {
   font-size: 16px;
   letter-spacing: -0.02em;
 }
 .principles p {
-  margin-top: 2px;
+  margin-top: 3px;
   font-size: 14px;
-  color: rgb(20 20 20 / 0.72);
+  color: rgb(20 20 20 / 0.7);
+}
+/* Cropped by the field, so the mark reads as printed on it. */
+.principles-mark {
+  --parallax: 30px;
+  position: absolute;
+  right: -72px;
+  bottom: -96px;
+  width: 300px;
+  height: 300px;
+  opacity: 0.11;
+  pointer-events: none;
 }
 
-.app-grid,
-.principles ul {
-  margin: 0;
-  list-style: none;
-  padding-inline: 0;
-}
-.app-grid {
-  padding-top: 24px;
-}
-.app-meta dd {
-  margin: 0;
-}
-.app-card {
-  align-items: start;
-  white-space: normal;
-  width: 100%;
-}
-.app-card h3 {
-  color: var(--foreground);
-}
-.app-grid > li {
-  min-width: 0;
-}
-.principles ul {
-  padding: 28px 32px;
-}
-.apps-section .section-heading {
-  margin-bottom: 0;
-}
-.apps-section .section-heading h2 {
-  margin: 0;
-}
-@media (hover: hover) {
-  .app-card:hover {
-    border-color: var(--tile-glow);
-  }
-  .app-card:hover .app-cta {
+@media (hover: hover) and (pointer: fine) {
+  .app-row:hover .app-row-go {
     color: var(--foreground);
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .app-card {
+  .app-row,
+  .app-row::before,
+  .app-row-go,
+  .app-tile {
     transition:
-      transform 180ms cubic-bezier(0.23, 1, 0.32, 1),
-      box-shadow 180ms,
-      border-color 100ms;
+      height 260ms var(--ease-out),
+      color 120ms ease,
+      box-shadow 240ms var(--ease-out),
+      translate 520ms var(--ease-spring),
+      scale 520ms var(--ease-spring),
+      transform 520ms var(--ease-spring);
   }
-  @media (hover: hover) {
-    .app-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 12px 24px -16px rgb(0 0 0 / 0.25);
+  @media (hover: hover) and (pointer: fine) {
+    .app-row:hover::before {
+      height: 56%;
+    }
+    .app-row:hover {
+      translate: 0 -3px;
+      box-shadow: var(--keycap-lift);
+    }
+    .app-row:hover .app-row-go {
+      transform: translateX(2px);
     }
   }
-  .app-card:active:not(:focus-visible) {
-    transform: scale(0.99);
+  /* The key seats under the press, then springs back on release. */
+  .app-row:active:not(:focus-visible) {
+    translate: 0 0;
+    scale: 0.994;
+    box-shadow: var(--keycap-press);
+    transition-duration: 110ms;
+    transition-timing-function: var(--ease-out);
+  }
+}
+@media (max-width: 1000px) {
+  .app-row {
+    grid-template-columns: 40px 56px minmax(0, 1fr) 40px;
+    gap: 20px;
+  }
+  .app-tile {
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+  }
+  .app-row-meta {
+    grid-column: 2 / 4;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: start;
+    gap: 6px 20px;
+    text-align: left;
+    margin-top: 4px;
+  }
+  .principles-field {
+    grid-template-columns: 1fr;
+    gap: 36px;
+    padding: 48px;
   }
 }
 @media (max-width: 900px) {
-  .hq-hero {
-    padding-block: 48px 40px;
-  }
-  .principles ul {
-    grid-template-columns: repeat(2, 1fr);
+  .app-row-name {
+    font-size: 26px;
   }
 }
 @media (max-width: 600px) {
   .hq-hero h1 {
-    font-size: clamp(40px, 10vw, 60px);
+    font-size: clamp(38px, 11.5vw, 60px);
   }
-  .hq-hero p {
-    font-size: 16px;
+  .app-row {
+    grid-template-columns: 48px minmax(0, 1fr) 32px;
+    gap: 6px 16px;
+    padding: 20px;
   }
-  .app-grid {
-    grid-template-columns: 1fr;
-    gap: 16px;
+  .app-row-index {
+    display: none;
   }
-  .app-card {
-    padding: 24px;
+  /* Top-aligned, nudged to the title's cap line: centred in its own column the
+     tile floats level with the description and reads as a stray mark. */
+  .app-tile {
+    width: 48px;
+    height: 48px;
+    border-radius: 11px;
+    align-self: start;
+    margin-top: 3px;
+  }
+  .app-row-name {
+    font-size: 24px;
+  }
+  .app-row-desc {
+    font-size: 15px;
+  }
+  /* Place both explicitly: left to auto-placement the arrow wraps to a row of
+     its own, under the tile. */
+  .app-row-text {
+    grid-area: 1 / 2 / 2 / 3;
+  }
+  .app-row-go {
+    grid-area: 1 / 3 / 2 / 4;
+    align-self: start;
+    width: 32px;
+    height: 32px;
+  }
+  .app-row-meta {
+    grid-area: 2 / 2 / 3 / 4;
+    gap: 4px 16px;
+  }
+  .app-row-go svg {
+    width: 15px;
+    height: 15px;
+  }
+  .principles-field {
+    border-radius: var(--radius-soft);
+    padding: 32px 24px;
+    gap: 28px;
   }
   .principles ul {
     grid-template-columns: 1fr;
-    padding: 24px;
+    gap: 20px;
   }
-  .apps-section {
-    padding-bottom: 48px;
-  }
-  .principles {
-    padding-bottom: 48px;
+  .principles-mark {
+    right: -64px;
+    bottom: -80px;
+    width: 220px;
+    height: 220px;
   }
 }
 @media (forced-colors: active) {
-  .app-card {
-    border-color: CanvasText;
+  .app-row,
+  .app-row-go {
+    border: 1px solid CanvasText;
   }
 }

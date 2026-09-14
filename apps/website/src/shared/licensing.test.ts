@@ -28,13 +28,14 @@ describe("checkoutUrl", () => {
 });
 
 describe("licensingFor", () => {
-  it("keeps both buttons disabled until an official build exists", () => {
+  it("sells every catalogued app, and disables both buttons for one taken off sale", () => {
     for (const product of products) {
-      expect(officialBuilds[product.id], product.id).toBe(false);
-      const licensing = licensingFor(product.id);
-      expect(licensing.officialBuildAvailable).toBe(false);
-      expect(licensing.buyUrl).toBeNull();
-      expect(licensing.trialUrl).toBeNull();
+      expect(officialBuilds[product.id], product.id).toBe(true);
+      expect(licensingFor(product.id).officialBuildAvailable, product.id).toBe(true);
+
+      const offSale = licensingFor(product.id, { officialBuildAvailable: false });
+      expect(offSale.buyUrl).toBeNull();
+      expect(offSale.trialUrl).toBeNull();
     }
   });
 
@@ -140,8 +141,8 @@ describe("cleanedUrl", () => {
         "https://openapps.space/openreaction/thanks/?payment_id=p&status=succeeded&license_key=LK&email=a%40b.c",
       ),
     ).toBe("/openreaction/thanks/");
-    expect(cleanedUrl("https://openapps.space/OpenKlack/thanks/?license_key=LK&ref=x#steps")).toBe(
-      "/OpenKlack/thanks/?ref=x#steps",
+    expect(cleanedUrl("https://openapps.space/openklack/thanks/?license_key=LK&ref=x#steps")).toBe(
+      "/openklack/thanks/?ref=x#steps",
     );
   });
 });

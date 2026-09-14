@@ -26,7 +26,7 @@ export default function KeyboardScene({
       aria-label="Interactive OpenKlack keyboard. Type or click a key."
     >
       <Keyboard3D
-        assetBase="/OpenKlack"
+        assetBase="/openklack"
         input={input}
         selected={selected}
         assignments={assignments}

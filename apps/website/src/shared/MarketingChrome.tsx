@@ -33,6 +33,16 @@ function Brand({ id, name }: { id: string; name: string }) {
   );
 }
 
+/** Section legend: the mono label printed in the gutter beside a section. */
+export function Legend({ index, children }: { index?: string; children: ReactNode }) {
+  return (
+    <span className="legend">
+      {index && <span className="legend-index">{index}</span>}
+      {children}
+    </span>
+  );
+}
+
 export function MarketingHeader({
   productId,
   links,
@@ -73,15 +83,22 @@ export function MarketingHeader({
   );
 }
 
-export function MarketingFooter() {
+/**
+ * Every app's footer points at the others by their own icon, muted until
+ * hovered: the family is visible from anywhere without competing with the page
+ * you are on. A product page lists its siblings; HQ lists them all.
+ */
+export function MarketingFooter({ productId }: { productId?: string } = {}) {
+  const siblings = products.filter((product) => product.id !== productId);
   return (
     <footer className="site-footer page-width">
       <Link className="brand footer-brand" href="/" aria-label="Explore all OpenApps">
         <Brand id="openapps-hq" name="OpenApps HQ" />
       </Link>
-      <nav aria-label="All OpenApps">
-        {products.map((product) => (
-          <Link key={product.id} href={`${product.route}/`}>
+      <nav aria-label={productId ? "The other OpenApps" : "All OpenApps"}>
+        {siblings.map((product) => (
+          <Link className="app-link" key={product.id} href={`${product.route}/`}>
+            <img src={`/brand/${product.id}/app-icon.svg`} alt="" width="24" height="24" />
             {product.name}
           </Link>
         ))}

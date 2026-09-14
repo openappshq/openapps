@@ -12,19 +12,19 @@ export const TRIAL_DAYS = 3;
 export const MACS_PER_LICENSE = 3;
 export const OFFLINE_GRACE = "a week";
 
-/** Dodo product IDs per app. A `PLACEHOLDER_` value renders a disabled "Coming soon" button. */
+/** Dodo product IDs per app. A `PLACEHOLDER_` value renders a disabled button. */
 export const dodoProducts: Record<string, { paid: string; trial: string }> = {
   openreaction: { paid: "pdt_0NnbAzI0N8T63rCLtnBxv", trial: "pdt_0NnbAzM7iVdlBBksxe0s4" },
   openklack: { paid: "pdt_0NnbAzPn7LOJRuOC74G1Q", trial: "pdt_0NnbAzTpBJLGJo3JmjbaX" },
 };
 
 /**
- * Whether an app has an official build to sell. Until it does, the buy and
- * trial buttons stay disabled: a key with nothing to activate helps no one.
+ * Whether an app has an official build to sell. Set false only to take an app
+ * off sale: a key with nothing to activate helps no one.
  */
 export const officialBuilds: Record<string, boolean> = {
-  openreaction: false,
-  openklack: false,
+  openreaction: true,
+  openklack: true,
 };
 
 export const isPlaceholder = (productId: string) => /^PLACEHOLDER_/.test(productId);
@@ -54,9 +54,9 @@ export interface AppLicensing {
   thanksUrl: string;
   /** Where trial checkout returns; a separate path so the page knows the kind. */
   trialThanksUrl: string;
-  /** False while there is no official build to license. */
+  /** False only while an app is off sale. */
   officialBuildAvailable: boolean;
-  /** Null while the product is a placeholder or no official build exists. */
+  /** Null while the product is a placeholder or the app is off sale. */
   buyUrl: string | null;
   trialUrl: string | null;
   supportUrl: string;

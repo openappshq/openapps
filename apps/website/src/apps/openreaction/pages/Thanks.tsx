@@ -7,7 +7,7 @@ export default function Thanks({ kind = "paid" }: { kind?: "paid" | "trial" }) {
     <>
       <MarketingHeader productId="openreaction" links={[]} />
       <ThanksPage app="openreaction" kind={kind} />
-      <MarketingFooter />
+      <MarketingFooter productId="openreaction" />
     </>
   );
 }

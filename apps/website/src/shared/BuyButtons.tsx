@@ -1,6 +1,35 @@
-import { ShoppingBag, Timer } from "lucide-react";
-import { licensingFor, PRICE, TRIAL_DAYS } from "./licensing";
+import { Download } from "lucide-react";
+import type { ReactNode } from "react";
+import { licensingFor, TRIAL_DAYS } from "./licensing";
 
+/**
+ * The two ways in. Every app carries its own trial, so downloading and starting
+ * one are a single act - but the button stays short and the trial is stated
+ * under it, where a long label would only have weakened the call.
+ */
+export default function BuyButtons({ app, small = false }: { app: string; small?: boolean }) {
+  const { buyUrl, pageUrl } = licensingFor(app);
+  const size = small ? " small" : "";
+
+  return (
+    <div className="buy-buttons">
+      <a className={`button-link primary${size}`} href={`${pageUrl}download/`}>
+        Download for Mac <Download size={18} aria-hidden="true" />
+      </a>
+      <Action href={buyUrl} className={`button-link secondary${size}`}>
+        Buy license
+      </Action>
+      {/* Everything a spec sheet was carrying, in the one line where someone
+          is actually deciding. */}
+      <p className="buy-note">
+        Free {TRIAL_DAYS}-day trial <span aria-hidden="true">·</span> macOS 14+{" "}
+        <span aria-hidden="true">·</span> Apple Silicon
+      </p>
+    </div>
+  );
+}
+
+/** A checkout link, or a quiet plate if the app is ever taken off sale. */
 function Action({
   href,
   className,
@@ -8,13 +37,13 @@ function Action({
 }: {
   href: string | null;
   className: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   if (!href) {
     return (
       <span className={`${className} is-disabled`} aria-disabled="true">
         {children}
-        <small>Coming soon</small>
+        <small>Temporarily unavailable</small>
       </span>
     );
   }
@@ -22,24 +51,5 @@ function Action({
     <a className={className} href={href}>
       {children}
     </a>
-  );
-}
-
-/** "Buy" and "Try" checkout buttons for an app; disabled until its Dodo products exist. */
-export default function BuyButtons({ app, small = false }: { app: string; small?: boolean }) {
-  const { buyUrl, trialUrl, officialBuildAvailable } = licensingFor(app);
-  const size = small ? " small" : "";
-  return (
-    <div className="buy-buttons">
-      <Action href={buyUrl} className={`button-link primary${size}`}>
-        <ShoppingBag size={18} aria-hidden="true" /> Buy for {PRICE}
-      </Action>
-      <Action href={trialUrl} className={`button-link secondary${size}`}>
-        <Timer size={18} aria-hidden="true" /> Try free for {TRIAL_DAYS} days
-      </Action>
-      {!officialBuildAvailable && (
-        <p className="buy-note">Official build coming soon — build from source today.</p>
-      )}
-    </div>
   );
 }

@@ -51,7 +51,7 @@ export function createAudio() {
     const ready = (async () => {
       for (const format of ["ogg", "mp3"]) {
         try {
-          const response = await fetch(`/OpenKlack/sounds/${pack.id}.${format}`);
+          const response = await fetch(`/openklack/sounds/${pack.id}.${format}`);
           if (!response.ok) continue;
           const buffer = await engine().decodeAudioData(await response.arrayBuffer());
           const gain = recordingGain(

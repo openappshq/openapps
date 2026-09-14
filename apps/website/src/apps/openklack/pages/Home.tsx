@@ -2,13 +2,17 @@ import { Button, Link } from "@heroui/react";
 import { useState } from "react";
 import { motion } from "motion/react";
 import { enter } from "@openapps/ui/transitions";
-import { ArrowDown, Check, Download } from "lucide-react";
+import { Check, Download } from "lucide-react";
 import Questions from "../../../shared/Questions";
 import HqBadge from "../../../shared/HqBadge";
 import BuyButtons from "../../../shared/BuyButtons";
 import { MACS_PER_LICENSE, OFFLINE_GRACE, PRICE, TRIAL_DAYS } from "../../../shared/licensing";
 import SoundStudio from "../SoundStudio";
+import Marquee from "../../../shared/Marquee";
+import KeyToken from "../../../shared/KeyToken";
+import { soundpacks } from "../soundpacks";
 import { SiteHeader, SiteFooter } from "../SiteChrome";
+import { Legend } from "../../../shared/MarketingChrome";
 
 import "../styles.css";
 
@@ -18,8 +22,8 @@ const questions = [
     "OpenKlack adds recorded mechanical keyboard sounds to your keystrokes. The Mac app works across your apps from the menu bar. This browser playground lets you try sounds while its keyboard or typing test is focused.",
   ],
   [
-    "Can I download the Mac app yet?",
-    "The native Mac app is in development. We’re testing reliability, permissions, and everyday use before offering a signed, notarized download. Launch support is planned for macOS 14 or later on Apple Silicon.",
+    "What do I need to run it?",
+    "macOS 14 or later on Apple Silicon. The download is signed and notarized. OpenKlack asks for Input Monitoring on first launch, which is how it hears keystrokes to play a sound for them.",
   ],
   [
     "Can I give individual keys a different sound?",
@@ -72,46 +76,62 @@ export default function App() {
       </Link>
       <SiteHeader />
       <main>
-        <section className="hero page-width" aria-labelledby="hero-title">
-          <div className="hero-kicker">
-            <HqBadge />
-          </div>
-          <div className="hero-grid">
+        <section className="hero" aria-labelledby="hero-title">
+          <div className="page-width">
+            <div className="hero-kicker">
+              <HqBadge />
+            </div>
             <motion.h1 {...enter} id="hero-title">
               Your keyboard.
               <br />
-              <span>With character.</span>
+              With <KeyToken>character</KeyToken>
             </motion.h1>
-            <div className="hero-intro">
-              <p>
-                The deep thock. The crisp click. Give every keystroke a sound you love, with the
-                keyboard you already own.
-              </p>
-              <div className="hero-actions">
-                <BuyButtons app="openklack" />
-                <Link className="text-link" href="#playground">
-                  Try the sounds <ArrowDown size={18} />
-                </Link>
+            <div className="hero-grid">
+              <div className="hero-intro">
+                <p>
+                  The deep thock. The crisp click. Give every keystroke a sound you love, with the
+                  keyboard you already own.
+                </p>
+                <div className="hero-actions">
+                  <BuyButtons app="openklack" />
+                </div>
               </div>
-              <span className="hero-note">
-                Open source · Official build {PRICE} · Free {TRIAL_DAYS}-day trial. Made for Mac.
-              </span>
             </div>
           </div>
         </section>
-        <div className="page-width">
-          <SoundStudio />
-        </div>
-        <section className="desktop-section" id="desktop" aria-labelledby="desktop-title">
+        <div className="studio-section">
           <div className="page-width">
-            <motion.div
-              initial={{ opacity: 0, transform: "translateY(8px)" }}
-              whileInView={{ opacity: 1, transform: "translateY(0)" }}
-              viewport={{ once: true, amount: 0.3 }}
-              className="section-heading"
-            >
+            <SoundStudio />
+          </div>
+        </div>
+        <section className="switch-strip" aria-label="The sound library">
+          <Marquee
+            label="Every switch in the library"
+            items={soundpacks.map((pack) => (
+              <span className="marquee-pack" key={pack.id}>
+                <span
+                  className="marquee-chip"
+                  style={{ "--chip": pack.color } as React.CSSProperties}
+                />
+                <span className="marquee-switch">
+                  {pack.name}
+                  <small>
+                    {pack.brand} · {pack.kind}
+                  </small>
+                </span>
+              </span>
+            ))}
+          />
+        </section>
+        <section
+          className="desktop-section"
+          id="desktop"
+          aria-labelledby="desktop-title"
+        >
+          <div className="page-width">
+            <div className="section-heading reveal">
               <div>
-                <span className="eyebrow">Beyond the browser</span>
+                <Legend>The Mac app</Legend>
                 <h2 id="desktop-title">
                   Small app.
                   <br />
@@ -119,15 +139,10 @@ export default function App() {
                 </h2>
               </div>
               <div className="section-intro">
-                <span className="release-label">
-                  <span className="status-dot" /> Mac app in development
-                </span>
-                <p>
-                  Pick a sound and close the window. OpenKlack keeps playing from your menu bar.
-                </p>
+                <p>Pick a sound and close the window. It keeps playing.</p>
               </div>
-            </motion.div>
-            <div className="app-showcase">
+            </div>
+            <div className="app-showcase reveal">
               <div className="showcase-topline">
                 <span>OPENKLACK / SOUND LIBRARY</span>
                 <div className="theme-choice" role="group" aria-label="App preview appearance">
@@ -153,7 +168,7 @@ export default function App() {
                 loading="lazy"
               />
             </div>
-            <div className="feature-row">
+            <div className="feature-row reveal-group">
               <article>
                 <span className="feature-number">01</span>
                 <h3>Your favorite sounds.</h3>
@@ -170,7 +185,7 @@ export default function App() {
                 <p>No account or telemetry. Your settings save automatically on your Mac.</p>
               </article>
             </div>
-            <div className="menu-story">
+            <div className="menu-story reveal-group">
               <div>
                 <h3>
                   A tiny home
@@ -185,20 +200,9 @@ export default function App() {
                   <li>
                     <Check size={18} /> Follows your Mac’s audio output
                   </li>
-                  <li>
-                    <Check size={18} /> Official build {PRICE} once, {MACS_PER_LICENSE} Macs
-                  </li>
-                  <li>
-                    <Check size={18} /> Free to build from source
-                  </li>
                 </ul>
               </div>
-              <motion.div
-                initial={{ opacity: 0, transform: "translateY(8px)" }}
-                whileInView={{ opacity: 1, transform: "translateY(0)" }}
-                viewport={{ once: true, amount: 0.25 }}
-                className="menu-preview"
-              >
+              <div className="menu-preview">
                 <img
                   src="/brand/openklack/features/menu.svg"
                   alt="OpenKlack in the Mac menu bar, with mute, volume, and favorite sounds"
@@ -206,29 +210,32 @@ export default function App() {
                   height="390"
                   loading="lazy"
                 />
-              </motion.div>
+              </div>
             </div>
           </div>
         </section>
-        <section className="faq-section page-width" id="questions" aria-labelledby="faq-title">
-          <div>
-            <span className="eyebrow">A few details</span>
-            <h2 id="faq-title">Good questions.</h2>
+        <section className="faq-wrap" id="questions" aria-labelledby="faq-title">
+          <div className="faq-section page-width">
+            <div>
+              <h2 id="faq-title">Good questions.</h2>
+            </div>
+            <Questions items={questions} />
           </div>
-          <Questions items={questions} />
         </section>
-        <section className="closing-section page-width">
+        <section className="closing-wrap">
+          <div className="closing-section page-width">
           <div>
             <h2>
               Make some
               <br />
               good noise.
             </h2>
-            <Link className="button-link inverse" href="/OpenKlack/download/">
+            <Link className="button-link inverse" href="/openklack/download/">
               Download for Mac <Download size={20} />
             </Link>
           </div>
-          <img src="/brand/openklack/symbol-paper.svg" alt="" width="260" height="260" />
+            <img src="/brand/openklack/symbol-paper.svg" alt="" width="300" height="300" />
+          </div>
         </section>
       </main>
       <SiteFooter />
