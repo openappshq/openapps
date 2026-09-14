@@ -1,0 +1,9 @@
+<svg width="224" height="224" viewBox="28 10 224 224" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Flat crop of ../../design/assets/app-icon.svg: tile and mark only, no drop shadow, for small sizes. -->
+<rect x="28" y="12" width="224" height="220" rx="50" fill="#F3A0DC"/>
+<g transform="translate(66 48) scale(1.16)">
+<path d="M34 28H22C18.6863 28 16 30.6863 16 34V46C16 49.3137 18.6863 52 22 52H34C37.3137 52 40 49.3137 40 46V34C40 30.6863 37.3137 28 34 28Z" fill="#141414"/>
+<path d="M34 76H22C18.6863 76 16 78.6863 16 82V94C16 97.3137 18.6863 100 22 100H34C37.3137 100 40 97.3137 40 94V82C40 78.6863 37.3137 76 34 76Z" fill="#141414"/>
+<path d="M84 15.5033A56 56 0 0 1 84 112.4967L72 91.7128A32 32 0 0 0 72 36.2872L84 15.5033Z" fill="#141414"/>
+</g>
+</svg>
