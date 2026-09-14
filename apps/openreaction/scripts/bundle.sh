@@ -16,9 +16,17 @@
 #   scripts/bundle.sh
 #
 # OPENAPPS_DODO_ENV is `test` (test.dodopayments.com) or `live`. Optional:
-# OPENAPPS_BUY_URL, OPENAPPS_TRIAL_URL, OPENAPPS_SUPPORT_URL. The script
-# generates Sources/OpenReaction/Licensing/LicensingConfig.swift (gitignored)
-# and refuses to build a licensed app without product IDs.
+# OPENAPPS_BUY_URL, OPENAPPS_TRIAL_URL, OPENAPPS_SUPPORT_URL — the live
+# checkout links, whose redirect_url is the website's return page (paid
+# https://openapps.space/openreaction/thanks/, trial
+# https://openapps.space/openreaction/thanks/trial/, which deep-links the
+# key back into the app):
+#
+#   OPENAPPS_BUY_URL='https://checkout.dodopayments.com/buy/pdt_0NnbAzI0N8T63rCLtnBxv?quantity=1&redirect_url=https://openapps.space/openreaction/thanks/'
+#   OPENAPPS_TRIAL_URL='https://checkout.dodopayments.com/buy/pdt_0NnbAzM7iVdlBBksxe0s4?quantity=1&redirect_url=https://openapps.space/openreaction/thanks/trial/'
+#
+# The script generates Sources/OpenReaction/Licensing/LicensingConfig.swift
+# (gitignored) and refuses to build a licensed app without product IDs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

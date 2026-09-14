@@ -58,7 +58,7 @@ final class LicenseController {
         observers.append(NotificationCenter.default.addObserver(
             forName: .NSSystemClockDidChange, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+            MainActor.assumeIsolated { self?.wakeOrNetwork() }
         })
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
@@ -110,11 +110,6 @@ final class LicenseController {
         refresh()
     }
 
-    func forgetRevokedRecord() {
-        manager.forgetRevokedRecord()
-        refresh()
-    }
-
     func clearMessage() {
         message = nil
     }
@@ -124,13 +119,16 @@ final class LicenseController {
     private func wakeOrNetwork() {
         // Local deadlines first: a trial that ended while asleep is off now.
         refresh()
-        Task { await runCheckIfDue() }
+        tick()
     }
 
-    private func runCheckIfDue() async {
-        await manager.checkIfDue()
-        await manager.retryPendingCleanups()
-        refresh()
+    /// The manager's housekeeping: note time, retry storage and cleanups,
+    /// check if due. Everything it changes lands through `refresh`.
+    private func tick() {
+        Task {
+            await manager.tick()
+            refresh()
+        }
     }
 
     private func scheduleTimers() {
@@ -138,15 +136,14 @@ final class LicenseController {
         checkTimer = nil
         if let delay = manager.nextCheckDelay {
             checkTimer = makeTimer(after: delay) { [weak self] in
-                guard let self else { return }
-                Task { await self.runCheckIfDue() }
+                self?.tick()
             }
         }
         deadlineTimer?.invalidate()
         deadlineTimer = nil
         if let deadline = manager.nextDeadline {
             deadlineTimer = makeTimer(after: deadline.timeIntervalSinceNow + 1) { [weak self] in
-                self?.refresh()
+                self?.wakeOrNetwork()
             }
         }
     }
@@ -160,10 +157,9 @@ final class LicenseController {
         return timer
     }
 
-    /// Re-evaluates the state from the clock, records that time has passed,
-    /// and re-arms both timers. Cheap; called on every timer and event.
+    /// Re-evaluates the state from the clock and re-arms both timers.
+    /// Cheap; called on every timer and event.
     private func refresh() {
-        manager.noteTime()
         let previous = state
         state = manager.state
         scheduleTimers()
@@ -178,7 +174,8 @@ final class LicenseController {
         case .licensed: nil
         case .unlicensed: manager.storageError == nil ? "Not licensed — start a trial or buy in Settings" : "Can’t read the license from the Keychain"
         case .trial(let days): "Trial: about \(days) day\(days == 1 ? "" : "s") left"
-        case .trialEnded: "Trial ended — buy in Settings"
+        case .trialEnded(clockChanged: false): "Trial ended — buy in Settings"
+        case .trialEnded(clockChanged: true): "Clock changed — connect to the internet to verify your trial"
         case .grace(let days, let warn): warn ? "Connect to the internet within \(days) day\(days == 1 ? "" : "s") to keep using OpenReaction" : nil
         case .checkRequired: "Connect to the internet to verify your license"
         case .revoked: "License no longer active on this Mac"

@@ -79,7 +79,8 @@ struct LicenseSection: View {
         switch license.state {
         case .unlicensed: "Not licensed"
         case .trial(let days): "Trial: about \(days) day\(days == 1 ? "" : "s") left"
-        case .trialEnded: "Your trial has ended"
+        case .trialEnded(clockChanged: false): "Your trial has ended"
+        case .trialEnded(clockChanged: true): "Clock changed — connect to the internet to verify your trial"
         case .licensed: "Licensed"
         case .grace(let days, let warn):
             warn ? "Connect to the internet within \(days) day\(days == 1 ? "" : "s") to keep using OpenReaction" : "Licensed"
@@ -110,7 +111,13 @@ struct LicenseSection: View {
                 Spacer()
                 enterKeyButton
                 removeButton
-            case .trialEnded:
+            case .trialEnded(clockChanged: false):
+                buyButton
+                Spacer()
+                enterKeyButton
+            case .trialEnded(clockChanged: true):
+                Button("Try again") { Task { await license.tryAgain() } }
+                    .buttonStyle(PrimaryButtonStyle())
                 buyButton
                 Spacer()
                 enterKeyButton
@@ -123,7 +130,9 @@ struct LicenseSection: View {
                 Spacer()
                 removeButton
             case .revoked:
-                Button("Activate again") { license.forgetRevokedRecord(); keyFieldIsTrial = false; showsKeyField = true }
+                // Only an explicit activation can unlock again; showing the
+                // field changes nothing until a key is submitted.
+                Button("Activate again") { keyFieldIsTrial = false; showsKeyField = true }
                 buyButton
                 if let support = LicensingConfig.supportURL {
                     Link("Contact support", destination: support)

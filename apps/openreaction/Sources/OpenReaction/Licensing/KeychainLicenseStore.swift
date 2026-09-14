@@ -4,7 +4,8 @@ import OpenReactionCore
 import Security
 
 /// The license record as a generic-password Keychain item, plus the
-/// trial-used flag as a second item that survives removing the record.
+/// trial-used flag as a second item that survives removing the record, and
+/// the activations still owed a deactivation as a third.
 /// Service `space.openapps.openreaction.license`, this device only.
 ///
 /// Every SecItem status is checked: "not found" is an absent item, anything
@@ -14,6 +15,7 @@ struct KeychainLicenseStore: LicenseStore {
     static let service = "space.openapps.openreaction.license"
     private static let recordAccount = "record"
     private static let trialAccount = "trial_used"
+    private static let cleanupsAccount = "pending_cleanups"
 
     func loadRecord() throws(LicenseStoreError) -> LicenseRecord? {
         guard let data = try Self.read(account: Self.recordAccount) else { return nil }
@@ -36,6 +38,21 @@ struct KeychainLicenseStore: LicenseStore {
 
     func markTrialUsed() throws(LicenseStoreError) {
         try Self.write(Data("1".utf8), account: Self.trialAccount)
+    }
+
+    func loadPendingCleanups() throws(LicenseStoreError) -> [PendingCleanup] {
+        guard let data = try Self.read(account: Self.cleanupsAccount) else { return [] }
+        guard let cleanups = try? JSONDecoder().decode([PendingCleanup].self, from: data) else { throw .corrupt }
+        return cleanups
+    }
+
+    func savePendingCleanups(_ cleanups: [PendingCleanup]) throws(LicenseStoreError) {
+        if cleanups.isEmpty {
+            try Self.delete(account: Self.cleanupsAccount)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(cleanups) else { throw .corrupt }
+        try Self.write(data, account: Self.cleanupsAccount)
     }
 
     // MARK: - SecItem
