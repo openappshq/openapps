@@ -8,20 +8,33 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let loginItem: LoginItem
     private let showOnboarding: () -> Void
     private var window: NSWindow?
+    #if OPENAPPS_LICENSING
+    private let license: LicenseController
+    #endif
 
+    #if OPENAPPS_LICENSING
+    init(controller: AppController, loginItem: LoginItem, license: LicenseController, showOnboarding: @escaping () -> Void) {
+        self.controller = controller
+        self.loginItem = loginItem
+        self.license = license
+        self.showOnboarding = showOnboarding
+    }
+    #else
     init(controller: AppController, loginItem: LoginItem, showOnboarding: @escaping () -> Void) {
         self.controller = controller
         self.loginItem = loginItem
         self.showOnboarding = showOnboarding
     }
+    #endif
 
     func show() {
         if window == nil {
-            let hostingView = NSHostingView(rootView: SettingsView(
-                controller: controller,
-                loginItem: loginItem,
-                showOnboarding: showOnboarding
-            ))
+            #if OPENAPPS_LICENSING
+            let root = SettingsView(controller: controller, loginItem: loginItem, license: license, showOnboarding: showOnboarding)
+            #else
+            let root = SettingsView(controller: controller, loginItem: loginItem, showOnboarding: showOnboarding)
+            #endif
+            let hostingView = NSHostingView(rootView: root)
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
                 styleMask: [.titled, .closable],
@@ -44,6 +57,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 private struct SettingsView: View {
     let controller: AppController
     let loginItem: LoginItem
+    #if OPENAPPS_LICENSING
+    let license: LicenseController
+    #endif
     let showOnboarding: () -> Void
     @State private var copied = false
 
@@ -77,6 +93,10 @@ private struct SettingsView: View {
             } header: {
                 MonoLabel("Permissions")
             }
+
+            #if OPENAPPS_LICENSING
+            LicenseSection(license: license)
+            #endif
 
             AppExclusionsSection(controller: controller)
 
@@ -151,7 +171,8 @@ enum Diagnostics {
     static func showAboutPanel(controller: AppController) {
         NSApp.activate()
         let credits = NSAttributedString(
-            string: "Emoji suggestions for every text field.\n\(controller.dataSourceSummary)\nMIT License. Nothing you type leaves this Mac.",
+            string: "Emoji suggestions for every text field.\n\(controller.dataSourceSummary)\nMIT License. Nothing you type leaves this Mac."
+                + (Licensing.isCompiledIn ? "\n\n" + LicensingCopy.privacy : ""),
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]
         )
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])

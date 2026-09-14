@@ -9,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: SettingsWindowController?
     private var loginItem: LoginItem?
     private var preview: PreviewHarness?
+    #if OPENAPPS_LICENSING
+    private var license: LicenseController?
+    #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppResources.registerFonts()
@@ -36,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         installMainMenu()
+        registerURLHandler()
 
         let controller = AppController(provider: provider, dataSourceSummary: emojiData.summary)
         let loginItem = LoginItem()
@@ -47,9 +51,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let onboarding = OnboardingWindowController(controller: controller, loginItem: loginItem) { [weak statusMenu] in
             statusMenu?.buttonScreenFrame
         }
+        #if OPENAPPS_LICENSING
+        let license = LicenseController(manager: LicenseManager(
+            products: LicensingConfig.products,
+            client: DodoLicenseClient(host: LicensingConfig.host),
+            store: KeychainLicenseStore()
+        ))
+        self.license = license
+        license.onChange = { [weak controller, weak license] in
+            guard let controller, let license else { return }
+            controller.setLicense(allowsFeature: license.isFeatureEnabled, statusLine: license.statusLine)
+        }
+        controller.setLicense(allowsFeature: license.isFeatureEnabled, statusLine: license.statusLine)
+        let settings = SettingsWindowController(controller: controller, loginItem: loginItem, license: license) { [weak onboarding] in
+            onboarding?.show()
+        }
+        #else
         let settings = SettingsWindowController(controller: controller, loginItem: loginItem) { [weak onboarding] in
             onboarding?.show()
         }
+        #endif
         controller.onStateChange = { [weak statusMenu] in statusMenu?.updateButton() }
         self.controller = controller
         self.loginItem = loginItem
@@ -60,9 +81,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Reads permissions and tries the tap once, so the launch decision
         // below sees current state.
         controller.start()
+        #if OPENAPPS_LICENSING
+        license.start()
+        #endif
         if OnboardingWindowController.shouldShowOnLaunch(permissions: controller.permissions) {
             onboarding.show()
         }
+    }
+
+    // MARK: - Deep link
+
+    /// `openreaction://activate?key=…` from the website's thanks page. It only
+    /// pre-fills the key; the user confirms in Settings → License. Builds
+    /// without licensing ignore it.
+    private func registerURLHandler() {
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleURLEvent(_:withReply:)),
+            forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    @objc private func handleURLEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
+        guard let string = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: string), url.scheme?.lowercased() == "openreaction",
+              url.host?.lowercased() == "activate",
+              let key = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                  .queryItems?.first(where: { $0.name == "key" })?.value?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !key.isEmpty
+        else { return }
+        #if OPENAPPS_LICENSING
+        license?.pendingKey = key
+        settings?.show()
+        #endif
     }
 
     /// Opening OpenReaction again from Finder or Spotlight while it runs. The

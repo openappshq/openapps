@@ -26,6 +26,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         observeChanges { [weak self] in
             guard let self else { return }
             _ = self.controller.isReady
+            _ = self.controller.licenseStatusLine
             _ = self.controller.permissions.snapshot
         } onChange: { [weak self] in
             self?.updateButton()
@@ -94,6 +95,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if PermissionKind.allCases.contains(where: { permissions.status($0) == .stale }) { return "Permission needs a reset" }
         if controller.needsRelaunch { return "Needs a relaunch" }
         if !permissions.allGranted { return "Needs permissions" }
+        if let line = controller.licenseStatusLine { return line }
         if !controller.isEnabled { return "Paused" }
         if IsSecureEventInputEnabled() { return "Paused while macOS protects typing" }
         return "On — type :shortcode: anywhere"

@@ -17,7 +17,22 @@ final class AppController {
 
     /// Permissions report granted but macOS still refuses the tap.
     var needsRelaunch: Bool { permissions.snapshot.isTapFailing }
-    var isReady: Bool { permissions.allGranted && isTapRunning && isEnabled }
+    var isReady: Bool { permissions.allGranted && isTapRunning && isEnabled && isLicensedForFeature }
+
+    /// Whether the license allows the picker. Always true in builds with
+    /// licensing compiled out; official builds set it from the license state.
+    /// A locked state stops only the picker: the tap is not started.
+    private(set) var isLicensedForFeature = true
+    /// Status-menu line while the license needs attention, or nil.
+    private(set) var licenseStatusLine: String?
+
+    func setLicense(allowsFeature: Bool, statusLine: String?) {
+        licenseStatusLine = statusLine
+        guard isLicensedForFeature != allowsFeature else { return }
+        isLicensedForFeature = allowsFeature
+        if !allowsFeature { runner?.tapStopped() }
+        updateTap()
+    }
     /// A packaged `.app` can start a fresh copy of itself; `swift run` builds cannot.
     var canRelaunch: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
@@ -187,7 +202,7 @@ final class AppController {
     func updateTap() {
         guard let tap, !isRelaunching else { return }
         let wasReady = isReady
-        if permissions.allGranted && isEnabled {
+        if permissions.allGranted && isEnabled && isLicensedForFeature {
             if !tap.isRunning {
                 let running = tap.start()
                 permissions.recordTap(running: running)
