@@ -22,6 +22,7 @@ final class GateRunner: @unchecked Sendable {
         case transactionEnded(transaction: Int, recordUse: Bool)
         case checkDestination(transaction: Int, target: FocusTarget)
         case inputLost(eventCount: Int)
+        case destinationChanged(transaction: Int)
     }
 
     private struct HeldCopy: @unchecked Sendable {
@@ -156,14 +157,22 @@ final class GateRunner: @unchecked Sendable {
     func destinationChecked(transaction id: Int, matches: Bool) {
         state.withLock { state in
             let stale = state.checkEpochs.removeValue(forKey: id) != state.focusEpoch
-            dispatch(state.gate.destinationChecked(transaction: id, matches: matches && !stale), state: &state)
+            if stale {
+                dispatch(state.gate.destinationStale(transaction: id), state: &state)
+            } else {
+                dispatch(state.gate.destinationChecked(transaction: id, matches: matches), state: &state)
+            }
         }
     }
 
     /// The user chose to drop what is held instead of waiting for a replay
-    /// that does not run.
+    /// that does not run. Replays already on the posting queue are cancelled
+    /// with it: the epoch moves on under the same lock, so their guards fail.
     func discardHeldInput() {
-        state.withLock { state in dispatch(state.gate.discardHeld(), state: &state) }
+        state.withLock { state in
+            state.focusEpoch += 1
+            dispatch(state.gate.discardHeld(), state: &state)
+        }
     }
 
     private var focusEpoch: Int {
@@ -308,6 +317,8 @@ final class GateRunner: @unchecked Sendable {
                 main.append(.checkDestination(transaction: transaction, target: target))
             case .inputLost(let eventCount):
                 main.append(.inputLost(eventCount: eventCount))
+            case .destinationChanged(let transaction):
+                main.append(.destinationChanged(transaction: transaction))
             case .post(let transaction, let deleteCount, let text):
                 poster.postReplacement(transaction: transaction, deleteCount: deleteCount, text: text, commit: { [weak self] in
                     self?.commit(transaction: transaction, secureInput: IsSecureEventInputEnabled()) ?? false

@@ -256,11 +256,19 @@ final class AppController {
     private func reportStuckInput() {
         Self.log.error("Held typing is still being restored; the tap stays installed until it is.")
         inputNotice = "Still restoring typing that was held back…"
+        showStuckPanel(reason: .slow)
+    }
+
+    private func showStuckPanel(reason: StuckInputPanel.Reason) {
+        if let stuckPanel {
+            stuckPanel.show(reason: reason)
+            return
+        }
         let panel = StuckInputPanel(keepWaiting: {}, discard: { [weak self] in
             self?.runner?.discardHeldInput()
         })
         stuckPanel = panel
-        panel.show()
+        panel.show(reason: reason)
     }
 
     // MARK: - Tap lifecycle
@@ -319,6 +327,12 @@ final class AppController {
             case .inputLost(let eventCount):
                 Self.log.error("Dropped \(eventCount) held key events: the focused field changed before they could be restored.")
                 inputNotice = "Some typing couldn’t be restored: the focused field changed while OpenReaction was stopping."
+            case .destinationChanged:
+                // Held typing waits for its field to come back; the user can
+                // switch back to it, keep waiting, or discard.
+                Self.log.error("Held typing is waiting: the focused field changed before it could be restored.")
+                inputNotice = "Typing held back is waiting for its field: switch back to it, or discard it."
+                showStuckPanel(reason: .fieldChanged)
             case .presentPicker(let query, let anchor):
                 let suggestions = provider.suggestions(for: query, usage: frecency.scores(), limit: PickerMetrics.maxItems)
                 if suggestions.isEmpty {

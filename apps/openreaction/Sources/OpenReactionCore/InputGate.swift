@@ -126,6 +126,10 @@ public enum GateEffect: Equatable, Sendable {
     /// Held input was dropped because its destination changed: tell the user
     /// that some typing could not be restored.
     case inputLost(eventCount: Int)
+    /// While shutting down, held input cannot go out because the focused
+    /// field changed; it stays held until the focus comes back (every focus
+    /// change asks again) or the user discards it. Show that choice.
+    case destinationChanged(transaction: Int)
     /// Send a synthetic press of this key; the tap swallowed a physical one
     /// the picker could not use.
     case repost(keyCode: UInt16)
@@ -288,8 +292,16 @@ public struct InputGate: Sendable {
         var bestEffortOutcome: ShutdownOutcome?
         /// Where the held input was typed; a delayed replay goes nowhere else.
         var origin: FocusTarget?
-        /// A `checkDestination` is out; held input waits for its answer.
+        /// A `checkDestination` is out; `pendingReplay` waits for its answer.
         var awaitingDestination = false
+        /// Events decided for replay that wait for the destination to be
+        /// confirmed (their copies are still with the app layer).
+        var pendingReplay: [Int] = []
+        /// The destination was found changed; waiting for it to come back
+        /// or for the user to discard.
+        var destinationChanged = false
+
+        var waitsForDestination: Bool { awaitingDestination || destinationChanged }
 
         /// Appends an event, tracking presses chronologically so their
         /// releases are held too (a release then a new press counts again).
@@ -519,7 +531,14 @@ public struct InputGate: Sendable {
 
     /// Focus may have moved (app activation, Accessibility notification).
     public mutating func focusMayHaveMoved() -> [GateEffect] {
-        closeGate()
+        var effects = closeGate()
+        if var current = transaction, current.destinationChanged {
+            // Maybe the field is back: ask again.
+            current.destinationChanged = false
+            transaction = current
+            effects += requestDestinationCheck()
+        }
+        return effects
     }
 
     /// Whether focused-element notifications are being received for the
@@ -612,7 +631,8 @@ public struct InputGate: Sendable {
     /// The flush marker for `id` came back through the tap: everything posted
     /// before it, including any replay, has reached the host.
     public mutating func flushAck(transaction id: Int, decode: (Int) -> String = { _ in "" }) -> [GateEffect] {
-        guard var current = transaction, current.id == id, !current.phase.isBeforeCommit, current.phase != .bestEffort else { return [] }
+        guard var current = transaction, current.id == id, !current.phase.isBeforeCommit, current.phase != .bestEffort,
+              !current.waitsForDestination else { return [] }
         if current.phase == .posting, let inserted = current.inserted, case .replacement(let typed, _) = current.kind {
             // Our deletes and text have reached the host; account for them
             // before any drained key is interpreted after them.
@@ -687,15 +707,23 @@ public struct InputGate: Sendable {
             }
             transaction = now
         }
-        if !replay.isEmpty { effects.append(.replay(eventIDs: replay)) }
         if !dropped.isEmpty { effects.append(.drop(eventIDs: dropped)) }
+        if !replay.isEmpty, isShuttingDown || current.cancelled, var now = transaction, now.id == id {
+            // Nothing vouches for where these keys would land now (the focus
+            // monitor closed capture, or is not consulted while shutting
+            // down): confirm the field first; the flush follows the replay.
+            now.pendingReplay = replay
+            transaction = now
+            return effects + requestDestinationCheck()
+        }
+        if !replay.isEmpty { effects.append(.replay(eventIDs: replay)) }
         effects += [.postFlush(transaction: id), .armWatchdog(transaction: id)]
         return effects
     }
 
     /// The watchdog for `id` fired: an acknowledgement did not arrive in time.
     public mutating func timeout(transaction id: Int) -> [GateEffect] {
-        guard var current = transaction, current.id == id else { return [] }
+        guard var current = transaction, current.id == id, !current.waitsForDestination else { return [] }
         switch current.phase {
         case .probing, .verifying, .authorized:
             return cancelTransaction()
@@ -761,9 +789,10 @@ public struct InputGate: Sendable {
     /// its own destination check); when nothing is left the shutdown ends
     /// with the recorded outcome.
     public mutating func replayExecuted(transaction id: Int) -> [GateEffect] {
-        guard var current = transaction, current.id == id, current.phase == .bestEffort, !current.awaitingDestination else { return [] }
+        guard var current = transaction, current.id == id, current.phase == .bestEffort, !current.waitsForDestination else { return [] }
         current.replayingDownKeys = []
         guard current.held.isEmpty else {
+            current.pendingReplay = Self.replayAllHeld(&current)
             transaction = current
             return requestDestinationCheck()
         }
@@ -775,20 +804,40 @@ public struct InputGate: Sendable {
     /// Answer to `checkDestination`. Held input goes out only into the field
     /// it was typed in; otherwise it is dropped and the user is told.
     public mutating func destinationChecked(transaction id: Int, matches: Bool) -> [GateEffect] {
-        guard var current = transaction, current.id == id, current.phase == .bestEffort, current.awaitingDestination else { return [] }
+        guard var current = transaction, current.id == id, current.awaitingDestination else { return [] }
         current.awaitingDestination = false
         var effects: [GateEffect] = []
+        let pending = current.pendingReplay
         if matches {
-            let ids = Self.replayAllHeld(&current)
-            if !ids.isEmpty { effects.append(.replayGuarded(eventIDs: ids, transaction: id)) }
+            current.pendingReplay = []
+            if !pending.isEmpty { effects.append(.replayGuarded(eventIDs: pending, transaction: id)) }
+        } else if isShuttingDown {
+            // Kept, not sent elsewhere: the focus may come back, or the user
+            // may discard. Nothing else moves meanwhile.
+            current.destinationChanged = true
+            transaction = current
+            return [.destinationChanged(transaction: id)]
         } else {
-            let ids = current.held.map(\.id)
-            current.held = []
-            current.heldDownKeys = []
-            if !ids.isEmpty { effects += [.drop(eventIDs: ids), .inputLost(eventCount: ids.count)] }
+            // A cancelled transaction outside a shutdown: typing must not
+            // freeze on a field that is gone.
+            current.pendingReplay = []
+            current.replayingDownKeys = []
+            if !pending.isEmpty { effects += [.drop(eventIDs: pending), .inputLost(eventCount: pending.count)] }
         }
         transaction = current
-        return effects + [.confirmReplay(transaction: id)]
+        if current.phase == .bestEffort {
+            return effects + [.confirmReplay(transaction: id)]
+        }
+        return effects + [.postFlush(transaction: id), .armWatchdog(transaction: id)]
+    }
+
+    /// The focus moved while the destination was being looked up, so the
+    /// answer is worthless: ask again.
+    public mutating func destinationStale(transaction id: Int) -> [GateEffect] {
+        guard var current = transaction, current.id == id, current.awaitingDestination else { return [] }
+        current.awaitingDestination = false
+        transaction = current
+        return requestDestinationCheck()
     }
 
     /// The user chose to discard what is held rather than keep waiting for
@@ -798,7 +847,7 @@ public struct InputGate: Sendable {
         guard isShuttingDown, let current = transaction else { return [] }
         transaction = nil
         shutdownOutcome = .failed
-        let ids = current.held.map(\.id)
+        let ids = current.pendingReplay + current.held.map(\.id)
         var effects: [GateEffect] = []
         if !ids.isEmpty { effects += [.drop(eventIDs: ids), .inputLost(eventCount: ids.count)] }
         effects.append(.transactionEnded(transaction: current.id, recordUse: false))
@@ -818,8 +867,15 @@ public struct InputGate: Sendable {
         current.phase = .bestEffort
         current.bestEffortOutcome = outcome
         current.replayingDownKeys = []
+        if current.waitsForDestination {
+            // A drain is already waiting for the field: its answer now ends
+            // through the best-effort confirmation instead of a flush.
+            transaction = current
+            return []
+        }
+        current.pendingReplay += Self.replayAllHeld(&current)
         transaction = current
-        if current.held.isEmpty {
+        if current.pendingReplay.isEmpty {
             return [.confirmReplay(transaction: current.id)]
         }
         return requestDestinationCheck()
@@ -979,9 +1035,14 @@ public struct InputGate: Sendable {
     /// Acknowledgements stopped: replay what is held now, keep holding, and
     /// post another flush to see whether the stream is alive.
     private mutating func recover() -> [GateEffect] {
-        guard var current = transaction else { return [] }
+        guard var current = transaction, !current.waitsForDestination else { return [] }
         current.phase = .recovering
         let ids = Self.replayAllHeld(&current)
+        if isShuttingDown, !ids.isEmpty {
+            current.pendingReplay = ids
+            transaction = current
+            return requestDestinationCheck()
+        }
         transaction = current
         var effects: [GateEffect] = []
         if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
@@ -994,7 +1055,7 @@ public struct InputGate: Sendable {
         guard let current = transaction else { return [] }
         transaction = nil
         deferred = nil
-        let ids = current.held.map(\.id)
+        let ids = current.pendingReplay + current.held.map(\.id)
         var effects: [GateEffect] = []
         if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
         effects.append(.transactionEnded(transaction: current.id, recordUse: false))

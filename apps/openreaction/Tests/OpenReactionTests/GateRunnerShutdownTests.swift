@@ -181,11 +181,65 @@ struct GateRunnerShutdownTests {
     @Test func anAcknowledgedDrainIsDelivered() async {
         let fixture = Fixture()
         fixture.holdColonAndBeginShutdown()
-        fixture.runner.flushAck(transaction: 1) // replay + flush
+        fixture.runner.flushAck(transaction: 1) // the drain confirms the field first
+        #expect(fixture.poster.ops == [.flush(1)])
+        #expect(fixture.main.destinationChecks.last?.target == Fixture.field)
+        fixture.answerDestination() // then replays, with a flush behind
         #expect(fixture.poster.ops == [.flush(1), .replay(1), .flush(1)])
         #expect(!fixture.runner.isIdle)
         fixture.runner.flushAck(transaction: 1)
         #expect(await fixture.runner.waitForShutdown() == .delivered)
+        fixture.poster.runQueue()
+        #expect(fixture.poster.runs == [.posted(1)])
+    }
+
+    // MARK: Round 7 — acknowledged drains are checked too
+
+    @Test func anAcknowledgedShutdownDrainNeverReplaysIntoAChangedField() async {
+        // holdColonAndBeginShutdown → focusMayHaveMoved → flushAck → runQueue
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        fixture.runner.focusMayHaveMoved() // app A moved focus to field B
+        fixture.runner.flushAck(transaction: 1)
+        fixture.answerDestination(focusedOn: FocusTarget(pid: 7, element: 9)) // the lookup finds B
+        fixture.poster.runQueue()
+        #expect(fixture.poster.ops == [.flush(1)]) // nothing was ever enqueued for replay
+        #expect(fixture.poster.runs.isEmpty)
+        #expect(!fixture.runner.isIdle) // the colon is kept for the field or the user
+        #expect(fixture.main.effects.contains { if case .destinationChanged = $0 { return true } else { return false } })
+        // The field comes back: replayed there, acknowledged, delivered.
+        fixture.runner.focusMayHaveMoved()
+        fixture.answerDestination()
+        #expect(fixture.poster.ops == [.flush(1), .replay(1), .flush(1)])
+        fixture.poster.runQueue()
+        #expect(fixture.poster.runs == [.posted(1)])
+        fixture.runner.flushAck(transaction: 1)
+        #expect(await fixture.runner.waitForShutdown() == .delivered)
+    }
+
+    @Test func aFocusChangeBetweenAnApprovedDrainAndItsExecutionDropsIt() async {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        fixture.runner.flushAck(transaction: 1)
+        fixture.answerDestination() // approved and enqueued
+        fixture.runner.focusMayHaveMoved() // ... but focus moves before the queue runs
+        fixture.poster.runQueue()
+        #expect(fixture.poster.runs == [.dropped(1)])
+        #expect(fixture.main.lostInput == [1])
+        fixture.runner.flushAck(transaction: 1) // the flush behind it still comes back
+        #expect(await fixture.runner.waitForShutdown() == .delivered)
+    }
+
+    @Test func discardingCancelsReplaysAlreadyOnTheQueue() async {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        fixture.runner.tapInterrupted()
+        fixture.answerDestination() // approved: replay enqueued, not run
+        #expect(fixture.key(KeyCode.delete) == .hold)
+        fixture.runner.discardHeldInput()
+        fixture.poster.runQueue()
+        #expect(fixture.poster.runs == [.dropped(1)]) // the queued colon never posts
+        #expect(fixture.runner.isIdle)
     }
 
     @Test func aStreamThatNeverAnswersReplaysAtTheBoundAndEndsOnlyOnceThatRan() async {
@@ -254,12 +308,16 @@ struct GateRunnerShutdownTests {
         await Task.yield()
         fixture.runner.tapInterrupted()
         // The focus lookup finds another field (or a password field): the
-        // held colon is not posted anywhere.
+        // held colon is not posted anywhere; it waits for the field or the user.
         fixture.answerDestination(focusedOn: FocusTarget(pid: 7, element: 9))
-        #expect(fixture.poster.ops == [.flush(1), .confirm])
+        #expect(fixture.poster.ops == [.flush(1)])
+        #expect(fixture.main.effects.contains { if case .destinationChanged = $0 { return true } else { return false } })
+        #expect(fixture.main.lostInput.isEmpty)
+        #expect(!fixture.runner.isIdle)
+        // The user discards it.
+        fixture.runner.discardHeldInput()
         #expect(fixture.main.lostInput == [1])
-        fixture.poster.runQueue()
-        #expect(await waiter.value == .interrupted)
+        #expect(await waiter.value == .failed)
         #expect(fixture.runner.isIdle)
     }
 
@@ -297,8 +355,13 @@ struct GateRunnerShutdownTests {
         #expect(fixture.main.destinationChecks.count == 1)
         fixture.runner.focusMayHaveMoved() // between the question and the answer
         fixture.answerDestination() // the lookup still says the original field
-        #expect(fixture.poster.ops == [.flush(1), .confirm]) // nothing replayed
-        #expect(fixture.main.lostInput == [1])
+        #expect(fixture.poster.ops == [.flush(1)]) // nothing replayed on a stale answer
+        // Asked again instead; this lookup finds another field: kept.
+        #expect(fixture.main.destinationChecks.count == 2)
+        fixture.answerDestination(focusedOn: FocusTarget(pid: 7, element: 9))
+        #expect(fixture.poster.ops == [.flush(1)])
+        #expect(fixture.main.effects.contains { if case .destinationChanged = $0 { return true } else { return false } })
+        #expect(!fixture.runner.isIdle)
     }
 
     // MARK: G5 — own windows stay usable; discarding is the user's choice
@@ -341,6 +404,7 @@ struct GateRunnerShutdownTests {
         }
         await Task.yield()
         fixture.runner.flushAck(transaction: 1)
+        fixture.answerDestination()
         fixture.runner.flushAck(transaction: 1)
         #expect(await stop.value == .delivered)
     }
