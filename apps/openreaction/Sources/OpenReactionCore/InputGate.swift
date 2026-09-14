@@ -300,14 +300,29 @@ public struct InputGate: Sendable {
         /// The destination was found changed; waiting for it to come back
         /// or for the user to discard.
         var destinationChanged = false
+        /// The focus generation each held event was typed under.
+        var heldGeneration: [Int: Int] = [:]
+        /// Key code and direction of each held key event, so a dropped press
+        /// takes its release with it.
+        var heldKeys: [Int: HeldKey] = [:]
+
+        struct HeldKey: Equatable {
+            let keyCode: UInt16
+            let isDown: Bool
+        }
+        /// Generations at which the origin was found *not* focused: input
+        /// held under them was typed elsewhere and never goes to the origin.
+        var mismatchedGenerations: Set<Int> = []
 
         var waitsForDestination: Bool { awaitingDestination || destinationChanged }
 
         /// Appends an event, tracking presses chronologically so their
         /// releases are held too (a release then a new press counts again).
-        mutating func hold(_ event: HeldEvent) {
+        mutating func hold(_ event: HeldEvent, generation: Int) {
             held.append(event)
+            heldGeneration[event.id] = generation
             if case .key(let key) = event {
+                heldKeys[event.id] = HeldKey(keyCode: key.keyCode, isDown: key.isDown)
                 if key.isDown { heldDownKeys.insert(key.keyCode) } else { heldDownKeys.remove(key.keyCode) }
             }
         }
@@ -385,11 +400,16 @@ public struct InputGate: Sendable {
             // Everything physical is held for the whole transaction so nothing
             // overtakes the replacement or its replay. A release passes only
             // if its press already reached the host.
-            if !event.isDown,
-               !current.heldDownKeys.contains(event.keyCode), !current.replayingDownKeys.contains(event.keyCode) {
+            let ownsPress = current.heldDownKeys.contains(event.keyCode) || current.replayingDownKeys.contains(event.keyCode)
+            if !event.isDown, !ownsPress {
                 return KeyResult(decision: .pass, effects: [])
             }
-            current.hold(.key(event))
+            if current.destinationChanged, !ownsPress {
+                // The origin is not focused: this was typed into whatever is,
+                // and goes there now. It never joins the origin's batch.
+                return KeyResult(decision: .pass, effects: [])
+            }
+            current.hold(.key(event), generation: focusGeneration)
             transaction = current
             var effects: [GateEffect] = []
             if event.secureInput, current.phase.isBeforeCommit {
@@ -428,7 +448,7 @@ public struct InputGate: Sendable {
             let effects = typed(string)
             if !wasHolding, var started = transaction, case .tokenStart = started.kind {
                 // A boundary colon: hold it (and what follows) until the probe answers.
-                started.hold(.key(event))
+                started.hold(.key(event), generation: focusGeneration)
                 transaction = started
                 return KeyResult(decision: .hold, effects: effects)
             }
@@ -514,8 +534,8 @@ public struct InputGate: Sendable {
         if isShuttingDown, targetsOwnApp {
             return KeyResult(decision: .pass, effects: [])
         }
-        if var current = transaction, current.phase.holdsMouse {
-            current.hold(.mouse(id: id, kind: kind))
+        if var current = transaction, current.phase.holdsMouse, !current.destinationChanged {
+            current.hold(.mouse(id: id, kind: kind), generation: focusGeneration)
             transaction = current
             return KeyResult(decision: .hold, effects: [])
         }
@@ -810,11 +830,30 @@ public struct InputGate: Sendable {
         let pending = current.pendingReplay
         if matches {
             current.pendingReplay = []
-            if !pending.isEmpty { effects.append(.replayGuarded(eventIDs: pending, transaction: id)) }
+            // What was typed while the origin was known not to be focused
+            // was meant for another field: it never goes into this one. A
+            // dropped press takes its release with it.
+            var elsewhere: [Int] = []
+            var droppedPresses: Set<UInt16> = []
+            for eventID in pending {
+                let key = current.heldKeys[eventID]
+                let typedElsewhere = current.mismatchedGenerations.contains(current.heldGeneration[eventID] ?? -1)
+                if typedElsewhere || (key.map { !$0.isDown && droppedPresses.contains($0.keyCode) } ?? false) {
+                    elsewhere.append(eventID)
+                    if let key, key.isDown { droppedPresses.insert(key.keyCode) }
+                } else if let key {
+                    if key.isDown { droppedPresses.remove(key.keyCode) }
+                }
+            }
+            current.replayingDownKeys.subtract(droppedPresses)
+            let batch = pending.filter { !elsewhere.contains($0) }
+            if !elsewhere.isEmpty { effects += [.drop(eventIDs: elsewhere), .inputLost(eventCount: elsewhere.count)] }
+            if !batch.isEmpty { effects.append(.replayGuarded(eventIDs: batch, transaction: id)) }
         } else if isShuttingDown {
             // Kept, not sent elsewhere: the focus may come back, or the user
             // may discard. Nothing else moves meanwhile.
             current.destinationChanged = true
+            current.mismatchedGenerations.insert(focusGeneration)
             transaction = current
             return [.destinationChanged(transaction: id)]
         } else {
@@ -829,6 +868,21 @@ public struct InputGate: Sendable {
             return effects + [.confirmReplay(transaction: id)]
         }
         return effects + [.postFlush(transaction: id), .armWatchdog(transaction: id)]
+    }
+
+    /// The posting queue refused a guarded replay because the focus moved
+    /// before it ran. Nothing was posted and the app layer still holds the
+    /// copies: the batch goes back to waiting for its field. Only the
+    /// field's return or the user's discard moves it on; the flush behind
+    /// it, and any confirmation, are ignored meanwhile.
+    public mutating func replayRejected(transaction id: Int, eventIDs: [Int]) -> [GateEffect] {
+        guard var current = transaction, current.id == id else { return [] }
+        current.pendingReplay = eventIDs + current.pendingReplay
+        current.awaitingDestination = false
+        current.destinationChanged = true
+        current.mismatchedGenerations.insert(focusGeneration)
+        transaction = current
+        return [.destinationChanged(transaction: id)]
     }
 
     /// The focus moved while the destination was being looked up, so the
@@ -964,6 +1018,7 @@ public struct InputGate: Sendable {
         nextTokenID += 1
         var next = Transaction(id: nextTransactionID, kind: .tokenStart(tokenID: nextTokenID), focusGeneration: focusGeneration, phase: .probing)
         next.held = held
+        for entry in held { next.heldGeneration[entry.id] = focusGeneration }
         next.recomputeHeldDownKeys()
         if case .open(_, let target) = capture { next.origin = target }
         transaction = next
@@ -977,6 +1032,7 @@ public struct InputGate: Sendable {
         let id = nextTransactionID
         var next = Transaction(id: id, kind: .replacement(typed: typed, target: target), focusGeneration: focusGeneration, phase: .verifying)
         next.held = held
+        for entry in held { next.heldGeneration[entry.id] = focusGeneration }
         next.recomputeHeldDownKeys()
         next.origin = target
         transaction = next

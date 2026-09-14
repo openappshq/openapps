@@ -179,8 +179,23 @@ final class GateRunner: @unchecked Sendable {
         state.withLock { $0.focusEpoch }
     }
 
-    private func inputLost(_ count: Int) {
-        mainHandler([.inputLost(eventCount: count)])
+    /// A guarded replay went out: its copies are no longer needed.
+    private func replayPosted(_ eventIDs: [Int]) {
+        state.withLock { state in
+            for id in eventIDs { state.held.removeValue(forKey: id) }
+        }
+    }
+
+    /// A guarded replay was refused at execution: the gate takes the batch
+    /// back; if it no longer owns a transaction (discarded), the copies go.
+    private func replayRejected(transaction id: Int, eventIDs: [Int]) {
+        state.withLock { state in
+            let effects = state.gate.replayRejected(transaction: id, eventIDs: eventIDs)
+            if effects.isEmpty {
+                for eventID in eventIDs { state.held.removeValue(forKey: eventID) }
+            }
+            dispatch(effects, state: &state)
+        }
     }
 
     /// The outcome of a shutdown begun with `beginShutdown`, once the gate
@@ -337,14 +352,17 @@ final class GateRunner: @unchecked Sendable {
             case .replay(let eventIDs):
                 let copies = eventIDs.compactMap { state.held.removeValue(forKey: $0) }
                 poster.replay(copies.map(\.event), guard: nil, completion: nil)
-            case .replayGuarded(let eventIDs, _):
+            case .replayGuarded(let eventIDs, let transaction):
                 // Checked again when the queue gets to it: the focus must not
-                // have moved since the destination was confirmed.
-                let copies = eventIDs.compactMap { state.held.removeValue(forKey: $0) }
+                // have moved since the destination was confirmed. The copies
+                // stay ours until they were actually posted; a refusal hands
+                // the batch back to the gate to wait for its field.
+                let copies = eventIDs.compactMap { state.held[$0] }
                 let epoch = state.focusEpoch
                 let replayGuard = ReplayGuard(
                     shouldPost: { [weak self] in self?.focusEpoch == epoch },
-                    dropped: { [weak self] count in self?.inputLost(count) }
+                    posted: { [weak self] in self?.replayPosted(eventIDs) },
+                    rejected: { [weak self] in self?.replayRejected(transaction: transaction, eventIDs: eventIDs) }
                 )
                 poster.replay(copies.map(\.event), guard: replayGuard, completion: nil)
             case .confirmReplay(let transaction):

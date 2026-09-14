@@ -14,7 +14,7 @@ struct GateRunnerShutdownTests {
     final class FakePoster: EventPoster, @unchecked Sendable {
         enum Op: Equatable { case flush(Int), replay(Int), confirm, replacement(Int) }
         /// What happened when a replay actually ran.
-        enum Run: Equatable { case posted(Int), dropped(Int) }
+        enum Run: Equatable { case posted(Int), rejected(Int) }
         private let lock = NSLock()
         private var _ops: [Op] = []
         private var _runs: [Run] = []
@@ -60,8 +60,8 @@ struct GateRunnerShutdownTests {
             enqueue(count == 0 && completion != nil ? .confirm : .replay(count)) { [self] in
                 if count > 0 {
                     let posted = `guard`?.shouldPost() ?? true
-                    lock.withLock { _runs.append(posted ? .posted(count) : .dropped(count)) }
-                    if !posted { `guard`?.dropped(count) }
+                    lock.withLock { _runs.append(posted ? .posted(count) : .rejected(count)) }
+                    if posted { `guard`?.posted() } else { `guard`?.rejected() }
                 }
                 completion?()
             }
@@ -217,17 +217,44 @@ struct GateRunnerShutdownTests {
         #expect(await fixture.runner.waitForShutdown() == .delivered)
     }
 
-    @Test func aFocusChangeBetweenAnApprovedDrainAndItsExecutionDropsIt() async {
+    @Test func aFocusChangeBetweenAnApprovedDrainAndItsExecutionKeepsTheInputAndIsNotDelivery() async {
         let fixture = Fixture()
         fixture.holdColonAndBeginShutdown()
+        let waiter = Task { await fixture.runner.waitForShutdown() }
+        await Task.yield()
         fixture.runner.flushAck(transaction: 1)
         fixture.answerDestination() // approved and enqueued
         fixture.runner.focusMayHaveMoved() // ... but focus moves before the queue runs
         fixture.poster.runQueue()
-        #expect(fixture.poster.runs == [.dropped(1)])
-        #expect(fixture.main.lostInput == [1])
-        fixture.runner.flushAck(transaction: 1) // the flush behind it still comes back
-        #expect(await fixture.runner.waitForShutdown() == .delivered)
+        #expect(fixture.poster.runs == [.rejected(1)])
+        #expect(fixture.main.lostInput.isEmpty) // nothing lost: the copies are still ours
+        #expect(fixture.main.effects.contains { if case .destinationChanged = $0 { return true } else { return false } })
+        fixture.runner.flushAck(transaction: 1) // the flush behind it comes back: proves nothing
+        #expect(!fixture.runner.isIdle)
+        #expect(!waiter.isCancelled)
+        // The field returns: replayed for real, then delivered.
+        fixture.runner.focusMayHaveMoved()
+        fixture.answerDestination()
+        fixture.poster.runQueue()
+        #expect(fixture.poster.runs == [.rejected(1), .posted(1)])
+        fixture.runner.flushAck(transaction: 1)
+        #expect(await waiter.value == .delivered)
+        #expect(fixture.runner.isIdle)
+    }
+
+    @Test func theFeatureLockReachesARunnerCreatedAfterItWasHandedOut() {
+        // The app hands the lock to the license layer before `start()`
+        // creates the runner (the real order in AppDelegate).
+        let lock = FeatureLock()
+        let pull: @Sendable () -> Void = { lock.pull() }
+        pull() // nothing to lock yet: harmless
+        let fixture = Fixture() // start(): the runner exists now
+        lock.attach(fixture.runner)
+        #expect(fixture.key(41, ":", shift: true) == .hold) // a probe is pending
+        pull() // valid:false known on the manager's thread
+        #expect(!fixture.runner.capturesText)
+        #expect(fixture.poster.ops == [.flush(1)]) // the held colon is being drained
+        #expect(fixture.key(8, "c") == .hold) // held behind, never authorized
     }
 
     @Test func discardingCancelsReplaysAlreadyOnTheQueue() async {
@@ -238,7 +265,7 @@ struct GateRunnerShutdownTests {
         #expect(fixture.key(KeyCode.delete) == .hold)
         fixture.runner.discardHeldInput()
         fixture.poster.runQueue()
-        #expect(fixture.poster.runs == [.dropped(1)]) // the queued colon never posts
+        #expect(fixture.poster.runs == [.rejected(1)]) // the queued colon never posts
         #expect(fixture.runner.isIdle)
     }
 
@@ -332,11 +359,19 @@ struct GateRunnerShutdownTests {
         fixture.answerDestination() // approved: replay queued
         #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm])
         // Focus moves before the queue gets to it (the focus monitor keeps
-        // reporting during a shutdown).
+        // reporting during a shutdown): refused, nothing lost, back to waiting.
         fixture.runner.focusMayHaveMoved()
         fixture.poster.runQueue()
-        #expect(fixture.poster.runs == [.dropped(1)])
-        #expect(fixture.main.lostInput == [1])
+        #expect(fixture.poster.runs == [.rejected(1)])
+        #expect(fixture.main.lostInput.isEmpty)
+        #expect(fixture.main.effects.contains { if case .destinationChanged = $0 { return true } else { return false } })
+        #expect(!fixture.runner.isIdle)
+        #expect(!waiter.isCancelled)
+        // The field returns: the same colon goes out and the stop ends.
+        fixture.runner.focusMayHaveMoved()
+        fixture.answerDestination()
+        fixture.poster.runQueue()
+        #expect(fixture.poster.runs == [.rejected(1), .posted(1)])
         #expect(await waiter.value == .interrupted)
         // Without a focus change the same replay is posted.
         let steady = Fixture()

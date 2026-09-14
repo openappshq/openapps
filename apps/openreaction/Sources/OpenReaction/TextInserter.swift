@@ -34,10 +34,14 @@ protocol EventPoster: Sendable {
     func repost(keyCode: UInt16)
 }
 
-/// Decides at execution time whether a delayed replay may still be posted.
+/// Decides at execution time whether a delayed replay may still be posted,
+/// and reports what happened: `posted` after the events went out,
+/// `rejected` if `shouldPost` said no (nothing was posted; the owner still
+/// holds the copies).
 struct ReplayGuard: Sendable {
     let shouldPost: @Sendable () -> Bool
-    let dropped: @Sendable (Int) -> Void
+    let posted: @Sendable () -> Void
+    let rejected: @Sendable () -> Void
 }
 
 /// The app's poster: `TextInserter`.
@@ -99,12 +103,13 @@ enum TextInserter {
         let boxed = events.map(EventBox.init)
         queue.async {
             if let `guard`, !boxed.isEmpty, !`guard`.shouldPost() {
-                `guard`.dropped(boxed.count)
+                `guard`.rejected()
             } else {
                 for box in boxed {
                     box.event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
                     box.event.post(tap: .cgSessionEventTap)
                 }
+                `guard`?.posted()
             }
             completion?()
         }
