@@ -190,9 +190,13 @@ public struct InputGate: Sendable {
         /// macOS disabled the tap meanwhile; what was owed was replayed and
         /// the replay ran, but no acknowledgement confirms its arrival.
         case interrupted
-        /// A flush could not be posted; what was owed was replayed in order,
-        /// unacknowledged.
+        /// A flush could not be posted, or no acknowledgement came within the
+        /// app layer's bound; what was owed was replayed in order and the
+        /// replay ran, unacknowledged.
         case failed
+        /// The app layer gave up waiting for the replay itself to run: input
+        /// may be lost. Reported by the app layer, never by the gate.
+        case abandoned
     }
 
     // MARK: State
@@ -714,6 +718,15 @@ public struct InputGate: Sendable {
             return bestEffortReplay(outcome: .failed)
         }
         return giveUp() + closeGate()
+    }
+
+    /// The app layer stopped waiting for acknowledgements (its bound passed)
+    /// while the tap is still installed: what is owed goes out in order,
+    /// unacknowledged, and the shutdown ends `.failed` once that replay ran.
+    /// New input keeps being held behind it meanwhile.
+    public mutating func acknowledgementAbandoned() -> [GateEffect] {
+        guard isShuttingDown else { return [] }
+        return bestEffortReplay(outcome: .failed)
     }
 
     /// The insertion queue has run every replay posted before the matching

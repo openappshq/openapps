@@ -143,15 +143,52 @@ struct GateRunnerShutdownTests {
         #expect(await fixture.runner.waitForShutdown() == .delivered)
     }
 
-    @Test func aStreamThatNeverAnswersHitsTheBoundAsFailed() async {
+    @Test func aStreamThatNeverAnswersReplaysAtTheBoundAndEndsOnlyOnceThatRan() async {
         let fixture = Fixture()
         fixture.holdColonAndBeginShutdown()
-        let outcome = await fixture.runner.waitForShutdown(bound: .milliseconds(50))
-        #expect(outcome == .failed)
-        #expect(!fixture.runner.isIdle) // nothing pretended delivery
-        // The tap going away lets what is owed out as a last resort.
-        fixture.runner.tapStopped()
-        #expect(fixture.poster.ops.last == .replay(1))
+        let stop = Task {
+            await fixture.runner.awaitShutdown(acknowledgementBound: .milliseconds(50), replayBound: .seconds(5))
+        }
+        // The acknowledgement bound passes: the colon is replayed in order,
+        // best effort, with the tap still installed.
+        while fixture.poster.ops.count < 3 { await Task.yield() }
+        #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm])
+        #expect(!fixture.runner.isIdle)
+        #expect(!stop.isCancelled)
+        // Physical input after the bound: held behind the queued replay.
+        #expect(fixture.key(KeyCode.delete) == .hold)
+        #expect(fixture.key(KeyCode.delete, down: false) == .hold)
+        // The replay runs; the Backspace follows it; its own replay must run too.
+        fixture.poster.runQueue()
+        #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm, .replay(2), .confirm])
+        #expect(!fixture.runner.isIdle)
+        fixture.poster.runQueue()
+        #expect(await stop.value == .failed)
         #expect(fixture.runner.isIdle)
+        // Nothing is left for the tap's removal to let out.
+        let before = fixture.poster.ops.count
+        fixture.runner.tapStopped()
+        #expect(fixture.poster.ops.count == before)
+    }
+
+    @Test func aPostingQueueThatNeverRunsTheReplayIsAbandoned() async {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        let outcome = await fixture.runner.awaitShutdown(acknowledgementBound: .milliseconds(20), replayBound: .milliseconds(50))
+        #expect(outcome == .abandoned)
+        #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm]) // enqueued, never run
+        #expect(!fixture.runner.isIdle)
+    }
+
+    @Test func anAcknowledgementThatArrivesInTimeIsDelivered() async {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        let stop = Task {
+            await fixture.runner.awaitShutdown(acknowledgementBound: .seconds(5), replayBound: .seconds(5))
+        }
+        await Task.yield()
+        fixture.runner.flushAck(transaction: 1)
+        fixture.runner.flushAck(transaction: 1)
+        #expect(await stop.value == .delivered)
     }
 }

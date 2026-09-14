@@ -1098,6 +1098,31 @@ struct InputGateTests {
         #expect(harness.gate.shutdownOutcome == nil)
     }
 
+    @Test func abandoningAcknowledgementsReplaysInOrderAndEndsFailedOnceRun() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        harness.press(KeyCode.delete)
+        let backspace = harness.nextID
+        // The app layer stopped waiting for acks: same protocol as an
+        // interruption, outcome .failed.
+        let effects = harness.run(harness.gate.acknowledgementAbandoned())
+        #expect(replays(effects) == [Array(1...6) + [backspace]])
+        #expect(effects.last == .confirmReplay(transaction: 1))
+        #expect(harness.gate.isHolding)
+        #expect(harness.press(7, "x").decision == .hold)
+        let x = harness.nextID
+        #expect(harness.run(harness.gate.acknowledgementAbandoned()).isEmpty) // already replaying
+        let next = harness.run(harness.gate.replayExecuted(transaction: 1))
+        #expect(replays(next) == [[x]])
+        harness.run(harness.gate.replayExecuted(transaction: 1))
+        #expect(harness.gate.shutdownOutcome == .failed)
+        #expect(!harness.gate.isHolding)
+        // Outside a shutdown it means nothing.
+        var idle = makeHarness()
+        #expect(idle.run(idle.gate.acknowledgementAbandoned()).isEmpty)
+    }
+
     @Test func replayConfirmationsForAnotherTransactionAreIgnored() {
         var harness = makeHarness()
         harness.type(":ta")

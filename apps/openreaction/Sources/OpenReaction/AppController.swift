@@ -197,9 +197,13 @@ final class AppController {
         return await stopTapDraining()
     }
 
-    /// The one bound on a deliberate stop: past it the stop ends `.failed`,
-    /// never "delivered".
-    static let shutdownBound: Duration = .seconds(10)
+    /// How long a deliberate stop waits for the tap's acknowledgements; past
+    /// it what is owed is replayed unacknowledged (`.failed`) while the tap
+    /// is still installed. Never "delivered".
+    static let acknowledgementBound: Duration = .seconds(10)
+    /// How long it then waits for the posting queue to run that replay;
+    /// past it the stop is `.abandoned` (input may be lost, logged).
+    static let replayBound: Duration = .seconds(10)
     private static let log = Logger(subsystem: "com.openappshq.openreaction", category: "tap")
 
     /// Stops the tap without reordering input. Focus tracking stops first so
@@ -211,14 +215,15 @@ final class AppController {
     /// The wait ends with the gate's outcome: `.delivered` when the tap
     /// acknowledged everything; `.interrupted` when macOS disabled the tap and
     /// the best-effort replay has run; `.failed` when a flush could not be
-    /// posted and the replay has run — or when `shutdownBound` passes with no
-    /// outcome at all, which is logged and never reported as delivery.
+    /// posted, or no acknowledgement came within `acknowledgementBound`, and
+    /// the replay has run anyway; `.abandoned` only if the posting queue never
+    /// ran that replay within `replayBound`. Anything but delivery is logged.
     @discardableResult
     private func stopTapDraining() async -> InputGate.ShutdownOutcome {
         guard let tap, let runner, tap.isRunning else { return .delivered }
         focusMonitor.stop()
         runner.beginShutdown()
-        let outcome = await runner.waitForShutdown(bound: Self.shutdownBound)
+        let outcome = await runner.awaitShutdown(acknowledgementBound: Self.acknowledgementBound, replayBound: Self.replayBound)
         if outcome != .delivered {
             Self.log.error("Tap stopped without confirmed delivery of held input: \(String(describing: outcome), privacy: .public)")
         }

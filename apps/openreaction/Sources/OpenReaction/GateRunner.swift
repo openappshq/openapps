@@ -40,7 +40,7 @@ final class GateRunner: @unchecked Sendable {
         /// Picker frame in Quartz coordinates while it is visible.
         var pickerFrame = CGRect.null
         /// Shutdowns waiting for their outcome, by waiter token.
-        var shutdownWaiters: [Int: CheckedContinuation<InputGate.ShutdownOutcome, Never>] = [:]
+        var shutdownWaiters: [Int: CheckedContinuation<InputGate.ShutdownOutcome?, Never>] = [:]
         var nextWaiterToken = 0
     }
 
@@ -125,14 +125,25 @@ final class GateRunner: @unchecked Sendable {
         state.withLock { !$0.gate.isHolding }
     }
 
+    /// Drives a shutdown begun with `beginShutdown` to its outcome. Waits for
+    /// the tap's acknowledgements up to `acknowledgementBound`; past it the
+    /// gate replays what is owed best effort (`.failed`) while the tap is
+    /// still installed and new input stays held behind it, and the wait
+    /// continues for that replay to actually run, up to `replayBound`. Only
+    /// if the posting queue itself never runs it is the shutdown `.abandoned`.
+    func awaitShutdown(acknowledgementBound: Duration, replayBound: Duration) async -> InputGate.ShutdownOutcome {
+        if let outcome = await waitForShutdown(bound: acknowledgementBound) { return outcome }
+        state.withLock { state in dispatch(state.gate.acknowledgementAbandoned(), state: &state) }
+        return await waitForShutdown(bound: replayBound) ?? .abandoned
+    }
+
     /// The outcome of a shutdown begun with `beginShutdown`, once the gate
     /// has nothing left to wait for: `.delivered` after the tap acknowledged
     /// everything, `.interrupted` or `.failed` once a best-effort replay has
     /// actually run on the posting queue. Never resumes on enqueued work.
-    /// With a `bound`, the wait ends as `.failed` once it passes with no
-    /// outcome — never as delivery.
-    func waitForShutdown(bound: Duration? = nil) async -> InputGate.ShutdownOutcome {
-        await withCheckedContinuation { (continuation: CheckedContinuation<InputGate.ShutdownOutcome, Never>) in
+    /// With a `bound`, nil once it passes with no outcome.
+    func waitForShutdown(bound: Duration? = nil) async -> InputGate.ShutdownOutcome? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<InputGate.ShutdownOutcome?, Never>) in
             let (outcome, token) = state.withLock { state -> (InputGate.ShutdownOutcome?, Int) in
                 if let outcome = state.gate.shutdownOutcome { return (outcome, 0) }
                 state.nextWaiterToken += 1
@@ -147,7 +158,7 @@ final class GateRunner: @unchecked Sendable {
             Task { [state] in
                 try? await Task.sleep(for: bound)
                 let waiter = state.withLock { $0.shutdownWaiters.removeValue(forKey: token) }
-                waiter?.resume(returning: .failed)
+                waiter?.resume(returning: nil)
             }
         }
     }
