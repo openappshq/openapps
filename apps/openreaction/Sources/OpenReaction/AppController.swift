@@ -103,7 +103,29 @@ final class AppController {
     }
 
     func setExcluded(_ excluded: Bool, bundleIdentifier: String) {
-        exclusions.setExcluded(excluded, bundleIdentifier: bundleIdentifier)
+        updateExclusions { $0.setExcluded(excluded, bundleIdentifier: bundleIdentifier) }
+    }
+
+    func addExclusions(_ bundleIdentifiers: [String]) {
+        updateExclusions { $0.add(bundleIdentifiers) }
+    }
+
+    func removeExclusion(_ bundleIdentifier: String) {
+        updateExclusions { $0.remove(bundleIdentifier) }
+    }
+
+    func restoreDefaultExclusions() {
+        updateExclusions { $0.restoreDefaults() }
+    }
+
+    /// Single write path: `exclusions` is the observed source of truth for
+    /// Settings and the status menu; the gate gets the frontmost app's new
+    /// answer at once.
+    private func updateExclusions(_ change: (inout AppExclusions) -> Void) {
+        var updated = exclusions
+        change(&updated)
+        guard updated != exclusions else { return }
+        exclusions = updated
         Self.encode(exclusions, key: DefaultsKey.exclusions)
         pushFrontmostExclusion()
         resetTyping()
@@ -215,6 +237,7 @@ final class AppController {
                 if recordUse, let suggestion {
                     frecency.record(suggestion.id)
                     Self.encode(frecency, key: DefaultsKey.frecency)
+                    hasStoredUsage = true
                 }
             }
         }

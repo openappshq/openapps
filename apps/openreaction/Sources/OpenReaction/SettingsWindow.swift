@@ -78,6 +78,8 @@ private struct SettingsView: View {
                 MonoLabel("Permissions")
             }
 
+            AppExclusionsSection(controller: controller)
+
             Section {
                 LabeledContent("Version") {
                     Text(Diagnostics.versionString).font(Brand.mono(12)).textSelection(.enabled)
@@ -114,8 +116,8 @@ private struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520)
-        .fixedSize(horizontal: false, vertical: true)
+        // The app list makes the form taller than a screen; the form scrolls.
+        .frame(width: 520, height: 640)
     }
 }
 
