@@ -45,7 +45,7 @@ struct PickerView: View {
                 .contentShape(Capsule())
                 .onTapGesture { model.onChoose?(index) }
                 .onHover { hovering in
-                    if hovering, model.selectedIndex != index { model.selectedIndex = index }
+                    if hovering, model.selectedIndex != index { model.onHover?(index) }
                 }
             }
         }
@@ -90,7 +90,7 @@ private struct PillCell: View {
                 .frame(width: PickerMetrics.pill.cell, height: PickerMetrics.pill.cell)
             if isSelected {
                 Text(":\(suggestion.title):")
-                    .font(Brand.mono(13, medium: true))
+                    .font(Brand.mono(PickerMetrics.labelFontSize, medium: true))
                     .foregroundStyle(Brand.accentOn)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -114,7 +114,7 @@ private struct PillCell: View {
     @ViewBuilder private var glyph: some View {
         switch suggestion.preview {
         case .glyph(let glyph):
-            Text(glyph).font(.system(size: 24))
+            Text(glyph).font(.system(size: PickerMetrics.glyphSize))
         }
     }
 
@@ -134,8 +134,9 @@ private struct SelectionCapsule: View {
 
     var body: some View {
         if #available(macOS 26, *), style.usesGlass, !style.increasedContrast {
+            // A fuller fill under the glass keeps the label at AA contrast.
             Capsule()
-                .fill(Brand.accentSolid.opacity(0.55))
+                .fill(Brand.accentSolid.opacity(0.85))
                 .glassEffect(.regular.tint(Brand.accentSolid).interactive(), in: Capsule())
         } else {
             Capsule()

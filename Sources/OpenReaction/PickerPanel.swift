@@ -2,17 +2,24 @@ import AppKit
 import OpenReactionCore
 import SwiftUI
 
+/// Every number that shapes the pill, in one place. The website demo mirrors
+/// these values.
 enum PickerMetrics {
-    static let pill = PillLayout(cell: 40, padding: 6, labelTrailing: 12, maxWidth: 440, peek: 20)
+    /// Cell 26 pt, padding 4 pt: a 34 pt capsule, close to a native text line.
+    static let pill = PillLayout(cell: 26, padding: 4, labelTrailing: 8, maxWidth: 340, peek: 14)
+    static let glyphSize: CGFloat = 18
+    static let labelFontSize: CGFloat = 12
+    /// Distance between the caret and the pill.
+    static let caretGap: CGFloat = 6
     /// Transparent margin so the system glass shadow is not clipped by the window.
     static let shadowInset: CGFloat = 24
-    static let maxItems = 12
-    static let maxLabelWidth: CGFloat = 180
+    static let maxItems = 8
+    static let maxLabelWidth: CGFloat = 150
     /// Centers the first emoji under the caret.
     static let leadingOffset: CGFloat = pill.padding + pill.cell / 2
 
     static func labelWidth(for title: String) -> CGFloat {
-        let font = NSFont(name: "IBMPlexMono-Medium", size: 13) ?? .monospacedSystemFont(ofSize: 13, weight: .medium)
+        let font = NSFont(name: "IBMPlexMono-Medium", size: labelFontSize) ?? .monospacedSystemFont(ofSize: labelFontSize, weight: .medium)
         let width = (":\(title):" as NSString).size(withAttributes: [.font: font]).width
         return min(ceil(width), maxLabelWidth)
     }
@@ -63,6 +70,7 @@ final class PickerModel {
     var isAboveCaret = false
     var isPresented = false
     @ObservationIgnored var onChoose: ((Int) -> Void)?
+    @ObservationIgnored var onHover: ((Int) -> Void)?
 
     var selectedLabelWidth: CGFloat {
         labelWidths.indices.contains(selectedIndex) ? labelWidths[selectedIndex] : 0
@@ -129,7 +137,15 @@ final class PickerPanelController {
     func moveSelection(by delta: Int) {
         let count = model.suggestions.count
         guard count > 0 else { return }
-        let next = (model.selectedIndex + delta + count) % count
+        select((model.selectedIndex + delta + count) % count)
+    }
+
+    /// Selects `index`, scrolling it into view and telling the tap the new
+    /// hit region. Keyboard, hover and clicks all go through here so the
+    /// pill, its scroll offset and the reported frame never disagree.
+    func select(_ next: Int) {
+        let count = model.suggestions.count
+        guard model.suggestions.indices.contains(next) else { return }
         let offset = PickerMetrics.pill.scrollOffset(
             selected: next,
             count: count,
@@ -154,7 +170,7 @@ final class PickerPanelController {
             size: size,
             caret: caret,
             visibleFrames: NSScreen.screens.map(\.visibleFrame),
-            gap: Brand.Space.s4,
+            gap: PickerMetrics.caretGap,
             leadingOffset: PickerMetrics.leadingOffset
         )
         model.isAboveCaret = placement.isAboveCaret
