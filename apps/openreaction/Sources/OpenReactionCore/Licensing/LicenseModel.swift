@@ -19,8 +19,8 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
     /// Set when Dodo answered `valid: false` for this activation. Persisted, so
     /// a revoked license stays revoked across restarts and offline launches.
     public var revokedAt: Date?
-    /// The latest moment this Mac has observed (server or local), so a clock
-    /// rolled back cannot extend a trial or grace.
+    /// The latest moment this Mac has observed (server time when a check
+    /// succeeds, else local), so a clock rolled back is detected.
     public var lastObservedAt: Date
 
     public init(
@@ -39,10 +39,9 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
 
     public var isRevoked: Bool { revokedAt != nil }
 
-    /// The clock the entitlement math uses: never earlier than what this Mac
-    /// has already seen, so rolling the clock back changes nothing.
-    public func effectiveNow(_ now: Date) -> Date {
-        max(now, lastObservedAt)
+    /// The wall clock is materially earlier than time this Mac already saw.
+    public func clockRolledBack(now: Date) -> Bool {
+        now < lastObservedAt.addingTimeInterval(-LicensePolicy.clockRollbackTolerance)
     }
 }
 
@@ -67,7 +66,9 @@ public struct LicenseProducts: Equatable, Sendable {
 public enum LicenseState: Equatable, Sendable {
     case unlicensed
     case trial(daysLeft: Int)
-    case trialEnded
+    /// `clockChanged`: the clock went back during the trial; the trial is
+    /// treated as over until a successful check re-anchors time.
+    case trialEnded(clockChanged: Bool)
     case licensed
     /// Offline for a while; `daysLeft` until a check is required. The
     /// warning shows after five days offline.
@@ -99,20 +100,22 @@ public enum LicensePolicy {
     /// the daily schedule.
     public static let maximumRetries = 8
 
-    /// Derives the state from the stored record and the clock.
-    public static func state(record: LicenseRecord?, now rawNow: Date) -> LicenseState {
+    /// Derives the state from the stored record and the clock. A clock that
+    /// went backwards fails closed: a trial counts as ended and a paid license
+    /// needs a check, until a successful check re-anchors time.
+    public static func state(record: LicenseRecord?, now: Date) -> LicenseState {
         guard let record else { return .unlicensed }
-        if record.isRevoked { return record.kind == .trial ? .trialEnded : .revoked }
-        let now = record.effectiveNow(rawNow)
+        if record.isRevoked { return record.kind == .trial ? .trialEnded(clockChanged: false) : .revoked }
+        let rolledBack = record.clockRolledBack(now: now)
         switch record.kind {
         case .trial:
+            if rolledBack { return .trialEnded(clockChanged: true) }
             let expiry = record.activatedAt.addingTimeInterval(trialDuration)
-            guard now < expiry else { return .trialEnded }
+            guard now < expiry else { return .trialEnded(clockChanged: false) }
             let days = Int(ceil(expiry.timeIntervalSince(now) / 86_400))
             return .trial(daysLeft: min(3, max(1, days)))
         case .paid:
-            if rawNow.timeIntervalSince(record.lastSuccessAt) < -clockRollbackTolerance {
-                // The clock went backwards: do not let that extend grace.
+            if rolledBack || now.timeIntervalSince(record.lastSuccessAt) < -clockRollbackTolerance {
                 return .checkRequired
             }
             let sinceSuccess = now.timeIntervalSince(record.lastSuccessAt)
@@ -129,9 +132,8 @@ public enum LicensePolicy {
 
     /// The next moment the state changes without any network activity
     /// (trial expiry, grace warning, grace end, or the daily schedule).
-    public static func nextDeadline(record: LicenseRecord?, now rawNow: Date) -> Date? {
-        guard let record, !record.isRevoked else { return nil }
-        let now = record.effectiveNow(rawNow)
+    public static func nextDeadline(record: LicenseRecord?, now: Date) -> Date? {
+        guard let record, !record.isRevoked, !record.clockRolledBack(now: now) else { return nil }
         switch record.kind {
         case .trial:
             let expiry = record.activatedAt.addingTimeInterval(trialDuration)
@@ -227,6 +229,21 @@ public protocol LicenseStore: Sendable {
     /// Set when a trial key is first activated on this Mac; kept after removal.
     func loadTrialUsed() throws(LicenseStoreError) -> Bool
     func markTrialUsed() throws(LicenseStoreError)
+    /// Activations that still have to be deactivated (foreign keys, replaced
+    /// trials); kept until Dodo confirms.
+    func loadPendingCleanups() throws(LicenseStoreError) -> [PendingCleanup]
+    func savePendingCleanups(_ cleanups: [PendingCleanup]) throws(LicenseStoreError)
+}
+
+/// An activation this Mac owes a deactivation for.
+public struct PendingCleanup: Codable, Equatable, Sendable {
+    public let licenseKey: String
+    public let instanceID: String
+
+    public init(licenseKey: String, instanceID: String) {
+        self.licenseKey = licenseKey
+        self.instanceID = instanceID
+    }
 }
 
 // MARK: - User-facing messages
@@ -267,7 +284,7 @@ public enum LicenseMessage: Equatable, Sendable {
         case .activated(.trial): "Your 3-day trial has started."
         case .removed: "This Mac was removed from the license."
         case .storageFailed: "OpenReaction couldn’t save the license on this Mac (the Keychain refused). The activation was released; unlock the Keychain and try again."
-        case .storageUnavailable: "OpenReaction can’t read its license from the Keychain right now."
+        case .storageUnavailable: "OpenReaction can’t read or update its license in the Keychain right now. It keeps retrying; unlock the Keychain if it stays locked."
         case .cleanupPending: "A previous activation couldn’t be released yet; OpenReaction will retry. If a Mac stays counted, contact support."
         case .alreadyActivated: "This key is already active on this Mac."
         case .malformedResponse: "The license service sent an unexpected answer. Try again later."

@@ -2,16 +2,24 @@ import Foundation
 
 /// Runs the licensing rules from LICENSING.md against a store and a Dodo
 /// client, with an injectable clock. The app layer owns timers, wake and
-/// network notifications and calls `checkOnLaunch` / `checkIfDue` /
-/// `noteTime` at the right moments.
+/// network notifications and calls `checkOnLaunch` / `tick` at the right
+/// moments.
 ///
 /// Every operation that may change the record runs through one serial queue
-/// (`perform`), and every network answer is applied only if the record it
-/// was about is still the current one (`generation`). A late validation can
-/// therefore never overwrite a newer activation or undo a removal.
+/// (`perform`). The *activation* is identified by `activationGeneration`,
+/// which changes only when an activation is created, replaced or removed; a
+/// network answer is applied only to the activation it was about. Time
+/// metadata never changes the generation.
+///
+/// Invalidation (`valid: false`) takes effect in memory at once; if the
+/// Keychain refuses the write it is retried on every tick and surfaced as a
+/// storage problem. Nothing ever re-enables an invalidated activation except
+/// a successful check of that same activation or a successful new activation.
 @MainActor
 public final class LicenseManager {
     public static let activationName = "Mac"
+    /// How often pending cleanups and durable writes are retried.
+    public static let cleanupRetryInterval: TimeInterval = 5 * 60
 
     public let products: LicenseProducts
     private let client: any LicenseClient
@@ -19,7 +27,11 @@ public final class LicenseManager {
     private let now: () -> Date
 
     public private(set) var record: LicenseRecord?
-    /// Storage could not be read at load; the license is unknown, not absent.
+    /// The record as it should be on disk while the last write has failed.
+    private var pendingDurableWrite: LicenseRecord??
+    /// The cleanups list on disk is behind memory.
+    private var cleanupsDirty = false
+    /// Storage could not be read or written; retried on every tick.
     public private(set) var storageError: LicenseStoreError?
     /// Consecutive failed checks, for backoff.
     public private(set) var failedChecks = 0
@@ -30,24 +42,33 @@ public final class LicenseManager {
     /// Client calls made, for diagnostics and tests.
     public private(set) var callCount = 0
     /// Activations that should have been freed but could not be yet.
-    public private(set) var pendingCleanups: [(licenseKey: String, instanceID: String)] = []
+    public private(set) var pendingCleanups: [PendingCleanup] = []
+    public private(set) var isChecking = false
 
-    /// Bumped on every record change; answers for an older generation are dropped.
-    private var generation = 0
+    /// Identity of the current activation; answers about an older one are dropped.
+    private var activationGeneration = 0
     private var queue: Task<Void, Never>?
-    private var trialUsedCache: Bool?
 
     public init(products: LicenseProducts, client: any LicenseClient, store: any LicenseStore, now: @escaping () -> Date = Date.init) {
         self.products = products
         self.client = client
         self.store = store
         self.now = now
+        reloadFromStore()
+    }
+
+    private func reloadFromStore() {
         do {
             record = try store.loadRecord()
+            pendingCleanups = (try? store.loadPendingCleanups()) ?? []
+            storageError = nil
         } catch {
             storageError = error
         }
     }
+
+    /// Whether memory holds something the store has not accepted yet.
+    private var owesDurableWrite: Bool { pendingDurableWrite != nil || cleanupsDirty }
 
     // MARK: State
 
@@ -57,15 +78,15 @@ public final class LicenseManager {
 
     public var isFeatureEnabled: Bool { state.isFeatureEnabled }
 
+    /// Fails closed: if the marker cannot be read, a trial is refused.
     public var trialUsed: Bool {
-        if let trialUsedCache { return trialUsedCache }
-        let used = (try? store.loadTrialUsed()) ?? false
-        trialUsedCache = used
-        return used
+        readTrialUsed() ?? true
     }
 
-    /// True when a trial key must be refused without calling Dodo.
-    public var refusesTrialLocally: Bool { trialUsed }
+    /// nil when the marker cannot be read.
+    private func readTrialUsed() -> Bool? {
+        try? store.loadTrialUsed()
+    }
 
     /// The next moment the state changes on its own (trial expiry, grace
     /// warning or end), independent of any network schedule.
@@ -74,37 +95,52 @@ public final class LicenseManager {
     }
 
     /// Whether a check should be attempted now: a day since the last attempt
-    /// (or never attempted, or a retry is due), not blocked, not running.
+    /// (or never attempted, a retry due, or the clock went back since the
+    /// last attempt), not blocked, not running.
     public var isCheckDue: Bool {
         guard record != nil, !isChecking else { return false }
         let current = now()
         if let blockedUntil, current < blockedUntil { return false }
         guard let lastAttemptAt else { return true }
-        if failedChecks > 0 && failedChecks <= LicensePolicy.maximumRetries {
-            return current >= lastAttemptAt.addingTimeInterval(LicensePolicy.retryDelay(afterFailures: failedChecks))
-        }
-        // Rollback: the clock is before the last attempt; check again.
-        return current >= lastAttemptAt.addingTimeInterval(LicensePolicy.checkInterval)
-            || current < lastAttemptAt.addingTimeInterval(-LicensePolicy.clockRollbackTolerance)
+        if current < lastAttemptAt.addingTimeInterval(-LicensePolicy.clockRollbackTolerance) { return true }
+        return current >= lastAttemptAt.addingTimeInterval(scheduledWait)
     }
 
-    /// When the app layer should call `checkIfDue` next, if nothing else
-    /// (wake, network) prompts it earlier.
+    /// The wait after the last attempt: backoff while retries remain, else a day.
+    private var scheduledWait: TimeInterval {
+        failedChecks > 0 && failedChecks <= LicensePolicy.maximumRetries
+            ? LicensePolicy.retryDelay(afterFailures: failedChecks)
+            : LicensePolicy.checkInterval
+    }
+
+    /// When the app layer should call `tick` next, if nothing else (wake,
+    /// network) prompts it earlier. Pending cleanups and durable writes keep
+    /// a schedule alive even without a license.
     public var nextCheckDelay: TimeInterval? {
-        guard record != nil else { return nil }
         let current = now()
-        if let blockedUntil, current < blockedUntil { return blockedUntil.timeIntervalSince(current) }
-        guard let lastAttemptAt else { return 0 }
-        let wait: TimeInterval
-        if failedChecks > 0 && failedChecks <= LicensePolicy.maximumRetries {
-            wait = LicensePolicy.retryDelay(afterFailures: failedChecks)
-        } else {
-            wait = LicensePolicy.checkInterval
+        var candidates: [TimeInterval] = []
+        if record != nil {
+            if let blockedUntil, current < blockedUntil {
+                candidates.append(blockedUntil.timeIntervalSince(current))
+            } else if let lastAttemptAt {
+                if current < lastAttemptAt.addingTimeInterval(-LicensePolicy.clockRollbackTolerance) {
+                    candidates.append(0)
+                } else {
+                    candidates.append(max(0, lastAttemptAt.addingTimeInterval(scheduledWait).timeIntervalSince(current)))
+                }
+            } else {
+                candidates.append(0)
+            }
         }
-        return max(0, lastAttemptAt.addingTimeInterval(wait).timeIntervalSince(current))
+        if !pendingCleanups.isEmpty || owesDurableWrite || storageError != nil {
+            if let blockedUntil, current < blockedUntil {
+                candidates.append(blockedUntil.timeIntervalSince(current))
+            } else {
+                candidates.append(Self.cleanupRetryInterval)
+            }
+        }
+        return candidates.min()
     }
-
-    public private(set) var isChecking = false
 
     // MARK: Serialization
 
@@ -119,14 +155,71 @@ public final class LicenseManager {
         return await task.value
     }
 
-    private func commit(_ newRecord: LicenseRecord?) throws(LicenseStoreError) {
-        if let newRecord {
-            try store.saveRecord(newRecord)
-        } else {
-            try store.clearRecord()
-        }
+    /// Updates the record in memory first, then on disk. A failed write is
+    /// remembered and retried; it never undoes the in-memory change.
+    private func write(_ newRecord: LicenseRecord?) {
         record = newRecord
-        generation += 1
+        pendingDurableWrite = .some(newRecord)
+        flushRecord()
+    }
+
+    private func flushRecord() {
+        guard let pending = pendingDurableWrite else { return }
+        do {
+            if let pending { try store.saveRecord(pending) } else { try store.clearRecord() }
+            pendingDurableWrite = nil
+            if !cleanupsDirty { storageError = nil }
+        } catch {
+            storageError = error
+        }
+    }
+
+    private func flushCleanups() {
+        guard cleanupsDirty else { return }
+        do {
+            try store.savePendingCleanups(pendingCleanups)
+            cleanupsDirty = false
+            if pendingDurableWrite == nil { storageError = nil }
+        } catch {
+            storageError = error
+        }
+    }
+
+    /// Retries whatever the store refused; with nothing owed, a store that
+    /// could not be read is read again.
+    private func retryStorage() {
+        guard owesDurableWrite else {
+            if storageError != nil { reloadFromStore() }
+            return
+        }
+        flushRecord()
+        flushCleanups()
+    }
+
+    /// A removed activation: answers about the old one are stale.
+    private func replaceActivation(with newRecord: LicenseRecord?) {
+        activationGeneration += 1
+        write(newRecord)
+    }
+
+    /// A new activation whose record the store already holds.
+    private func commitActivation(_ newRecord: LicenseRecord) {
+        activationGeneration += 1
+        record = newRecord
+        pendingDurableWrite = nil
+        if !cleanupsDirty { storageError = nil }
+        failedChecks = 0
+        blockedUntil = nil
+        lastAttemptAt = now()
+    }
+
+    /// Invalidation takes effect immediately, whatever storage says.
+    private func invalidate(_ current: LicenseRecord) {
+        var revoked = current
+        revoked.revokedAt = now()
+        write(revoked)
+        failedChecks = 0
+        blockedUntil = nil
     }
 
     // MARK: Activation
@@ -140,18 +233,20 @@ public final class LicenseManager {
 
     private func activateNow(key rawKey: String, expecting: LicenseKind?) async -> LicenseMessage {
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if expecting == .trial, trialUsed {
-            return .trialAlreadyUsed
+        if expecting == .trial {
+            guard let used = readTrialUsed() else { return .storageUnavailable }
+            if used { return .trialAlreadyUsed }
         }
         if let blockedUntil, now() < blockedUntil {
             return .rateLimited(seconds: Int(blockedUntil.timeIntervalSince(now()).rounded(.up)))
         }
-        // The same paid key again: keep the existing activation, just verify it.
+        // The same paid key on a live activation: keep it, just verify it.
         if let record, record.kind == .paid, record.licenseKey == key, !record.isRevoked {
             callCount += 1
+            lastAttemptAt = now()
             switch await client.validate(licenseKey: key, instanceID: record.instanceID) {
             case .valid(let serverDate):
-                applySuccess(serverDate: serverDate, for: record)
+                if let current = self.record, current.instanceID == record.instanceID { applySuccess(serverDate: serverDate, for: current) }
                 return .alreadyActivated
             case .rateLimited(let retryAfter):
                 block(for: retryAfter)
@@ -159,7 +254,10 @@ public final class LicenseManager {
             case .unreachable:
                 return .unreachable
             case .invalid:
-                break // Fall through: activate afresh.
+                // Authoritative: this activation is dead. Show that; the user
+                // may activate again explicitly.
+                if let current = self.record, current.instanceID == record.instanceID { invalidate(current) }
+                return .keyDisabledOrExpired
             }
         }
 
@@ -174,42 +272,39 @@ public final class LicenseManager {
         case .unreachable: return .unreachable
         case .malformed: return .malformedResponse
         case .activated(let activation):
-            guard let kind = products.kind(of: activation.productID) else {
+            let instanceID = activation.instanceID.trimmingCharacters(in: .whitespaces)
+            let productID = activation.productID.trimmingCharacters(in: .whitespaces)
+            guard !instanceID.isEmpty, !productID.isEmpty else { return .malformedResponse }
+            guard let kind = products.kind(of: productID) else {
                 // Another app's key or the wrong environment: give the slot back.
-                await release(licenseKey: key, instanceID: activation.instanceID)
+                await release(licenseKey: key, instanceID: instanceID)
                 return .wrongProduct(productName: activation.productName)
             }
-            if kind == .trial, trialUsed {
-                await release(licenseKey: key, instanceID: activation.instanceID)
-                return .trialAlreadyUsed
+            if kind == .trial {
+                // Never a second trial on this Mac; unreadable storage counts as used.
+                guard let used = readTrialUsed() else {
+                    await release(licenseKey: key, instanceID: instanceID)
+                    return .storageUnavailable
+                }
+                if used {
+                    await release(licenseKey: key, instanceID: instanceID)
+                    return .trialAlreadyUsed
+                }
             }
             let previous = record
-            let observed = max(activation.serverDate ?? now(), activation.createdAt)
+            let anchor = activation.serverDate ?? now()
             let newRecord = LicenseRecord(
-                licenseKey: key, instanceID: activation.instanceID, productID: activation.productID, kind: kind,
-                activatedAt: activation.createdAt, lastSuccessAt: activation.serverDate ?? now(), lastObservedAt: observed
+                licenseKey: key, instanceID: instanceID, productID: productID, kind: kind,
+                activatedAt: activation.createdAt, lastSuccessAt: anchor, lastObservedAt: max(anchor, activation.createdAt)
             )
             // Persist first; announce success only once the record is durable.
-            do {
-                try commit(newRecord)
-                if kind == .trial {
-                    do {
-                        try store.markTrialUsed()
-                        trialUsedCache = true
-                    } catch {
-                        // Never keep a trial that could be taken again later.
-                        try? commit(previous)
-                        throw error
-                    }
-                }
-            } catch {
-                await release(licenseKey: key, instanceID: activation.instanceID)
+            if let failure = persist(newRecord, markingTrial: kind == .trial, previous: previous) {
+                storageError = failure
+                await release(licenseKey: key, instanceID: instanceID)
                 return .storageFailed
             }
-            failedChecks = 0
-            blockedUntil = nil
-            lastAttemptAt = now()
-            if let previous, previous.instanceID != activation.instanceID {
+            commitActivation(newRecord)
+            if let previous, previous.instanceID != instanceID {
                 // A trial replaced by a purchase, or a different paid key:
                 // free the old activation so it does not count against the limit.
                 await release(licenseKey: previous.licenseKey, instanceID: previous.instanceID)
@@ -218,13 +313,32 @@ public final class LicenseManager {
         }
     }
 
-    /// Deactivates an activation we must not keep; remembers it for retry
-    /// if Dodo could not be reached.
+    /// Saves a new record and, for a trial, the used marker. Returns the
+    /// failure, having restored the previous record if the marker failed so
+    /// no trial can be taken twice.
+    private func persist(_ newRecord: LicenseRecord, markingTrial: Bool, previous: LicenseRecord?) -> LicenseStoreError? {
+        do {
+            try store.saveRecord(newRecord)
+        } catch {
+            return error
+        }
+        guard markingTrial else { return nil }
+        do {
+            try store.markTrialUsed()
+            return nil
+        } catch {
+            if let previous { try? store.saveRecord(previous) } else { try? store.clearRecord() }
+            return error
+        }
+    }
+
+    /// Deactivates an activation we must not keep; remembers it (durably)
+    /// for retry if Dodo could not be reached.
     private func release(licenseKey: String, instanceID: String) async {
         callCount += 1
         switch await client.deactivate(licenseKey: licenseKey, instanceID: instanceID) {
         case .deactivated:
-            pendingCleanups.removeAll { $0.instanceID == instanceID }
+            setPendingCleanups(pendingCleanups.filter { $0.instanceID != instanceID })
         case .rateLimited(let retryAfter):
             block(for: retryAfter)
             remember(licenseKey: licenseKey, instanceID: instanceID)
@@ -235,17 +349,14 @@ public final class LicenseManager {
 
     private func remember(licenseKey: String, instanceID: String) {
         guard !pendingCleanups.contains(where: { $0.instanceID == instanceID }) else { return }
-        pendingCleanups.append((licenseKey, instanceID))
+        setPendingCleanups(pendingCleanups + [PendingCleanup(licenseKey: licenseKey, instanceID: instanceID)])
     }
 
-    /// Retries deactivations that could not be completed earlier.
-    public func retryPendingCleanups() async {
-        await perform {
-            for cleanup in self.pendingCleanups {
-                if let blockedUntil = self.blockedUntil, self.now() < blockedUntil { return }
-                await self.release(licenseKey: cleanup.licenseKey, instanceID: cleanup.instanceID)
-            }
-        }
+    private func setPendingCleanups(_ cleanups: [PendingCleanup]) {
+        guard cleanups != pendingCleanups else { return }
+        pendingCleanups = cleanups
+        cleanupsDirty = true
+        flushCleanups()
     }
 
     // MARK: Checks
@@ -266,11 +377,21 @@ public final class LicenseManager {
         }
     }
 
-    /// Validates the stored activation now. A network failure never makes
-    /// the state worse; only `valid: false` revokes, and only for the record
-    /// the answer was about.
+    /// Validates the stored activation now.
     public func check() async {
         await perform { await self.checkNow() }
+    }
+
+    /// Housekeeping the app layer runs on every timer, wake and network event:
+    /// records that time passed, retries failed writes and cleanups, then
+    /// runs the check if it is due.
+    public func tick() async {
+        await perform {
+            self.retryStorage()
+            self.noteTime()
+            await self.retryCleanupsNow()
+            if self.isCheckDue { await self.checkNow() }
+        }
     }
 
     private func checkNow() async {
@@ -278,24 +399,19 @@ public final class LicenseManager {
         if let blockedUntil, now() < blockedUntil { return }
         isChecking = true
         defer { isChecking = false }
-        let expected = generation
+        let expected = activationGeneration
         lastAttemptAt = now()
         callCount += 1
         let result = await client.validate(licenseKey: record.licenseKey, instanceID: record.instanceID)
-        guard generation == expected, let current = self.record, current.instanceID == record.instanceID else {
-            return // The record changed meanwhile; this answer is about the old one.
+        guard activationGeneration == expected, let current = self.record, current.instanceID == record.instanceID else {
+            return // The activation changed meanwhile; this answer is about the old one.
         }
         switch result {
         case .valid(let serverDate):
             applySuccess(serverDate: serverDate, for: current)
         case .invalid:
-            var revoked = current
-            revoked.revokedAt = now()
-            try? commit(revoked)
-            failedChecks = 0
-            blockedUntil = nil
+            invalidate(current)
         case .rateLimited(let retryAfter):
-            // A failed attempt too: retry once the limit lifts.
             failedChecks += 1
             block(for: retryAfter)
         case .unreachable:
@@ -303,27 +419,40 @@ public final class LicenseManager {
         }
     }
 
+    /// A successful check: fresh success time, revocation cleared, and time
+    /// re-anchored from the server when it says what time it is.
     private func applySuccess(serverDate: Date?, for current: LicenseRecord) {
         var updated = current
         let successAt = serverDate ?? now()
         updated.lastSuccessAt = successAt
         updated.revokedAt = nil
-        updated.lastObservedAt = max(updated.lastObservedAt, successAt, now())
-        // Storage failure here only loses the fresher timestamp; keep it in memory.
-        do { try commit(updated) } catch { record = updated; generation += 1 }
+        updated.lastObservedAt = serverDate.map { max($0, current.activatedAt) } ?? max(current.lastObservedAt, now())
+        write(updated)
         failedChecks = 0
         blockedUntil = nil
     }
 
-    /// Records that time has moved on, so a later clock rollback cannot
-    /// extend a trial or grace. Cheap; the app calls it on its local timers.
-    public func noteTime() {
+    /// Time moved on: remember it so a later rollback is detected. Never
+    /// touches the activation identity.
+    private func noteTime() {
         guard let record else { return }
         let current = now()
         guard current > record.lastObservedAt.addingTimeInterval(60) else { return }
         var updated = record
         updated.lastObservedAt = current
-        do { try commit(updated) } catch { self.record = updated }
+        write(updated)
+    }
+
+    private func retryCleanupsNow() async {
+        for cleanup in pendingCleanups {
+            if let blockedUntil, now() < blockedUntil { return }
+            await release(licenseKey: cleanup.licenseKey, instanceID: cleanup.instanceID)
+        }
+    }
+
+    /// Retries deactivations that could not be completed earlier.
+    public func retryPendingCleanups() async {
+        await perform { await self.retryCleanupsNow() }
     }
 
     // MARK: Removal
@@ -338,11 +467,11 @@ public final class LicenseManager {
             self.callCount += 1
             switch await self.client.deactivate(licenseKey: record.licenseKey, instanceID: record.instanceID) {
             case .deactivated:
-                do { try self.commit(nil) } catch { return .storageFailed }
+                self.replaceActivation(with: nil)
                 self.failedChecks = 0
                 self.blockedUntil = nil
                 self.lastAttemptAt = nil
-                return .removed
+                return self.storageError == nil ? .removed : .storageUnavailable
             case .rateLimited(let retryAfter):
                 self.block(for: retryAfter)
                 return .rateLimited(seconds: Int(retryAfter.rounded(.up)))
@@ -350,13 +479,6 @@ public final class LicenseManager {
                 return .removeFailedOffline
             }
         }
-    }
-
-    /// After `revoked`, the user may clear the dead record to start over.
-    public func forgetRevokedRecord() {
-        guard let record, record.isRevoked else { return }
-        try? commit(nil)
-        lastAttemptAt = nil
     }
 
     private func block(for seconds: TimeInterval) {
