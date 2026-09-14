@@ -46,6 +46,10 @@ pub struct Record {
     /// Set by `valid: false` for this activation; only a new activation clears it.
     #[serde(default)]
     pub revoked: bool,
+    /// Counts authoritative changes to this activation (activation, `valid: true`, revocation,
+    /// removal). The revocation journal refers to it, never to a clock.
+    #[serde(default)]
+    pub event_seq: u64,
 }
 
 /// Everything kept in the single Keychain item. `trial_used` survives removing the record.
@@ -293,9 +297,6 @@ pub struct Engine {
     pub stored: Stored,
     pub products: Products,
     pub schedule: Schedule,
-    /// Counts changes that grant or extend access. Playback may only be unlocked once the
-    /// record carrying the current value has been saved.
-    pub grant_version: u64,
 }
 
 impl Engine {
@@ -304,7 +305,6 @@ impl Engine {
             stored,
             products,
             schedule: Schedule::default(),
-            grant_version: 0,
         }
     }
 
@@ -342,7 +342,17 @@ impl Engine {
     }
 
     pub fn state(&self, now: i64) -> State {
-        let Some(record) = &self.stored.license else {
+        Self::state_of(&self.stored, &self.schedule, now)
+    }
+
+    /// Whether a record grants access at `now`, for any record: the runtime evaluates the last
+    /// saved record this way, so an unsaved extension never unlocks by itself.
+    pub fn stored_core_feature(stored: &Stored, now: i64) -> bool {
+        Self::state_of(stored, &Schedule::default(), now).core_feature()
+    }
+
+    fn state_of(stored: &Stored, schedule: &Schedule, now: i64) -> State {
+        let Some(record) = &stored.license else {
             return State::Unlicensed;
         };
         match record.kind {
@@ -370,7 +380,7 @@ impl Engine {
                 let age = Self::anchored_now(record, now) - record.last_success_at;
                 if !Self::clock_trusted(record, now) || age > GRACE_PERIOD {
                     State::CheckRequired
-                } else if age > CHECK_INTERVAL && self.schedule.failures > 0 {
+                } else if age > CHECK_INTERVAL && schedule.failures > 0 {
                     State::Grace {
                         days_offline: (age / DAY) as u32,
                         days_left: days_up(GRACE_PERIOD - age),
@@ -434,10 +444,13 @@ impl Engine {
         let record = self.checkable(now)?;
         // The schedule lives on the local clock; before any attempt this run, a day after the
         // last answer's local moment.
-        let mut due = match self.schedule.next_attempt_at {
-            Some(at) => at,
-            None if !Self::clock_trusted(record, now) => now,
-            None => Self::local_anchor(record) + CHECK_INTERVAL,
+        let mut due = if !Self::clock_trusted(record, now) {
+            // An untrusted clock needs Dodo's answer now, whatever was scheduled.
+            now
+        } else {
+            self.schedule
+                .next_attempt_at
+                .unwrap_or_else(|| Self::local_anchor(record) + CHECK_INTERVAL)
         };
         if let Some(hold_until) = self.schedule.hold_until {
             due = due.max(hold_until);
@@ -538,6 +551,7 @@ impl Engine {
             last_success_local: now,
             last_observed_at: activation.server_time.unwrap_or(now),
             revoked: false,
+            event_seq: 1,
         });
         next.trial_used |= kind == Kind::Trial;
         Ok(Activated {
@@ -552,7 +566,6 @@ impl Engine {
     pub fn commit_activation(&mut self, activated: Activated, now: i64) -> Option<Probe> {
         self.stored = activated.next;
         self.schedule.answered(now);
-        self.grant_version += 1;
         activated.replaced
     }
 
@@ -628,10 +641,10 @@ impl Engine {
                     // this, but an answer from Dodo sets it.
                     record.last_observed_at = record.last_success_at;
                     record.revoked = false;
-                    self.grant_version += 1;
                 } else {
                     record.revoked = true;
                 }
+                record.event_seq += 1;
                 self.schedule.answered(now);
                 Ok(self.state(now))
             }
@@ -921,6 +934,7 @@ pub(crate) mod tests {
                     last_success_local: NOW - last_success_ago,
                     last_observed_at: NOW - last_success_ago,
                     revoked: false,
+                    event_seq: 1,
                 }),
                 pending_cleanups: vec![],
             },
@@ -942,6 +956,7 @@ pub(crate) mod tests {
                     last_success_local: NOW - activated_ago,
                     last_observed_at: NOW - activated_ago,
                     revoked: false,
+                    event_seq: 1,
                 }),
                 pending_cleanups: vec![],
             },
@@ -1755,7 +1770,78 @@ pub(crate) mod tests {
         assert!(!engine.check_due(local + DAY + 1));
         assert_eq!(engine.next_check_at(local + DAY), Some(local + 2 * DAY));
         // Entitlement still follows the anchored clock, not the raw offset.
-        assert_eq!(engine.grant_version, 1);
+    }
+
+    #[test]
+    fn authoritative_changes_advance_the_event_sequence() {
+        let mut engine = unlicensed();
+        assert_eq!(
+            activate(
+                &mut engine,
+                "KEY-PAID",
+                KeyHint::Any,
+                &Fake::activating(P),
+                NOW
+            ),
+            Ok(State::Licensed)
+        );
+        assert_eq!(engine.stored.license.as_ref().unwrap().event_seq, 1);
+        engine.check(&Fake::validating(true), NOW + DAY).unwrap();
+        assert_eq!(engine.stored.license.as_ref().unwrap().event_seq, 2);
+        engine
+            .check(&Fake::validating(false), NOW + 2 * DAY)
+            .unwrap();
+        assert_eq!(engine.stored.license.as_ref().unwrap().event_seq, 3);
+        // Answers for another activation, or no answer, leave it alone.
+        let probe = Probe {
+            license_key: "KEY-PAID".into(),
+            instance_id: "other".into(),
+        };
+        engine
+            .finish_check(
+                &probe,
+                Ok(Validation {
+                    valid: true,
+                    server_time: None,
+                }),
+                NOW + 3 * DAY,
+            )
+            .unwrap();
+        assert!(
+            engine
+                .check(
+                    &Fake::failing(DodoError::Offline("down".into())),
+                    NOW + 3 * DAY
+                )
+                .is_err()
+        );
+        assert_eq!(engine.stored.license.as_ref().unwrap().event_seq, 3);
+        // A record without the field is at sequence zero, so any journal entry outranks it.
+        let legacy: Stored = serde_json::from_str(
+            r#"{"license":{"license_key":"K","instance_id":"i","product_id":"p","kind":"paid","activated_at":1,"last_success_at":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.license.unwrap().event_seq, 0);
+    }
+
+    #[test]
+    fn an_untrusted_clock_forces_a_check_even_with_one_scheduled() {
+        let mut engine = licensed(HOUR);
+        assert_eq!(
+            engine.check(&Fake::validating(true), NOW),
+            Ok(State::Licensed)
+        );
+        assert_eq!(engine.next_check_at(NOW), Some(NOW + DAY));
+        // The clock jumps back two days: the scheduled attempt no longer applies.
+        engine.observe(NOW + HOUR);
+        assert!(engine.check_due(NOW - 2 * DAY));
+        assert_eq!(engine.next_check_at(NOW - 2 * DAY), Some(NOW - 2 * DAY));
+        // A rate limit still holds.
+        engine.note_rate_limit(NOW - 2 * DAY, 60);
+        assert_eq!(
+            engine.next_check_at(NOW - 2 * DAY),
+            Some(NOW - 2 * DAY + 60)
+        );
     }
 
     #[test]
@@ -1772,6 +1858,7 @@ pub(crate) mod tests {
                 last_success_local: NOW,
                 last_observed_at: NOW,
                 revoked: false,
+                event_seq: 1,
             }),
             pending_cleanups: vec![],
         };

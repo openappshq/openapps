@@ -127,13 +127,15 @@ impl Vault for Keychain {
 }
 
 /// A small non-secret note, outside the Keychain, that an activation was revoked or removed:
-/// keyed by a SHA-256 hash of the activation ID and holding only the time. Written before the
-/// Keychain save and kept as a tombstone until that save lands, so a lost access survives a
-/// restart even when the Keychain never caught up. Never contains the license key.
+/// keyed by a SHA-256 hash of the activation ID and holding only the record's event sequence
+/// after that change, never a clock. Written before the Keychain save and kept as a tombstone
+/// until that save lands, so a lost access survives a restart even when the Keychain never
+/// caught up. Never contains the license key.
 pub trait Journal: Send + Sync {
-    /// When the activation was revoked or removed, if an entry exists.
-    fn revoked_at(&self, instance_hash: &str) -> Option<i64>;
-    fn revoke(&self, instance_hash: &str, at: i64) -> Result<(), String>;
+    /// The sequence noted for the activation, if an entry exists. `Err` means the journal could
+    /// not be read: the caller fails closed.
+    fn entry(&self, instance_hash: &str) -> Result<Option<u64>, String>;
+    fn revoke(&self, instance_hash: &str, seq: u64) -> Result<(), String>;
     fn clear(&self, instance_hash: &str) -> Result<(), String>;
 }
 
@@ -143,7 +145,11 @@ pub fn instance_hash(instance_id: &str) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The journal as a JSON object `{ "<hash>": <revoked_at> }` in the app's data directory.
+type JournalEntries = std::collections::BTreeMap<String, u64>;
+
+/// The journal as a JSON object `{ "<hash>": <event_seq> }` in the app's data directory.
+/// A missing file is an empty journal; an unreadable or corrupt one is an error, and is moved
+/// aside for inspection rather than overwritten once an authoritative answer replaces it.
 pub struct FileJournal {
     path: std::path::PathBuf,
     lock: Mutex<()>,
@@ -157,14 +163,32 @@ impl FileJournal {
         }
     }
 
-    fn read(&self) -> std::collections::BTreeMap<String, i64> {
-        std::fs::read(&self.path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+    fn read(&self) -> Result<JournalEntries, String> {
+        match std::fs::read(&self.path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| format!("The revocation journal is unreadable: {e}")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(JournalEntries::new()),
+            Err(error) => Err(format!("The revocation journal could not be read: {error}")),
+        }
     }
 
-    fn write(&self, entries: &std::collections::BTreeMap<String, i64>) -> Result<(), String> {
+    /// The entries to build a write on. A corrupt file is kept aside first so it is never
+    /// overwritten; the new journal starts from what Dodo just said.
+    fn read_for_write(&self) -> Result<JournalEntries, String> {
+        match self.read() {
+            Ok(entries) => Ok(entries),
+            Err(error) if self.path.exists() => {
+                let aside = self
+                    .path
+                    .with_extension(format!("corrupt-{}.json", crate::library::unique_suffix()));
+                std::fs::rename(&self.path, &aside).map_err(|e| format!("{error} ({e})"))?;
+                Ok(JournalEntries::new())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn write(&self, entries: &JournalEntries) -> Result<(), String> {
         if let Some(directory) = self.path.parent() {
             std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
         }
@@ -174,21 +198,21 @@ impl FileJournal {
 }
 
 impl Journal for FileJournal {
-    fn revoked_at(&self, instance_hash: &str) -> Option<i64> {
+    fn entry(&self, instance_hash: &str) -> Result<Option<u64>, String> {
         let _guard = self.lock.lock().unwrap();
-        self.read().get(instance_hash).copied()
+        Ok(self.read()?.get(instance_hash).copied())
     }
 
-    fn revoke(&self, instance_hash: &str, at: i64) -> Result<(), String> {
+    fn revoke(&self, instance_hash: &str, seq: u64) -> Result<(), String> {
         let _guard = self.lock.lock().unwrap();
-        let mut entries = self.read();
-        entries.insert(instance_hash.to_string(), at);
+        let mut entries = self.read_for_write()?;
+        entries.insert(instance_hash.to_string(), seq);
         self.write(&entries)
     }
 
     fn clear(&self, instance_hash: &str) -> Result<(), String> {
         let _guard = self.lock.lock().unwrap();
-        let mut entries = self.read();
+        let mut entries = self.read_for_write()?;
         if entries.remove(instance_hash).is_none() {
             return Ok(());
         }
@@ -416,7 +440,7 @@ struct Meta {
 
 #[derive(Clone, Debug, PartialEq)]
 enum JournalOp {
-    Revoke(String, i64),
+    Revoke(String, u64),
     Clear(String),
 }
 
@@ -432,9 +456,14 @@ pub struct Service<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> {
     check: Mutex<()>,
     /// Issued under the engine lock with each gate decision; the host applies only newer ones.
     gate_revision: AtomicU64,
-    /// The engine's `grant_version` whose record has been saved; playback unlocks only when it
-    /// matches, so a grant never takes effect before it is durable.
-    saved_grant: AtomicU64,
+    /// The record as last saved or loaded. Playback unlocks only if it grants access too, so
+    /// an unsaved extension never unlocks by itself while a durable grant keeps working.
+    durable: Mutex<Option<Stored>>,
+    /// Bumped by every change to the record in memory or on disk; a load result older than the
+    /// latest change is discarded.
+    generation: AtomicU64,
+    /// One Keychain read at a time, automatic or manual.
+    load: Mutex<()>,
     wake: (Mutex<bool>, Condvar),
     /// The deadline enforcer's own wake-up, so a stalled write never delays a restriction.
     deadline_wake: (Mutex<bool>, Condvar),
@@ -487,7 +516,9 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             mutate: Mutex::new(()),
             check: Mutex::new(()),
             gate_revision: AtomicU64::new(0),
-            saved_grant: AtomicU64::new(0),
+            durable: Mutex::new(None),
+            generation: AtomicU64::new(0),
+            load: Mutex::new(()),
             wake: (Mutex::new(false), Condvar::new()),
             deadline_wake: (Mutex::new(false), Condvar::new()),
             dodo,
@@ -529,10 +560,10 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
 
     /// Notes a lost access in the journal. A failure keeps the memory state locked, shows a
     /// storage error and is retried every tick.
-    fn journal_revoke(&self, hash: String, at: i64) {
-        if let Err(error) = self.journal.revoke(&hash, at) {
+    fn journal_revoke(&self, hash: String, seq: u64) {
+        if let Err(error) = self.journal.revoke(&hash, seq) {
             self.publish(|meta| {
-                meta.journal_retry.push(JournalOp::Revoke(hash, at));
+                meta.journal_retry.push(JournalOp::Revoke(hash, seq));
                 meta.last_error = Some(format!("The revocation note could not be saved: {error}"));
             });
         }
@@ -556,7 +587,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         let mut failed = Vec::new();
         for op in pending {
             let result = match &op {
-                JournalOp::Revoke(hash, at) => self.journal.revoke(hash, *at),
+                JournalOp::Revoke(hash, seq) => self.journal.revoke(hash, *seq),
                 JournalOp::Clear(hash) => self.journal.clear(hash),
             };
             if result.is_err() {
@@ -593,13 +624,33 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         }
     }
 
-    /// Reads the Keychain. An unreadable record is a storage error, never "no license": the
-    /// Mac stays gated, the error is shown, and the read is retried with backoff. A journal
-    /// entry for the stored activation forces Revoked whatever the record says.
+    /// Reads the Keychain and the journal. Unreadable storage is a storage error, never "no
+    /// license": the Mac stays gated, the error is shown, and the read is retried with backoff.
+    /// Loads are single-flight, and a result is discarded if the record changed meanwhile.
     pub fn load(&self) {
+        let Ok(_loading) = self.load.try_lock() else {
+            return;
+        };
+        let started = self.generation.load(Ordering::SeqCst);
         let now = self.now();
-        let stored = match self.vault.load() {
-            Ok(stored) => stored,
+        let loaded = self.vault.load().and_then(|stored| {
+            // A journal entry newer than the durable record forces Revoked; an older one is
+            // stale. An unreadable journal fails closed like an entry.
+            let override_revoked = match &stored.license {
+                Some(record) => {
+                    let hash = instance_hash(&record.instance_id);
+                    match self.journal.entry(&hash)? {
+                        Some(seq) if seq > record.event_seq => Some(true),
+                        Some(_) => Some(false),
+                        None => None,
+                    }
+                }
+                None => None,
+            };
+            Ok((stored, override_revoked))
+        });
+        let (stored, override_revoked) = match loaded {
+            Ok(loaded) => loaded,
             Err(error) => {
                 self.publish(|meta| {
                     meta.load_failures += 1;
@@ -612,42 +663,41 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
                 return;
             }
         };
-        // A journal entry forces Revoked, unless Dodo granted this activation after the entry
-        // was written: then the entry is stale and goes.
-        let mut stale_entry = None;
-        let revoked_by_journal = stored.license.as_ref().is_some_and(|record| {
-            let hash = instance_hash(&record.instance_id);
-            match self.journal.revoked_at(&hash) {
-                Some(at) if at >= record.last_success_local.max(record.last_success_at) => true,
-                Some(_) => {
-                    stale_entry = Some(hash);
-                    false
-                }
-                None => false,
-            }
-        });
-        if let Some(hash) = stale_entry {
-            self.journal_clear(hash);
-        }
+        let stale_entry = (override_revoked == Some(false))
+            .then(|| {
+                stored
+                    .license
+                    .as_ref()
+                    .map(|record| instance_hash(&record.instance_id))
+            })
+            .flatten();
         {
             let ordered = self.mutate.lock().unwrap();
+            if self.generation.load(Ordering::SeqCst) != started {
+                // Something changed the record while this read was in flight: it is old news.
+                return;
+            }
             let mut engine = self.engine.lock().unwrap();
-            engine.stored = stored;
-            if revoked_by_journal && let Some(record) = engine.stored.license.as_mut() {
+            engine.stored = stored.clone();
+            if override_revoked == Some(true)
+                && let Some(record) = engine.stored.license.as_mut()
+            {
                 record.revoked = true;
             }
-            let grant = engine.grant_version;
             drop(engine);
-            // The record on disk is what took effect, unless the journal overrode it.
-            self.saved_grant.store(grant, Ordering::SeqCst);
+            *self.durable.lock().unwrap() = Some(stored);
+            self.generation.fetch_add(1, Ordering::SeqCst);
             let mut meta = self.meta.lock().unwrap();
             meta.ready = true;
             meta.load_failures = 0;
             meta.next_load_at = None;
             meta.last_error = None;
-            meta.storage_dirty = revoked_by_journal;
+            meta.storage_dirty = override_revoked == Some(true);
             drop(meta);
             drop(ordered);
+        }
+        if let Some(hash) = stale_entry {
+            self.journal_clear(hash);
         }
         self.publish(|_| {});
         self.apply();
@@ -672,6 +722,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         }
         // The high-water mark keeps a rolled-back clock from being trusted.
         if self.engine.lock().unwrap().observe(now) {
+            self.generation.fetch_add(1, Ordering::SeqCst);
             let ordered = self.mutate.lock().unwrap();
             self.persist(&ordered);
         }
@@ -720,6 +771,17 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
     }
 
     fn sleep(&self) {
+        let wait = self.next_wait();
+        let (flag, condvar) = &self.wake;
+        let mut woken = flag.lock().unwrap();
+        if !*woken {
+            woken = condvar.wait_timeout(woken, wait).unwrap().0;
+        }
+        *woken = false;
+    }
+
+    /// How long the scheduler may sleep before something is due.
+    fn next_wait(&self) -> Duration {
         let now = self.now();
         let (next_check, next_transition, probing) = {
             let engine = self.engine.lock().unwrap();
@@ -735,16 +797,16 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             .map(|due| Duration::from_secs((due - now).max(0) as u64))
             .min()
             .unwrap_or(MAX_SLEEP);
-        if probing || self.meta.lock().unwrap().storage_dirty {
-            wait = wait.min(REACHABILITY_POLL.min(CLEANUP_RETRY));
+        {
+            let meta = self.meta.lock().unwrap();
+            if probing || meta.storage_dirty || !meta.journal_retry.is_empty() {
+                wait = wait.min(REACHABILITY_POLL.min(CLEANUP_RETRY));
+            }
+            if let Some(at) = meta.next_load_at.filter(|_| !meta.ready) {
+                wait = wait.min(Duration::from_secs((at - now).max(0) as u64));
+            }
         }
-        let wait = wait.clamp(Duration::from_secs(1), MAX_SLEEP);
-        let (flag, condvar) = &self.wake;
-        let mut woken = flag.lock().unwrap();
-        if !*woken {
-            woken = condvar.wait_timeout(woken, wait).unwrap().0;
-        }
-        *woken = false;
+        wait.clamp(Duration::from_secs(1), MAX_SLEEP)
     }
 
     /// Wakes the scheduler: after activation, on wake from sleep, or when asked to check now.
@@ -770,24 +832,25 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         };
         self.publish(|meta| meta.checking = true);
         let answer = self.dodo.validate(&probe.license_key, &probe.instance_id);
-        let (result, network_down, revoked_now) = {
+        let (result, network_down, answered) = {
             let mut engine = self.engine.lock().unwrap();
             let result = engine.finish_check(&probe, answer, self.now());
-            let revoked_now = engine
+            let answered = engine
                 .stored
                 .license
                 .as_ref()
                 .filter(|record| record.instance_id == probe.instance_id)
-                .map(|record| record.revoked);
-            (result, engine.schedule.network_down, revoked_now)
+                .map(|record| (record.revoked, record.event_seq));
+            (result, engine.schedule.network_down, answered)
         };
+        self.generation.fetch_add(1, Ordering::SeqCst);
         self.gate(false);
         let hash = instance_hash(&probe.instance_id);
-        match revoked_now {
+        match answered {
             // Journalled before the Keychain save, so a restart cannot lose the revocation.
-            Some(true) => self.journal_revoke(hash, self.now()),
-            Some(false) => self.journal_clear(hash),
-            None => {}
+            Some((true, seq)) if result.is_ok() => self.journal_revoke(hash, seq),
+            Some((false, _)) if result.is_ok() => self.journal_clear(hash),
+            _ => {}
         }
         if network_down {
             self.meta.lock().unwrap().recovery_armed = true;
@@ -853,13 +916,11 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
     /// Writes the current record. Requires the ordering lock, so writes land in the order the
     /// changes were made and a slower writer can never restore an older record.
     fn persist(&self, _ordered: &MutexGuard<'_, ()>) {
-        let (stored, grant) = {
-            let engine = self.engine.lock().unwrap();
-            (engine.stored.clone(), engine.grant_version)
-        };
+        let stored = self.engine.lock().unwrap().stored.clone();
+        self.generation.fetch_add(1, Ordering::SeqCst);
         match self.vault.save(&stored) {
             Ok(()) => {
-                self.saved_grant.fetch_max(grant, Ordering::SeqCst);
+                *self.durable.lock().unwrap() = Some(stored.clone());
                 // The lost access is durable now, so its journal note has done its job.
                 let clear = {
                     let mut meta = self.meta.lock().unwrap();
@@ -897,9 +958,17 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
     /// Decides the gate under the engine lock and stamps it with the next revision.
     fn decide(&self) -> (u64, bool) {
         let engine = self.engine.lock().unwrap();
+        let now = self.now();
         let ready = self.meta.lock().unwrap().ready;
-        let durable = self.saved_grant.load(Ordering::SeqCst) >= engine.grant_version;
-        let blocked = !ready || !durable || !engine.core_feature(self.now());
+        // Both what is in memory and what is saved must grant access: a restriction in memory
+        // counts at once, an extension only once it is durable.
+        let durable = self
+            .durable
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|stored| Engine::stored_core_feature(stored, now));
+        let blocked = !ready || !durable || !engine.core_feature(now);
         let revision = self.gate_revision.fetch_add(1, Ordering::SeqCst) + 1;
         (revision, blocked)
     }
@@ -1023,10 +1092,11 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         }
         let (state, replaced) = {
             let mut engine = self.engine.lock().unwrap();
+            let next = activated.next.clone();
             let replaced = engine.commit_activation(activated, now);
             // The record just saved is the one now in effect.
-            self.saved_grant
-                .store(engine.grant_version, Ordering::SeqCst);
+            *self.durable.lock().unwrap() = Some(next);
+            self.generation.fetch_add(1, Ordering::SeqCst);
             (engine.state(now), replaced)
         };
         self.gate(false);
@@ -1047,17 +1117,29 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             let begun = self.engine.lock().unwrap().begin_remove(now);
             begun.and_then(|probe| {
                 let answer = self.dodo.deactivate(&probe.license_key, &probe.instance_id);
+                let removed_seq = self
+                    .engine
+                    .lock()
+                    .unwrap()
+                    .stored
+                    .license
+                    .as_ref()
+                    .filter(|record| record.instance_id == probe.instance_id)
+                    .map(|record| record.event_seq + 1);
                 let result = self
                     .engine
                     .lock()
                     .unwrap()
                     .finish_remove(&probe, answer, now);
+                self.generation.fetch_add(1, Ordering::SeqCst);
                 self.gate(false);
-                if self.engine.lock().unwrap().stored.license.is_none() {
+                if let Some(seq) = removed_seq
+                    && self.engine.lock().unwrap().stored.license.is_none()
+                {
                     // A tombstone until the cleared record is saved: if that save fails and
                     // the app restarts offline, the old record must not come back to life.
                     let hash = instance_hash(&probe.instance_id);
-                    self.journal_revoke(hash.clone(), now);
+                    self.journal_revoke(hash.clone(), seq);
                     self.meta.lock().unwrap().clear_after_save.push(hash);
                 }
                 self.persist(&ordered);
@@ -1422,14 +1504,20 @@ mod tests {
 
     /// The journal as a shared map, so a "restart" can reuse it alongside the vault.
     #[derive(Default)]
-    struct FakeJournal(Mutex<std::collections::BTreeMap<String, i64>>);
+    struct FakeJournal(Mutex<std::collections::BTreeMap<String, u64>>);
 
     impl Journal for Arc<FakeJournal> {
-        fn revoked_at(&self, hash: &str) -> Option<i64> {
-            self.0.lock().unwrap().get(hash).copied()
+        fn entry(&self, hash: &str) -> Result<Option<u64>, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(hash)
+                .copied()
+                .map(Ok)
+                .transpose()
         }
-        fn revoke(&self, hash: &str, at: i64) -> Result<(), String> {
-            self.0.lock().unwrap().insert(hash.into(), at);
+        fn revoke(&self, hash: &str, seq: u64) -> Result<(), String> {
+            self.0.lock().unwrap().insert(hash.into(), seq);
             Ok(())
         }
         fn clear(&self, hash: &str) -> Result<(), String> {
@@ -1451,6 +1539,7 @@ mod tests {
             last_success_local: NOW - last_success_ago,
             last_observed_at: NOW - last_success_ago,
             revoked: false,
+            event_seq: 1,
         }
     }
 
@@ -1465,6 +1554,7 @@ mod tests {
             last_success_local: NOW - activated_ago,
             last_observed_at: NOW - activated_ago,
             revoked: false,
+            event_seq: 1,
         }
     }
 
@@ -2041,7 +2131,7 @@ mod tests {
         assert!(service.host.blocked());
         let hash = instance_hash("lki_KEY-PAID");
         assert!(
-            service.journal.revoked_at(&hash).is_some(),
+            service.journal.entry(&hash).unwrap().is_some(),
             "journalled before the save"
         );
         assert!(!service.vault.load().unwrap().license.unwrap().revoked);
@@ -2060,14 +2150,14 @@ mod tests {
         // Once the revoked record is saved, the note is no longer needed.
         restarted.tick();
         assert!(restarted.vault.load().unwrap().license.unwrap().revoked);
-        assert!(restarted.journal.revoked_at(&hash).is_none());
+        assert!(restarted.journal.entry(&hash).unwrap().is_none());
         // `valid: true` for the same activation clears everything.
         restarted.dodo.answer(Ok(Validation {
             valid: true,
             server_time: Some(NOW + HOUR),
         }));
         assert_eq!(restarted.check_once(true), Ok(State::Licensed));
-        assert!(restarted.journal.revoked_at(&hash).is_none());
+        assert!(restarted.journal.entry(&hash).unwrap().is_none());
         assert!(!restarted.host.blocked());
     }
 
@@ -2076,13 +2166,13 @@ mod tests {
         let service = service(with_paid(0), Arc::new(AtomicI64::new(NOW)));
         service.load();
         let hash = instance_hash("lki_KEY-PAID");
-        service.journal.revoke(&hash, NOW).unwrap();
+        service.journal.revoke(&hash, 2).unwrap();
         service.activate("KEY-PAID-2", KeyHint::Any).unwrap();
-        assert!(service.journal.revoked_at(&hash).is_none());
+        assert!(service.journal.entry(&hash).unwrap().is_none());
         let hash2 = instance_hash("lki_KEY-PAID-2");
-        service.journal.revoke(&hash2, NOW).unwrap();
+        service.journal.revoke(&hash2, 2).unwrap();
         service.remove().unwrap();
-        assert!(service.journal.revoked_at(&hash2).is_none());
+        assert!(service.journal.entry(&hash2).unwrap().is_none());
         // Remove whose Keychain save fails: the tombstone stays and an offline restart stays
         // off; once the cleared record is saved, the tombstone goes.
         let service = self::service(with_paid(0), Arc::new(AtomicI64::new(NOW)));
@@ -2090,7 +2180,7 @@ mod tests {
         *service.vault.save_error.lock().unwrap() = Some("denied".into());
         service.remove().unwrap();
         let hash = instance_hash("lki_KEY-PAID");
-        assert!(service.journal.revoked_at(&hash).is_some(), "tombstone");
+        assert!(service.journal.entry(&hash).unwrap().is_some(), "tombstone");
         assert!(service.vault.load().unwrap().license.is_some());
         let restarted = service_with(
             service.vault.reopen(),
@@ -2106,16 +2196,16 @@ mod tests {
         *service.vault.save_error.lock().unwrap() = None;
         service.tick();
         assert!(service.vault.load().unwrap().license.is_none());
-        assert!(service.journal.revoked_at(&hash).is_none());
-        // A stale entry older than a later grant for the same activation is ignored and dropped.
+        assert!(service.journal.entry(&hash).unwrap().is_none());
+        // A stale entry the durable record has already caught up with is ignored and dropped.
         let vault = FakeVault::default();
         *vault.stored.lock().unwrap() = with_paid(0);
         let journal = Arc::new(FakeJournal::default());
-        journal.revoke(&hash, NOW - DAY).unwrap();
+        journal.revoke(&hash, 1).unwrap();
         let fresh = service_with(vault, journal.clone(), Arc::new(AtomicI64::new(NOW)));
         fresh.load();
         assert_eq!(fresh.view().state, State::Licensed);
-        assert!(journal.revoked_at(&hash).is_none());
+        assert!(journal.entry(&hash).unwrap().is_none());
         assert!(
             !instance_hash("lki_KEY-PAID").contains("KEY"),
             "hashed, never the id"
@@ -2127,14 +2217,14 @@ mod tests {
     fn a_journal_that_cannot_be_written_still_locks_and_is_retried() {
         struct FailingJournal(Arc<FakeJournal>, AtomicBool);
         impl Journal for FailingJournal {
-            fn revoked_at(&self, hash: &str) -> Option<i64> {
-                self.0.revoked_at(hash)
+            fn entry(&self, hash: &str) -> Result<Option<u64>, String> {
+                self.0.entry(hash)
             }
-            fn revoke(&self, hash: &str, at: i64) -> Result<(), String> {
+            fn revoke(&self, hash: &str, seq: u64) -> Result<(), String> {
                 if self.1.load(Ordering::SeqCst) {
                     return Err("disk full".into());
                 }
-                self.0.revoke(hash, at)
+                self.0.revoke(hash, seq)
             }
             fn clear(&self, hash: &str) -> Result<(), String> {
                 self.0.clear(hash)
@@ -2163,13 +2253,218 @@ mod tests {
             "a storage error is shown"
         );
         let hash = instance_hash("lki_KEY-PAID");
-        assert!(inner.revoked_at(&hash).is_none());
+        assert!(inner.entry(&hash).unwrap().is_none());
         service.journal.1.store(false, Ordering::SeqCst);
         service.tick();
         assert!(
-            inner.revoked_at(&hash).is_some(),
+            inner.entry(&hash).unwrap().is_some(),
             "retried on the next tick"
         );
+    }
+
+    #[test]
+    fn a_failed_renewal_save_keeps_a_durable_paid_grant_playing() {
+        let service = service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
+        service.load();
+        assert!(!service.host.blocked());
+        *service.vault.save_error.lock().unwrap() = Some("denied".into());
+        assert_eq!(service.check_once(true), Ok(State::Licensed));
+        assert_eq!(service.view().state, State::Licensed);
+        assert!(
+            !service.host.blocked(),
+            "the saved record already grants access"
+        );
+        assert!(service.view().last_error.unwrap().contains("denied"));
+        // An unsaved revocation still counts at once.
+        service.dodo.answer(Ok(Validation {
+            valid: false,
+            server_time: Some(NOW),
+        }));
+        assert_eq!(service.check_once(true), Ok(State::Revoked));
+        assert!(service.host.blocked());
+    }
+
+    #[test]
+    fn a_clock_behind_the_server_cannot_make_a_revocation_look_old() {
+        let clock = Arc::new(AtomicI64::new(NOW - 2 * DAY));
+        let service = service(with_paid(0), clock.clone());
+        service.load();
+        *service.vault.save_error.lock().unwrap() = Some("denied".into());
+        service.dodo.answer(Ok(Validation {
+            valid: false,
+            server_time: Some(NOW),
+        }));
+        assert_eq!(service.check_once(true), Ok(State::Revoked));
+        assert!(service.host.blocked());
+        let hash = instance_hash("lki_KEY-PAID");
+        assert_eq!(
+            service.journal.entry(&hash).unwrap(),
+            Some(3),
+            "sequence, not a clock"
+        );
+        let restart = service_with(service.vault.reopen(), service.journal.clone(), clock);
+        restart
+            .dodo
+            .answer(Err(DodoError::Offline("offline".into())));
+        restart.load();
+        assert_eq!(restart.view().state, State::Revoked);
+        assert!(restart.host.blocked());
+        // The forced revocation was saved by the launch check's persist, so the note is done.
+        assert!(restart.vault.load().unwrap().license.unwrap().revoked);
+        assert!(restart.journal.entry(&hash).unwrap().is_none());
+        // Back online, `valid: true` moves the record past the entry and unlocks; if that save
+        // failed the Mac would stay locked until the next successful check.
+        restart.dodo.answer(Ok(Validation {
+            valid: true,
+            server_time: Some(NOW + DAY),
+        }));
+        assert_eq!(restart.check_once(true), Ok(State::Licensed));
+        assert!(!restart.host.blocked());
+        assert!(restart.journal.entry(&hash).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_unreadable_journal_fails_closed_and_is_kept_aside_only_when_replaced() {
+        let path = std::env::temp_dir().join(format!(
+            "openklack-journal-{}.json",
+            crate::library::unique_suffix()
+        ));
+        std::fs::write(&path, b"invalid json").unwrap();
+        let vault = FakeVault::default();
+        *vault.stored.lock().unwrap() = with_paid(HOUR);
+        let service: Service<FakeDodo, FakeVault, FakeHost, FileJournal> = Service::new(
+            FakeDodo::paid(),
+            vault,
+            FakeHost::default(),
+            FileJournal::new(path.clone()),
+            Box::new(|| NOW),
+        );
+        service.apply();
+        service
+            .dodo
+            .answer(Err(DodoError::Offline("offline".into())));
+        service.load();
+        assert!(
+            !service.view().ready,
+            "unreadable storage is not an empty journal"
+        );
+        assert!(service.host.blocked());
+        assert!(service.view().last_error.unwrap().contains("journal"));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"invalid json",
+            "never overwritten"
+        );
+        assert!(service.dodo.calls().is_empty());
+        // The corrupt file stays until an authoritative answer has to be recorded.
+        let hash = instance_hash("x");
+        service.journal.revoke(&hash, 1).unwrap();
+        assert_eq!(service.journal.entry(&hash).unwrap(), Some(1));
+        let directory = path.parent().unwrap();
+        let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let aside: Vec<_> = std::fs::read_dir(directory)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&stem) && name.contains("corrupt"))
+            .collect();
+        assert_eq!(aside.len(), 1, "kept aside for inspection");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(directory.join(&aside[0])).unwrap();
+        // A missing file is simply empty.
+        assert_eq!(FileJournal::new(path).entry(&hash).unwrap(), None);
+    }
+
+    #[test]
+    fn a_late_load_cannot_overwrite_a_newer_record() {
+        struct SnapshotVault {
+            inner: FakeVault,
+            pause: Pause,
+        }
+        impl Vault for SnapshotVault {
+            fn load(&self) -> Result<Stored, String> {
+                let snapshot = self.inner.load()?;
+                self.pause.enter();
+                Ok(snapshot)
+            }
+            fn save(&self, stored: &Stored) -> Result<(), String> {
+                self.inner.save(stored)
+            }
+        }
+        let vault = SnapshotVault {
+            inner: FakeVault::default(),
+            pause: Pause::default(),
+        };
+        *vault.inner.stored.lock().unwrap() = with_trial();
+        let service: Arc<Service<FakeDodo, SnapshotVault, FakeHost, Arc<FakeJournal>>> =
+            Arc::new(Service::new(
+                FakeDodo::paid(),
+                vault,
+                FakeHost::default(),
+                Arc::new(FakeJournal::default()),
+                Box::new(|| NOW),
+            ));
+        service.apply();
+        service.vault.pause.arm();
+        let old_load = {
+            let service = service.clone();
+            thread::spawn(move || service.load())
+        };
+        service.vault.pause.wait_entered();
+        // A manual retry while the first read is still in flight does nothing.
+        service.load();
+        assert!(!service.view().ready, "single-flight");
+        service.vault.pause.open();
+        old_load.join().unwrap();
+        assert!(service.view().ready);
+        // A read that started before an activation is discarded when it lands afterwards.
+        service.meta.lock().unwrap().ready = false;
+        service.vault.pause.arm();
+        let old_load = {
+            let service = service.clone();
+            thread::spawn(move || service.load())
+        };
+        service.vault.pause.wait_entered();
+        service.activate("KEY-PAID", KeyHint::Any).unwrap();
+        assert_eq!(
+            service
+                .vault
+                .inner
+                .load()
+                .unwrap()
+                .license
+                .unwrap()
+                .license_key,
+            "KEY-PAID"
+        );
+        service.vault.pause.open();
+        old_load.join().unwrap();
+        assert_eq!(service.view().state, State::Licensed);
+        assert_eq!(
+            service
+                .vault
+                .inner
+                .load()
+                .unwrap()
+                .license
+                .unwrap()
+                .license_key,
+            "KEY-PAID"
+        );
+        assert!(
+            !service.view().ready,
+            "the discarded read did not mark anything ready"
+        );
+    }
+
+    #[test]
+    fn the_scheduler_sleeps_no_longer_than_the_next_load_retry() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_paid(HOUR), clock);
+        *service.vault.load_error.lock().unwrap() = Some("keychain denied".into());
+        service.load();
+        let wait = service.next_wait();
+        assert_eq!(wait, Duration::from_secs(LOAD_RETRY_MIN as u64));
     }
 
     #[test]
