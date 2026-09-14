@@ -1,0 +1,17 @@
+{
+  "name": "OpenReaction release tags",
+  "target": "tag",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/tags/openreaction-v*"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    { "type": "update" },
+    { "type": "non_fast_forward" },
+    { "type": "deletion" }
+  ]
+}
