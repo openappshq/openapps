@@ -3,11 +3,16 @@ import ThanksPage from "../../../shared/ThanksPage";
 import { GITHUB_URL } from "../../../shared/github";
 import "../styles.css";
 
-export default function Thanks() {
+export default function Thanks({ kind = "paid" }: { kind?: "paid" | "trial" }) {
   return (
     <>
       <header className="site-header page-width">
-        <a className="brand" href="/openreaction/" aria-label="OpenReaction home">
+        <a
+          className="brand"
+          href="/openreaction/"
+          aria-label="OpenReaction home"
+          referrerPolicy="no-referrer"
+        >
           <img
             className="brand-symbol"
             src="/openreaction/favicon.svg"
@@ -18,7 +23,7 @@ export default function Thanks() {
           <span className="brand-name">OpenReaction</span>
         </a>
       </header>
-      <ThanksPage app="openreaction" />
+      <ThanksPage app="openreaction" kind={kind} />
       <footer className="site-footer page-width">
         <div className="hq-lockup">
           <img src="/brand/openapps-hq/app-icon.svg" alt="" width="56" height="56" />
@@ -28,7 +33,9 @@ export default function Thanks() {
           </div>
         </div>
         <div className="footer-links">
-          <a href="/">All OpenApps</a>
+          <a href="/" referrerPolicy="no-referrer">
+            All OpenApps
+          </a>
           <a href={GITHUB_URL} target="_blank" rel="noreferrer">
             GitHub <ArrowUpRight size={14} />
           </a>

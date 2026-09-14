@@ -1,47 +1,68 @@
 import { ArrowUpRight, Check, Copy, ExternalLink } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { products } from "../catalog";
-import { licensingFor, MACS_PER_LICENSE, SUPPORT_URL } from "./licensing";
-import { activateUrl, cleanedUrl, parseCheckoutReturn, type CheckoutReturn } from "./thanks";
-
-function readCheckoutReturn(): CheckoutReturn {
-  const result = parseCheckoutReturn(location.search);
-  // The key and email live only in this page's memory: drop them from the address bar
-  // (and history) right away so they are never bookmarked, shared or logged.
-  const cleaned = cleanedUrl(location.href);
-  if (cleaned !== location.pathname + location.search + location.hash) {
-    history.replaceState(history.state, "", cleaned);
-  }
-  return result;
-}
+import { licensingFor, MACS_PER_LICENSE, SUPPORT_URL, TRIAL_DAYS } from "./licensing";
+import { activateUrl, readCheckoutReturn, type LicenseKind } from "./thanks";
 
 function KeyRow({ licenseKey }: { licenseKey: string }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "manual">("idle");
+  const code = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1800);
+    if (state !== "copied") return;
+    const timer = setTimeout(() => setState("idle"), 1800);
     return () => clearTimeout(timer);
-  }, [copied]);
+  }, [state]);
+
+  const selectKey = () => {
+    const node = code.current;
+    if (!node) return;
+    node.focus();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  };
+  const copy = async () => {
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(licenseKey);
+      setState("copied");
+    } catch {
+      setState("manual");
+      selectKey();
+    }
+  };
+
   return (
     <div className="license-key">
-      <code>{licenseKey}</code>
+      <code ref={code} tabIndex={-1}>
+        {licenseKey}
+      </code>
       <button
         type="button"
-        aria-label={copied ? "Copied" : "Copy license key"}
-        onClick={() => {
-          void navigator.clipboard?.writeText(licenseKey).then(() => setCopied(true));
-        }}
+        aria-label={state === "copied" ? "Copied" : "Copy license key"}
+        onClick={() => void copy()}
       >
-        {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
-        {copied ? "Copied" : "Copy"}
+        {state === "copied" ? (
+          <Check size={16} aria-hidden="true" />
+        ) : (
+          <Copy size={16} aria-hidden="true" />
+        )}
+        {state === "copied" ? "Copied" : "Copy"}
       </button>
+      {state === "manual" && (
+        <p className="license-key-help" role="status">
+          Copying isn’t allowed here. The key is selected: press ⌘C to copy it manually.
+        </p>
+      )}
     </div>
   );
 }
 
 function Support({ size = 14 }: { size?: number }) {
   return (
-    <a href={SUPPORT_URL}>
+    <a href={SUPPORT_URL} referrerPolicy="no-referrer" rel="noreferrer">
       Contact support <ArrowUpRight size={size} aria-hidden="true" />
     </a>
   );
@@ -53,30 +74,47 @@ function Support({ size = 14 }: { size?: number }) {
  * otherwise (several keys from a bundle, or the site-wide page) it lists every
  * key and points at each app.
  */
-export default function ThanksPage({ app }: { app?: string }) {
+export default function ThanksPage({ app, kind = "paid" }: { app?: string; kind?: LicenseKind }) {
   const licensing = app ? licensingFor(app) : null;
-  const [checkout] = useState(readCheckoutReturn);
-  const failed = checkout.status !== null && checkout.status !== "succeeded";
+  const [checkout] = useState(() => readCheckoutReturn(window));
+  const unconfirmed = checkout.status !== null && checkout.status !== "succeeded";
   const single = licensing && checkout.keys.length === 1 ? checkout.keys[0]! : null;
+  const trial = kind === "trial";
   const appName = licensing?.name ?? "the app";
+  const seats = trial
+    ? `It’s a free ${TRIAL_DAYS}-day trial for 1 Mac`
+    : `It works on up to ${MACS_PER_LICENSE} Macs`;
+  const seatsPlural = trial
+    ? `each is a free ${TRIAL_DAYS}-day trial for 1 Mac`
+    : `every key works on up to ${MACS_PER_LICENSE} Macs`;
 
-  if (failed) {
+  if (unconfirmed) {
     return (
       <main className="thanks-page page-width">
         <span className="eyebrow">Checkout</span>
         <h1>
-          That didn’t
+          Not confirmed
           <br />
-          <span>go through.</span>
+          <span>just yet.</span>
         </h1>
         <p className="thanks-lead">
-          The payment came back as <code>{checkout.status}</code>, so no license was issued and
-          nothing was charged. You can try again
-          {licensing ? ` from the ${licensing.name} page` : ""}, or write to us if something looks
-          wrong.
+          We couldn’t confirm this checkout yet (status: <code>{checkout.status}</code>). If it went
+          through, your key is in your email
+          {checkout.email && (
+            <>
+              {" "}
+              at <strong>{checkout.email}</strong>
+            </>
+          )}
+          . Otherwise you can try again{licensing ? ` from the ${licensing.name} page` : ""}, or
+          write to us.
         </p>
         <div className="thanks-actions">
-          <a className="button-link primary" href={licensing?.pageUrl ?? "/"}>
+          <a
+            className="button-link primary"
+            href={licensing?.pageUrl ?? "/"}
+            referrerPolicy="no-referrer"
+          >
             {licensing ? `Back to ${licensing.name}` : "Back to the apps"}
           </a>
           <span className="thanks-note" style={{ marginTop: 0 }}>
@@ -89,29 +127,29 @@ export default function ThanksPage({ app }: { app?: string }) {
 
   return (
     <main className="thanks-page page-width">
-      <span className="eyebrow">Thank you</span>
+      <span className="eyebrow">{trial ? "Your trial" : "Thank you"}</span>
       <h1>
         {licensing ? `${licensing.name} is` : "Your keys are"}
         <br />
-        <span>{licensing ? "yours." : "ready."}</span>
+        <span>{licensing ? (trial ? "yours to try." : "yours.") : "ready."}</span>
       </h1>
       {checkout.keys.length === 0 ? (
         <p className="thanks-lead">
-          Check your email for your license key
+          Check your email for your {trial ? "trial" : "license"} key
           {checkout.email && (
             <>
               {" "}
               at <strong>{checkout.email}</strong>
             </>
           )}
-          . Each key works on up to {MACS_PER_LICENSE} Macs.
+          . {seats}.
         </p>
       ) : (
         <>
           <p className="thanks-lead">
             {checkout.keys.length === 1
-              ? `Here’s your license key. It works on up to ${MACS_PER_LICENSE} Macs`
-              : `Here are your license keys. Paste each key into its app — each app recognises its own key, and every key works on up to ${MACS_PER_LICENSE} Macs`}
+              ? `Here’s your ${trial ? "trial" : "license"} key. ${seats}`
+              : `Here are your keys. Paste each key into its app — each app recognises its own key, and ${seatsPlural}`}
             {checkout.email && (
               <>
                 , and a copy is on its way to <strong>{checkout.email}</strong>
@@ -127,7 +165,10 @@ export default function ThanksPage({ app }: { app?: string }) {
           <div className="thanks-actions">
             {single && licensing ? (
               <>
-                <a className="button-link primary" href={activateUrl(licensing.scheme, single)}>
+                <a
+                  className="button-link primary"
+                  href={activateUrl(licensing.scheme, single, kind)}
+                >
                   Open {licensing.name} <ExternalLink size={18} aria-hidden="true" />
                 </a>
                 <span className="thanks-note" style={{ marginTop: 0 }}>
@@ -136,7 +177,12 @@ export default function ThanksPage({ app }: { app?: string }) {
               </>
             ) : (
               products.map((product) => (
-                <a key={product.id} className="button-link secondary" href={`${product.route}/`}>
+                <a
+                  key={product.id}
+                  className="button-link secondary"
+                  href={`${product.route}/`}
+                  referrerPolicy="no-referrer"
+                >
                   Get {product.name}
                 </a>
               ))
@@ -165,16 +211,16 @@ export default function ThanksPage({ app }: { app?: string }) {
           <div>
             <h2>Paste your key</h2>
             <p>
-              Paste the key and click Activate. {licensing ? licensing.name : "The app"} checks it
-              once and you’re done.
+              Paste the key and click {trial ? "Start trial" : "Activate"}.{" "}
+              {licensing ? licensing.name : "The app"} checks it once and you’re done.
             </p>
           </div>
         </li>
       </ol>
 
       <p className="thanks-note">
-        Lost a Mac or need help? <Support />. This page keeps your key only in memory: reload it and
-        the key is gone, so copy it now.
+        {trial ? "Questions" : "Lost a Mac or need help"}? <Support />. This page keeps your key
+        only in memory: reload it and the key is gone, so copy it now.
       </p>
     </main>
   );

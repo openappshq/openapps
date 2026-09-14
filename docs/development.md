@@ -101,6 +101,14 @@ The website’s primary Download for Mac links open `/OpenKlack/download/`, a se
 - Reduced motion removes lighting animation and key travel. Browser shortcuts and form controls keep their normal behavior.
 - Desktop per-key customization has an accessible key selector and explicit physical-key selection mode.
 
+## Checkout return pages
+
+`/<app>/thanks/`, `/<app>/thanks/trial/` and the site-wide `/thanks/` are where Dodo Payments sends customers back, with `license_key`, `email`, `status` and `payment_id` in the query string. Each generated page starts its `<head>` with `<meta name="referrer" content="no-referrer">` and an inline script that moves those parameters into memory and replaces the URL before any stylesheet or script is requested, so the key never appears in a Referer header, in history, or in a bookmark. The page keeps the key only in memory and never stores or sends it.
+
+What no page code can prevent: the host that serves the thanks page receives the initial request, query string included, and may write it to its access logs. Configure the host to redact or drop query strings for `*/thanks/*` in its logs, and add a `Referrer-Policy: no-referrer` response header for those paths if the host supports per-path headers. The repository has no hosting configuration file today, so this is a hosting-side setting.
+
+Buy and trial buttons stay disabled (“Coming soon”) until `officialBuilds` in `apps/website/src/shared/licensing.ts` marks the app as having an official build to license.
+
 ## Sound library
 
 The MIT-declared recordings come from [Thock soundpacks](https://github.com/kamillobinski/thock-soundpacks), originally Mechvibes and kbsim. Full notices ship in `packages/soundpacks/sounds/NOTICE.txt`; source revisions, original IDs, and licenses are retained in `packages/soundpacks/catalog.json`. The [research](../design/archive/thock-sound-architecture.md) records the source format and provenance.

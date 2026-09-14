@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pages } from "../src/catalog.ts";
+import { CHECKOUT_HEAD } from "../src/shared/checkoutCapture.ts";
 
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -16,6 +17,8 @@ export function preparePages(root: string) {
       ? readFileSync(resolve(root, page.template), "utf8")
       : template;
     const html = pageTemplate
+      // First in <head>, before any stylesheet or script can send a Referer.
+      .replace(/<head>/, page.checkoutReturn ? `<head>\n    ${CHECKOUT_HEAD}` : "<head>")
       .replace(/<title>.*?<\/title>/, `<title>${escapeHtml(page.title)}</title>`)
       .replace(
         /name="description"\s+content="[^"]*"/,
