@@ -34,16 +34,34 @@ describe("tiers", () => {
   ];
 
   // A keyword that stems to the query also prefix-matches it, so the stem tier is covered below.
-  it("orders exact > shortcode prefix > word prefix > exact keyword > keyword prefix > fuzzy > typo", () => {
+  it("orders exact > shortcode prefix > word prefix > exact keyword > keyword prefix", () => {
     expect(search(list, "thum", { limit: 20 }).map((s) => [s.entry.emoji, s.tier])).toEqual([
       ["exact", Tier.Exact],
       ["prefix", Tier.ShortcodePrefix],
       ["word", Tier.WordPrefix],
       ["kwexact", Tier.ExactKeyword],
       ["kwprefix", Tier.KeywordPrefix],
+    ]);
+  });
+
+  it("adds fuzzy and typo rows only when the strong tiers find fewer than four", () => {
+    const weak = [
+      entry("exact", ["thum"]),
+      entry("fuzzy", ["t_h_u_m"]),
+      entry("typo", ["zz_d"], ["thun"]),
+    ];
+    expect(search(weak, "thum").map((s) => [s.entry.emoji, s.tier])).toEqual([
+      ["exact", Tier.Exact],
       ["fuzzy", Tier.Fuzzy],
       ["typo", Tier.Typo],
     ]);
+    const strong = [
+      ...weak,
+      entry("a", ["thumb_a"]),
+      entry("b", ["thumb_b"]),
+      entry("c", ["thumb_c"]),
+    ];
+    expect(search(strong, "thum").map((s) => s.entry.emoji)).toEqual(["exact", "a", "b", "c"]);
   });
 
   it("matches words of the emoji name as word prefixes", () => {
@@ -95,7 +113,8 @@ describe("helpers", () => {
     );
     expect(fuzzyMatch("red heart", "rhe", (c) => c === " ")).toMatchObject({ matched: [0, 4, 5] });
     expect(fuzzyMatch("taco", "aco")).toBeNull();
-    expect(fuzzyMatch("man_technologist", "mtc")!.score).toBeLessThan(56);
+    expect(fuzzyMatch("man_technologist", "mtc")!.score).toBeLessThan(70);
+    expect(fuzzyMatch("trade_mark", "tad")!.score).toBeLessThan(70);
   });
 });
 
@@ -122,6 +141,13 @@ describe("gemoji dataset", () => {
     ["rocket", "🚀"],
   ])(":%s ranks %s first", (query, emoji) => {
     expect(first(query)).toBe(emoji);
+  });
+
+  it("keeps weak tiers out once the strong ones have enough", () => {
+    expect(top("tad", 10)).toEqual(["🎉"]);
+    expect(top("tada", 10)).toEqual(["🎉"]);
+    expect(search(all, "hart")[0]).toMatchObject({ tier: Tier.Typo });
+    expect(search(all, "fire").every((s) => s.tier <= Tier.Stem)).toBe(true);
   });
 
   it("derives shortcodes from emoji names", () => {

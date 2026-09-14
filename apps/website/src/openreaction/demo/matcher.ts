@@ -33,7 +33,9 @@ export const Tier = {
 export type Tier = (typeof Tier)[keyof typeof Tier];
 
 const FUZZY_MIN_QUERY = 3;
-const FUZZY_MIN_SCORE = 56;
+const FUZZY_MIN_SCORE = 70;
+/** Fuzzy and typo matches only fill in when the stronger tiers find fewer emoji than this. */
+const WEAK_TIERS_BELOW = 4;
 const TYPO_MIN_QUERY = 4;
 const STEM_MIN = 3;
 
@@ -302,7 +304,12 @@ interface Hit {
   matchedLength: number;
 }
 
-function matchEntry(item: IndexedEntry, query: string, queryStem: string): Hit | null {
+function matchEntry(
+  item: IndexedEntry,
+  query: string,
+  queryStem: string,
+  weakTiers: boolean,
+): Hit | null {
   const primary = item.entry.names[0];
   const plain = (tier: Tier, matchedLength: number): Hit => ({
     tier,
@@ -357,6 +364,8 @@ function matchEntry(item: IndexedEntry, query: string, queryStem: string): Hit |
   if (queryStem.length >= STEM_MIN && item.stems.has(queryStem))
     return plain(Tier.Stem, byteLength(item.nameText));
 
+  if (!weakTiers) return null;
+
   if (query.length >= FUZZY_MIN_QUERY) {
     let best: Hit | null = null;
     for (const { text } of item.shortcodes) {
@@ -398,9 +407,10 @@ function frecencies(history: readonly string[]): Map<string, number> {
 }
 
 /**
- * Ranks emoji for a shortcode query. Within a tier: fuzzy quality (fuzzy
- * tier only), session frecency, popularity, shorter matched text (UTF-8
- * bytes), dataset order.
+ * Ranks emoji for a shortcode query. Fuzzy and typo matches are added only
+ * when the stronger tiers find fewer than four emoji. Within a tier: fuzzy
+ * quality (fuzzy tier only), session frecency, popularity, shorter matched
+ * text (UTF-8 bytes), dataset order.
  */
 export function search(
   entries: readonly EmojiEntry[],
@@ -412,9 +422,18 @@ export function search(
   const queryStem = stem(query);
   const frecency = frecencies(recent);
   const hits: (Hit & { item: IndexedEntry; frecency: number })[] = [];
-  for (const item of indexFor(entries)) {
-    const hit = matchEntry(item, query, queryStem);
+  const index = indexFor(entries);
+  const unmatched: IndexedEntry[] = [];
+  for (const item of index) {
+    const hit = matchEntry(item, query, queryStem, false);
     if (hit) hits.push({ ...hit, item, frecency: frecency.get(item.entry.emoji) ?? 0 });
+    else unmatched.push(item);
+  }
+  if (hits.length < WEAK_TIERS_BELOW) {
+    for (const item of unmatched) {
+      const hit = matchEntry(item, query, queryStem, true);
+      if (hit) hits.push({ ...hit, item, frecency: frecency.get(item.entry.emoji) ?? 0 });
+    }
   }
   hits.sort(
     (a, b) =>
