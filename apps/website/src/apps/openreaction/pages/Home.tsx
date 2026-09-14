@@ -82,7 +82,7 @@ const features: { icon: ReactNode; title: string; body: string }[] = [
 const questions: [string, string][] = [
   [
     "Can I download it yet?",
-    "OpenReaction is in development, and we want it dependable in everyday use before the first official build ships. Buying or starting a trial now gets you a license key that will work with it; until then, you can build it from source.",
+    "OpenReaction is in development, and we want it dependable in everyday use before the first official build ships. Licenses and the free 3-day trial become available with that release; until then, you can build it from source.",
   ],
   [
     `What does the ${PRICE} buy?`,
@@ -402,9 +402,9 @@ export default function App() {
               </span>
             </p>
             <p className="start-copy">
-              The official build is signed, notarized and {PRICE} once for up to {MACS_PER_LICENSE}{" "}
-              Macs, or try it free for {TRIAL_DAYS} days. Your key arrives by email and works with
-              the first official release.
+              The official build will be signed, notarized and {PRICE} once for up to{" "}
+              {MACS_PER_LICENSE} Macs, with a free {TRIAL_DAYS}-day trial. Licenses and the trial
+              become available with the official release; build from source today.
             </p>
             <div className="start-actions">
               <BuyButtons app="openreaction" />

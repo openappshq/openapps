@@ -85,8 +85,9 @@ export default function DownloadPage({
               {PRICE} once for {MACS_PER_LICENSE} Macs, or try it free for {TRIAL_DAYS} days.
             </h2>
             <p>
-              Official builds need a license key; it arrives by email right after checkout. Free to
-              build from source, no key needed.
+              Official builds need a license key, which arrives by email right after checkout.
+              Licenses and the trial become available with the official release. Free to build from
+              source today, no key needed.
             </p>
           </div>
           <BuyButtons app="openklack" />
