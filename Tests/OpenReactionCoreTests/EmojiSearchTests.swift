@@ -24,6 +24,13 @@ enum Fixtures {
         "😺": "grinning cat",
         "🫩": "face with bags under eyes",
         "👏": "clapping hands",
+        "™️": "trade mark",
+        "🔣": "input symbols",
+        "👨‍👨‍👧": "family: man, man, girl",
+        "👩‍👩‍👧‍👦": "family: woman, woman, girl, boy",
+        "🏷️": "label",
+        "🎯": "bullseye",
+        "🎟️": "admission tickets",
     ]
 
     static let gemoji = try! EmojiDatabase.bundled()
@@ -68,8 +75,9 @@ struct EmojiSearchTests {
         Case(query: "celebr", first: "🥳", tier: .keywordPrefix),
         Case(query: "parties", first: "🎉", tier: .stem),
         Case(query: "clapped", first: "👏", tier: .stem),
-        // "hart" is an in-order subsequence of "heart", so it is a fuzzy hit.
-        Case(query: "hart", first: "❤️", tier: .fuzzy),
+        // "hart" is a loose subsequence of "heart" (below the fuzzy floor), so
+        // it lands in the typo tier.
+        Case(query: "hart", first: "❤️", tier: .typo),
         Case(query: "haert", first: "❤️", tier: .typo),
         // "firr" would loosely fuzzy-match fire_extinguisher; the quality floor rejects that.
         Case(query: "firr", first: "🔥", tier: .typo),
@@ -78,6 +86,29 @@ struct EmojiSearchTests {
         let first = top(testCase.query).first
         #expect(first?.record.emoji == testCase.first)
         #expect(first?.tier == testCase.tier)
+    }
+
+    @Test func loosePrefixTyposDoNotSurfaceAsFuzzy() {
+        // `tad` is a subsequence of `trade_mark` but scattered; only 🎉 matches.
+        let tad = top("tad").map(\.record.emoji)
+        #expect(tad.first == "🎉")
+        #expect(!tad.contains("™️"))
+        #expect(!tad.contains("🔣"))
+    }
+
+    @Test func exactShortcodeIsNotFollowedByFamilyNoise() {
+        let tada = top("tada").map(\.record.emoji)
+        #expect(tada == ["🎉"])
+    }
+
+    @Test func weakTiersOnlyFillWhenStrongTiersAreThin() {
+        // `fire` has ≥4 strong matches in the full set, so no fuzzy/typo rows.
+        let full = EmojiSearch(catalog: EmojiCatalog.build(apple: nil, gemoji: Fixtures.gemoji, isSupported: { _ in true }))
+        let fire = full.matches(for: "fire", limit: 12)
+        #expect(fire.count >= 4)
+        #expect(fire.allSatisfy { $0.tier <= .stem })
+        // `hart` has no strong matches, so the typo tier fills in.
+        #expect(full.matches(for: "hart").first?.tier == .typo)
     }
 
     @Test func partyShowsBothPartyEmojiFirst() {

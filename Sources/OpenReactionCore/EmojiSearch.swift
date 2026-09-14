@@ -10,8 +10,12 @@
 /// | 3    | exact keyword                                                |
 /// | 4    | keyword prefix                                               |
 /// | 5    | same English stem as a keyword or name word (`:parties`)     |
-/// | 6    | fuzzy subsequence, 3+ characters (`:thmup`)                  |
+/// | 6    | fuzzy subsequence, 3+ characters (`:thup` → `thumbs_up`)     |
 /// | 7    | one typo, 4+ characters (`:hart` → `heart`)                  |
+///
+/// Tiers 6 and 7 are fallbacks: they only appear when tiers 0–5 found fewer
+/// than `weakTierFillThreshold` emoji, and a fuzzy match must start at a word
+/// start and score at least `minimumFuzzyQuality`.
 ///
 /// Within a tier: frecency, then popularity, then fuzzy quality, then the
 /// shorter matched text, then catalog order. In the fuzzy tier, match quality
@@ -31,9 +35,13 @@ public struct EmojiSearch: Sendable {
     }
 
     public static let minimumFuzzyLength = 3
-    /// Fuzzy hits scoring below this (long gaps, few runs) are dropped so a
-    /// near-miss typo of a short word is not outranked by a scattered match.
-    public static let minimumFuzzyQuality = 56
+    /// Fuzzy hits scoring below this (long gaps, few runs) are dropped, so
+    /// `tad` does not surface `trade_mark` and `hart` falls through to the
+    /// typo tier instead of matching `heart` loosely.
+    public static let minimumFuzzyQuality = 70
+    /// Fuzzy and typo results only fill in when the stronger tiers found
+    /// fewer than this many emoji.
+    public static let weakTierFillThreshold = 4
     public static let minimumTypoLength = 4
 
     private struct Indexed: Sendable {
@@ -102,6 +110,11 @@ public struct EmojiSearch: Sendable {
                 length: found.length,
                 frecency: frecency[record.emoji] ?? 0
             ))
+        }
+
+        let strongCount = scored.reduce(0) { $0 + ($1.tier <= .stem ? 1 : 0) }
+        if strongCount >= Self.weakTierFillThreshold {
+            scored.removeAll { $0.tier > .stem }
         }
 
         scored.sort { lhs, rhs in
