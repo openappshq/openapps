@@ -38,13 +38,14 @@ const envValue = (env: Env, name: string) => {
  * instead of linking to a broken checkout.
  */
 export function dodoConfigFrom(env: Env): DodoConfig {
-  const origin = envValue(env, "VITE_DODO_CHECKOUT_ORIGIN").replace(/\/+$/, "");
+  const raw = envValue(env, "VITE_DODO_CHECKOUT_ORIGIN");
+  const origin = raw.replace(/\/+$/, "");
   const known = Object.values(DODO_CHECKOUT_ORIGINS) as string[];
   const config: DodoConfig = {
     checkoutOrigin: known.includes(origin) ? origin : DODO_CHECKOUT_ORIGINS.live,
     products: {},
   };
-  if (origin && !known.includes(origin)) {
+  if (raw && !known.includes(origin)) {
     // An unknown origin could send buyers anywhere; sell nothing until it is fixed.
     return config;
   }

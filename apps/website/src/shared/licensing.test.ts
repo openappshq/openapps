@@ -58,6 +58,7 @@ describe("dodoConfigFrom", () => {
     const config = dodoConfigFrom({ ...liveEnv, VITE_DODO_CHECKOUT_ORIGIN: "https://evil.example" });
     expect(config.checkoutOrigin).toBe(DODO_CHECKOUT_ORIGINS.live);
     expect(config.products).toEqual({});
+    expect(dodoConfigFrom({ ...liveEnv, VITE_DODO_CHECKOUT_ORIGIN: "///" }).products).toEqual({});
   });
 
   it("skips an app unless both of its IDs are present and well formed", () => {
