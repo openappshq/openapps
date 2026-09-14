@@ -22,30 +22,25 @@ test("physical, pointer and preview holds remain independent and repeats do not 
   expect(input.pulses).toEqual([]);
 });
 
-test("saved sound assignments are validated and old pitch presets migrate to real packs", () => {
+test("the simple demo restores volume and valid stars, with no hidden legacy key overrides", () => {
   const settings = readSettings(
     JSON.stringify({
       packId: "drop-holy-panda",
       volume: 500,
-      releaseVolume: -1,
-      finish: "sage",
-      overrides: {
-        Space: { packId: "cherry-mx-blue-pbt", volume: 45 },
-        KeyA: { packId: "invalid", volume: 50 },
-        Invalid: { packId: "drop-holy-panda", volume: 30 },
-      },
+      tone: 50,
+      pitch: 2,
+      overrides: { Space: { packId: "cherry-mx-blue-pbt", volume: 45 } },
+      favoritePackIds: ["cherry-mx-blue-pbt", "invalid", "cherry-mx-blue-pbt", null],
     }),
   );
   expect(settings.volume).toBe(100);
-  expect(settings.releaseVolume).toBe(0);
-  expect(settings.overrides).toEqual({ Space: { packId: "cherry-mx-blue-pbt", volume: 45 } });
-  expect(voiceForKey(settings, "Space")).toEqual({ packId: "cherry-mx-blue-pbt", volume: 45 });
-  expect(voiceForKey(settings, "KeyA")).toEqual({ packId: "drop-holy-panda", volume: 100 });
+  expect(settings.favoritePackIds).toEqual(["cherry-mx-blue-pbt"]);
+  expect(settings.overrides).toEqual({});
+  expect(settings.tone).toBe(0);
+  expect(voiceForKey(settings, "Space")).toEqual({ packId: "drop-holy-panda", volume: 100 });
   expect(readSettings(JSON.stringify(settings))).toEqual(settings);
   expect(readSettings("{")).toEqual(defaults);
-  expect(
-    readSettings('{"profile":"deep","overrides":{"Space":"clicky"}}').overrides.Space.packId,
-  ).toBe("cherry-mx-blue-pbt");
+  expect(readSettings('{"profile":"deep"}').packId).toBe("novelkeys-cream");
 });
 
 test("all 18 packs retain real sample regions, per-key mappings and release semantics", () => {

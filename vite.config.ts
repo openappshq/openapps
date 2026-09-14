@@ -2,9 +2,9 @@ import { defineConfig } from "vite-plus";
 
 // https://vite.dev/config/
 export default defineConfig({
-  fmt: { ignorePatterns: ["apps/website/public/draco/**", "packages/soundpacks/catalog.json"] },
+  fmt: { ignorePatterns: ["packages/soundpacks/catalog.json"] },
   lint: {
-    ignorePatterns: ["apps/website/public/draco/**"],
+    ignorePatterns: ["**/assets/draco/**", "**/public/draco/**"],
     plugins: ["react", "typescript", "oxc"],
     rules: {
       "react/rules-of-hooks": "error",

@@ -8,6 +8,9 @@ export type Preset = {
   packId: string;
   volume: number;
   releaseVolume: number;
+  tone?: number;
+  pitch?: number;
+  width?: number;
   variation: boolean;
   favorite: boolean;
   overrides: Record<string, { packId: string; volume: number }>;
@@ -18,6 +21,7 @@ export type Preferences = {
   pauseOnMicrophone: boolean;
   activePresetId: string;
   presets: Preset[];
+  favoritePackIds?: string[];
   appRules: { bundleId: string; name: string; presetId: string | null; mute: boolean }[];
 };
 export type Snapshot = {
@@ -51,8 +55,10 @@ export type Pack = {
   author: string;
   credits: string;
   supportsKeyUp: boolean;
+  source: string;
 };
-export const packLabel = (pack: Pack) => `${pack.brand} ${pack.name}`.trim();
+export const packLabel = (pack: Pack) =>
+  `${pack.brand} ${pack.name === "Unknown" ? "Classic" : pack.name}${pack.source === "" ? " (Imported)" : ""}`.trim();
 
 export function useDesktop() {
   const [snapshot, setSnapshot] = useState<Snapshot>();
@@ -165,22 +171,19 @@ export function useDesktop() {
     });
   }
   async function importSounds() {
-    return perform(async () => {
+    await perform(async () => {
       const result = await invoke<{ packIds: string[]; preset: Preset | null } | null>(
         "import_sounds",
       ).finally(refresh);
       if (!result) return;
-      setNotice(
-        result.preset
-          ? `Imported “${result.preset.name}”. Select it in Presets when you are ready.`
-          : "Sounds imported. Find them in All sounds; your active preset has stayed the same.",
-      );
+      setNotice(result.preset ? "Settings imported." : "Sounds imported. Find them in Browse all.");
+      return result;
     });
   }
   async function exportPreset(id: string) {
     return perform(async () => {
       if (await invoke<boolean>("export_preset", { presetId: id }))
-        setNotice("Preset exported with its recordings and credits.");
+        setNotice("Settings exported with their sounds.");
     });
   }
   async function checkPackUpdates() {
@@ -189,8 +192,8 @@ export function useDesktop() {
       await refresh();
       setNotice(
         added
-          ? `${added} new pack versions added to All sounds. Apply one to update a preset.`
-          : "You have every pack version included with this app. Existing presets keep their saved versions.",
+          ? `${added} sounds added. Find them in Browse all.`
+          : "Your bundled sounds are up to date.",
       );
     });
   }

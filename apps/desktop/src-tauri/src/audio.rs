@@ -151,7 +151,7 @@ impl Playback {
         key: &str,
         down: bool,
         variant: usize,
-    ) -> Option<(SamplesBuffer, f32)> {
+    ) -> Option<(Box<dyn Source + Send>, f32)> {
         let preset = self.prefs.preset(app);
         let assignment = preset.overrides.get(key);
         let id = assignment.map_or(&preset.pack_id, |v| &v.pack_id);
@@ -171,7 +171,7 @@ impl Playback {
             } else {
                 preset.release_volume / 100.0
             };
-        Some((sample, gain))
+        Some((crate::shaping::shape(sample, preset, key), gain))
     }
 }
 

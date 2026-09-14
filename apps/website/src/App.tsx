@@ -1,15 +1,16 @@
-import { useState, useId } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { Accordion, Button, Link } from "@heroui/react";
+import { useState } from "react";
+import { motion } from "motion/react";
 import { enter } from "@openklack/ui/transitions";
-import { ArrowDown, ArrowUpRight, Check, Plus } from "lucide-react";
+import { ArrowDown, Check, Download } from "lucide-react";
 import SoundStudio from "./SoundStudio";
 import HqBadge from "./shared/HqBadge";
-import StarButton from "./shared/StarButton";
+import { SiteHeader, SiteFooter } from "./SiteChrome";
 
 const questions = [
   [
     "What does OpenKlack actually do?",
-    "OpenKlack adds recorded mechanical keyboard sounds to your keystrokes. The Mac app works across your apps from the menu bar. This browser playground lets you try the sounds while its keyboard is focused.",
+    "OpenKlack adds recorded mechanical keyboard sounds to your keystrokes. The Mac app works across your apps from the menu bar. This browser playground lets you try sounds while its keyboard or typing test is focused.",
   ],
   [
     "Can I download the Mac app yet?",
@@ -17,7 +18,7 @@ const questions = [
   ],
   [
     "Can I give individual keys a different sound?",
-    "Yes. Try Customize a key in the playground, choose a key, and apply a sound from the library. The desktop app also supports saved presets and importing your own audio or compatible sound packs.",
+    "Yes—in the Mac app, choose Customize a key, then pick its sound. You can also import your own recordings or compatible sound packs.",
   ],
   [
     "Does it record what I type?",
@@ -25,7 +26,7 @@ const questions = [
   ],
   [
     "Where do the sounds come from?",
-    "This collection contains 18 packs distributed by Thock, with recordings originally from Mechvibes and kbsim. Each pack keeps its credits and license. You can read the sound credits below the playground.",
+    "This collection contains 18 packs distributed by Thock, with recordings originally from Mechvibes and kbsim. Each pack keeps its credits and license. Credits and licenses are included with the sound files.",
   ],
   [
     "What about Windows, Linux, or mobile?",
@@ -33,40 +34,25 @@ const questions = [
   ],
 ];
 
+const MotionLink = motion.create(Link);
+
 function Question({ question, answer }: { question: string; answer: string }) {
-  const [open, setOpen] = useState(false);
-  const id = useId();
   return (
-    <article className="faq-item">
-      <h3>
-        <button
-          className="faq-trigger"
-          aria-expanded={open}
-          aria-controls={id}
-          onClick={() => setOpen(!open)}
-        >
-          {question}
-          <motion.span animate={{ rotate: open ? 45 : 0 }}>
-            <Plus size={20} />
-          </motion.span>
-        </button>
-      </h3>
-      <div id={id}>
-        <AnimatePresence initial={false}>
-          {open && (
-            <motion.div
-              key="answer"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              style={{ overflow: "hidden" }}
-            >
-              <p>{answer}</p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    </article>
+    <Accordion className="faq-item">
+      <Accordion.Item id={question}>
+        <Accordion.Heading>
+          <Accordion.Trigger className="faq-trigger">
+            {question}
+            <Accordion.Indicator />
+          </Accordion.Trigger>
+        </Accordion.Heading>
+        <Accordion.Panel>
+          <Accordion.Body>
+            <p>{answer}</p>
+          </Accordion.Body>
+        </Accordion.Panel>
+      </Accordion.Item>
+    </Accordion>
   );
 }
 
@@ -74,44 +60,14 @@ export default function App() {
   const [previewTheme, setPreviewTheme] = useState("light");
   return (
     <>
-      <a className="skip-link" href="#playground">
+      <Link className="skip-link" href="#playground">
         Skip to sound playground
-      </a>
-      <header className="site-header page-width" id="top">
-        <a className="brand" href="#top" aria-label="OpenKlack home">
-          <img
-            className="brand-symbol"
-            src="/brand/openklack/symbol-ink.svg"
-            alt=""
-            width="36"
-            height="36"
-          />
-          <img
-            className="brand-wordmark"
-            src="/brand/openklack/wordmark-ink.svg"
-            alt="OpenKlack"
-            width="150"
-            height="34"
-          />
-        </a>
-        <nav aria-label="Main navigation">
-          <a href="#desktop">The Mac app</a>
-          <a href="#questions">Questions</a>
-          <StarButton />
-          <motion.a
-            whileHover={{ y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            className="button-link small primary"
-            href="#playground"
-          >
-            Try the sounds <ArrowDown size={16} />
-          </motion.a>
-        </nav>
-      </header>
+      </Link>
+      <SiteHeader />
       <main>
         <section className="hero page-width" aria-labelledby="hero-title">
           <div className="hero-kicker">
-            <HqBadge /> <span>Sound on. Smile on.</span>
+            <HqBadge />
           </div>
           <div className="hero-grid">
             <motion.h1 {...enter} id="hero-title">
@@ -130,9 +86,19 @@ export default function App() {
                 The deep thock. The crisp click. Give every keystroke a sound you love, with the
                 keyboard you already own.
               </p>
-              <a className="text-link" href="#playground">
-                Find your sound <ArrowDown size={18} />
-              </a>
+              <div className="hero-actions">
+                <MotionLink
+                  className="button-link primary"
+                  href="/download/"
+                  whileHover={{ y: -2 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  Download for Mac <Download size={18} />
+                </MotionLink>
+                <Link className="text-link" href="#playground">
+                  Try the sounds <ArrowDown size={18} />
+                </Link>
+              </div>
               <span className="hero-note">Free & open source. Made for Mac.</span>
             </div>
           </div>
@@ -161,8 +127,7 @@ export default function App() {
                   <span className="status-dot" /> Mac app in development
                 </span>
                 <p>
-                  Pick your sound. Close the window. OpenKlack lives in your menu bar, adding a
-                  little character to the things you do every day.
+                  Pick a sound and close the window. OpenKlack keeps playing from your menu bar.
                 </p>
               </div>
             </motion.div>
@@ -171,13 +136,14 @@ export default function App() {
                 <span>OPENKLACK / SOUND LIBRARY</span>
                 <div className="theme-choice" role="group" aria-label="App preview appearance">
                   {["light", "dark"].map((theme) => (
-                    <button
+                    <Button
+                      variant="ghost"
                       key={theme}
                       aria-pressed={previewTheme === theme}
-                      onClick={() => setPreviewTheme(theme)}
+                      onPress={() => setPreviewTheme(theme)}
                     >
                       {theme}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -187,51 +153,37 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="settings-preview"
                 src={`/brand/openklack/ui/settings-${previewTheme}.png`}
-                alt={`${previewTheme === "light" ? "Light" : "Dark"} OpenKlack app design: sound library, pack previews, explicit Apply control, and live keyboard`}
-                width="1208"
-                height="968"
+                alt={`${previewTheme === "light" ? "Light" : "Dark"} OpenKlack app design: sound selection, stars, volume, and live keyboard`}
+                width="1080"
+                height="760"
                 loading="lazy"
               />
-              <span className="preview-caption">A look at the new app design.</span>
             </div>
             <div className="feature-row">
               <article>
                 <span className="feature-number">01</span>
-                <h3>Find your signature.</h3>
-                <p>
-                  A curated starting point, a deeper catalog to explore. Mix sounds by key, save a
-                  preset, or bring your own recordings.
-                </p>
+                <h3>Your favorite sounds.</h3>
+                <p>Choose from 18 recordings. Star your favorites or import your own.</p>
               </article>
               <article>
                 <span className="feature-number">02</span>
                 <h3>Knows when to hush.</h3>
-                <p>
-                  Automatic pause for microphone activity, with a visible reason and an easy way to
-                  resume. App rules keep you in control.
-                </p>
+                <p>Pauses when your microphone is in use. You can also mute specific apps.</p>
               </article>
               <article>
                 <span className="feature-number">03</span>
                 <h3>Entirely yours.</h3>
-                <p>
-                  No account. No automatic telemetry. Your sounds and settings stay on your Mac,
-                  with portable presets when you want to share.
-                </p>
+                <p>No account or telemetry. Your settings save automatically on your Mac.</p>
               </article>
             </div>
             <div className="menu-story">
               <div>
-                <span className="eyebrow">Within reach. Out of the way.</span>
                 <h3>
                   A tiny home
                   <br />
                   for your sound.
                 </h3>
-                <p>
-                  Volume, favorites, and a moment of quiet. The everyday controls live one click
-                  away, so the settings window can stay closed.
-                </p>
+                <p>Mute, adjust the volume, or switch to a favorite sound in one click.</p>
                 <ul>
                   <li>
                     <Check size={18} /> Native input and audio
@@ -250,12 +202,11 @@ export default function App() {
                 viewport={{ once: true, amount: 0.25 }}
                 className="menu-preview"
               >
-                <span className="menu-preview-label">When it’s time to listen.</span>
                 <img
-                  src="/brand/openklack/ui/menu-paused.png"
-                  alt="Proposed menu bar controls showing automatic pause, resume, volume, preset, and favorites"
-                  width="416"
-                  height="608"
+                  src="/brand/openklack/features/menu.svg"
+                  alt="Menu controls illustration: mute, volume, and favorite sounds"
+                  width="440"
+                  height="210"
                   loading="lazy"
                 />
               </motion.div>
@@ -278,45 +229,24 @@ export default function App() {
         </section>
         <section className="closing-section page-width">
           <div>
-            <span className="eyebrow">Your next favorite little thing.</span>
             <h2>
               Make some
               <br />
               good noise.
             </h2>
-            <motion.a
+            <MotionLink
               whileHover={{ y: -2 }}
               whileTap={{ scale: 0.98 }}
               className="button-link inverse"
-              href="#playground"
+              href="/download/"
             >
-              Back to the playground <ArrowUpRight size={20} />
-            </motion.a>
+              Download for Mac <Download size={20} />
+            </MotionLink>
           </div>
           <img src="/brand/openklack/symbol-paper.svg" alt="" width="260" height="260" />
         </section>
       </main>
-      <footer className="site-footer page-width">
-        <div className="hq-lockup">
-          <img src="/brand/openapps-hq/symbol-ink.svg" alt="" width="40" height="40" />
-          <div>
-            <img
-              src="/brand/openapps-hq/wordmark-ink.svg"
-              alt="OpenApps HQ"
-              width="150"
-              height="27"
-            />
-            <p>Small apps. Room for personality.</p>
-          </div>
-        </div>
-        <div>
-          <span>OpenKlack / 2026</span>
-          <a href="/home/">All OpenApps HQ apps</a>
-          <a href="https://github.com/openappshq/openklack" target="_blank" rel="noreferrer">
-            GitHub <ArrowUpRight size={14} />
-          </a>
-        </div>
-      </footer>
+      <SiteFooter />
     </>
   );
 }

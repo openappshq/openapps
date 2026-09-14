@@ -1,0 +1,74 @@
+[
+  {
+    "file": "design/keyboard/source/keycap.glb",
+    "url": "https://www.raycast.com/_next/static/immutable/media/keycap.114j0h4f8n-ul.glb",
+    "bytes": 16280,
+    "sha256": "1a8b6a80bc40ad522179516c83f90afecb4e732b5b4d9d206fef889eef49abf8"
+  },
+  {
+    "file": "design/keyboard/source/glyphs.png",
+    "url": "https://www.raycast.com/_next/static/immutable/media/glyphs.3_7t_06yewiuv.png",
+    "bytes": 30846,
+    "sha256": "71a108f567b37b18a4e45577307356873d37181ceb207c6d4131f79f5f37a0db"
+  },
+  {
+    "file": "design/keyboard/source/switch.glb",
+    "url": "https://www.raycast.com/_next/static/immutable/media/switch.2aqhh-g0zdlt6.glb",
+    "bytes": 177596,
+    "sha256": "d964b6b723f8bbd5e93b40d2ee369fe549d02fbdc34343c44f3484d7853db2dc"
+  },
+  {
+    "file": "design/keyboard/source/switch-baked.jpg",
+    "url": "https://www.raycast.com/_next/static/immutable/media/switch-baked.3fq5l859v9m_i.jpg",
+    "bytes": 184220,
+    "sha256": "1daac6d70dbbd6a151c64e58e13f2069b048d32519228d2c09dc3e90f236f916"
+  },
+  {
+    "file": "design/keyboard/source/keyboard.glb",
+    "url": "https://www.raycast.com/_next/static/immutable/media/keyboard.3ro93waeap5n5.glb",
+    "bytes": 666444,
+    "sha256": "e9f1ef605da1f079a239b376ce79a7339c87c161c86ac76611cdfdb59cf3ca46"
+  },
+  {
+    "file": "design/keyboard/source/base.jpg",
+    "url": "https://www.raycast.com/_next/static/immutable/media/base.2rqquubqlk5zp.jpg",
+    "bytes": 243229,
+    "sha256": "e7f0a5d8c1f025d0a4e092baef979c9ba1f0dd53d186254ec3e78f6aaa4c0cce"
+  },
+  {
+    "file": "design/keyboard/source/rgb.jpg",
+    "url": "https://www.raycast.com/_next/static/immutable/media/rgb.2b0rcidn_e7r4.jpg",
+    "bytes": 263575,
+    "sha256": "09bfa894f518deb8d80db073772ae3bfba6ffcef91b9fc23170f3aef4d90e0b2"
+  },
+  {
+    "file": "design/keyboard/source/keycaps-lighting.hdr",
+    "url": "https://www.raycast.com/_next/static/immutable/media/keycaps-lighting.2gr60d-0vh8m7.hdr",
+    "bytes": 44929,
+    "sha256": "4f5667c185e36fb48cc232acd767c733f5ea1ee48a5f479fd869565f17896389"
+  },
+  {
+    "file": "design/keyboard/source/switches.ogg",
+    "url": "https://www.raycast.com/_next/static/immutable/media/switches.3x255z57flf6r.ogg",
+    "bytes": 93379,
+    "sha256": "c8036cd012357478ba33e0407e659145214f2ea9405b9ff3a18f16e99549e847"
+  },
+  {
+    "file": "target/reference/raycast/page-component.js",
+    "url": "https://www.raycast.com/_next/static/immutable/chunks/2xw_xxyp1rc6m.js",
+    "bytes": 21505,
+    "sha256": "150a74fe419066a8593adb127b1a3911412e885d44cb3292f39bc3e7bc0e9ac1"
+  },
+  {
+    "file": "target/reference/raycast/renderer.js",
+    "url": "https://www.raycast.com/_next/static/immutable/chunks/0afenv_xkmt60.js",
+    "bytes": 773145,
+    "sha256": "d34e088fc9d1fa804b3ada24324b30faa364ed2dbdf09e42868fb097ee93ff50"
+  },
+  {
+    "file": "target/reference/raycast/keyboard-component.js",
+    "url": "https://www.raycast.com/_next/static/immutable/chunks/1iq4-hk8vxk9w.js",
+    "bytes": 116697,
+    "sha256": "b0e6aa9cd0f563fd233b84fff9021288a4dfa08a7515f42e4f1c70389cde405e"
+  }
+]

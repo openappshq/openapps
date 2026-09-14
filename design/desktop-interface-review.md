@@ -1,68 +1,56 @@
 # Desktop interface review
 
-Reviewed September 13, 2026.
+Reviewed September 14, 2026, after the simplicity and HeroUI pass.
 
 ## Scope and coverage
 
-Scope: the packaged macOS settings interface, including Keyboard, Presets, App rules, General, native file sheets, close/reopen behavior, isolated startup recovery, and app-update error feedback.
-The implementation uses React 19.2, HeroUI 3, Geist, custom CSS, and Tauri's WKWebView.
-Project conventions come from `/Users/anurag/AGENTS.md` and the accepted `design/desktop-plan.md`.
-This review covers the inspected desktop interface, not website design or public-release readiness.
+Scope: the installed macOS home, sound browser, key customization, Settings, and menu contents. React 19, HeroUI 3, Motion, Tauri/WKWebView, and the shared Tactile Studio tokens in `design/tokens.json`. Conventions: the supplied AGENTS.md guidance, `design/desktop-plan.md`, and the later user instructions to remove preset/tuning complexity. This is a desktop review; the website typing test is deliberately excluded.
 
 | Domain | Evidence inspected | Result |
 | --- | --- | --- |
-| Accessibility | Native accessibility tree, labeled controls, error/status roles, keyboard key selector, focus CSS, switch structure | Corrected switch labeling; arrow navigation passed; full VoiceOver not verified |
-| Layout | Packaged settings at 1080 × 760 and approximately 767 × 607; Keyboard and App rules at the smaller size | Corrected description alignment and offscreen error feedback; no horizontal overflow observed |
-| Writing | Preview/apply controls, pause reasons, import errors, General diagnostics explanation, app-rule labels | Clear within inspected states; diagnostics explicitly distinguish callback timing from speaker latency |
-| Typography | Geist text hierarchy, key legends, labels and descriptions in packaged screenshots | Clear within inspected sizes; zoom not verified |
-| Colors | Declared foreground/background pairs, focus styles, selected states, switch outlines | Inspected text pairs exceed 4.5:1; final packaged General screen shows distinct off-state track and thumb |
-| UI | Keyboard depth/selection, panels, dialogs, preset/rule actions, close/reopen | Native file sheets, rule Undo, and saved preset restoration passed; native tray slider not verified |
+| Accessibility | Native accessibility tree; labeled buttons, search, tabs, dropdowns and switches; focus CSS; Down/Return selection and Escape dismissal | Corrected duplicate search focus ring; full VoiceOver unverified |
+| Layout | Installed 1080 × 760 home, browse, customization and Settings; bounded lists and source breakpoint rules | Removed sidebar/inspector; four initial choices fit; full library scrolls |
+| Writing | Visible actions, saved-setup terminology, pause reasons, import/export and optional diagnostics | Removed preset terminology, redundant explanations and tuning labels |
+| Typography | Bricolage headings, Instrument Sans controls and IBM Plex Mono values in light/dark screenshots | Clear within inspected size; zoom unverified |
+| Colors | Shared light/dark tokens, selected rows, focus and volume thumb | Inspected text pairs pass 4.5:1; dark thumb remains visible |
+| UI | HeroUI Select, Accordion, Tabs, Slider and button states; native menu AX | Dropdown/accordion interactions passed; native menu contents verified, physical tray interaction unverified |
 
-## Findings
-
-No remaining HIGH findings were identified in the inspected interface paths.
-These root causes were corrected during implementation:
+## Findings resolved
 
 | Severity | Domain | Location | Before | After | Why |
 | --- | --- | --- | --- | --- | --- |
-| HIGH | UI | `apps/desktop/src-tauri/src/lib.rs:19` | File actions could fail to present a usable sheet | All file dialogs share a helper that attaches the settings window | Import/export must produce a visible, operable dialog |
-| MEDIUM | UI | `apps/desktop/src-tauri/src/engine.rs:418` | A damaged recording prevented manual mute from saving | A mute-only change preserves playback and its warning while persisting mute | The primary silence control must remain usable during recovery |
-| MEDIUM | Accessibility | `apps/desktop/src/controls.tsx:60` | Switch label and description appeared concatenated | Label/control share Switch.Content; Description remains a distinct sibling | Separates the control's name from explanatory text |
-| MEDIUM | Layout | `apps/desktop/src/App.tsx:171` | Import failures could appear above the current scroll position | Error feedback scrolls into view and uses an alert role | Users can locate the failure and act on it |
-| LOW | Layout | `apps/desktop/src/styles.css:629` | Switch descriptions were indented independently of their labels | Description padding aligns with its label | Preserves visual grouping |
+| HIGH | Layout | `apps/desktop/src/App.tsx:79`; `apps/desktop/src/SoundLibrary.tsx:12` | Sidebar destinations, inspector and preset workflow surrounded the primary task | One home with current sound, volume, keyboard and immediate sound selection | The everyday task must not require navigating or applying a candidate |
+| MEDIUM | UI | `apps/desktop/src/controls.tsx:75`; `apps/desktop/src/General.tsx:70` | Plain selects and disclosures felt unrelated to the component system | HeroUI Select and Accordion, with native focus and expansion semantics | Consistent behavior and recognizable feedback |
+| MEDIUM | Layout | `apps/desktop/src/SoundLibrary.tsx:24`; `packages/ui/SoundBrowser.tsx:25` | Entire catalog dominated the window with no quick type narrowing | Four initial choices and a bounded browser with combined search/type tabs | Progressive disclosure keeps the main action compact |
+| MEDIUM | UI | `apps/desktop/src/SoundLibrary.tsx:73`; `apps/desktop/src-tauri/src/lib.rs:428` | Favorites did not form one predictable route between home and menu | Shared persisted stars sort first and appear above More sounds | Frequently used sounds should take one selection |
+| MEDIUM | Accessibility | `packages/ui/browser.css:12` | Search input and its group both drew focus outlines; native cancel duplicated the clear action | The group owns the focus ring; HeroUI owns clearing | One visible focus target with one clear control |
+| LOW | Writing | `apps/desktop/src/useDesktop.ts:60`; `apps/desktop/src/SoundLibrary.tsx:62` | Imported Alps recording appeared indistinguishable from the bundled entry | Imported source is identified in name and subtitle | Similar names should explain their actual difference |
+| LOW | Colors | `apps/desktop/src/styles.css:635` | The slider thumb could inherit a dark inner surface | Explicit white inner thumb in both appearances | Volume position remains visible on the track |
 
-The off-state switch outline was strengthened at `apps/desktop/src/styles.css:635` and inspected in the final packaged General screen.
-The final packaged key-selection button enters selection mode, displays the physical-key instruction, and cancels through the same button.
-Automation could not establish a reliable window-focus transition for testing automatic cancellation, so that behavior remains unverified.
+No unresolved HIGH findings were identified within this scope. Legacy non-mute app rules retain their compatibility label; this review does not re-specify that legacy workflow.
 
 ## Verification
 
 Passed:
 
-- `pnpm exec vp lint`, `pnpm test`, and `pnpm --filter @openklack/desktop web:build` passed after the latest source changes.
-- Clicking A and pressing Right selected S, moved focus to S, and updated the assignment selector to S.
-- Closing settings with Command-W kept the native process running; reopening reset the transient selection to Space and restored the user's saved Brown PBT preset and 52% volume.
-- Removing the test app rule exposed Undo; Undo restored the exact rule.
-- Native sheets imported a compatible Thock archive and individual WAV, reported a malformed WAV, and saved the reviewed diagnostics report.
-- Keyboard and App rules were inspected at approximately 767 × 607 without observed horizontal clipping.
-- General's switch label and description were visibly distinct and aligned.
-- The updated release's Choose by typing control enters and cancels selection mode with matching accessible pressed state.
-- An isolated packaged QA app displayed a damaged-pack warning, accepted manual mute, and cleared the warning after native import repaired the recording; mute remained enabled.
-- Malformed QA settings produced a visible recovery-copy notice and a usable default preset after relaunch.
-- A deliberately unreachable update endpoint produced a readable connection/retry message in the packaged QA app, retained the native failure state after closing/reopening settings, and left Check for updates available.
-- The final local release shows its version, a clear unconfigured-update explanation, and a disabled Check for updates button; the General layout was visually inspected at 1080 × 760.
-- Declared contrast checks include body text 12.51:1, secondary text at least 4.78:1 on inspected surfaces, accent text 9.10:1, error text 7.13:1, and key labels 6.56:1.
+- `pnpm lint`; `pnpm test` (8); `pnpm build`; desktop `web:build`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` (14 passed, 1 ignored hardware check).
+- Development-signed `tauri build --debug --bundles app`; installed bundle passed `codesign --verify --deep --strict`.
+- Installed home preserved Red PBT, displayed 77% volume, existing assignment and stars after relaunch. No desktop typing test or preset navigation was present.
+- Browse all → Tactile → search “brown”: only Brown ABS and Brown PBT remained. The selected sound stayed Red PBT.
+- Settings → Appearance: inspected HeroUI popover, changed Dark/Light and restored Light; Escape dismissed the popover and restored trigger focus.
+- Sounds & settings files expanded with import/export actions; nested About/help uses the same Accordion implementation.
+- Customize a key → Key dropdown → Down → Return selected Enter; Sound showed the unchanged default and Reset was disabled.
+- Native menu AX exposed the volume slider, starred Blue/Brown PBT, More sounds, Open and Quit actions.
+- Measured token pairs: primary/light 18.42:1; secondary/light surface 5.50:1; accent/light selected surface 7.07:1; secondary/dark surface 8.40:1; accent/dark selected surface 8.42:1.
 
 Not verified:
 
-- Full VoiceOver navigation, 200% zoom, and runtime reduced-motion behavior.
-- Native menu-bar slider interaction; the automation surface did not expose the status menu.
-- The new native save-error dialog and restoration of failed menu-bar controls; the shared Rust paths compile and pass strict Clippy, but the status-menu error route was not exercised interactively.
-- Physical-key selection and blur cancellation, live RGB timing, and international-layout behavior through genuine hardware input.
-- Browser-width reflow below the native settings minimum of 760 × 600.
-- Available-update notes, download progress, signature rejection, installation, and restart against an actual signed release.
+- Full VoiceOver, 200% zoom, RTL, and runtime reduced-motion behavior.
+- Final native layout at the minimum window size; source breakpoints were inspected, while packaged visual checks used 1080 × 760.
+- Actual tray slider interaction/icon appearance, new file imports, or app-rule undo in this pass; earlier checks remain in the historical verification record.
+- Genuine hardware latency, sleep/reconnect/call recovery, and battery use after this UI pass.
+- Notarization and DMG packaging. The local `.app` succeeded; an earlier DMG attempt failed.
 
 ## Verdict
 
-Approve for the inspected interface paths only.
-This verdict does not cover the unverified accessibility modes, native tray controls, hardware behavior, or public release.
+Approve for the inspected desktop interface paths. This does not establish public-release readiness or the unverified accessibility and hardware modes.

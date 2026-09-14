@@ -10,13 +10,15 @@ import {
   type KeyVoice,
 } from "./keyboard";
 
-const storageKey = "openklack:settings:v2";
+const storageKey = "openklack:demo:v1";
 
 export function useStudio() {
   const [settings, setSettings] = useState(() => {
     try {
       return readSettings(
-        localStorage.getItem(storageKey) ?? localStorage.getItem("openklack:settings:v1"),
+        localStorage.getItem(storageKey) ??
+          localStorage.getItem("openklack:settings:v2") ??
+          localStorage.getItem("openklack:settings:v1"),
       );
     } catch {
       return defaults;
@@ -26,9 +28,7 @@ export function useStudio() {
   const [input] = useState(createInput);
   const [enabled, setEnabled] = useState(false);
   const [enabling, setEnabling] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [help, setHelp] = useState(false);
+
   const [error, setError] = useState("");
   const [saveError, setSaveError] = useState(false);
   const [loadingPackId, setLoadingPackId] = useState<string | null>(null);
@@ -36,16 +36,16 @@ export function useStudio() {
   const [reducedMotion, setReducedMotion] = useState(
     () => matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
-  const latest = useRef({ settings, selectedKey, enabled });
+  const latest = useRef({ settings, enabled });
   const heldVoices = useRef(new Map<string, KeyVoice>());
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const previewSounds = useRef<PlayingSound[]>([]);
   const operation = useRef(0);
 
   useEffect(() => {
-    latest.current = { settings, selectedKey, enabled };
+    latest.current = { settings, enabled };
     audio.configure(settings.volume, enabled);
-  }, [settings, selectedKey, enabled, audio]);
+  }, [settings, enabled, audio]);
   /* oxlint-disable react/set-state-in-effect -- Report localStorage write failures from the persistence effect. */
   useEffect(() => {
     try {
@@ -63,14 +63,12 @@ export function useStudio() {
     return () => query.removeEventListener("change", update);
   }, []);
   useEffect(() => {
-    // Fetch only the current pack initially; overrides load when typing sound is enabled.
     void audio.load(latest.current.settings.packId).catch(() => {});
   }, [audio]);
 
   const press = useCallback(
     (code: string, source: InputSource) => {
       if (!input.press(code, source)) return;
-      if (latest.current.selectedKey !== null) setSelectedKey(code);
       const voice = voiceForKey(latest.current.settings, code);
       heldVoices.current.set(code, voice);
       audio.play(voice, code, true, latest.current.settings);
@@ -98,14 +96,14 @@ export function useStudio() {
     setAuditionId(null);
   }, [audio, input]);
   const onKeyboard = useEffectEvent((event: KeyboardEvent) => {
-    if (help || !(event.target instanceof Element) || !event.target.closest(".keyboard-canvas"))
+    if (
+      !(event.target instanceof Element) ||
+      !event.target.closest(".keyboard-canvas, [data-sound-input]")
+    )
       return;
-    if (event.code === "Escape" && selectedKey) {
-      setSelectedKey(null);
-      return;
-    }
     if (!acceptsKeyboardEvent(event)) return;
     if (
+      !event.target.matches("[data-sound-input]") &&
       !event.metaKey &&
       !event.ctrlKey &&
       ["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)
@@ -149,7 +147,6 @@ export function useStudio() {
       clear();
     };
   }, [input, release, stopPreview]);
-  const sceneReady = useCallback(() => setReady(true), []);
 
   function after(delay: number, callback: () => void) {
     const timer = setTimeout(() => {
@@ -158,9 +155,9 @@ export function useStudio() {
     }, delay);
     timers.current.add(timer);
   }
-  function playSequence(packId: string, key: string | null) {
+  function playSequence(packId: string) {
     setAuditionId(packId);
-    const keys = key ? [key, key, key] : ["KeyA", "KeyS", "KeyD", "Space", "Enter", "Backspace"];
+    const keys = ["KeyA", "KeyS", "KeyD", "Space", "Enter", "Backspace"];
     const voice = { packId, volume: 100 };
     keys.forEach((code, index) => {
       after(index * 170, () => {
@@ -179,35 +176,17 @@ export function useStudio() {
   async function choosePack(packId: string, previewOnly = false) {
     stopPreview();
     const request = operation.current;
-    const targetKey = selectedKey;
     setError("");
     setLoadingPackId(packId);
     try {
-      const current = latest.current.settings;
-      const required = previewOnly
-        ? [packId]
-        : [
-            packId,
-            current.packId,
-            ...Object.values(current.overrides).map((voice) => voice.packId),
-          ];
+      const required = [packId];
       await audio.unlock(required);
       if (request !== operation.current) return;
       if (!previewOnly) {
-        setSettings((current) =>
-          targetKey
-            ? {
-                ...current,
-                overrides: {
-                  ...current.overrides,
-                  [targetKey]: { packId, volume: current.overrides[targetKey]?.volume ?? 100 },
-                },
-              }
-            : { ...current, packId },
-        );
+        setSettings((current) => ({ ...current, packId }));
         setEnabled(true);
       }
-      playSequence(packId, targetKey);
+      if (previewOnly) playSequence(packId);
     } catch (cause) {
       if (request === operation.current)
         setError(
@@ -227,10 +206,7 @@ export function useStudio() {
     setEnabling(true);
     setError("");
     try {
-      await audio.unlock([
-        settings.packId,
-        ...Object.values(settings.overrides).map((voice) => voice.packId),
-      ]);
+      await audio.unlock([settings.packId]);
       if (request === operation.current) setEnabled(true);
     } catch (cause) {
       if (request === operation.current)
@@ -241,24 +217,13 @@ export function useStudio() {
       if (request === operation.current) setEnabling(false);
     }
   }
-  function resetKey(code: string) {
-    setSettings((current) => {
-      const overrides = { ...current.overrides };
-      delete overrides[code];
-      return { ...current, overrides };
-    });
-  }
+
   return {
     settings,
     setSettings,
     input,
     enabled,
     enabling,
-    ready,
-    selectedKey,
-    setSelectedKey,
-    help,
-    setHelp,
     error,
     saveError,
     loadingPackId,
@@ -266,10 +231,8 @@ export function useStudio() {
     reducedMotion,
     press,
     release,
-    sceneReady,
     choosePack,
     enableSound,
     stopPreview,
-    resetKey,
   };
 }

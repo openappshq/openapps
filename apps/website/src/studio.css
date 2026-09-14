@@ -1,0 +1,324 @@
+.studio-shell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 28px 32px 20px;
+  scroll-margin-top: 16px;
+}
+.studio-topline,
+.studio-controls,
+.compact-volume,
+.library-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.studio-topline {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.studio-topline h2 {
+  font-size: 24px;
+  letter-spacing: -0.6px;
+}
+.studio-controls {
+  flex-shrink: 0;
+}
+.sound-power {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  min-height: 44px;
+}
+.sound-power.enabled {
+  background: var(--background);
+  color: var(--foreground);
+}
+.compact-volume {
+  gap: 8px;
+}
+.compact-volume input {
+  width: 88px;
+  height: 32px;
+}
+.compact-volume output {
+  color: var(--muted);
+  font: 11px var(--font-mono);
+  min-width: 32px;
+}
+.library-heading {
+  min-height: 48px;
+  margin-bottom: 8px;
+}
+.browse-sounds {
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-text);
+  font-size: 13px;
+}
+.sound-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.sound-grid.expanded {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  padding: 3px;
+}
+.sound-card {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  padding: 0 8px 0 0;
+  transition:
+    border-color 120ms,
+    background 120ms;
+}
+.sound-card.active {
+  border-color: var(--accent);
+  background: var(--color-accent-subtle);
+}
+.choose-sound {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  text-align: left;
+  padding: 11px 16px;
+}
+.choose-sound span {
+  display: grid;
+  min-width: 0;
+}
+.choose-sound strong {
+  font: 600 15px/1.4 var(--font-sans);
+}
+.choose-sound small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.choose-sound svg {
+  color: var(--color-accent-text);
+}
+.preview-pack {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+}
+.loading-sound {
+  font-size: 22px;
+}
+.typing-test {
+  width: min(800px, 100%);
+  margin: 30px auto 0;
+}
+.keyboard-stage {
+  height: clamp(280px, 30vw, 390px);
+  position: relative;
+  margin-top: 6px;
+}
+.keyboard-canvas {
+  width: 100%;
+  height: 100%;
+}
+.scene-fallback {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+.studio-error {
+  color: var(--color-danger-solid);
+  font-size: 14px;
+  padding-top: 12px;
+}
+.no-sounds {
+  padding: 20px;
+  text-align: center;
+  font-size: 14px;
+}
+.no-sounds button {
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-text);
+  text-decoration: underline;
+  padding: 12px;
+}
+@media (hover: hover) {
+  .choose-sound:hover,
+  .preview-pack:hover {
+    background: var(--color-bg-hover);
+  }
+  .browse-sounds:hover {
+    text-decoration: underline;
+  }
+}
+@media (max-width: 760px) {
+  .studio-shell {
+    padding: 20px 16px 12px;
+    border-radius: 18px;
+  }
+  .studio-topline {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .studio-topline h2 {
+    font-size: 23px;
+  }
+  .studio-controls {
+    justify-content: space-between;
+  }
+  .library-heading {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .choose-sound {
+    padding: 10px;
+    gap: 4px;
+  }
+  .sound-card {
+    padding-right: 2px;
+  }
+  .choose-sound strong {
+    font-size: 13px;
+  }
+  .sound-grid {
+    gap: 6px;
+  }
+  .sound-grid.expanded {
+    grid-template-columns: 1fr;
+    max-height: 240px;
+  }
+  .preview-pack {
+    min-width: 36px;
+  }
+  .keyboard-stage {
+    height: 260px;
+  }
+}
+@media (max-width: 450px) {
+  .sound-grid {
+    grid-template-columns: 1fr;
+  }
+  .keyboard-stage {
+    height: 185px;
+    margin-inline: -8px;
+  }
+  .typing-test {
+    margin-top: 20px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sound-card {
+    transition: none;
+  }
+}
+.star-sound[aria-pressed="true"] {
+  color: var(--color-accent-text);
+}
+.compact-volume.slider {
+  display: flex;
+  width: 176px;
+  flex: 0 1 176px;
+  min-width: 0;
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+}
+.compact-volume .slider__track {
+  height: 4px;
+  min-width: 40px;
+  flex: 1;
+  background: var(--color-border-control);
+}
+.compact-volume .slider__fill {
+  background: var(--accent);
+}
+.compact-volume .slider__thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--palette-white);
+  border: 1px solid var(--color-border-control);
+  border-radius: 50%;
+}
+.compact-volume .slider__thumb::after {
+  width: 14px;
+  height: 14px;
+  background: var(--palette-white);
+  border-radius: 50%;
+}
+.sound-card .choose-sound {
+  height: auto;
+  min-height: 64px;
+  padding: 11px 14px;
+  justify-content: space-between;
+}
+.sound-card .preview-pack {
+  width: 36px;
+  min-width: 36px;
+  flex: 0 0 36px;
+}
+.sound-grid {
+  max-height: 284px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.browse-sounds {
+  height: auto;
+  min-width: 0;
+}
+.typing-modes .button,
+.typing-restart {
+  min-width: 0;
+  height: auto;
+}
+.faq-item .accordion__body-inner {
+  padding: 0;
+}
+.faq-trigger .accordion__indicator {
+  width: 20px;
+  height: 20px;
+}
+:root {
+  --field: var(--background);
+  --field-foreground: var(--foreground);
+  --field-border: var(--color-border-control);
+  --overlay: var(--background);
+  --overlay-foreground: var(--foreground);
+  --separator: var(--border);
+}
+
+@media (max-width: 450px) {
+  .compact-volume .slider__output {
+    display: none;
+  }
+}

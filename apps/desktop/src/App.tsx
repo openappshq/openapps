@@ -2,41 +2,22 @@ import { motion } from "motion/react";
 import { enter } from "@openklack/ui/transitions";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Button } from "@heroui/react";
-import {
-  AudioLines,
-  BookOpen,
-  Check,
-  Keyboard,
-  Settings2,
-  ShieldCheck,
-  Volume2,
-  VolumeX,
-  X,
-  SlidersHorizontal,
-  Library,
-} from "lucide-react";
+import { Button, Link } from "@heroui/react";
+import { ArrowLeft, Settings2, ShieldCheck, Volume2, VolumeX, X } from "lucide-react";
 import { useDesktop } from "./useDesktop";
 import { KeyAssignments } from "./KeyAssignments";
 import { CurrentPreset } from "./CurrentPreset";
 import klackMark from "../../../design/assets/openklack/symbol-paper.svg";
 import { SoundLibrary } from "./SoundLibrary";
-import { Presets } from "./Presets";
 import { AppRules } from "./AppRules";
 import { General } from "./General";
 
-const pages = [
-  { id: "library", label: "Sound library", icon: Library },
-  { id: "presets", label: "My presets", icon: BookOpen },
-  { id: "keyboard", label: "Key assignments", icon: Keyboard },
-  { id: "rules", label: "Rules", icon: Settings2 },
-  { id: "general", label: "Settings", icon: SlidersHorizontal },
-] as const;
+type Page = "library" | "keyboard" | "rules" | "general";
 
 export default function App() {
   const desktop = useDesktop();
   const { snapshot, packs, busy } = desktop;
-  const [page, setPage] = useState<(typeof pages)[number]["id"]>("library");
+  const [page, setPage] = useState<Page>("library");
   const [key, setKey] = useState("Space");
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("openklack-theme");
@@ -73,6 +54,7 @@ export default function App() {
     author: "",
     credits: "",
     supportsKeyUp: false,
+    source: "",
   };
   const effective = prefs?.presets.find((p) => p.id === snapshot?.effectivePresetId);
   if (!snapshot || !prefs || !preset)
@@ -92,66 +74,52 @@ export default function App() {
     );
   return (
     <div className="app-shell">
-      <a className="skip-link" href="#content">
+      <Link className="skip-link" href="#content">
         Skip to settings
-      </a>
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">
-            <img src={klackMark} alt="OpenKlack" />
-          </span>
-          <strong>
-            Your kind of
-            <br />
-            click.
-          </strong>
-        </div>
-        <nav aria-label="Settings">
-          {pages.map(({ id, label, icon: Icon }) => (
-            <Button
-              key={id}
-              variant="ghost"
-              className={`nav-item ${page === id ? "active" : ""}`}
-              aria-current={page === id ? "page" : undefined}
-              onPress={() => setPage(id)}
-            >
-              {page === id && (
-                <motion.span
-                  className="nav-highlight"
-                  layoutId="desktop-navigation"
-                  aria-hidden="true"
-                />
-              )}
-              <Icon size={17} />
-              <span>{label}</span>
-            </Button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="status" role="status">
-            <span className={`status-dot ${snapshot.pauseReason ? "paused" : ""}`} />
-            <span>{snapshot.pauseReason ?? "Ready to play"}</span>
-          </div>
-          <span className="mono">AN OPENAPPS HQ APP</span>
-          <span>Free. Open. Yours.</span>
-        </div>
-      </aside>
+      </Link>
       <div className="main-column">
         <div className="topbar">
-          <span className="topbar-title">OpenKlack</span>
-          <div className="status" role="status">
-            <span className={`status-dot ${snapshot.pauseReason ? "paused" : ""}`} />
-            {snapshot.pauseReason ??
-              (snapshot.runtime.temporaryResume ? "Temporarily resumed" : "Sound is on")}
-          </div>
+          <Button
+            variant="ghost"
+            className="app-brand"
+            onPress={() => setPage("library")}
+            aria-label="OpenKlack sounds"
+          >
+            <img src={klackMark} alt="" />
+            <strong>OpenKlack</strong>
+          </Button>
+          {page !== "library" && page !== "keyboard" && (
+            <Button
+              variant="ghost"
+              onPress={() => setPage(page === "rules" ? "general" : "library")}
+            >
+              <ArrowLeft size={16} />
+              {page === "rules" ? "Settings" : "Sounds"}
+            </Button>
+          )}
+          {(snapshot.pauseReason || snapshot.runtime.temporaryResume) && (
+            <div className="status" role="status">
+              {snapshot.pauseReason ??
+                (snapshot.runtime.temporaryResume ? "Temporarily resumed" : "")}
+            </div>
+          )}
           <Button
             variant="secondary"
             isDisabled={busy}
-            aria-pressed={prefs.muted}
+            aria-pressed={!prefs.muted}
             onPress={() => void desktop.save((p) => ({ ...p, muted: !p.muted }))}
           >
             {prefs.muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
-            {prefs.muted ? "Unmute" : "Mute"}
+            {prefs.muted ? "Sound off" : "Sound on"}
+          </Button>
+          <Button
+            isIconOnly
+            variant="ghost"
+            aria-label="Settings"
+            aria-pressed={page === "general"}
+            onPress={() => setPage(page === "general" ? "library" : "general")}
+          >
+            <Settings2 size={19} />
           </Button>
         </div>
         <main id="content" tabIndex={-1}>
@@ -159,10 +127,10 @@ export default function App() {
             <section className="permission">
               <ShieldCheck size={23} />
               <div>
-                <h2>Sound in every app starts here.</h2>
+                <h2>Enable keyboard sounds</h2>
                 <p>
-                  Allow Input Monitoring to hear your keys across your Mac. Typed text is never
-                  saved.
+                  Allow Input Monitoring so OpenKlack can respond to your keyboard. Your typing is
+                  never saved.
                 </p>
               </div>
               <Button
@@ -178,7 +146,7 @@ export default function App() {
             snapshot.pauseReason ?? "",
           ) && (
             <div className="pause-banner">
-              <p>{snapshot.pauseReason}. Your preset is ready when you are.</p>
+              <p>{snapshot.pauseReason}.</p>
               <Button
                 variant="secondary"
                 onPress={() => void desktop.perform(() => invoke("resume_temporarily"))}
@@ -219,8 +187,8 @@ export default function App() {
           {snapshot.runtime.configurationError && (
             <div className="error" role="alert">
               <p>
-                {snapshot.runtime.configurationError} Your preset is preserved. Import its original
-                sounds, or choose another sound below.
+                {snapshot.runtime.configurationError} Your settings are preserved. Import the
+                original sounds, or choose another sound below.
               </p>
               <Button
                 variant="secondary"
@@ -234,19 +202,9 @@ export default function App() {
           <motion.div key={page} {...enter} className="page-transition">
             {(page === "library" || page === "keyboard") && (
               <>
-                <header className="page-heading">
-                  <h1>{page === "library" ? "Sound library" : "Key assignments"}</h1>
-                  <Button
-                    variant="secondary"
-                    isDisabled={busy}
-                    onPress={() => void desktop.importSounds()}
-                  >
-                    Import sounds
-                  </Button>
-                </header>
                 {effective?.id !== preset.id && (
                   <p className="inline-hint">
-                    An app rule is using “{effective?.name}”. You are editing “{preset.name}”.
+                    An app rule is active. Changes here apply to your default sound.
                   </p>
                 )}
                 <CurrentPreset
@@ -255,7 +213,8 @@ export default function App() {
                   pack={pack}
                   selected={key}
                   onSelect={setKey}
-                  compact={page === "library"}
+                  editing={page === "keyboard"}
+                  onEdit={() => setPage(page === "keyboard" ? "library" : "keyboard")}
                 />
                 {page === "library" ? (
                   <SoundLibrary desktop={desktop} preset={preset} />
@@ -270,11 +229,12 @@ export default function App() {
                 )}
               </>
             )}
-            {page === "presets" && <Presets desktop={desktop} active={preset} />}
             {page === "rules" && <AppRules desktop={desktop} />}
             {page === "general" && (
               <General
                 desktop={desktop}
+                preset={preset}
+                onApps={() => setPage("rules")}
                 theme={theme}
                 onThemeChange={(value) => {
                   try {
@@ -287,20 +247,6 @@ export default function App() {
               />
             )}
           </motion.div>
-          <footer>
-            <span>
-              <Check size={13} />
-              {busy
-                ? "Saving changes…"
-                : desktop.error
-                  ? "Review the error above"
-                  : "Saved on this Mac"}
-            </span>
-            <span>
-              <AudioLines size={13} />
-              Close settings. Keep your sound.
-            </span>
-          </footer>
         </main>
       </div>
     </div>

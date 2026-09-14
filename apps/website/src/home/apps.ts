@@ -16,7 +16,7 @@ export interface AppEntry {
 }
 
 /** Pages this website serves, so app links can be checked. */
-export const routes = ["/", "/openreaction/", "/home/"] as const;
+export const routes = ["/", "/download/", "/openreaction/", "/home/"] as const;
 
 export const apps: AppEntry[] = [
   {

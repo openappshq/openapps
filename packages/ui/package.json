@@ -5,10 +5,20 @@
   "type": "module",
   "exports": {
     "./motion": "./motion.tsx",
-    "./transitions": "./transitions.ts"
+    "./transitions": "./transitions.ts",
+    "./keyboard": "./Keyboard3D.tsx",
+    "./keyboard.css": "./keyboard.css",
+    "./typing": "./TypingTest.tsx",
+    "./typing.css": "./typing.css",
+    "./sound-browser": "./SoundBrowser.tsx",
+    "./browser.css": "./browser.css"
   },
   "dependencies": {
-    "motion": "^13.2.0"
+    "@heroui/react": "^3.2.5",
+    "@openklack/keyboard-layout": "workspace:*",
+    "@react-three/fiber": "^9.7.0",
+    "motion": "^13.2.0",
+    "three": "^0.186.0"
   },
   "peerDependencies": {
     "react": "~19.2.8"

@@ -1,6 +1,7 @@
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, lazyPlugins } from "vite-plus";
+import { resolve } from "node:path";
 import { unknownPageRedirects } from "./redirects.ts";
 
 export default defineConfig({
@@ -11,12 +12,13 @@ export default defineConfig({
   build: {
     outDir: "../../dist",
     emptyOutDir: true,
-    // Each page is its own entry so static hosting serves /openreaction/ without a router.
-    rollupOptions: {
+    // Each page is its own entry so static hosting serves every page without a router.
+    rolldownOptions: {
       input: {
-        openklack: new URL("./index.html", import.meta.url).pathname,
-        openreaction: new URL("./openreaction/index.html", import.meta.url).pathname,
-        home: new URL("./home/index.html", import.meta.url).pathname,
+        main: resolve(import.meta.dirname, "index.html"),
+        download: resolve(import.meta.dirname, "download/index.html"),
+        openreaction: resolve(import.meta.dirname, "openreaction/index.html"),
+        home: resolve(import.meta.dirname, "home/index.html"),
       },
     },
   },

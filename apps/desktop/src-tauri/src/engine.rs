@@ -252,8 +252,9 @@ impl Controller {
                             let mut duration = Duration::ZERO;
                             if let Some(sink) = &output {
                                 worker.cancel();
-                                let volume =
-                                    worker.snapshot().preferences.preset("").volume / 100.0;
+                                let snapshot = worker.snapshot();
+                                let preset = snapshot.preferences.preset("");
+                                let volume = preset.volume / 100.0;
                                 for (index, key) in
                                     ["KeyA", "KeyS", "KeyD", "Space", "KeyF", "Enter"]
                                         .iter()
@@ -263,9 +264,16 @@ impl Controller {
                                         pack.keys.get(*key).or_else(|| pack.keys.get("default"))
                                     {
                                         for (samples, release) in [(down, false), (up, true)] {
-                                            if let Some(sample) =
-                                                samples.get(index % samples.len().max(1))
-                                            {
+                                            if let Some(sample) = samples.get(if preset.variation {
+                                                index % samples.len().max(1)
+                                            } else {
+                                                0
+                                            }) {
+                                                let sample = crate::shaping::shape(
+                                                    sample.clone(),
+                                                    preset,
+                                                    key,
+                                                );
                                                 let delay = Duration::from_millis(
                                                     index as u64 * 145
                                                         + if release { 65 } else { 0 },
@@ -278,11 +286,14 @@ impl Controller {
                                                 );
                                                 sink.mixer().add(Cancellable::new(
                                                     sample
-                                                        .clone()
                                                         .amplify(
                                                             volume
                                                                 * pack.gain
-                                                                * if release { 0.65 } else { 1.0 },
+                                                                * if release {
+                                                                    preset.release_volume / 100.0
+                                                                } else {
+                                                                    1.0
+                                                                },
                                                         )
                                                         .delay(delay),
                                                     worker.voices.clone(),
