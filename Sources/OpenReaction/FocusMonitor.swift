@@ -11,9 +11,11 @@ import ApplicationServices
 /// so a slow one for an app that is no longer frontmost is discarded.
 @MainActor
 final class FocusMonitor {
-    /// Called on the main actor. `reliable` is false while no observer is
-    /// registered for the frontmost app.
+    /// Called on the main actor whenever focus may have moved.
     var onFocusChange: (() -> Void)?
+    /// Called on the main actor when focused-element notifications for the
+    /// frontmost app start or stop arriving. Capture stays closed while false.
+    var onTrackingChange: ((Bool) -> Void)?
     private(set) var isObservingFrontmost = false
 
     private let queue = DispatchQueue(label: "com.openappshq.openreaction.focus-observer", qos: .userInitiated)
@@ -38,6 +40,8 @@ final class FocusMonitor {
         activationObserver = nil
         generation += 1
         removeObserver()
+        isObservingFrontmost = false
+        onTrackingChange?(false)
     }
 
     private func frontmostChanged() {
@@ -46,6 +50,7 @@ final class FocusMonitor {
         let current = generation
         isObservingFrontmost = false
         removeObserver()
+        onTrackingChange?(false)
         onFocusChange?()
 
         guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
@@ -60,8 +65,8 @@ final class FocusMonitor {
                     }
                     self.observer = created?.observer
                     self.isObservingFrontmost = created != nil
-                    // Focus may have changed while registration was in flight.
-                    self.onFocusChange?()
+                    // Becoming tracked asks the gate for a fresh probe.
+                    self.onTrackingChange?(created != nil)
                 }
             }
         }
@@ -96,13 +101,11 @@ private enum ObserverRegistry {
         guard status == .success, let created else { return nil }
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.25)
-        var registered = 0
-        for notification in [kAXFocusedUIElementChangedNotification, kAXFocusedWindowChangedNotification] {
-            if AXObserverAddNotification(created, application, notification as CFString, refcon.pointer) == .success {
-                registered += 1
-            }
+        // Focused-element changes are required; window changes are a bonus.
+        guard AXObserverAddNotification(created, application, kAXFocusedUIElementChangedNotification as CFString, refcon.pointer) == .success else {
+            return nil
         }
-        guard registered > 0 else { return nil }
+        _ = AXObserverAddNotification(created, application, kAXFocusedWindowChangedNotification as CFString, refcon.pointer)
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .defaultMode)
         return Registered(observer: created)
     }

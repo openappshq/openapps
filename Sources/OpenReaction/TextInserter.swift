@@ -24,10 +24,13 @@ enum TextInserter {
     private static let maxUnitsPerEvent = 20
 
     /// Deletes `deleteCount` characters, types `text`, then posts the flush for
-    /// the transaction. If events cannot be created the flush is still posted,
-    /// so the gate learns the phase is over instead of waiting for the watchdog.
-    static func postReplacement(transaction: Int, deleteCount: Int, text: String) {
+    /// the transaction — but only if `commit` agrees at that moment. If the
+    /// commit is refused nothing is posted (the gate has already arranged its
+    /// own flush). If events cannot be created the flush is still posted, so
+    /// the gate learns the phase is over instead of waiting for the watchdog.
+    static func postReplacement(transaction: Int, deleteCount: Int, text: String, commit: @escaping @Sendable () -> Bool) {
         queue.async {
+            guard commit() else { return }
             if let source = makeSource() {
                 for _ in 0..<max(0, deleteCount) {
                     postKey(CGKeyCode(kVK_Delete), source: source)
@@ -51,6 +54,20 @@ enum TextInserter {
             for box in boxed {
                 box.event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
                 box.event.post(tap: .cgSessionEventTap)
+            }
+        }
+    }
+
+    /// Releases keys whose presses were replayed during recovery but whose
+    /// physical releases may already have passed.
+    static func release(keyCodes: [UInt16]) {
+        queue.async {
+            guard let source = makeSource() else { return }
+            for keyCode in keyCodes {
+                guard let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: false) else { continue }
+                up.flags = []
+                up.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
+                up.post(tap: .cgSessionEventTap)
             }
         }
     }

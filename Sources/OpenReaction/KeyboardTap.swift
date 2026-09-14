@@ -86,7 +86,7 @@ final class KeyboardTap: @unchecked Sendable {
         if let runLoop { CFRunLoopStop(runLoop) }
         machPort = nil
         runLoop = nil
-        runner.tapInterrupted()
+        runner.tapStopped()
     }
 
     // MARK: - Tap thread

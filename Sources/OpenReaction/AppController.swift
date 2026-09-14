@@ -58,32 +58,23 @@ final class AppController {
         } else {
             frecency = Frecency()
         }
-        let exclusions = Self.decode(AppExclusions.self, key: DefaultsKey.exclusions) ?? AppExclusions()
-        self.exclusions = exclusions
-        exclusionsBox = ExclusionsBox(exclusions)
+        exclusions = Self.decode(AppExclusions.self, key: DefaultsKey.exclusions) ?? AppExclusions()
     }
-
-    /// Lets the gate's `Sendable` closure read the current exclusions.
-    private final class ExclusionsBox: @unchecked Sendable {
-        var value: AppExclusions
-        init(_ value: AppExclusions) { self.value = value }
-    }
-
-    @ObservationIgnored private let exclusionsBox: ExclusionsBox
 
     func start() {
-        let box = exclusionsBox
-        let gate = InputGate(isFrontmostAppExcluded: {
-            box.value.isExcluded(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-        })
-        let runner = GateRunner(gate: gate) { [weak self] effects in
+        let runner = GateRunner(gate: InputGate()) { [weak self] effects in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.perform(effects) }
             }
         }
         self.runner = runner
         tap = KeyboardTap(runner: runner)
-        focusMonitor.onFocusChange = { [weak self] in self?.runner?.focusMayHaveMoved() }
+        focusMonitor.onFocusChange = { [weak self] in
+            guard let self else { return }
+            self.pushFrontmostExclusion()
+            self.runner?.focusMayHaveMoved()
+        }
+        focusMonitor.onTrackingChange = { [weak self] active in self?.runner?.focusTracking(active: active) }
         picker.onVisibilityChange = { [weak self] frame in
             self?.runner?.pickerVisibility(frame)
         }
@@ -107,15 +98,21 @@ final class AppController {
     func setEnabled(_ enabled: Bool) {
         isEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: DefaultsKey.enabled)
-        if !enabled { runner?.paused() }
+        if !enabled { runner?.tapStopped() }
         updateTap()
     }
 
     func setExcluded(_ excluded: Bool, bundleIdentifier: String) {
         exclusions.setExcluded(excluded, bundleIdentifier: bundleIdentifier)
-        exclusionsBox.value = exclusions
         Self.encode(exclusions, key: DefaultsKey.exclusions)
+        pushFrontmostExclusion()
         resetTyping()
+    }
+
+    /// The gate never touches AppKit: the frontmost app's exclusion is
+    /// computed here and handed in as a locked input.
+    private func pushFrontmostExclusion() {
+        runner?.frontmostApp(excluded: exclusions.isExcluded(NSWorkspace.shared.frontmostApplication?.bundleIdentifier))
     }
 
     /// Starts a new instance, then quits this one once it is running.
@@ -211,11 +208,11 @@ final class AppController {
                 beginInsertion(transaction: transaction, source: source, typed: typed, target: target)
             case .armWatchdog(let transaction):
                 armWatchdog(transaction: transaction)
-            case .disarmWatchdog:
+            case .transactionEnded(let transaction, let recordUse):
                 watchdog?.cancel()
                 watchdog = nil
-            case .recordUse(let transaction):
-                if let suggestion = pendingSuggestions.removeValue(forKey: transaction) {
+                let suggestion = pendingSuggestions.removeValue(forKey: transaction)
+                if recordUse, let suggestion {
                     frecency.record(suggestion.id)
                     Self.encode(frecency, key: DefaultsKey.frecency)
                 }
@@ -250,7 +247,6 @@ final class AppController {
         pendingSuggestions[transaction] = suggestion
         Task {
             let result = await locator.verify(target, typed: typed, text: text)
-            if case .refused = result { pendingSuggestions.removeValue(forKey: transaction) }
             runner?.verifyResult(transaction: transaction, result)
         }
     }

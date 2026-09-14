@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import CoreGraphics
 import OpenReactionCore
 import os
@@ -18,8 +19,7 @@ final class GateRunner: @unchecked Sendable {
         case moveSelection(by: Int)
         case beginInsertion(transaction: Int, source: InsertionSource, typed: String, target: FocusTarget)
         case armWatchdog(transaction: Int)
-        case disarmWatchdog
-        case recordUse(transaction: Int)
+        case transactionEnded(transaction: Int, recordUse: Bool)
     }
 
     private struct HeldCopy: @unchecked Sendable {
@@ -85,9 +85,30 @@ final class GateRunner: @unchecked Sendable {
         }
     }
 
+    /// The system disabled and re-enabled the tap; the stream is still alive.
     func tapInterrupted() {
         state.withLock { state in
             dispatch(state.gate.tapInterrupted(), state: &state)
+        }
+    }
+
+    /// The tap stopped or the app paused; no events flow until it restarts.
+    func tapStopped() {
+        state.withLock { state in
+            dispatch(state.gate.tapStopped(), state: &state)
+        }
+    }
+
+    // MARK: - Insertion queue input
+
+    /// Called by the insertion queue right before posting a replacement.
+    /// Decided under the lock, so a mouse click, focus change or pause that
+    /// the gate saw first wins and nothing is posted.
+    func commit(transaction id: Int, secureInput: Bool) -> Bool {
+        state.withLock { state in
+            let (proceed, effects) = state.gate.commit(transaction: id, secureInput: secureInput)
+            dispatch(effects, state: &state)
+            return proceed
         }
     }
 
@@ -109,8 +130,12 @@ final class GateRunner: @unchecked Sendable {
         state.withLock { state in dispatch(state.gate.timeout(transaction: id), state: &state) }
     }
 
-    func paused() {
-        state.withLock { state in dispatch(state.gate.paused(), state: &state) }
+    func focusTracking(active: Bool) {
+        state.withLock { state in dispatch(state.gate.focusTracking(active: active), state: &state) }
+    }
+
+    func frontmostApp(excluded: Bool) {
+        state.withLock { state in state.gate.frontmostApp(excluded: excluded) }
     }
 
     func pickerVisibility(_ frame: CGRect?) {
@@ -148,12 +173,12 @@ final class GateRunner: @unchecked Sendable {
                 main.append(.beginInsertion(transaction: transaction, source: source, typed: typed, target: target))
             case .armWatchdog(let transaction):
                 main.append(.armWatchdog(transaction: transaction))
-            case .disarmWatchdog:
-                main.append(.disarmWatchdog)
-            case .recordUse(let transaction):
-                main.append(.recordUse(transaction: transaction))
+            case .transactionEnded(let transaction, let recordUse):
+                main.append(.transactionEnded(transaction: transaction, recordUse: recordUse))
             case .post(let transaction, let deleteCount, let text):
-                TextInserter.postReplacement(transaction: transaction, deleteCount: deleteCount, text: text)
+                TextInserter.postReplacement(transaction: transaction, deleteCount: deleteCount, text: text) { [weak self] in
+                    self?.commit(transaction: transaction, secureInput: IsSecureEventInputEnabled()) ?? false
+                }
             case .postFlush(let transaction):
                 TextInserter.postFlush(transaction: transaction)
             case .replay(let eventIDs):
@@ -161,6 +186,8 @@ final class GateRunner: @unchecked Sendable {
                 TextInserter.replay(copies.map(\.event))
             case .drop(let eventIDs):
                 for id in eventIDs { state.held.removeValue(forKey: id) }
+            case .release(let keyCodes):
+                TextInserter.release(keyCodes: keyCodes)
             case .repost(let keyCode):
                 TextInserter.repost(keyCode: keyCode)
             }

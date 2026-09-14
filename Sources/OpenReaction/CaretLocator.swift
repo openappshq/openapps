@@ -44,8 +44,7 @@ final class CaretLocator: @unchecked Sendable {
     }
 
     /// Confirms `target` still has focus with the typed token right before an
-    /// empty caret, and decides how to replace it with `text`. Fails closed:
-    /// anything unreadable refuses. See `verifyTarget`.
+    /// empty caret. Read-only and fail-closed: anything unreadable refuses.
     func verify(_ target: FocusTarget, typed: String, text: String) async -> VerifyResult {
         await withCheckedContinuation { continuation in
             queue.async {
@@ -84,17 +83,13 @@ final class CaretLocator: @unchecked Sendable {
         return .noGeometry(target)
     }
 
-    /// Verification order:
+    /// Read-only verification, in order:
     /// 1. The focused element must be the remembered one (`CFEqual`, same pid)
     ///    and must answer that it is not a secure field.
     /// 2. The selection must be readable, empty, and at least `typed` long.
-    /// 3. If the text before the caret is readable it must equal `typed`;
-    ///    the token is then removed with key events.
-    /// 4. Otherwise, if the app lets the selection be set and read back, the
-    ///    token is selected, read back through the selection, and replaced
-    ///    through Accessibility; the result is confirmed by reading the
-    ///    selection again.
-    /// Anything else refuses. Nothing is ever deleted on an assumption.
+    /// 3. The text before the caret must be readable and equal `typed`.
+    /// Anything else refuses. The host is never modified here; the gate posts
+    /// key events later, if it still may.
     private func verifyTarget(_ target: FocusTarget, typed: String, text: String) -> VerifyResult {
         guard let remembered = elements[target] else { return .refused }
         let systemWide = AXUIElementCreateSystemWide()
@@ -109,39 +104,10 @@ final class CaretLocator: @unchecked Sendable {
         guard let selection = Self.selectedRange(focused), selection.length == 0 else { return .refused }
         let count = typed.utf16.count
         guard selection.location >= count else { return .refused }
-        let tokenRange = CFRange(location: selection.location - count, length: count)
-
-        if let before = Self.string(focused, tokenRange) {
-            return before == typed ? .keystrokes(text: text) : .refused
-        }
-        return replaceThroughAccessibility(focused, tokenRange: tokenRange, typed: typed, text: text, caret: selection.location)
-    }
-
-    /// Used when the app does not answer `AXStringForRange`. Selecting the
-    /// token and reading `AXSelectedText` proves the suffix; setting
-    /// `AXSelectedText` performs the replacement.
-    private func replaceThroughAccessibility(_ element: AXUIElement, tokenRange: CFRange, typed: String, text: String, caret: Int) -> VerifyResult {
-        guard Self.isSettable(element, kAXSelectedTextRangeAttribute),
-              Self.isSettable(element, kAXSelectedTextAttribute) else { return .refused }
-        guard Self.setSelectedRange(element, tokenRange) else { return .refused }
-        let restore = { _ = Self.setSelectedRange(element, CFRange(location: caret, length: 0)) }
-
-        guard let selected = Self.copy(element, kAXSelectedTextAttribute) as? String, selected == typed else {
-            restore()
+        guard let before = Self.string(focused, CFRange(location: selection.location - count, length: count)) else {
             return .refused
         }
-        guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success else {
-            restore()
-            return .refused
-        }
-        // Confirm: the caret now sits after the inserted text.
-        let expected = tokenRange.location + text.utf16.count
-        guard let after = Self.selectedRange(element), after.length == 0, after.location == expected else {
-            // The app changed something else; leave it alone and report
-            // failure without touching text again.
-            return .refused
-        }
-        return .replaced(text: text)
+        return before == typed ? .keystrokes(text: text) : .refused
     }
 
     // MARK: - Attribute helpers
@@ -166,17 +132,6 @@ final class CaretLocator: @unchecked Sendable {
         var range = CFRange()
         guard AXValueGetValue(selection, .cfRange, &range), range.location >= 0, range.length >= 0 else { return nil }
         return range
-    }
-
-    private static func setSelectedRange(_ element: AXUIElement, _ range: CFRange) -> Bool {
-        var range = range
-        guard let value = AXValueCreate(.cfRange, &range) else { return false }
-        return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
-    }
-
-    private static func isSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
-        var settable = DarwinBoolean(false)
-        return AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success && settable.boolValue
     }
 
     private static func caretBounds(_ element: AXUIElement) -> CGRect? {
