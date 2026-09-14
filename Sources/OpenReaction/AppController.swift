@@ -12,10 +12,14 @@ final class AppController {
     private(set) var isEnabled: Bool
     private(set) var exclusions: AppExclusions
     private(set) var isTapRunning = false
-    /// Permissions report granted but macOS still refuses the tap.
-    private(set) var needsRelaunch = false
+    /// Set when `relaunch()` could not start a new instance.
+    private(set) var relaunchError: String?
 
+    /// Permissions report granted but macOS still refuses the tap.
+    var needsRelaunch: Bool { permissions.snapshot.isTapFailing }
     var isReady: Bool { permissions.allGranted && isTapRunning && isEnabled }
+    /// A packaged `.app` can start a fresh copy of itself; `swift run` builds cannot.
+    var canRelaunch: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
     @ObservationIgnored var onStateChange: (() -> Void)?
 
@@ -34,24 +38,25 @@ final class AppController {
     @ObservationIgnored private var tap: KeyboardTap?
     @ObservationIgnored private var machine = TriggerMachine()
     @ObservationIgnored private var session: Session?
-    @ObservationIgnored private var recents: RecentItems
-    @ObservationIgnored private var tapStartFailures = 0
+    @ObservationIgnored private var frecency: Frecency
+    /// Which emoji data is in use, for About and diagnostics.
+    @ObservationIgnored let dataSourceSummary: String
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     private static let minimumQueryLength = 2
-    private static let relaunchThreshold = 3
 
     private enum DefaultsKey {
         static let enabled = "enabled"
-        static let recents = "recents"
+        static let frecency = "frecency"
         static let exclusions = "exclusions"
     }
 
-    init(provider: any SuggestionProvider) {
+    init(provider: any SuggestionProvider, dataSourceSummary: String) {
         self.provider = provider
+        self.dataSourceSummary = dataSourceSummary
         let defaults = UserDefaults.standard
         isEnabled = defaults.object(forKey: DefaultsKey.enabled) as? Bool ?? true
-        recents = Self.decode(RecentItems.self, key: DefaultsKey.recents) ?? RecentItems()
+        frecency = Self.decode(Frecency.self, key: DefaultsKey.frecency) ?? Frecency()
         exclusions = Self.decode(AppExclusions.self, key: DefaultsKey.exclusions) ?? AppExclusions()
     }
 
@@ -96,11 +101,39 @@ final class AppController {
         resetTyping()
     }
 
+    /// Starts a new instance, then quits this one once it is running.
+    ///
+    /// The tap stops first so two instances never handle the same keystrokes.
+    /// If the new instance cannot be opened, this one keeps running and
+    /// restarts its tap. The relaunch is recorded so a tap that still fails in
+    /// the new process is reported as a stale permission, not another relaunch.
     func relaunch() {
+        guard canRelaunch else {
+            relaunchError = "Quit OpenReaction and open it again."
+            return
+        }
+        relaunchError = nil
+        permissions.willRelaunch()
+        tap?.stop()
+        resetTyping()
+        isTapRunning = false
+
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, _ in
-            DispatchQueue.main.async { NSApp.terminate(nil) }
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { app, error in
+            let message = error?.localizedDescription
+            let launched = app != nil && error == nil
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if launched {
+                        NSApp.terminate(nil)
+                    } else {
+                        self.relaunchError = message ?? "OpenReaction couldn't open a new copy of itself."
+                        self.permissions.relaunchFailed()
+                        self.updateTap()
+                    }
+                }
+            }
         }
     }
 
@@ -109,25 +142,20 @@ final class AppController {
     /// Runs the tap only while both permissions are granted and the user has
     /// not paused OpenReaction. Called on every permission poll, so access
     /// granted in System Settings takes effect without a relaunch, and access
-    /// revoked there stops the tap.
-    private func updateTap() {
+    /// revoked there stops the tap. Every start attempt is reported to the
+    /// permission flow, which decides when failures mean "relaunch" or "stale".
+    func updateTap() {
         guard let tap else { return }
         let wasReady = isReady
         if permissions.allGranted && isEnabled {
             if !tap.isRunning {
-                if tap.start() {
-                    tapStartFailures = 0
-                } else {
-                    tapStartFailures += 1
-                }
+                permissions.recordTap(running: tap.start())
             }
         } else if tap.isRunning {
             tap.stop()
             resetTyping()
         }
         if isTapRunning != tap.isRunning { isTapRunning = tap.isRunning }
-        let relaunch = permissions.allGranted && isEnabled && !tap.isRunning && tapStartFailures >= Self.relaunchThreshold
-        if needsRelaunch != relaunch { needsRelaunch = relaunch }
         if wasReady != isReady { onStateChange?() }
     }
 
@@ -143,9 +171,9 @@ final class AppController {
             resetTyping()
         case .ignore:
             break
-        case .moveUp, .moveDown:
+        case .movePrevious, .moveNext:
             if picker.isVisible {
-                picker.moveSelection(by: event.input == .moveUp ? -1 : 1)
+                picker.moveSelection(by: event.input == .movePrevious ? -1 : 1)
             } else {
                 giveBack(event)
                 resetTyping()
@@ -252,7 +280,7 @@ final class AppController {
             picker.dismiss()
             return
         }
-        let suggestions = provider.suggestions(for: token.query, recents: recents.items, limit: PickerMetrics.maxRows)
+        let suggestions = provider.suggestions(for: token.query, usage: frecency.scores(), limit: PickerMetrics.maxItems)
         guard !suggestions.isEmpty else {
             picker.dismiss()
             return
@@ -277,8 +305,8 @@ final class AppController {
         }
         session = nil
         picker.dismiss()
-        recents.record(suggestion.id)
-        Self.encode(recents, key: DefaultsKey.recents)
+        frecency.record(suggestion.id)
+        Self.encode(frecency, key: DefaultsKey.frecency)
     }
 
     // MARK: - Persistence
