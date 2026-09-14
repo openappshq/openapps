@@ -1,0 +1,227 @@
+# Licensing
+
+How every OpenApps HQ app sells and checks licenses. OpenKlack and OpenReaction follow this document, and any new app under `apps/` must too. If an app needs to differ, change this document first.
+
+## Principles
+
+- **The source is free.** Apps are MIT licensed. A build from source has licensing compiled out: every feature works and nothing contacts the license service.
+- **The license pays for the official build**: the signed, notarized download with updates.
+- **No license server.** Apps talk directly to Dodo Payments' public license endpoints. There are no secrets in any app.
+- **Privacy first.** License checks send only the license key and an activation ID. Never the Mac's name, user, hardware IDs, typed content or usage.
+
+## Commercial terms
+
+| Term | Value |
+| --- | --- |
+| Price | $5 per app, one-time |
+| Updates | Lifetime |
+| Devices | 3 Macs per license |
+| Trial | 3 days, through a free trial license key, 1 Mac |
+| License check | **Daily**, every 24 hours |
+| Offline grace | 1 week since the last successful check |
+| Payment provider | [Dodo Payments](https://dodopayments.com), one brand per app |
+
+The daily check always runs. The 1-week grace only covers a Mac that is offline or can't reach Dodo, so a laptop that is away from the internet for a few days keeps working.
+
+## Dodo Payments setup
+
+One business (OpenApps) with **one brand per app**, so checkout, card statements and emails show the app's name and logo.
+
+| App | Brand ID | Statement descriptor |
+| --- | --- | --- |
+| OpenKlack | `brnd_0Nnask8u9RICKzhm6lKrS` | `DODOPAY_OPENKLACK` |
+| OpenReaction | `brnd_0NnarnziynbFJozfJUS5T` | `DODOPAY_OPENREACTION` |
+
+Each app has two products under its brand, created in test mode first and copied to live:
+
+| Product | Price | License key entitlement |
+| --- | --- | --- |
+| `<App>` | $5 one-time | Activation limit 3, never expires |
+| `<App> Trial` | $0 one-time | Activation limit 1, expires after 3 days |
+
+Refunding the paid product disables its key automatically. Product IDs are public configuration compiled into official builds.
+
+## Endpoints
+
+All public, no API key. Release builds use `https://live.dodopayments.com`; development builds use `https://test.dodopayments.com`.
+
+| Call | Request body | Success |
+| --- | --- | --- |
+| Activate | `POST /licenses/activate` `{license_key, name}` | `201` `{id, product: {product_id, name}, created_at, …}` |
+| Validate | `POST /licenses/validate` `{license_key, license_key_instance_id}` | `200` `{valid}` |
+| Deactivate | `POST /licenses/deactivate` `{license_key, license_key_instance_id}` | `200` |
+
+- The activation `name` is always the literal string `"Mac"`.
+- Activation is the only response that says which product a key belongs to. Validation returns only `valid`.
+
+| Response | Meaning |
+| --- | --- |
+| Activate `404` | Key not found |
+| Activate `403` | Key disabled or expired |
+| Activate `422` | All 3 Macs already activated |
+| `429` | Rate limited: honor `Retry-After`, treat as offline |
+| `5xx`, timeout, no network | Offline: grace rules apply, state never gets worse |
+| Validate `{valid: false}` | Authoritative: refunded, disabled, expired, or this Mac was removed |
+
+## States
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unlicensed
+    Unlicensed --> Trial: activate trial key
+    Unlicensed --> Licensed: activate paid key
+    Trial --> Licensed: activate paid key
+    Trial --> TrialEnded: valid false, or 3 days passed
+    TrialEnded --> Licensed: activate paid key
+    Licensed --> Grace: daily check can't reach Dodo
+    Grace --> Licensed: check succeeds
+    Grace --> CheckRequired: 7 days without a successful check
+    CheckRequired --> Licensed: check succeeds
+    Licensed --> Revoked: valid false
+    Grace --> Revoked: valid false
+    CheckRequired --> Revoked: valid false
+    Revoked --> Licensed: activate a valid paid key
+    Licensed --> Unlicensed: Remove this Mac
+    Trial --> Unlicensed: Remove this Mac
+```
+
+| State | Core feature | What the user sees |
+| --- | --- | --- |
+| Unlicensed | Off | Settings → License: Start 3-day trial, Buy for $5, key field |
+| Trial | On | "Trial: about N days left", Buy for $5 |
+| TrialEnded | Off | "Your trial has ended", Buy for $5, key field |
+| Licensed | On | "Licensed", Remove this Mac |
+| Grace | On | Nothing for the first 5 days offline, then "Connect to the internet within N days to keep using <App>" |
+| CheckRequired | Off | "Connect to the internet to verify your license", Try again |
+| Revoked | Off | "This license is no longer active on this Mac", Activate again, Buy, Contact support |
+
+"Off" stops only the app's core feature (sounds, the emoji picker). The menu bar, Settings, License and Quit always work. Licensing never crashes the app, deletes settings or blocks quitting.
+
+## Rules
+
+### Activation and the product check
+1. Call activate. On success, read `product.product_id`.
+2. If it matches the app's paid product for the current environment, the key is **paid**. If it matches the trial product, it's **trial**.
+3. Anything else (another app's key, the wrong environment) is refused:
+   - immediately deactivate the new activation, so the customer's slot isn't used up;
+   - store nothing;
+   - show "This key is for <product name>, not <App>".
+4. A future bundle product is added to each app's allowed list; nothing else changes.
+
+### Stored record
+One Keychain item per app, service `space.openapps.<app>.license`. Never store it in plain preferences.
+
+| Field | Source |
+| --- | --- |
+| `license_key` | What the user entered |
+| `instance_id` | Activation `id` |
+| `product_id`, `kind` | Activation response and the product check |
+| `activated_at` | Activation `created_at` (server time) |
+| `last_success_at` | Time of the last `valid: true`, from the response `Date` header, falling back to the local clock |
+| `trial_used` | Set when a trial key is first activated on this Mac; kept after removal |
+
+### Daily check
+- **When:**
+  - on launch, in the background, never delaying launch or the core feature;
+  - every 24 hours while the app runs;
+  - on wake from sleep and when the network comes back, if the last check is older than 24 hours.
+- **Activation counts as a successful check.**
+- **One check at a time.** Failed checks retry with backoff from 1 minute up to 1 hour, then fall back to the daily schedule.
+
+### Offline grace (paid licenses)
+- **Grace:** the core feature stays on while `now − last_success_at` is at most 7 days.
+- **After 7 days** without a successful check: CheckRequired until a check succeeds.
+- **Clock rollback:** if the local clock is more than 1 hour earlier than `last_success_at`, don't extend grace; require a check.
+- **Only an answer from Dodo revokes:** a network failure never revokes a license. Only `valid: false` does.
+
+### Trial
+- **Starting:** a trial starts only by activating a trial key, which needs the internet once.
+- **Expiry:** Dodo counts the 3 days from checkout, and validation doesn't return an expiry date. The app estimates expiry as `activated_at + 3 days` and shows "about N days left".
+- **Ending:** the trial ends at `valid: false` or the estimated expiry, whichever comes first. There is no offline grace past that estimate.
+- **One trial per Mac:** if `trial_used` is already set, refuse a trial key locally without calling Dodo: "The trial was already used on this Mac."
+- **Buying during a trial:** activating a paid key during a trial makes the Mac Licensed and deactivates the trial activation (best effort).
+
+### Removing a Mac
+- **From Settings:** Settings → License → Remove this Mac deactivates, then clears the record (except `trial_used`).
+- **Offline:** if deactivation can't reach Dodo, keep the record and ask the user to try again online.
+- **Lost or dead Mac:** the customer emails support, and support removes the activation in the Dodo dashboard.
+
+## Build flavours
+
+| Build | Licensing | Talks to |
+| --- | --- | --- |
+| From source (default) | Off: no License UI, no license network calls, all features on | Nothing |
+| Official development build | On | Dodo test mode, test product IDs |
+| Official release build (CI) | On | Dodo live mode, live product IDs |
+
+| Stack | How licensing is switched on |
+| --- | --- |
+| Swift apps | Compile condition `OPENAPPS_LICENSING` plus generated config (host and product IDs) from the release script |
+| Tauri / Rust apps | Cargo feature `licensing` plus build-time environment for host and product IDs |
+
+## Website and checkout
+
+- **Buttons on each app page:** "Buy for $5" (paid checkout link) and "Try free for 3 days" (trial checkout, email only).
+- **Return URL:** checkout returns to `/<app>/thanks/`, and Dodo appends `license_key` and `email`.
+- **Thanks page:**
+  - shows the key with Copy, an "Open <App>" deep link (`<app>://activate?key=…`) and setup steps;
+  - removes the query string from the address bar immediately;
+  - never logs, stores or sends the key;
+  - is `noindex`;
+  - is on the site's known-pages list.
+- **Deep link:** it only pre-fills the key field. The user confirms before activating.
+
+## Privacy copy
+
+Every licensed app ships this text, adapted with its name, in the README, the website FAQ and the About/License screen:
+
+> Official builds check your license with Dodo Payments, our payment provider. The license key and an activation ID are sent when you activate and once a day after that. Your Mac's name, what you type, and how you use the app are never sent. Builds from source never contact the license service.
+
+## Shared test cases
+
+Every app implements these against a fake Dodo client with an injectable clock. `P` = this app's paid product, `T` = its trial product, `X` = another app's product.
+
+| # | Given | When | Then |
+| --- | --- | --- | --- |
+| 1 | Unlicensed | activate → `201` product `P` | Licensed; record saved, kind paid |
+| 2 | Unlicensed | activate → `201` product `X` | New activation deactivated; nothing saved; "key is for …" |
+| 3 | Unlicensed | activate → `422` | Unlicensed; "all 3 Macs already activated" |
+| 4 | Unlicensed | activate → `404` / `403` | Unlicensed; "key not found" / "key disabled or expired" |
+| 5 | Unlicensed | activate → timeout | Unlicensed; "couldn't reach the license service"; nothing saved |
+| 6 | Licensed, last success 25 h ago | app running | Daily check runs |
+| 7 | Licensed, last success 2 days ago | check → timeout | Grace; core feature on |
+| 8 | Licensed, last success 8 days ago | check → timeout | CheckRequired; core feature off |
+| 9 | CheckRequired | check → `valid: true` | Licensed; `last_success_at` updated |
+| 10 | Licensed | check → `valid: false` | Revoked; core feature off |
+| 11 | Licensed, last success 3 days ago | local clock 2 days before `last_success_at` | Check required; grace not extended |
+| 12 | Unlicensed, trial not used | activate → `201` product `T` | Trial; `trial_used` set; about 3 days left |
+| 13 | Trial activated 3 days + 1 min ago, offline | launch | TrialEnded |
+| 14 | Trial, day 1 | check → `valid: false` | TrialEnded |
+| 15 | `trial_used` set, Unlicensed | enter a trial key | Refused locally; Dodo not called |
+| 16 | Trial | activate → `201` product `P` | Licensed; trial activation deactivated |
+| 17 | Licensed | Remove this Mac → `200` | Unlicensed; record cleared except `trial_used` |
+| 18 | Licensed | Remove this Mac → timeout | Still Licensed; retry message |
+| 19 | Any | `429` with `Retry-After: 60` | No call for 60 s; state unchanged |
+| 20 | Source build | launch | No License UI, no network calls, core feature on |
+
+## Adding licensing to a new app
+
+1. Create the app's brand in Dodo: name, logo, website, statement descriptor.
+2. Create the `<App>` ($5, 3 activations) and `<App> Trial` ($0, 1 activation, 3 days) products under that brand, in test mode, then copy to live.
+3. Implement the states, rules and test cases above behind the app's licensing build flag.
+4. Add the product IDs and host to the app's official build configuration.
+5. Add the License screen, the privacy copy, and the website's buy, trial and thanks pages.
+6. Run the shared test cases, then verify end to end in Dodo test mode:
+   - trial checkout issues a key;
+   - a paid key activates on 3 Macs and the 4th is refused;
+   - a refund revokes;
+   - Remove this Mac frees a slot.
+
+## Still to verify in Dodo test mode
+
+- [ ] A $0 trial checkout issues and emails a key.
+- [ ] A 3-day key validates as `false` after 3 days, and whether the 3 days count from checkout.
+- [ ] Activation error codes for limit reached, unknown key and disabled key.
+- [ ] Validation returns `false` for an activation removed in the dashboard.
+- [ ] A refund makes validation return `false`.
+- [ ] Emails and invoices show the app's brand.
