@@ -108,6 +108,18 @@ final class GateRunner: @unchecked Sendable {
         }
     }
 
+    /// A deliberate stop is coming: stop authorizing, keep draining.
+    func beginShutdown() {
+        state.withLock { state in
+            dispatch(state.gate.beginShutdown(), state: &state)
+        }
+    }
+
+    /// Nothing is held or in flight in the gate.
+    var isIdle: Bool {
+        state.withLock { !$0.gate.isHolding }
+    }
+
     /// The tap stopped or the app paused; no events flow until it restarts.
     func tapStopped() {
         state.withLock { state in

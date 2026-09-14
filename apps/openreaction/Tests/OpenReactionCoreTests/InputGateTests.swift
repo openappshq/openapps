@@ -867,6 +867,69 @@ struct InputGateTests {
         #expect(!harness.gate.capturesText)
     }
 
+    // MARK: L5 — a deliberate stop drains in order before the tap goes
+
+    @Test func shutdownDuringAProbeDrainsHeldKeysBeforeAnyNewInput() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        let held = Array(1...6)
+        // Lock/pause: nothing new is authorized, the held keys are still owed.
+        let effects = harness.run(harness.gate.beginShutdown())
+        #expect(effects.contains(.postFlush(transaction: 1)))
+        #expect(harness.gate.isHolding)
+        #expect(!harness.gate.capturesText)
+        // A Backspace typed now must not overtake the colon: it is held too.
+        #expect(harness.press(KeyCode.delete).decision == .hold)
+        let backspace = harness.nextID
+        let drain = harness.ack()
+        #expect(replays(drain) == [held + [backspace]])
+        #expect(harness.decodedHeld.isEmpty)
+        harness.settle()
+        #expect(!harness.gate.isHolding)
+        // Only now is the tap uninstalled.
+        let stopped = harness.run(harness.gate.tapStopped())
+        #expect(replays(stopped).isEmpty)
+    }
+
+    @Test func shutdownDuringPostingLetsTheReplacementFinishInOrder() {
+        var harness = harnessWithToken()
+        let id = postReplacement(&harness)
+        harness.press(7, "x")
+        let xDown = harness.nextID
+        harness.run(harness.gate.beginShutdown())
+        #expect(harness.gate.isHolding)
+        // The committed replacement still completes and x follows it.
+        let drain = harness.ack()
+        #expect(replays(drain) == [[xDown]])
+        let done = harness.ack()
+        #expect(ended(done, id, recorded: true))
+        #expect(!harness.gate.isHolding)
+    }
+
+    @Test func nothingStartsWhileShuttingDown() {
+        var harness = makeHarness()
+        harness.run(harness.gate.beginShutdown())
+        #expect(!harness.gate.isHolding)
+        #expect(harness.press(41, ":", modifiers: .shift).decision == .pass)
+        #expect(harness.decodedLive.isEmpty)
+        // A late probe answer for the old generation opens nothing.
+        harness.answerProbe(editable)
+        #expect(!harness.gate.capturesText)
+    }
+
+    @Test func shutdownDropsADeferredColonInsteadOfProbingIt() {
+        var harness = harnessWithToken()
+        _ = postReplacement(&harness)
+        harness.type(" :sm")
+        let mark = harness.log.count
+        harness.run(harness.gate.beginShutdown())
+        harness.settle()
+        #expect(!harness.gate.isHolding)
+        let after = Array(harness.log[mark...])
+        #expect(probes(after).isEmpty)
+        #expect(replays(after).joined().count == 8)
+    }
+
     // MARK: Picker commands
 
     @Test func pickerCommandsPassWhileHiddenAndResetTyping() {

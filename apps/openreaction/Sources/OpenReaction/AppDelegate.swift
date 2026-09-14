@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
         controller.onStateChange = { [weak statusMenu] in statusMenu?.updateButton() }
+        onboarding.model.onOpenSettings = { [weak settings] in settings?.show() }
         self.controller = controller
         self.loginItem = loginItem
         self.statusMenu = statusMenu
@@ -87,6 +88,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if OnboardingWindowController.shouldShowOnLaunch(permissions: controller.permissions) {
             onboarding.show()
         }
+    }
+
+    /// Quitting drains what the gate still owes the host before the tap goes
+    /// away with the process.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let controller, controller.isTapRunning else { return .terminateNow }
+        Task {
+            await controller.prepareToQuit()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     // MARK: - Deep link
@@ -105,14 +117,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let string = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
               let url = URL(string: string), url.scheme?.lowercased() == "openreaction",
               url.host?.lowercased() == "activate",
-              let key = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                  .queryItems?.first(where: { $0.name == "key" })?.value?
-                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let key = items.first(where: { $0.name == "key" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !key.isEmpty
         else { return }
         #if OPENAPPS_LICENSING
-        license?.pendingKey = key
+        let kind: LicenseKind? = items.first(where: { $0.name == "kind" })?.value == "trial" ? .trial : nil
+        license?.pendingKey = LicenseController.PendingKey(key: key, kind: kind)
         settings?.show()
+        #else
+        _ = items
         #endif
     }
 

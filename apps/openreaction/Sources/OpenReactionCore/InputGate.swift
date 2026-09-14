@@ -667,15 +667,37 @@ public struct InputGate: Sendable {
         return effects + closeGate()
     }
 
-    /// The tap is gone (stopped or the app paused). Whatever is owed to the
-    /// host goes out in order; a key still physically down is resolved by
-    /// its next physical release, which now passes directly.
+    /// A deliberate stop is coming (pause, license lock, relaunch, quit).
+    /// Nothing new is authorized from here on; anything owed to the host keeps
+    /// draining through the acknowledged flush protocol while the tap still
+    /// owns the stream. The app layer waits for `isHolding` to become false
+    /// (bounded by the watchdog), then calls `tapStopped` and uninstalls the tap.
+    public mutating func beginShutdown() -> [GateEffect] {
+        isShuttingDown = true
+        trackingActive = false
+        deferred = nil
+        var effects = forgetTyping()
+        capture = .closed
+        focusGeneration += 1
+        if let transaction, transaction.phase.isBeforeCommit {
+            effects += cancelTransaction()
+        }
+        return effects
+    }
+
+    /// The tap is gone (stopped or the app paused) after `beginShutdown`
+    /// drained what it could. Anything still held goes out in order as a
+    /// last resort; a key still physically down is resolved by its next
+    /// physical release, which now passes directly.
     public mutating func tapStopped() -> [GateEffect] {
         ownedKeys.removeAll()
+        isShuttingDown = false
         var effects: [GateEffect] = []
         if transaction != nil { effects += giveUp() }
         return effects + closeGate()
     }
+
+    public private(set) var isShuttingDown = false
 
     // MARK: Internals
 
@@ -729,6 +751,12 @@ public struct InputGate: Sendable {
         ]
         if current.cancelled, case .tokenStart = current.kind {
             atBoundary = false
+        }
+        if isShuttingDown {
+            // Let whatever waited through, uninterpreted; nothing new starts.
+            let ids = current.held.map(\.id)
+            if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
+            return effects + forgetTyping()
         }
         switch deferred {
         case .tokenStart?:

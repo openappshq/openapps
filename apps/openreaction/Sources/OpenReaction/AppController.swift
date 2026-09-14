@@ -30,7 +30,6 @@ final class AppController {
         licenseStatusLine = statusLine
         guard isLicensedForFeature != allowsFeature else { return }
         isLicensedForFeature = allowsFeature
-        if !allowsFeature { runner?.tapStopped() }
         updateTap()
     }
     /// A packaged `.app` can start a fresh copy of itself; `swift run` builds cannot.
@@ -113,7 +112,6 @@ final class AppController {
     func setEnabled(_ enabled: Bool) {
         isEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: DefaultsKey.enabled)
-        if !enabled { runner?.tapStopped() }
         updateTap()
     }
 
@@ -167,29 +165,50 @@ final class AppController {
         relaunchError = nil
         isRelaunching = true
         permissions.willRelaunch()
-        tap?.stop()
-        focusMonitor.stop()
-        resetTyping()
-        isTapRunning = false
-
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { app, error in
-            let message = error?.localizedDescription
-            let launched = app != nil && error == nil
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    if launched {
-                        NSApp.terminate(nil)
-                    } else {
-                        self.isRelaunching = false
-                        self.relaunchError = message ?? "OpenReaction couldn't open a new copy of itself."
-                        self.permissions.relaunchFailed()
-                        self.updateTap()
+        Task {
+            await stopTapDraining()
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { app, error in
+                let message = error?.localizedDescription
+                let launched = app != nil && error == nil
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if launched {
+                            NSApp.terminate(nil)
+                        } else {
+                            self.isRelaunching = false
+                            self.relaunchError = message ?? "OpenReaction couldn't open a new copy of itself."
+                            self.permissions.relaunchFailed()
+                            self.updateTap()
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Called before the process exits, so held input reaches the host.
+    func prepareToQuit() async {
+        isRelaunching = true // no restarts from the permission poll meanwhile
+        await stopTapDraining()
+    }
+
+    /// Stops the tap without reordering input: the gate stops authorizing at
+    /// once, everything it still owes the host drains through acknowledged
+    /// flushes while the tap owns the stream, and only then is the tap
+    /// uninstalled. Bounded by the gate's own watchdogs.
+    private func stopTapDraining() async {
+        guard let tap, let runner, tap.isRunning else { return }
+        runner.beginShutdown()
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !runner.isIdle, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        runner.tapStopped()
+        tap.stop()
+        focusMonitor.stop()
+        if isTapRunning { isTapRunning = false }
     }
 
     // MARK: - Tap lifecycle
@@ -200,7 +219,7 @@ final class AppController {
     /// revoked there stops the tap. Every start attempt is reported to the
     /// permission flow, which decides when failures mean "relaunch" or "stale".
     func updateTap() {
-        guard let tap, !isRelaunching else { return }
+        guard let tap, !isRelaunching, !isStoppingTap else { return }
         let wasReady = isReady
         if permissions.allGranted && isEnabled && isLicensedForFeature {
             if !tap.isRunning {
@@ -211,13 +230,19 @@ final class AppController {
                 }
             }
         } else if tap.isRunning {
-            tap.stop()
-            focusMonitor.stop()
-            resetTyping()
+            isStoppingTap = true
+            Task {
+                await stopTapDraining()
+                isStoppingTap = false
+                updateTap()
+                onStateChange?()
+            }
         }
         if isTapRunning != tap.isRunning { isTapRunning = tap.isRunning }
         if wasReady != isReady { onStateChange?() }
     }
+
+    @ObservationIgnored private var isStoppingTap = false
 
     // MARK: - Gate effects
 
