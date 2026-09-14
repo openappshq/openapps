@@ -73,7 +73,7 @@ extension LicensingTests {
         let relaunched = makeManager()
         #expect(relaunched.state == .trialClockBehind)
         #expect(!relaunched.isFeatureEnabled)
-        #expect(relaunched.nextDeadline == Clock.start.addingTimeInterval(-3600))
+        #expect(relaunched.nextDeadlineDelay == 5 * Day.day - 3600) // until the clock is back within the hour
         await relaunched.checkOnLaunch()
         for _ in 0..<3 {
             clock.uptime += 3600 // the app keeps running with the clock still wrong
@@ -83,13 +83,14 @@ extension LicensingTests {
         #expect(relaunched.state == .trialClockBehind)
         #expect(trialStore.saves.isEmpty) // nothing saved
         #expect(relaunched.trial?.lastSeenAt == Clock.start) // no time added, trial not ended
-        // Corrected to within the hour: back on, with the day that was left.
+        // Corrected to within the hour: still locked until the manager observes
+        // the corrected clock, then back on with the day that was left.
         clock.now = Clock.start.addingTimeInterval(-30 * 60)
-        #expect(relaunched.state == .trial(daysLeft: 1))
+        #expect(relaunched.state == .trialClockBehind)
         await relaunched.tick()
         #expect(!relaunched.trialClockBehind)
         #expect(relaunched.state == .trial(daysLeft: 1))
-        #expect(relaunched.trial?.elapsed(now: clock.now) == 2 * Day.day)
+        #expect(relaunched.trialElapsed == 2 * Day.day)
     }
 
     @Test("28. A frozen or set-back wall clock does not pause a running trial: monotonic time ends it", arguments: [0, -2 * 3600] as [TimeInterval])
@@ -103,7 +104,7 @@ extension LicensingTests {
             if hour == 24 {
                 #expect(manager.state == .trial(daysLeft: 1))
                 // The end is a day of observed time away: the timer is armed for it.
-                #expect(manager.nextDeadline == clock.now.addingTimeInterval(Day.day))
+                #expect(manager.nextDeadlineDelay == Day.day)
             }
         }
         #expect(manager.state == .trialEnded)
@@ -124,8 +125,9 @@ extension LicensingTests {
         #expect(manager.state == .trialClockBehind)
         #expect(!manager.isFeatureEnabled)
         clock.advance(2.5 * 3600) // within the hour again
-        #expect(manager.state == .trial(daysLeft: 2))
+        #expect(manager.state == .trialClockBehind) // held until the manager observes
         await manager.tick()
+        #expect(manager.state == .trial(daysLeft: 2))
         #expect(!manager.trialClockBehind)
         #expect(manager.trial?.lastSeenAt == Clock.start) // the time behind added nothing
     }
@@ -135,12 +137,12 @@ extension LicensingTests {
         trialStore.record = trialRecord(elapsed: 3 * Day.day - 60)
         let manager = makeManager()
         let snapshot = manager.snapshot
-        #expect(snapshot.state(now: clock.now) == .trial(daysLeft: 1))
-        #expect(snapshot.nextDeadline == clock.now.addingTimeInterval(60))
+        #expect(snapshot.state(now: clock.now, uptime: clock.uptime) == .trial(daysLeft: 1))
+        #expect(snapshot.deadlineDelay(now: clock.now, uptime: clock.uptime) == 60)
         trialStore.failsWrites = true
         clock.advance(120)
         // A snapshot taken before the deadline already knows: no I/O involved.
-        #expect(snapshot.state(now: clock.now) == .trialEnded)
+        #expect(snapshot.state(now: clock.now, uptime: clock.uptime) == .trialEnded)
         #expect(manager.state == .trialEnded)
         await manager.tick() // the end-of-trial save fails; the state does not care
         #expect(manager.state == .trialEnded)
@@ -161,7 +163,7 @@ extension LicensingTests {
         #expect(manager.state == .trial(daysLeft: 2))
         clock.advance(Day.day)
         #expect(manager.state == .trial(daysLeft: 1))
-        #expect(manager.nextDeadline == trialStore.record!.startedAt.addingTimeInterval(3 * Day.day))
+        #expect(manager.nextDeadlineDelay == Day.day - 1) // 2 days and a second used
     }
 
     // MARK: 16–17 — storage
@@ -233,7 +235,7 @@ extension LicensingTests {
         await manager.checkOnLaunch()
         #expect(manager.state == .trialEnded) // ... and access is removed anyway, in memory first
         #expect(!manager.isFeatureEnabled)
-        #expect(seen.all.contains { $0.trial?.registered == true && $0.state(now: clock.now) == .trialEnded })
+        #expect(seen.all.contains { $0.trial?.registered == true && $0.state(now: clock.now, uptime: clock.uptime) == .trialEnded })
         #expect(trialStore.record?.registered == false)
         #expect(manager.trialStorageError != nil)
         trialStore.failsWrites = false
@@ -266,7 +268,7 @@ extension LicensingTests {
         }
         #expect(manager.state == .trial(daysLeft: 3)) // 23 h
         #expect(manager.isFeatureEnabled)
-        #expect(manager.nextDeadline == Clock.start.addingTimeInterval(Day.day))
+        #expect(manager.nextDeadlineDelay == 3600) // the offline limit, an hour of observed time away
         clock.advance(3600) // 24 h
         #expect(manager.state == .trialNeedsConnection)
         #expect(!manager.isFeatureEnabled)
@@ -321,6 +323,113 @@ extension LicensingTests {
         #expect(trialStore.record?.startedAt == Clock.start.addingTimeInterval(-23 * 3600))
         #expect(manager.trialStorageError == nil)
         #expect(registry.devices.count == 1)
+    }
+
+    @Test("Review 2, P0-2: relaunching an unregistered 12 h trial with the clock 5 days behind asks and saves nothing until the clock is right")
+    func unregisteredTrialClockBehindAtLaunch() async {
+        trialStore.record = trialRecord(elapsed: 12 * 3600, registered: false)
+        let original = trialStore.record!
+        registry.result = .registered(startedAt: Clock.start.addingTimeInterval(-12 * 3600), now: Clock.start) // 12 h old
+        clock.now = Clock.start.addingTimeInterval(-5 * Day.day)
+        let manager = makeManager()
+        #expect(manager.state == .trialClockBehind)
+        await manager.checkOnLaunch()
+        await manager.tick()
+        await manager.tick(wake: true)
+        manager.saveTrialBeforeQuit()
+        #expect(manager.state == .trialClockBehind)
+        #expect(registry.devices.isEmpty) // no request while writes are frozen
+        #expect(trialStore.saves.isEmpty)
+        #expect(trialStore.record == original)
+        // The clock is set right: registered from the observed time, nothing lost.
+        clock.now = Clock.start
+        await manager.tick()
+        #expect(registry.devices.count == 1)
+        #expect(manager.state == .trial(daysLeft: 3))
+        #expect(trialStore.record?.registered == true)
+        #expect(trialStore.record?.startedAt == original.startedAt)
+    }
+
+    @Test("Review 2, P0-2: an answer that arrives after a wake found the clock behind is kept raw and applied once the clock is right")
+    func registryAnswerWaitsWhileClockBehind() async {
+        trialStore.record = trialRecord(elapsed: 12 * 3600, registered: false)
+        let original = trialStore.record!
+        let gate = Gate()
+        registry.gate = gate
+        registry.result = .registered(startedAt: Clock.start.addingTimeInterval(-12 * 3600), now: Clock.start)
+        let manager = makeManager()
+        let launch = Task { await manager.checkOnLaunch() }
+        await until { registry.devices.count == 1 } // in flight
+        clock.now = Clock.start.addingTimeInterval(-5 * Day.day) // set back while asleep for a minute
+        clock.uptime += 60
+        let woke = Task { await manager.wake() }
+        await until { manager.trialClockBehind }
+        #expect(manager.state == .trialClockBehind) // published while the request still hangs
+        await gate.release()
+        await launch.value
+        await woke.value
+        #expect(manager.state == .trialClockBehind)
+        #expect(trialStore.saves.isEmpty)
+        #expect(manager.trial?.startedAt == original.startedAt)
+        #expect(manager.trial?.registered == false)
+        clock.now = Clock.start.addingTimeInterval(60) // set right
+        await manager.tick()
+        #expect(registry.devices.count == 1) // not asked again
+        #expect(manager.state == .trial(daysLeft: 3))
+        #expect(trialStore.record?.registered == true)
+        #expect(trialStore.record?.startedAt == original.startedAt)
+    }
+
+    @Test("Review 2, P0-3: a failed registration save, 2 h asleep, then a successful retry counts the sleep once; the right clock is never rejected")
+    func sleepAfterFailedRegistrationSaveCountsOnce() async {
+        trialStore.record = trialRecord(elapsed: 23 * 3600, registered: false)
+        registry.result = .registered(startedAt: clock.now, now: clock.now)
+        let manager = makeManager()
+        trialStore.failsWrites = true
+        await manager.checkOnLaunch()
+        #expect(manager.trial?.registered == false)
+        clock.advance(2 * 3600) // asleep, clock right
+        trialStore.failsWrites = false
+        await manager.wake()
+        #expect(trialStore.record?.registered == true)
+        #expect(trialStore.record?.lastSeenAt == Clock.start.addingTimeInterval(2 * 3600)) // hour 25, counted once
+        #expect(trialStore.record?.startedAt == Clock.start.addingTimeInterval(-23 * 3600))
+        #expect(abs((manager.trialElapsed ?? 0) - 25 * 3600) < 0.001)
+        #expect(manager.state == .trial(daysLeft: 2))
+        await manager.wake()
+        #expect(!manager.trialClockBehind)
+        #expect(manager.state == .trial(daysLeft: 2))
+        let relaunched = makeManager()
+        #expect(!relaunched.trialClockBehind)
+        #expect(relaunched.state == .trial(daysLeft: 2))
+    }
+
+    @Test("The trial clock observes once: repeated observations add nothing, a behind clock freezes, and lifting adds nothing")
+    func trialClockObservesOnce() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        var clock = TrialClock(seen: t0, at: TrialObservation(wall: t0, mono: 100))
+        clock.observe(TrialObservation(wall: t0, mono: 3_700), checkingBehind: false) // wall frozen, an hour passes
+        #expect(clock.seen == t0.addingTimeInterval(3_600))
+        clock.observe(TrialObservation(wall: t0, mono: 3_700), checkingBehind: false) // same moment again
+        #expect(clock.seen == t0.addingTimeInterval(3_600))
+        #expect(clock.projectedSeen(at: TrialObservation(wall: t0.addingTimeInterval(-7_200), mono: 7_300)) == t0.addingTimeInterval(7_200))
+        // A wake with the clock 10 h behind what was seen freezes it.
+        clock.observe(TrialObservation(wall: t0.addingTimeInterval(-10 * 3_600), mono: 3_700), checkingBehind: true)
+        #expect(clock.behind)
+        let frozen = clock.seen
+        #expect(clock.projectedSeen(at: TrialObservation(wall: t0.addingTimeInterval(-10 * 3_600), mono: 90_000)) == frozen)
+        clock.observe(TrialObservation(wall: t0.addingTimeInterval(-10 * 3_600), mono: 90_000), checkingBehind: false)
+        #expect(clock.seen == frozen)
+        // Corrected but not yet observed: still held, still frozen.
+        let corrected = TrialObservation(wall: frozen.addingTimeInterval(-1_800), mono: 91_000)
+        #expect(clock.isBehind(at: corrected))
+        #expect(clock.projectedSeen(at: TrialObservation(wall: frozen.addingTimeInterval(-600), mono: 92_200)) == frozen)
+        // Set right: nothing added for the time behind, counting resumes.
+        clock.observe(TrialObservation(wall: frozen.addingTimeInterval(-1_800), mono: 91_000), checkingBehind: false)
+        #expect(!clock.behind)
+        #expect(clock.seen == frozen)
+        clock.observe(TrialObservation(wall: frozen.addingTimeInterval(-1_800), mono: 91_060), checkingBehind: false)
+        #expect(clock.seen == frozen.addingTimeInterval(60))
     }
 
     @Test("21. Registry 429 Retry-After: 120 blocks calls for 120 s; state unchanged")

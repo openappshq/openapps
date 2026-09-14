@@ -153,14 +153,14 @@ public enum LicensePolicy {
         return .checkRequired
     }
 
-    /// Derives the trial's state: ended at `duration` of elapsed time; off
-    /// while a clock found behind at launch or wake (`clockBehind`) still is;
-    /// and an unregistered trial stops at its offline limit until the
-    /// registry answers.
-    public static func trialState(_ trial: TrialRecord, timing: TrialTiming, clockBehind: Bool = false, now: Date) -> LicenseState {
-        let elapsed = trial.elapsed(now: now)
+    /// Derives the trial's state from its record and its clock projected to
+    /// `observation`: ended at `duration` of elapsed time; off while a clock
+    /// found behind at launch or wake still is; and an unregistered trial
+    /// stops at its offline limit until the registry answers.
+    public static func trialState(_ trial: TrialRecord, clock: TrialClock, timing: TrialTiming, at observation: TrialObservation) -> LicenseState {
+        let elapsed = max(0, clock.projectedSeen(at: observation).timeIntervalSince(trial.startedAt))
         if elapsed >= timing.duration { return .trialEnded }
-        if clockBehind, trial.clockBehind(now: now) { return .trialClockBehind }
+        if clock.isBehind(at: observation) { return .trialClockBehind }
         if !trial.registered, elapsed >= timing.offlineLimit { return .trialNeedsConnection }
         let days = Int(ceil((timing.duration - elapsed) / timing.day))
         return .trial(daysLeft: min(3, max(1, days)))
@@ -176,20 +176,23 @@ public enum LicensePolicy {
         return candidates.min()
     }
 
-    /// The next moment, on the wall clock, the trial's state may change: a
-    /// day boundary (days left, the offline limit) or the end, counted from
-    /// the time already observed — so a clock running behind `last_seen_at`
-    /// still gets a timer when the boundary is due — or, while the clock is
-    /// behind, the moment it would be back within the hour.
-    public static func nextTrialDeadline(_ trial: TrialRecord, timing: TrialTiming, clockBehind: Bool = false, now: Date) -> Date? {
-        if clockBehind, trial.clockBehind(now: now) {
-            return trial.lastSeenAt.addingTimeInterval(-clockRollbackTolerance)
+    /// Seconds until the trial's state may change: on the projected trial
+    /// clock (which moves with monotonic time), the next day boundary (days
+    /// left, the offline limit) or the end; while the clock is behind, until
+    /// the wall clock would be back within the hour.
+    public static func trialDeadlineDelay(_ trial: TrialRecord, clock: TrialClock, timing: TrialTiming, at observation: TrialObservation) -> TimeInterval? {
+        if clock.isBehind(at: observation) {
+            // Held behind: nothing changes until the manager observes the
+            // corrected clock. Wake when it would be within the hour, and keep
+            // asking every minute once it is.
+            let untilWithin = clock.seen.addingTimeInterval(-TrialClock.tolerance).timeIntervalSince(observation.wall)
+            return untilWithin > 0 ? untilWithin : LicensePolicy.minimumRetryDelay
         }
-        let observed = max(now, trial.lastSeenAt)
+        let seen = clock.projectedSeen(at: observation)
         return (1...3).map { trial.startedAt.addingTimeInterval(Double($0) * timing.day) }
-            .filter { $0 > observed }
+            .filter { $0 > seen }
             .min()
-            .map { now.addingTimeInterval($0.timeIntervalSince(observed)) }
+            .map { $0.timeIntervalSince(seen) }
     }
 
     /// Backoff after `failures` consecutive failed checks: 1 min doubling to 1 h.
@@ -402,25 +405,28 @@ public struct LicenseSnapshot: Equatable, Sendable {
     public var journalUnreadable: Bool
     /// The trial record as in memory; nil while it is absent or unread.
     public var trial: TrialRecord?
+    /// The trial's clock at its last observation. Enforcement projects it
+    /// to the current readings, so trial deadlines move with monotonic time
+    /// even while the manager waits on storage or the network.
+    public var trialClock: TrialClock?
     /// The trial record could not be read or saved.
     public var trialStorageError: LicenseStoreError?
     public var trialTiming: TrialTiming
-    /// The clock was found behind `last_seen_at` at launch or wake.
-    public var trialClockBehind: Bool
     /// When the app layer should call `tick` next (absolute, so a timer
     /// re-armed later from the same snapshot does not drift), if anything
     /// is scheduled.
     public var nextCheckAt: Date?
+    /// The paid license's next deadline on the wall clock.
     public var nextDeadline: Date?
     public var hasPendingCleanups: Bool
 
     public init(
         record: LicenseRecord? = nil, licenseRead: Bool = false, isRestricted: Bool = false,
         storageError: LicenseStoreError? = nil, journalError: Bool = false, journalUnreadable: Bool = false,
-        trial: TrialRecord? = nil, trialStorageError: LicenseStoreError? = nil, trialTiming: TrialTiming = .standard,
-        trialClockBehind: Bool = false, nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
+        trial: TrialRecord? = nil, trialClock: TrialClock? = nil, trialStorageError: LicenseStoreError? = nil,
+        trialTiming: TrialTiming = .standard, nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
     ) {
-        self.trialClockBehind = trialClockBehind
+        self.trialClock = trialClock
         self.record = record
         self.licenseRead = licenseRead
         self.isRestricted = isRestricted
@@ -436,15 +442,41 @@ public struct LicenseSnapshot: Equatable, Sendable {
     }
 
     /// A license always wins over the trial; without a readable license
-    /// record the trial record decides.
-    public func state(now: Date) -> LicenseState {
+    /// record the trial record and its clock, projected to `now` and
+    /// `uptime` (the monotonic clock), decide. `wakeSince`: the monotonic
+    /// time of a wake the manager has not checked yet — the clock-behind
+    /// check is applied here too, so a wake restricts before any I/O.
+    public func state(now: Date, uptime: TimeInterval, wakeSince: TimeInterval? = nil) -> LicenseState {
         if let record {
             let policy = LicensePolicy.state(record: record, now: now)
             if isRestricted, policy.isFeatureEnabled { return .checkRequired }
             return policy
         }
-        guard licenseRead, let trial else { return .trialUnavailable }
-        return LicensePolicy.trialState(trial, timing: trialTiming, clockBehind: trialClockBehind, now: now)
+        let observation = TrialObservation(wall: now, mono: uptime)
+        guard licenseRead, let trial, let clock = projectedClock(at: observation, wakeSince: wakeSince) else {
+            return .trialUnavailable
+        }
+        return LicensePolicy.trialState(trial, clock: clock, timing: trialTiming, at: observation)
+    }
+
+    /// Seconds until the state may change on its own: the paid license's
+    /// next deadline, or the trial's on its projected clock.
+    public func deadlineDelay(now: Date, uptime: TimeInterval, wakeSince: TimeInterval? = nil) -> TimeInterval? {
+        if record != nil { return nextDeadline.map { max(0, $0.timeIntervalSince(now)) } }
+        let observation = TrialObservation(wall: now, mono: uptime)
+        guard licenseRead, let trial, let clock = projectedClock(at: observation, wakeSince: wakeSince) else { return nil }
+        return LicensePolicy.trialDeadlineDelay(trial, clock: clock, timing: trialTiming, at: observation)
+    }
+
+    /// The trial clock, with an unchecked wake observed on a copy.
+    private func projectedClock(at observation: TrialObservation, wakeSince: TimeInterval?) -> TrialClock? {
+        guard var clock = trialClock else { return nil }
+        // An unchecked wake may only restrict: a clock already held behind is
+        // never released here, only by the manager's own observation.
+        if let wakeSince, !clock.behind, (clock.lastBehindCheck ?? -.infinity) < wakeSince {
+            clock.observe(observation, checkingBehind: true)
+        }
+        return clock
     }
 }
 

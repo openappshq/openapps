@@ -30,15 +30,88 @@ public struct TrialRecord: Codable, Equatable, Sendable {
         case fallbackDeviceID = "device_id"
     }
 
-    /// `last_seen_at − started_at`, or the wall clock if it is already past
-    /// `last_seen_at` between ticks: setting the clock back never gives time back.
-    public func elapsed(now: Date) -> TimeInterval {
-        max(0, max(now, lastSeenAt).timeIntervalSince(startedAt))
+}
+
+/// One reading of both clocks: the wall clock and a monotonic clock that
+/// keeps counting through sleep.
+public struct TrialObservation: Equatable, Sendable {
+    public var wall: Date
+    public var mono: TimeInterval
+
+    public init(wall: Date, mono: TimeInterval) {
+        self.wall = wall
+        self.mono = mono
+    }
+}
+
+/// The trial's clock (LICENSING.md, "Elapsed time never stops while the app
+/// runs"): an anchor `(wall, monotonic, seen)` and one observe step that
+/// advances `seen` exactly once and re-anchors. Every consumer goes through
+/// it — ticks, wake, snapshots, the deadline timer and the registry answer —
+/// and nothing else moves `last_seen_at`. Enforcement projects it without
+/// mutating it, so deadlines keep moving while the manager is busy.
+public struct TrialClock: Equatable, Sendable {
+    /// The readings at the last observation.
+    public private(set) var anchor: TrialObservation
+    /// `last_seen_at` at the anchor.
+    public private(set) var seen: Date
+    /// At launch or wake the wall clock was more than the tolerance behind
+    /// `seen`. While it still is, `seen` is frozen: no time is added.
+    public private(set) var behind = false
+    /// The monotonic time of the last launch or wake check.
+    public private(set) var lastBehindCheck: TimeInterval?
+
+    public static let tolerance = LicensePolicy.clockRollbackTolerance
+
+    public init(seen: Date, at anchor: TrialObservation) {
+        self.seen = seen
+        self.anchor = anchor
     }
 
-    /// The wall clock is more than an hour earlier than time already observed.
-    public func clockBehind(now: Date) -> Bool {
-        now < lastSeenAt.addingTimeInterval(-LicensePolicy.clockRollbackTolerance)
+    /// Whether the clock found behind at launch or wake is still held behind.
+    /// Fail-closed: a clock marked behind stays behind for every projection,
+    /// whatever the wall clock reads now; only `observe` clears it, once the
+    /// wall clock is back within the tolerance, and re-anchors there. A held
+    /// or cached clock may restrict, never unlock.
+    public func isBehind(at observation: TrialObservation) -> Bool {
+        behind
+    }
+
+    /// The wall clock is more than the tolerance behind `seen`.
+    private func wallBehind(_ observation: TrialObservation) -> Bool {
+        observation.wall < seen.addingTimeInterval(-Self.tolerance)
+    }
+
+    /// `last_seen_at` as of `observation`, without re-anchoring:
+    /// `max(seen + monotonic time since the anchor, wall)`. While the clock is
+    /// held behind it stays at `seen`: time spent behind never counts.
+    public func projectedSeen(at observation: TrialObservation) -> Date {
+        if behind { return seen }
+        return max(seen.addingTimeInterval(max(0, observation.mono - anchor.mono)), observation.wall)
+    }
+
+    /// The one observe step, and the only way out of clock-behind.
+    /// `checkingBehind` at launch and wake: after advancing, a wall clock more
+    /// than the tolerance behind `seen` freezes it. A held clock whose wall
+    /// clock is back within the tolerance is released here, at `max(seen,
+    /// wall)`, and counting resumes from this anchor. An observation older than
+    /// the anchor — sampled before a wait that a later observation overtook —
+    /// is ignored entirely, so the anchor only moves forward.
+    public mutating func observe(_ observation: TrialObservation, checkingBehind: Bool) {
+        guard observation.mono >= anchor.mono else { return }
+        if behind {
+            if !wallBehind(observation) {
+                behind = false
+                seen = max(seen, observation.wall)
+            }
+        } else {
+            seen = projectedSeen(at: observation)
+        }
+        if checkingBehind {
+            lastBehindCheck = observation.mono
+            if wallBehind(observation) { behind = true }
+        }
+        anchor = observation
     }
 }
 

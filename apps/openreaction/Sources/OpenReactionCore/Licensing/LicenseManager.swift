@@ -68,7 +68,7 @@ public final class LicenseManager {
     /// That data must be saved on the next tick (not only hourly): a
     /// registry answer, a fallback device id, the end, or a failed save.
     private var trialSaveRequired = false
-    private var lastTrialSaveAt: Date?
+    private var lastTrialSaveMono: TimeInterval?
     /// The ended trial's `last_seen_at` has been saved in this process.
     private var trialEndSaved = false
     /// Identity of the trial record in memory; a registry answer applies
@@ -76,20 +76,18 @@ public final class LicenseManager {
     private var trialGeneration = 0
     /// Consecutive failed registry calls, for backoff.
     public private(set) var registryFailures = 0
-    /// No registry call before this moment (`Retry-After`).
-    public private(set) var registryBlockedUntil: Date?
-    public private(set) var registryLastAttemptAt: Date?
+    /// No registry call before this monotonic moment (`Retry-After`).
+    private var registryBlockedUntilMono: TimeInterval?
+    private var registryLastAttemptMono: TimeInterval?
     /// Registry calls made, for diagnostics and tests.
     public private(set) var registryCallCount = 0
     private var isRegistering = false
-    /// A registry answer (the start on the local clock) whose record could
-    /// not be saved yet. Retried on ticks; the registry is not asked again.
-    private var pendingRegistrationStart: Date?
-    /// The monotonic reading at the last tick that counted trial time.
-    private var lastTickUptime: TimeInterval?
-    /// The clock was more than an hour behind `last_seen_at` at launch or
-    /// wake; the core stays off until it is within the hour again.
-    public private(set) var trialClockBehind = false
+    /// A registry answer not applied yet, as the registry sent it: its save
+    /// failed, or the clock is behind. Retried on ticks; the registry is not
+    /// asked again.
+    private var pendingRegistryAnswer: RegistryAnswer?
+    /// The trial's clock: the one source of `last_seen_at`.
+    public private(set) var trialClock: TrialClock?
     /// The fallback device id the store is known to hold; only that id is
     /// ever sent.
     private var durableFallbackID: String?
@@ -264,7 +262,7 @@ public final class LicenseManager {
     // MARK: State
 
     public var state: LicenseState {
-        snapshot.state(now: now())
+        snapshot.state(now: now(), uptime: uptime())
     }
 
     /// What the app layer works from; `onChange` hands it over.
@@ -273,10 +271,11 @@ public final class LicenseManager {
         return LicenseSnapshot(
             record: record, licenseRead: licenseRead, isRestricted: isRestricted, storageError: storageError,
             journalError: journalError, journalUnreadable: journalUnreadable,
-            trial: trial, trialStorageError: trialApplies ? trialStorageError : nil, trialTiming: trialTiming,
-            trialClockBehind: trialClockBehind,
+            trial: trial, trialClock: trialClock, trialStorageError: trialApplies ? trialStorageError : nil,
+            trialTiming: trialTiming,
             nextCheckAt: nextCheckDelay.map { current.addingTimeInterval($0) },
-            nextDeadline: nextDeadline, hasPendingCleanups: !pendingCleanups.isEmpty
+            nextDeadline: record.flatMap { LicensePolicy.nextDeadline(record: $0, now: current) },
+            hasPendingCleanups: !pendingCleanups.isEmpty
         )
     }
 
@@ -287,12 +286,11 @@ public final class LicenseManager {
 
     public var isFeatureEnabled: Bool { state.isFeatureEnabled }
 
-    /// The next moment the state changes on its own (a trial day boundary or
-    /// its end, grace warning or end), independent of any network schedule.
-    public var nextDeadline: Date? {
-        if let record { return LicensePolicy.nextDeadline(record: record, now: now()) }
-        guard licenseRead, let trial else { return nil }
-        return LicensePolicy.nextTrialDeadline(trial, timing: trialTiming, clockBehind: trialClockBehind, now: now())
+    /// How long until the state may change on its own (a trial day boundary
+    /// or its end on the projected trial clock, a behind clock back within the
+    /// hour, grace warning or end), independent of any network schedule.
+    public var nextDeadlineDelay: TimeInterval? {
+        snapshot.deadlineDelay(now: now(), uptime: uptime())
     }
 
     /// The trial is what decides the state: no license record, and that is known.
@@ -348,34 +346,7 @@ public final class LicenseManager {
                 candidates.append(Self.cleanupRetryInterval)
             }
         }
-        if let trialDelay = nextTrialTickDelay(now: current) { candidates.append(trialDelay) }
-        return candidates.min()
-    }
-
-    /// The trial's share of the schedule: registration (due now, after
-    /// `Retry-After`, or after backoff), a trial save that failed or cannot
-    /// wait, and the hourly `last_seen_at` save while the trial runs.
-    private func nextTrialTickDelay(now current: Date) -> TimeInterval? {
-        guard trialApplies else { return nil }
-        var candidates: [TimeInterval] = []
-        if trialStorageError != nil || (trialDirty && trialSaveRequired) {
-            candidates.append(LicensePolicy.minimumRetryDelay)
-        }
-        guard let trial else { return candidates.min() }
-        if isRegistrationDue {
-            candidates.append(0)
-        } else if !trial.registered {
-            if let registryBlockedUntil, current < registryBlockedUntil {
-                candidates.append(registryBlockedUntil.timeIntervalSince(current))
-            } else if let last = registryLastAttemptAt, registryFailures > 0 {
-                let wait = LicensePolicy.retryDelay(afterFailures: registryFailures)
-                candidates.append(max(0, last.addingTimeInterval(wait).timeIntervalSince(current)))
-            }
-        }
-        if LicensePolicy.trialState(trial, timing: trialTiming, now: current) != .trialEnded {
-            let since = lastTrialSaveAt.map { max(0, current.timeIntervalSince($0)) } ?? 0
-            candidates.append(max(0, LicensePolicy.trialSaveInterval - since))
-        }
+        if let trialDelay = nextTrialTickDelay() { candidates.append(trialDelay) }
         return candidates.min()
     }
 
@@ -749,21 +720,19 @@ public final class LicenseManager {
     /// (wake from sleep, the network back, "Try again") asks the registry
     /// without waiting out the backoff; a `Retry-After` still holds.
     public func tick(wake: Bool = false) async {
-        await housekeeping(prompted: wake, woke: false)
+        await housekeeping(prompted: wake)
     }
 
-    /// Wake from sleep: a tick that asks the registry at once and first
-    /// checks whether the clock is now more than an hour behind the trial's
-    /// `last_seen_at`.
+    /// Wake from sleep: the trial clock observes at once, checking whether
+    /// the clock is behind, and that is published before anything queued or
+    /// any I/O runs; then a tick that asks the registry at once.
     public func wake() async {
-        await housekeeping(prompted: true, woke: true)
+        observeWake()
+        await housekeeping(prompted: true)
     }
 
-    private func housekeeping(prompted wake: Bool, woke: Bool) async {
+    private func housekeeping(prompted wake: Bool) async {
         await perform {
-            if woke, self.trialApplies, let trial = self.trial, trial.clockBehind(now: self.now()) {
-                self.trialClockBehind = true
-            }
             self.retryStorage()
             self.settleTrial()
             self.commitPendingRegistration()
@@ -905,6 +874,67 @@ public final class LicenseManager {
 
     // MARK: Trial
 
+    /// A registry answer kept as the registry sent it (its start and its own
+    /// clock), with the monotonic time it arrived. It is converted only when
+    /// applied, from the trial clock's observed time, never through a wall
+    /// clock that is behind.
+    private struct RegistryAnswer {
+        let startedAt: Date
+        let serverNow: Date
+        let receivedMono: TimeInterval
+    }
+
+    /// Now, on both clocks.
+    private var observation: TrialObservation {
+        TrialObservation(wall: now(), mono: uptime())
+    }
+
+    /// While a clock found behind at launch or wake still is, every trial
+    /// write is frozen: no saves, no change to the start or `last_seen_at`,
+    /// no registry request or answer applied.
+    private var trialFrozen: Bool {
+        trialClock?.isBehind(at: observation) ?? false
+    }
+
+    /// The clock was found behind at launch or wake and still is.
+    public var trialClockBehind: Bool {
+        trialApplies && trialFrozen
+    }
+
+    /// The trial's elapsed time as enforcement sees it now, projected on the
+    /// monotonic clock.
+    public var trialElapsed: TimeInterval? {
+        guard trialApplies, let trial, let trialClock else { return nil }
+        return max(0, trialClock.projectedSeen(at: observation).timeIntervalSince(trial.startedAt))
+    }
+
+    private var trialStateNow: LicenseState? {
+        guard trialApplies, let trial, let trialClock else { return nil }
+        return LicensePolicy.trialState(trial, clock: trialClock, timing: trialTiming, at: observation)
+    }
+
+    /// The one place trial time advances: the trial clock observes both
+    /// clocks once and re-anchors, and the record's `last_seen_at` follows it.
+    /// `checkingBehind` at launch and wake.
+    private func observeTrial(checkingBehind: Bool = false) {
+        guard trialApplies, var clock = trialClock, var record = trial else { return }
+        clock.observe(observation, checkingBehind: checkingBehind)
+        trialClock = clock
+        if clock.seen > record.lastSeenAt {
+            record.lastSeenAt = clock.seen
+            trial = record
+            trialDirty = true
+        }
+    }
+
+    /// Wake: observe at once, checking the clock, and publish before
+    /// anything queued or any I/O runs.
+    private func observeWake() {
+        guard trialApplies, trial != nil else { return }
+        observeTrial(checkingBehind: true)
+        notify()
+    }
+
     /// Reads the trial record once it has not been read, and starts a
     /// provisional trial when the trial record is positively absent. Only
     /// without a license record: while one exists the trial record is not
@@ -918,20 +948,27 @@ public final class LicenseManager {
     private func readTrial() {
         do {
             if let stored = try trialStore.loadTrial() {
-                trial = stored
+                // Launch: the clock is anchored at the stored time and
+                // observed once, checking whether it is behind.
+                let at = observation
+                var clock = TrialClock(seen: stored.lastSeenAt, at: at)
+                clock.observe(at, checkingBehind: true)
+                var record = stored
+                record.lastSeenAt = clock.seen
+                trial = record
+                trialClock = clock
                 trialLoad = .present
-                lastTrialSaveAt = now()
-                // Launch: a clock far behind what was already seen keeps the core off.
-                trialClockBehind = stored.clockBehind(now: now())
-                lastTickUptime = uptime()
+                trialDirty = record != stored
+                lastTrialSaveMono = at.mono
             } else {
                 trial = nil
+                trialClock = nil
                 trialLoad = .absent
+                trialDirty = false
             }
             durableFallbackID = trial?.fallbackDeviceID
-            pendingRegistrationStart = nil
+            pendingRegistryAnswer = nil
             trialStorageError = nil
-            trialDirty = false
             trialSaveRequired = false
             trialGeneration += 1
         } catch {
@@ -944,9 +981,9 @@ public final class LicenseManager {
     /// the core turns on only once it is durable. A failed save leaves the
     /// record unread: the next attempt reads before it writes.
     private func startProvisionalTrial() {
-        let current = now()
+        let at = observation
         let fallback = device.hardwareUUID() == nil ? UUID().uuidString.lowercased() : nil
-        let provisional = TrialRecord(startedAt: current, lastSeenAt: current, registered: false, fallbackDeviceID: fallback)
+        let provisional = TrialRecord(startedAt: at.wall, lastSeenAt: at.wall, registered: false, fallbackDeviceID: fallback)
         do {
             try trialStore.saveTrial(provisional)
         } catch {
@@ -956,70 +993,50 @@ public final class LicenseManager {
             return
         }
         trial = provisional
+        trialClock = TrialClock(seen: at.wall, at: at)
         trialLoad = .present
         durableFallbackID = fallback
-        pendingRegistrationStart = nil
+        pendingRegistryAnswer = nil
         trialStorageError = nil
         trialDirty = false
         trialSaveRequired = false
         trialEndSaved = false
-        trialClockBehind = false
-        lastTickUptime = uptime()
         trialGeneration += 1
-        lastTrialSaveAt = current
+        lastTrialSaveMono = at.mono
         registryFailures = 0
-        registryLastAttemptAt = nil
+        registryLastAttemptMono = nil
         notify()
     }
 
     /// Saves the trial record as it is in memory. A failure is retried on
-    /// every tick and shown; it never changes the trial's state.
+    /// every tick and shown; it never changes the trial's state or its clock.
+    /// Nothing is saved while the clock is behind.
     private func flushTrial() {
-        guard let trial else { return }
+        guard let trial, !trialFrozen else { return }
         do {
             try trialStore.saveTrial(trial)
             trialDirty = false
             trialSaveRequired = false
             trialStorageError = nil
             durableFallbackID = trial.fallbackDeviceID
-            lastTrialSaveAt = now()
-            if LicensePolicy.trialState(trial, timing: trialTiming, now: now()) == .trialEnded { trialEndSaved = true }
+            lastTrialSaveMono = uptime()
+            if trialStateNow == .trialEnded { trialEndSaved = true }
         } catch {
             trialStorageError = error
             trialSaveRequired = true
         }
     }
 
-    /// Raises `last_seen_at` in memory to `max(last_seen_at + monotonic time
-    /// since the last tick, now)`, so a frozen or set-back wall clock never
-    /// pauses the trial; saves it hourly, once when the trial has ended,
-    /// whenever a save is owed, and on quit (`force`). While a clock found
-    /// behind at launch or wake still is, nothing is added or saved.
+    /// Observes trial time; saves `last_seen_at` at most hourly (on the
+    /// monotonic clock), once when the trial has ended, whenever a save is
+    /// owed, and on quit (`force`). While the clock is behind, nothing is saved.
     private func noteTrialTime(force: Bool = false) {
-        guard trialApplies, var updated = trial else { return }
-        let current = now()
-        let upNow = uptime()
-        if trialClockBehind {
-            lastTickUptime = upNow // time spent behind is never added
-            guard !updated.clockBehind(now: current) else {
-                notify()
-                return
-            }
-            trialClockBehind = false
-        }
-        let moved = lastTickUptime.map { max(0, upNow - $0) } ?? 0
-        lastTickUptime = upNow
-        let observed = max(updated.lastSeenAt.addingTimeInterval(moved), current)
-        if observed > updated.lastSeenAt {
-            updated.lastSeenAt = observed
-            trial = updated
-            trialDirty = true
-        }
-        let ended = LicensePolicy.trialState(updated, timing: trialTiming, now: current) == .trialEnded
-        let hourly = lastTrialSaveAt.map {
-            current.timeIntervalSince($0) >= LicensePolicy.trialSaveInterval || current < $0
-        } ?? true
+        guard trialApplies, trial != nil else { return }
+        observeTrial()
         notify() // memory first
+        guard !trialFrozen else { return }
+        let ended = trialStateNow == .trialEnded
+        let hourly = lastTrialSaveMono.map { uptime() - $0 >= LicensePolicy.trialSaveInterval } ?? true
         if trialDirty, force || trialSaveRequired || trialStorageError != nil || hourly || (ended && !trialEndSaved) {
             flushTrial()
             notify()
@@ -1035,21 +1052,50 @@ public final class LicenseManager {
     }
 
     /// An unregistered trial may ask the registry now, ignoring backoff but
-    /// not a `Retry-After`.
+    /// not a `Retry-After`; never while an answer waits or the clock is behind.
     private var canRegister: Bool {
-        guard trialApplies, let trial, !trial.registered, !isRegistering, pendingRegistrationStart == nil else { return false }
-        if let registryBlockedUntil, now() < registryBlockedUntil { return false }
+        guard trialApplies, let trial, !trial.registered, !isRegistering, pendingRegistryAnswer == nil, !trialFrozen else {
+            return false
+        }
+        if let registryBlockedUntilMono, uptime() < registryBlockedUntilMono { return false }
         return true
     }
 
     /// Registration is due: never tried, or the backoff after the last
-    /// failure (1 min doubling to 1 h) has passed.
+    /// failure (1 min doubling to 1 h, on the monotonic clock) has passed.
     public var isRegistrationDue: Bool {
         guard canRegister else { return false }
-        guard registryFailures > 0, let last = registryLastAttemptAt else { return true }
-        let current = now()
-        if current < last { return true } // the clock went back since
-        return current >= last.addingTimeInterval(LicensePolicy.retryDelay(afterFailures: registryFailures))
+        guard registryFailures > 0, let last = registryLastAttemptMono else { return true }
+        return uptime() >= last + LicensePolicy.retryDelay(afterFailures: registryFailures)
+    }
+
+    /// The trial's share of the schedule: an answer or a save to retry,
+    /// registration (due now, after `Retry-After`, or after backoff), and the
+    /// hourly `last_seen_at` save while the trial runs. Nothing while the clock
+    /// is behind: the deadline timer wakes the app when it could be right again.
+    private func nextTrialTickDelay() -> TimeInterval? {
+        guard trialApplies else { return nil }
+        let frozen = trialFrozen
+        var candidates: [TimeInterval] = []
+        if trialStorageError != nil || (trialDirty && trialSaveRequired) || (pendingRegistryAnswer != nil && !frozen) {
+            candidates.append(LicensePolicy.minimumRetryDelay)
+        }
+        guard let trial, !frozen else { return candidates.min() }
+        let upNow = uptime()
+        if isRegistrationDue {
+            candidates.append(0)
+        } else if !trial.registered {
+            if let registryBlockedUntilMono, upNow < registryBlockedUntilMono {
+                candidates.append(registryBlockedUntilMono - upNow)
+            } else if let last = registryLastAttemptMono, registryFailures > 0 {
+                candidates.append(max(0, last + LicensePolicy.retryDelay(afterFailures: registryFailures) - upNow))
+            }
+        }
+        if trialStateNow != .trialEnded {
+            let since = lastTrialSaveMono.map { max(0, upNow - $0) } ?? 0
+            candidates.append(max(0, LicensePolicy.trialSaveInterval - since))
+        }
+        return candidates.min()
     }
 
     /// Asks the registry for this Mac's start. The answer applies only to
@@ -1076,35 +1122,28 @@ public final class LicenseManager {
         let generation = trialGeneration
         isRegistering = true
         defer { isRegistering = false }
-        registryLastAttemptAt = now()
+        registryLastAttemptMono = uptime()
         registryCallCount += 1
         let result = await registry.register(device: TrialDevice.hash(app: Self.trialAppID, hardwareID: deviceID))
-        guard generation == trialGeneration, trialApplies, let latest = trial, !latest.registered else {
+        guard generation == trialGeneration, trialApplies, trial?.registered == false else {
             notify()
             return
         }
         switch result {
         case .registered(let startedAt, let serverNow):
-            applyRegistration(startedAt: startedAt, serverNow: serverNow, to: latest)
+            // Kept as sent; applied now, or once a save succeeds or the clock
+            // is right again.
+            pendingRegistryAnswer = RegistryAnswer(startedAt: startedAt, serverNow: serverNow, receivedMono: uptime())
+            registryFailures = 0
+            registryBlockedUntilMono = nil
+            commitPendingRegistration()
         case .rateLimited(let retryAfter):
             registryFailures += 1
-            registryBlockedUntil = now().addingTimeInterval(Self.bounded(retryAfter))
+            registryBlockedUntilMono = uptime() + Self.bounded(retryAfter)
         case .unreachable:
             registryFailures += 1
         }
         notify()
-    }
-
-    /// The registry's start, converted to the local clock
-    /// (`local_now − (registry_now − registry_started_at)`); the earlier of
-    /// that and the provisional start wins. The registry has answered, so it
-    /// is not asked again; the record is committed now or on a later tick.
-    private func applyRegistration(startedAt: Date, serverNow: Date, to latest: TrialRecord) {
-        let used = max(0, serverNow.timeIntervalSince(startedAt))
-        pendingRegistrationStart = min(latest.startedAt, now().addingTimeInterval(-used))
-        registryFailures = 0
-        registryBlockedUntil = nil
-        commitPendingRegistration()
     }
 
     /// When a trial record's access ends: the offline limit while
@@ -1114,21 +1153,29 @@ public final class LicenseManager {
         return record.startedAt.addingTimeInterval(limit)
     }
 
-    /// Registers the trial record. Anything that lets access run longer than
-    /// the record in memory allows is saved first and published only once
-    /// the store holds it: until then the provisional deadline keeps
-    /// applying, and a failed save is retried on ticks. A registration that
-    /// shortens or ends the trial takes effect in memory first, then is saved.
+    /// Applies a kept registry answer. The trial clock observes exactly once
+    /// first; the candidate keeps that `last_seen_at`. The registry's start is
+    /// converted from the observed time: `seen − (registry_now −
+    /// registry_started_at + monotonic time since the answer arrived)`, and
+    /// the earlier of that and the current start wins. Anything that lets
+    /// access run longer is saved first and published only once saved (the
+    /// provisional limit keeps applying meanwhile); anything that shortens
+    /// or ends the trial takes effect in memory first, then is saved. While
+    /// the clock is behind the answer waits.
     private func commitPendingRegistration() {
-        guard let start = pendingRegistrationStart else { return }
-        guard trialApplies, let latest = trial, !latest.registered else {
-            pendingRegistrationStart = nil
+        guard let answer = pendingRegistryAnswer else { return }
+        guard trialApplies, trial?.registered == false else {
+            pendingRegistryAnswer = nil
             return
         }
-        let current = now()
+        observeTrial()
+        guard !trialFrozen, let latest = trial, let clock = trialClock else {
+            notify()
+            return
+        }
+        let age = max(0, answer.serverNow.timeIntervalSince(answer.startedAt)) + max(0, uptime() - answer.receivedMono)
         var updated = latest
-        updated.startedAt = min(latest.startedAt, start)
-        updated.lastSeenAt = max(latest.lastSeenAt, current)
+        updated.startedAt = min(latest.startedAt, clock.seen.addingTimeInterval(-age))
         updated.registered = true
         if entitlementEnd(updated) > entitlementEnd(latest) {
             do {
@@ -1138,17 +1185,17 @@ public final class LicenseManager {
                 notify()
                 return
             }
-            pendingRegistrationStart = nil
+            pendingRegistryAnswer = nil
             trial = updated
             trialDirty = false
             trialSaveRequired = false
             trialStorageError = nil
             durableFallbackID = updated.fallbackDeviceID
-            lastTrialSaveAt = current
-            if LicensePolicy.trialState(updated, timing: trialTiming, now: current) == .trialEnded { trialEndSaved = true }
+            lastTrialSaveMono = uptime()
+            if trialStateNow == .trialEnded { trialEndSaved = true }
             notify()
         } else {
-            pendingRegistrationStart = nil
+            pendingRegistryAnswer = nil
             trial = updated
             trialDirty = true
             trialSaveRequired = true

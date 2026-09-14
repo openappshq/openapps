@@ -55,7 +55,7 @@ final class LicenseController {
         self.manager = manager
         let initial = LicenseSnapshot(trialTiming: manager.trialTiming)
         snapshot = initial
-        state = initial.state(now: Date())
+        state = initial.state(now: Date(), uptime: LicenseManager.continuousUptime())
     }
 
     /// Wires the snapshot feed, then loads storage on the license actor.
@@ -81,15 +81,23 @@ final class LicenseController {
             self.lock = lock
         }
         func deliver(_ snapshot: LicenseSnapshot) {
-            if !snapshot.state(now: Date()).isFeatureEnabled { lock() }
+            if !snapshot.state(now: Date(), uptime: LicenseManager.continuousUptime()).isFeatureEnabled { lock() }
             toMain(snapshot)
         }
     }
 
     private func receive(_ snapshot: LicenseSnapshot) {
         self.snapshot = snapshot
+        // The manager has checked the clock since the wake: its snapshot decides.
+        if let pendingWake, (snapshot.trialClock?.lastBehindCheck ?? .infinity) >= pendingWake {
+            self.pendingWake = nil
+        }
         refresh()
     }
+
+    /// The monotonic time of a wake the manager has not checked yet; until
+    /// it has, the clock-behind check is projected here, before any I/O.
+    @ObservationIgnored private var pendingWake: TimeInterval?
 
     var isFeatureEnabled: Bool { state.isFeatureEnabled }
 
@@ -201,10 +209,10 @@ final class LicenseController {
 
     // MARK: - Scheduling
 
-    /// Wake from sleep or the network back: an unregistered trial asks the
-    /// registry now.
-    /// Wake from sleep: also checks the clock against the trial's last seen time.
+    /// Wake from sleep: the clock-behind check is projected from the snapshot
+    /// at once, on the main actor, then the manager observes the wake.
     private func didWake() {
+        pendingWake = LicenseManager.continuousUptime()
         refresh()
         Task {
             await manager.wake()
@@ -212,6 +220,7 @@ final class LicenseController {
         }
     }
 
+    /// The network back: an unregistered trial asks the registry now.
     private func wakeOrNetwork() {
         // Local deadlines first: a trial that ended while asleep is off now.
         refresh()
@@ -243,8 +252,10 @@ final class LicenseController {
         }
         deadlineTimer?.invalidate()
         deadlineTimer = nil
-        if let deadline = snapshot.nextDeadline {
-            deadlineTimer = makeTimer(after: deadline.timeIntervalSinceNow + 1) { [weak self] in
+        // Keyed off the projected trial clock (monotonic time), or the paid
+        // license's wall-clock deadline.
+        if let delay = snapshot.deadlineDelay(now: Date(), uptime: LicenseManager.continuousUptime(), wakeSince: pendingWake) {
+            deadlineTimer = makeTimer(after: delay + 1) { [weak self] in
                 self?.deadlineOrClock()
             }
         }
@@ -263,7 +274,7 @@ final class LicenseController {
     /// storage — and re-arms both timers. Cheap; called on every timer and event.
     private func refresh() {
         let previous = state
-        state = snapshot.state(now: Date())
+        state = snapshot.state(now: Date(), uptime: LicenseManager.continuousUptime(), wakeSince: pendingWake)
         scheduleTimers()
         if previous != state { onChange?() }
     }

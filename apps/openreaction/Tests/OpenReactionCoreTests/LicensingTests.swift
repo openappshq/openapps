@@ -437,7 +437,7 @@ struct LicensingTests {
         await manager.tick() // unreachable: time observed anyway
         clock.advance(-2 * Clock.day - 7200)
         #expect(manager.state == .checkRequired)
-        #expect(manager.nextDeadline == nil)
+        #expect(manager.nextDeadlineDelay == nil)
         client.validation = .valid(serverDate: clock.now)
         await manager.check()
         #expect(manager.state == .licensed)
@@ -459,18 +459,18 @@ struct LicensingTests {
     func localDeadlines() {
         trialStore.record = trialRecord(elapsed: 3 * Clock.day - 2.4 * 3600)
         var manager = makeManager()
-        #expect(manager.nextDeadline == clock.now.addingTimeInterval(2.4 * 3600))
+        #expect(manager.nextDeadlineDelay == (2.4 * 3600))
         #expect(manager.nextCheckDelay == LicensePolicy.trialSaveInterval) // no license: only the hourly trial save
         store.record = paidRecord(lastSuccessAge: 3600)
         manager = makeManager()
         // Daily due, then the five-day warning, then the end of grace.
-        #expect(manager.nextDeadline == clock.now.addingTimeInterval(LicensePolicy.checkInterval - 3600))
+        #expect(manager.nextDeadlineDelay == (LicensePolicy.checkInterval - 3600))
         clock.advance(2 * Clock.day)
-        #expect(manager.nextDeadline == clock.now.addingTimeInterval(LicensePolicy.graceWarningAfter - 2 * Clock.day - 3600))
+        #expect(manager.nextDeadlineDelay == (LicensePolicy.graceWarningAfter - 2 * Clock.day - 3600))
         clock.advance(4 * Clock.day)
-        #expect(manager.nextDeadline == clock.now.addingTimeInterval(LicensePolicy.graceDuration - 6 * Clock.day - 3600))
+        #expect(manager.nextDeadlineDelay == (LicensePolicy.graceDuration - 6 * Clock.day - 3600))
         clock.advance(2 * Clock.day)
-        #expect(manager.nextDeadline == nil)
+        #expect(manager.nextDeadlineDelay == nil)
         #expect(manager.state == .checkRequired)
     }
 
