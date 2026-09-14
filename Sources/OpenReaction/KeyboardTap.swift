@@ -1,31 +1,7 @@
 import Carbon.HIToolbox
 import CoreGraphics
+import OpenReactionCore
 import os
-
-/// What a keyboard or mouse event means to OpenReaction.
-enum KeyInput: Equatable, Sendable {
-    case text(String)
-    case backspace
-    /// The caret may have moved without typing, or focus may have changed.
-    case reset
-    /// ← or ↑.
-    case movePrevious
-    /// → or ↓.
-    case moveNext
-    /// Return, keypad Enter or Tab.
-    case confirm
-    case escape
-    /// A key that neither types nor moves the caret (e.g. a dead-key prefix).
-    case ignore
-
-    /// Keys the picker consumes while it is visible.
-    var isPickerCommand: Bool {
-        switch self {
-        case .movePrevious, .moveNext, .confirm, .escape: true
-        default: false
-        }
-    }
-}
 
 struct TapEvent: Sendable {
     let input: KeyInput

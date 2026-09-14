@@ -131,22 +131,25 @@ struct EmojiSearchTests {
         #expect(top("face", limit: 3).count == 3)
     }
 
-    /// Debug builds are several times slower than release; run
-    /// `swift test -c release` to check the 5 ms budget.
-    @Test func searchIsFastOnTheFullGemojiSet() {
+    /// Unoptimized debug code cannot meet the per-keystroke budget, so this
+    /// only asserts in release: `swift test -c release`.
+    @Test(.enabled(if: isReleaseBuild, "performance budget applies to release builds"))
+    func searchIsFastOnTheFullGemojiSet() {
         let full = EmojiSearch(catalog: EmojiCatalog.build(apple: nil, gemoji: Fixtures.gemoji, isSupported: { _ in true }))
         let clock = ContinuousClock()
         var worst = Duration.zero
         for query in ["s", "sm", "smi", "heart", "thumbs", "xyzq", "face", "flag", "hart", "parties", "thmup"] {
             worst = max(worst, clock.measure { _ = full.matches(for: query, frecency: ["🎉": 1, "👍": 3]) })
         }
+        #expect(worst < .milliseconds(5), "slowest query took \(worst)")
+    }
+
+    private static var isReleaseBuild: Bool {
         #if DEBUG
-        // Unoptimized code on a busy machine; only catches pathological regressions.
-        let budget = Duration.milliseconds(150)
+        false
         #else
-        let budget = Duration.milliseconds(5)
+        true
         #endif
-        #expect(worst < budget, "slowest query took \(worst)")
     }
 }
 

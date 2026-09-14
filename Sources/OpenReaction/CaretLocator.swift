@@ -3,19 +3,18 @@ import ApplicationServices
 import OpenReactionCore
 
 /// What the Accessibility API reports about the focused element.
-struct FocusInfo: Sendable {
-    enum Anchor: Sendable {
-        /// Bounds of the text at the insertion point.
-        case caret(CGRect)
-        /// Frame of the focused element; used when text bounds are unavailable.
-        case element(CGRect)
-        /// Nothing usable. The caller anchors to the mouse pointer.
-        case none
-    }
-
-    var isSecureField = false
-    /// Quartz global coordinates.
-    var anchor = Anchor.none
+enum FocusInfo: Equatable, Sendable {
+    /// A password field. Nothing may be observed or inserted.
+    case secure
+    /// Editable text whose caret bounds are known (Quartz coordinates).
+    case caret(CGRect)
+    /// Editable text without caret bounds; the element's frame (Quartz coordinates).
+    case element(CGRect)
+    /// A non-secure focused element with no usable geometry.
+    case noGeometry
+    /// No focused element, or the check could not complete (timeout, no
+    /// Accessibility access). Unsafe: the field might be secure.
+    case unavailable
 }
 
 /// Queries the focused element off the main thread.
@@ -41,21 +40,37 @@ final class CaretLocator: Sendable {
         let systemWide = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
         guard let focused = element(systemWide, kAXFocusedUIElementAttribute) else {
-            return FocusInfo()
+            return .unavailable
         }
         AXUIElementSetMessagingTimeout(focused, messagingTimeout)
 
-        var info = FocusInfo()
-        if string(focused, kAXSubroleAttribute) == kAXSecureTextFieldSubrole {
-            info.isSecureField = true
-            return info
+        // The secure-field check must complete, not merely fail to say "secure".
+        switch secureFieldCheck(focused) {
+        case .some(true): return .secure
+        case .none: return .unavailable
+        case .some(false): break
         }
         if let caret = caretBounds(focused) {
-            info.anchor = .caret(caret)
-        } else if let frame = frame(focused), frame.height > 0, frame.height <= maxElementAnchorHeight {
-            info.anchor = .element(frame)
+            return .caret(caret)
         }
-        return info
+        if let frame = frame(focused), frame.height > 0, frame.height <= maxElementAnchorHeight {
+            return .element(frame)
+        }
+        return .noGeometry
+    }
+
+    /// True/false when the element answered, nil when the question could not
+    /// be delivered (timeout, dead app) and the field might be secure.
+    private static func secureFieldCheck(_ element: AXUIElement) -> Bool? {
+        var value: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) {
+        case .success:
+            return (value as? String) == kAXSecureTextFieldSubrole
+        case .noValue, .attributeUnsupported:
+            return false
+        default:
+            return nil
+        }
     }
 
     private static func caretBounds(_ element: AXUIElement) -> CGRect? {
