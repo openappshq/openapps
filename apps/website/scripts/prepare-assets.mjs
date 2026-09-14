@@ -26,9 +26,7 @@ await Promise.all([
 // The /openreaction/ page needs the app's brand marks and its vendored emoji database.
 const openreaction = openreactionSourceDir();
 if (!openreaction) {
-  throw new Error(
-    "OpenReaction sources not found: expected apps/openreaction or OPENREACTION_SOURCE_DIR.",
-  );
+  throw new Error("OpenReaction sources not found: expected apps/openreaction.");
 }
 await writeGithubStars("openappshq/openklack", new URL("data/github.json", publicDir));
 
