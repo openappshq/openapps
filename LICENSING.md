@@ -118,7 +118,12 @@ One Keychain item per app, service `space.openapps.<app>.license`. Never store i
 | `product_id`, `kind` | Activation response and the product check |
 | `activated_at` | Activation `created_at` (server time) |
 | `last_success_at` | Time of the last `valid: true`, from the response `Date` header, falling back to the local clock |
+| `last_observed_at` | The latest moment the app has seen: server `Date` from a successful check, otherwise the local clock, raised on every scheduler tick and never lowered |
+| `revoked` | Set when Dodo answers `valid: false` for this activation; cleared only by `valid: true` for the same activation or a new activation |
 | `trial_used` | Set when a trial key is first activated on this Mac; kept after removal |
+| `pending_cleanups` | Activations the app still owes a deactivation for (replaced, refused or abandoned); kept even with no record |
+
+**Write order:** a change that removes access (revocation, trial end) takes effect in memory immediately, then is saved; a failed save is retried on every tick and shown as a storage error. A change that grants access is saved first and only then takes effect.
 
 ### Daily check
 - **When:**
@@ -131,7 +136,7 @@ One Keychain item per app, service `space.openapps.<app>.license`. Never store i
 ### Offline grace (paid licenses)
 - **Grace:** the core feature stays on while `now − last_success_at` is at most 7 days.
 - **After 7 days** without a successful check: CheckRequired until a check succeeds.
-- **Clock rollback:** if the local clock is more than 1 hour earlier than `last_success_at`, don't extend grace; require a check.
+- **Clock rollback:** if the local clock is more than 1 hour earlier than `last_observed_at`, don't extend grace; require a check (CheckRequired) until a successful check re-anchors time from the server `Date`.
 - **Only an answer from Dodo revokes:** a network failure never revokes a license. Only `valid: false` does.
 
 ### Trial
@@ -139,7 +144,12 @@ One Keychain item per app, service `space.openapps.<app>.license`. Never store i
 - **Expiry:** Dodo counts the 3 days from checkout, and validation doesn't return an expiry date. The app estimates expiry as `activated_at + 3 days` and shows "about N days left".
 - **Ending:** the trial ends at `valid: false` or the estimated expiry, whichever comes first. There is no offline grace past that estimate.
 - **One trial per Mac:** if `trial_used` is already set, refuse a trial key locally without calling Dodo: "The trial was already used on this Mac."
-- **Buying during a trial:** activating a paid key during a trial makes the Mac Licensed and deactivates the trial activation (best effort).
+- **Clock changed:** if the local clock is more than 1 hour earlier than `last_observed_at` during a trial, the trial counts as ended ("Clock changed — connect to the internet to verify your trial") until a successful check re-anchors time from the server `Date`. Time never freezes: remaining trial days are always computed from the real current clock.
+- **Buying during a trial:** activating a paid key during a trial makes the Mac Licensed and deactivates the trial activation. If Dodo can't be reached, the owed deactivation is added to `pending_cleanups`.
+
+### Owed deactivations
+- **Replacing or refusing an activation** (a paid key over a trial, a different paid key, a key for another app, a record that couldn't be saved) always deactivates the unwanted activation, so the customer's slot isn't used up.
+- **If Dodo can't be reached**, the activation is stored in `pending_cleanups` and retried on the scheduler (every 5 minutes while any are owed, honoring `Retry-After`), across restarts, until Dodo confirms.
 
 ### Removing a Mac
 - **From Settings:** Settings → License → Remove this Mac deactivates, then clears the record (except `trial_used`).
