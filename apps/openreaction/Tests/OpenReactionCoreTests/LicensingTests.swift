@@ -1231,7 +1231,9 @@ struct LicensingTests {
         #expect(manager.state == .revoked)
         client.validation = .valid(serverDate: clock.now)
         await manager.check()
-        #expect(manager.state == .licensed) // Dodo just said so
+        #expect(manager.state == .revoked) // the grant is saved first: not saved, not granted
+        #expect(manager.storageError == .unavailable("denied"))
+        #expect(manager.failedChecks == 1) // tried again with backoff
         #expect(journal.entries["inst_1"] == JournalEntry(seq: 2)) // not cleared: nothing durable moved past it
         client.validation = .unreachable
         let restarted = makeManager()
@@ -1391,13 +1393,13 @@ struct LicensingTests {
         let manager = makeManager()
         #expect(manager.state == .checkRequired)
         journal.failsWrites = true
-        store.failsWrites = true
         client.validation = .valid(serverDate: clock.now)
-        await manager.check()
+        await manager.check() // the grant saves (seq 2); the journal rebuild fails and waits
         #expect(manager.state == .checkRequired) // the rebuild is not durable: still restricted
         #expect(manager.journalError)
+        store.failsWrites = true
         client.validation = .invalid
-        await manager.check()
+        await manager.check() // revocation seq 3: journaled (fails, waits), Keychain refuses
         #expect(manager.state == .revoked)
         journal.failsWrites = false
         await manager.tick() // the newest request (the revocation) runs, not the stale rebuild

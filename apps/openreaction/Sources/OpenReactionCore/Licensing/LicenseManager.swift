@@ -164,6 +164,7 @@ public final class LicenseManager {
             cleanupsUnread = true
             failure = failure ?? error
         }
+        trialUsedCache = try? store.loadTrialUsed()
         storageError = failure
         notify()
         flushRecord()
@@ -189,9 +190,11 @@ public final class LicenseManager {
 
     /// What the app layer works from; `onChange` hands it over.
     public var snapshot: LicenseSnapshot {
-        LicenseSnapshot(
+        let current = now()
+        return LicenseSnapshot(
             record: record, isRestricted: isRestricted, storageError: storageError, journalError: journalError,
-            journalUnreadable: journalUnreadable, trialUsed: trialUsed, nextCheckDelay: nextCheckDelay,
+            journalUnreadable: journalUnreadable, trialUsed: trialUsed,
+            nextCheckAt: nextCheckDelay.map { current.addingTimeInterval($0) },
             nextDeadline: nextDeadline, hasPendingCleanups: !pendingCleanups.isEmpty
         )
     }
@@ -203,14 +206,22 @@ public final class LicenseManager {
 
     public var isFeatureEnabled: Bool { state.isFeatureEnabled }
 
+    /// The trial marker as last read (`load`, ticks) or written. Fails
+    /// closed: unknown counts as used. Kept in memory so snapshots never
+    /// touch storage.
+    private var trialUsedCache: Bool?
+
     /// Fails closed: if the marker cannot be read, a trial is refused.
     public var trialUsed: Bool {
-        readTrialUsed() ?? true
+        trialUsedCache ?? true
     }
 
-    /// nil when the marker cannot be read.
+    /// Reads the marker now; nil when it cannot be read. Only the activation
+    /// routes call this (they may do I/O); enforcement never does.
     private func readTrialUsed() -> Bool? {
-        try? store.loadTrialUsed()
+        let used = try? store.loadTrialUsed()
+        trialUsedCache = used
+        return used
     }
 
     /// The next moment the state changes on its own (trial expiry, grace
@@ -286,11 +297,16 @@ public final class LicenseManager {
     /// Updates the record in memory first, then on disk. A failed write is
     /// remembered and retried; it never undoes the in-memory change.
     private func write(_ newRecord: LicenseRecord?) {
+        setRecord(newRecord)
+        flushRecord()
+        notify() // what storage said
+    }
+
+    /// The in-memory change, published before any storage runs.
+    private func setRecord(_ newRecord: LicenseRecord?) {
         record = newRecord
         pendingDurableWrite = .some(newRecord)
         notify() // enforcement first, storage second
-        flushRecord()
-        notify() // and what storage said
     }
 
     private func flushRecord() {
@@ -417,11 +433,14 @@ public final class LicenseManager {
     /// deletion is durable.
     private func removeActivation() {
         activationGeneration += 1
-        if let previous = record {
+        let previous = record
+        setRecord(nil) // off at once, before any storage
+        if let previous {
             journalRecord(previous.instanceID, entry: JournalEntry(seq: previous.eventSeq + 1))
             removingInstance = (previous.instanceID, previous.eventSeq + 1)
         }
-        write(nil)
+        flushRecord()
+        notify()
     }
 
     /// A new activation whose record the store already holds: the previous
@@ -464,12 +483,16 @@ public final class LicenseManager {
     }
 
     /// Invalidation takes effect immediately, whatever storage says: the
-    /// journal is written first, so a restart before the Keychain accepts
+    /// restrictive state is published before any I/O, then the journal is
+    /// written, then the Keychain — so a restart before the Keychain accepts
     /// the revoked record still finds it revoked.
     private func invalidate(_ current: LicenseRecord) {
         var revoked = current
         revoked.revokedAt = now()
         revoked.eventSeq = current.eventSeq + 1
+        failedChecks = 0
+        blockedUntil = nil
+        setRecord(revoked) // enforcement first
         if unreadableJournalInstances.contains(current.instanceID) {
             // Dodo's answer supersedes whatever the unreadable entry said;
             // it is replaced only once the revocation is durable.
@@ -477,9 +500,8 @@ public final class LicenseManager {
         } else {
             journalRecord(current.instanceID, entry: JournalEntry(seq: revoked.eventSeq))
         }
-        write(revoked)
-        failedChecks = 0
-        blockedUntil = nil
+        flushRecord()
+        notify()
     }
 
     // MARK: Activation
@@ -507,7 +529,7 @@ public final class LicenseManager {
             switch await client.validate(licenseKey: key, instanceID: record.instanceID) {
             case .valid(let serverDate):
                 if let current = self.record, current.instanceID == record.instanceID { applySuccess(serverDate: serverDate, for: current) }
-                return .alreadyActivated
+                return self.record?.isRevoked == false ? .alreadyActivated : .storageUnavailable
             case .rateLimited(let retryAfter):
                 block(for: retryAfter)
                 return .rateLimited(seconds: Int(retryAfter.rounded(.up)))
@@ -593,6 +615,7 @@ public final class LicenseManager {
         guard markingTrial else { return nil }
         do {
             try store.markTrialUsed()
+            trialUsedCache = true
             return nil
         } catch {
             if let previous { try? store.saveRecord(previous) } else { try? store.clearRecord() }
@@ -685,6 +708,7 @@ public final class LicenseManager {
         case .unreachable:
             failedChecks += 1
         }
+        notify() // the scheduling state is settled now
     }
 
     /// A successful check: fresh success time, revocation cleared, and time
@@ -699,6 +723,17 @@ public final class LicenseManager {
         // which goes once this record is durable (`flushRecord`). If the
         // save fails, a restart stays locked until the next successful check.
         updated.eventSeq = current.eventSeq + 1
+        // The grant is saved first: it takes effect only once the Keychain
+        // holds it. A refused save leaves the Mac as it was; the next check
+        // (backoff applies) tries again.
+        do {
+            try store.saveRecord(updated)
+        } catch {
+            storageError = error
+            failedChecks += 1
+            notify()
+            return
+        }
         if unreadableJournalInstances.contains(current.instanceID) {
             // Dodo settled what the unreadable entry might have said: the
             // journal is rebuilt without it, atomically. The restriction is
@@ -706,9 +741,15 @@ public final class LicenseManager {
             replaceUnreadableJournal(current.instanceID, with: nil)
             if pendingJournalOps[current.instanceID] == nil { restrictedInstances.remove(current.instanceID) }
         }
-        write(updated)
+        record = updated
+        pendingDurableWrite = nil
+        if !cleanupsDirty, !cleanupsUnread, !journalUnreadable { storageError = nil }
+        if let known = journaledSeq[current.instanceID], known <= updated.eventSeq {
+            clearJournal(current.instanceID, upTo: updated.eventSeq)
+        }
         failedChecks = 0
         blockedUntil = nil
+        notify()
     }
 
     /// Time moved on: remember it so a later rollback is detected. Never

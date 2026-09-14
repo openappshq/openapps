@@ -197,8 +197,8 @@ final class LicenseController {
     private func scheduleTimers() {
         checkTimer?.invalidate()
         checkTimer = nil
-        if let delay = snapshot.nextCheckDelay {
-            checkTimer = makeTimer(after: delay) { [weak self] in
+        if let at = snapshot.nextCheckAt {
+            checkTimer = makeTimer(after: at.timeIntervalSinceNow) { [weak self] in
                 self?.tick()
             }
         }

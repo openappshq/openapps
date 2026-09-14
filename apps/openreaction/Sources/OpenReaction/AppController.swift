@@ -3,6 +3,23 @@ import Carbon.HIToolbox
 import OpenReactionCore
 import os
 
+/// The synchronous feature lock: whoever holds it can stop the gate from
+/// authorizing, from any thread, whether or not the runner exists yet.
+final class FeatureLock: @unchecked Sendable {
+    private let mutex = NSLock()
+    private var runner: GateRunner?
+
+    func attach(_ runner: GateRunner) {
+        mutex.withLock { self.runner = runner }
+    }
+
+    /// Begins the gate's shutdown now. A tap installed later resets it.
+    func pull() {
+        let runner = mutex.withLock { self.runner }
+        runner?.beginShutdown()
+    }
+}
+
 /// Connects the event tap, trigger state machine, suggestion provider, caret
 /// lookup, picker and insertion. Everything here runs on the main thread;
 /// the tap and accessibility queries hand results over asynchronously.
@@ -86,6 +103,7 @@ final class AppController {
             }
         }
         self.runner = runner
+        lock.attach(runner)
         tap = KeyboardTap(runner: runner)
         focusMonitor.onFocusChange = { [weak self] in
             guard let self else { return }
@@ -196,10 +214,15 @@ final class AppController {
     /// the gate stops authorizing at once (commits queued on the insertion
     /// queue are refused from here on) and everything it holds drains
     /// through the normal stop, which `setLicense` then completes on main.
+    /// Resolves the runner when pulled, so it may be handed out before
+    /// `start()` creates the runner.
     func featureLock() -> @Sendable () -> Void {
-        let runner = self.runner
-        return { runner?.beginShutdown() } // a tap installed later resets this
+        let lock = self.lock
+        return { lock.pull() }
     }
+
+    /// The runner the feature lock reaches, from any thread.
+    @ObservationIgnored private let lock = FeatureLock()
 
     /// Called before the process exits, so held input reaches the host.
     /// Returns how the drain ended; only `.delivered` is a confirmed delivery.

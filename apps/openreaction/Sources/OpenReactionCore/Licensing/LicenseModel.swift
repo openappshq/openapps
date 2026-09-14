@@ -382,14 +382,17 @@ public struct LicenseSnapshot: Equatable, Sendable {
     public var journalError: Bool
     public var journalUnreadable: Bool
     public var trialUsed: Bool
-    public var nextCheckDelay: TimeInterval?
+    /// When the app layer should call `tick` next (absolute, so a timer
+    /// re-armed later from the same snapshot does not drift), if anything
+    /// is scheduled.
+    public var nextCheckAt: Date?
     public var nextDeadline: Date?
     public var hasPendingCleanups: Bool
 
     public init(
         record: LicenseRecord? = nil, isRestricted: Bool = false, storageError: LicenseStoreError? = nil,
         journalError: Bool = false, journalUnreadable: Bool = false, trialUsed: Bool = true,
-        nextCheckDelay: TimeInterval? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
+        nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
     ) {
         self.record = record
         self.isRestricted = isRestricted
@@ -397,7 +400,7 @@ public struct LicenseSnapshot: Equatable, Sendable {
         self.journalError = journalError
         self.journalUnreadable = journalUnreadable
         self.trialUsed = trialUsed
-        self.nextCheckDelay = nextCheckDelay
+        self.nextCheckAt = nextCheckAt
         self.nextDeadline = nextDeadline
         self.hasPendingCleanups = hasPendingCleanups
     }
