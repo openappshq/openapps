@@ -11,6 +11,8 @@ pub const TRIAL_LENGTH: i64 = 3 * DAY;
 pub const CLOCK_ROLLBACK_TOLERANCE: i64 = 3600;
 pub const MIN_BACKOFF: i64 = 60;
 pub const MAX_BACKOFF: i64 = 3600;
+/// The longest `Retry-After` honoured; anything larger is treated as a day.
+pub const MAX_HOLD: i64 = DAY;
 pub const ACTIVATION_NAME: &str = "Mac";
 pub const APP_NAME: &str = "OpenKlack";
 
@@ -151,11 +153,17 @@ pub enum LicenseError {
     KeyDisabled,
     LimitReached,
     Unreachable,
-    RateLimited { retry_after: i64 },
-    WrongProduct { product_name: String },
+    RateLimited {
+        retry_after: i64,
+    },
+    WrongProduct {
+        product_name: String,
+    },
     TrialUsed,
     NothingToRemove,
     RemoveOffline,
+    /// The Keychain refused the record; the activation was given back.
+    NotSaved(String),
 }
 
 impl LicenseError {
@@ -187,6 +195,9 @@ impl LicenseError {
             LicenseError::RemoveOffline => format!(
                 "{APP_NAME} couldn't reach the license service, so this Mac is still activated. Connect to the internet and try again."
             ),
+            LicenseError::NotSaved(reason) => {
+                format!("{reason} This Mac was not activated; try again.")
+            }
         }
     }
 }
@@ -236,7 +247,7 @@ impl Schedule {
     /// `429`: no call of any kind until `Retry-After` has passed. Not a failure, so the state
     /// does not change.
     fn hold(&mut self, now: i64, retry_after: i64) {
-        self.hold_until = Some(now + retry_after.max(1));
+        self.hold_until = Some(now + retry_after.clamp(1, MAX_HOLD));
     }
 
     fn succeeded(&mut self) {
@@ -355,13 +366,12 @@ impl Engine {
     /// When the scheduler should run the next check, or `None` while there is nothing to check.
     pub fn next_check_at(&self, now: i64) -> Option<i64> {
         let record = self.checkable(now)?;
-        let mut due = record.last_success_at + CHECK_INTERVAL;
-        if now < record.last_success_at - CLOCK_ROLLBACK_TOLERANCE {
-            due = now;
-        }
-        if let Some(retry_at) = self.schedule.retry_at {
-            due = due.max(retry_at);
-        }
+        // After a failure the backoff decides; otherwise the daily schedule does.
+        let mut due = match self.schedule.retry_at {
+            Some(retry_at) => retry_at,
+            None if now < record.last_success_at - CLOCK_ROLLBACK_TOLERANCE => now,
+            None => record.last_success_at + CHECK_INTERVAL,
+        };
         if let Some(hold_until) = self.schedule.hold_until {
             due = due.max(hold_until);
         }
@@ -388,52 +398,58 @@ impl Engine {
         candidates.into_iter().filter(|at| *at > now).min()
     }
 
-    /// Activate a key and apply the product check. Nothing is stored yet: persist
-    /// `Activated::next`, then `commit_activation` or `abandon_activation`.
-    pub fn activate(
-        &mut self,
+    /// Whether an activation call may be made now. Refuses a second trial locally.
+    pub fn activation_allowed(
+        &self,
         key: &str,
         hint: KeyHint,
-        dodo: &dyn Dodo,
         now: i64,
-    ) -> Result<Activated, LicenseError> {
-        let key = key.trim();
-        if key.is_empty() {
+    ) -> Result<(), LicenseError> {
+        if key.trim().is_empty() {
             return Err(LicenseError::EmptyKey);
         }
         if hint == KeyHint::Trial && self.stored.trial_used {
             return Err(LicenseError::TrialUsed);
         }
-        self.held(now)?;
-        let activation = match dodo.activate(key, ACTIVATION_NAME) {
-            Ok(activation) => activation,
-            Err(DodoError::RateLimited { retry_after }) => {
-                self.schedule.hold(now, retry_after);
-                return Err(LicenseError::RateLimited { retry_after });
-            }
-            Err(error) => return Err(error.into()),
-        };
+        self.held(now)
+    }
+
+    /// `429`: nothing is called again until `Retry-After` has passed.
+    pub fn note_rate_limit(&mut self, now: i64, retry_after: i64) {
+        self.schedule.hold(now, retry_after);
+    }
+
+    /// Applies the product check to a fresh activation. Nothing is stored yet: the caller
+    /// persists `Activated::next` before `commit_activation`, and gives a refused or unsaved
+    /// activation's slot back with `apply_release`.
+    pub fn accept_activation(
+        &self,
+        key: &str,
+        activation: Activation,
+        now: i64,
+    ) -> Result<Activated, Refusal> {
         let probe = Probe {
-            license_key: key.to_string(),
-            instance_id: activation.id.clone(),
+            license_key: key.trim().to_string(),
+            instance_id: activation.id,
         };
-        let refused = match self.products.classify(&activation.product_id) {
+        let kind = match self.products.classify(&activation.product_id) {
             // Another app's key or the wrong environment.
-            None => Some(LicenseError::WrongProduct {
-                product_name: activation.product_name.clone(),
-            }),
-            Some(Kind::Trial) if self.stored.trial_used => Some(LicenseError::TrialUsed),
-            Some(_) => None,
+            None => {
+                return Err(Refusal {
+                    probe,
+                    error: LicenseError::WrongProduct {
+                        product_name: activation.product_name,
+                    },
+                });
+            }
+            Some(Kind::Trial) if self.stored.trial_used => {
+                return Err(Refusal {
+                    probe,
+                    error: LicenseError::TrialUsed,
+                });
+            }
+            Some(kind) => kind,
         };
-        if let Some(error) = refused {
-            // Give the slot back and keep nothing; if Dodo is unreachable, try again later.
-            self.release(probe, dodo);
-            return Err(error);
-        }
-        let kind = self
-            .products
-            .classify(&activation.product_id)
-            .expect("classified");
         let replaced = self
             .stored
             .license
@@ -462,45 +478,41 @@ impl Engine {
         })
     }
 
-    /// Puts a saved activation into effect and frees the slot it replaced (for example the trial).
-    pub fn commit_activation(&mut self, activated: Activated, dodo: &dyn Dodo, now: i64) -> State {
+    /// Puts a saved activation into effect. Returns the activation it replaced (for example the
+    /// trial), whose slot the caller frees with `apply_release`.
+    pub fn commit_activation(&mut self, activated: Activated) -> Option<Probe> {
         self.stored = activated.next;
         self.schedule.succeeded();
-        if let Some(replaced) = activated.replaced {
-            self.release(replaced, dodo);
-        }
-        self.state(now)
+        activated.replaced
     }
 
-    /// The record could not be saved: give the new slot back so the customer is not charged one.
-    pub fn abandon_activation(&mut self, activated: Activated, dodo: &dyn Dodo) {
-        self.release(activated.probe, dodo);
-    }
-
-    /// Deactivates an activation this Mac no longer uses. A failure is remembered and retried by
-    /// `release_stale`, so a slot is never silently lost.
-    fn release(&mut self, probe: Probe, dodo: &dyn Dodo) {
-        match dodo.deactivate(&probe.license_key, &probe.instance_id) {
+    /// Records the outcome of deactivating an activation this Mac no longer uses. A failure is
+    /// remembered in `Stored::stale` and retried through `take_stale`, so a slot is never lost.
+    pub fn apply_release(&mut self, probe: Probe, answer: Result<(), DodoError>, now: i64) {
+        match answer {
             Ok(()) | Err(DodoError::KeyNotFound) | Err(DodoError::KeyDisabled) => {}
-            Err(_) => {
-                if !self.stored.stale.contains(&probe) {
-                    self.stored.stale.push(probe);
+            Err(error) => {
+                if let DodoError::RateLimited { retry_after } = error {
+                    self.schedule.hold(now, retry_after);
                 }
+                self.remember_stale(probe);
             }
         }
     }
 
-    /// Retries deactivations that failed earlier. Returns whether the stored record changed.
-    pub fn release_stale(&mut self, dodo: &dyn Dodo, now: i64) -> bool {
-        if self.stored.stale.is_empty() || self.held(now).is_err() {
-            return false;
+    pub fn remember_stale(&mut self, probe: Probe) {
+        if !self.stored.stale.contains(&probe) {
+            self.stored.stale.push(probe);
         }
-        let pending = std::mem::take(&mut self.stored.stale);
-        let before = pending.len();
-        for probe in pending {
-            self.release(probe, dodo);
+    }
+
+    /// Deactivations to retry now; empty while a rate limit holds. Each answer goes back through
+    /// `apply_release`.
+    pub fn take_stale(&mut self, now: i64) -> Vec<Probe> {
+        if self.held(now).is_err() {
+            return Vec::new();
         }
-        self.stored.stale.len() != before
+        std::mem::take(&mut self.stored.stale)
     }
 
     /// Starts a validation. `Ok(None)` when there is nothing to check, or the check is not due and
@@ -556,31 +568,40 @@ impl Engine {
         }
     }
 
-    /// One validation, start to finish. `Err` means Dodo did not answer; the state is unchanged
-    /// apart from the retry schedule. The runtime uses the two halves so the network call runs
-    /// outside its lock.
-    #[cfg(test)]
-    pub fn check(&mut self, dodo: &dyn Dodo, now: i64) -> Result<State, LicenseError> {
-        let Some(probe) = self.begin_check(now, true)? else {
-            return Ok(self.state(now));
-        };
-        let answer = dodo.validate(&probe.license_key, &probe.instance_id);
-        self.finish_check(&probe, answer, now)
-    }
-
-    /// Settings → License → Remove this Mac.
-    pub fn remove(&mut self, dodo: &dyn Dodo, now: i64) -> Result<State, LicenseError> {
+    /// Settings → License → Remove this Mac: the activation to deactivate, or why not now.
+    pub fn begin_remove(&self, now: i64) -> Result<Probe, LicenseError> {
         let Some(record) = &self.stored.license else {
             return Err(LicenseError::NothingToRemove);
         };
         if self.held(now).is_err() {
             return Err(LicenseError::RemoveOffline);
         }
-        match dodo.deactivate(&record.license_key, &record.instance_id) {
+        Ok(Probe {
+            license_key: record.license_key.clone(),
+            instance_id: record.instance_id.clone(),
+        })
+    }
+
+    /// Clears the record once Dodo has deactivated it (or no longer knows it). If the record
+    /// changed meanwhile the answer is ignored.
+    pub fn finish_remove(
+        &mut self,
+        probe: &Probe,
+        answer: Result<(), DodoError>,
+        now: i64,
+    ) -> Result<State, LicenseError> {
+        let matches = self
+            .stored
+            .license
+            .as_ref()
+            .is_some_and(|record| record.instance_id == probe.instance_id);
+        match answer {
             // Already gone on Dodo's side: the slot is free, so forget it here too.
             Ok(()) | Err(DodoError::KeyNotFound) | Err(DodoError::KeyDisabled) => {
-                self.stored.license = None;
-                self.schedule.succeeded();
+                if matches {
+                    self.stored.license = None;
+                    self.schedule.succeeded();
+                }
                 Ok(self.state(now))
             }
             Err(DodoError::RateLimited { retry_after }) => {
@@ -589,6 +610,86 @@ impl Engine {
             }
             Err(_) => Err(LicenseError::RemoveOffline),
         }
+    }
+}
+
+/// An activation Dodo accepted but this app refuses: the slot goes back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refusal {
+    pub probe: Probe,
+    pub error: LicenseError,
+}
+
+/// The full sequences the runtime performs, with a Dodo client in place of its network calls.
+/// Tests drive these; the runtime interleaves the same steps with its locks and the Keychain.
+#[cfg(test)]
+impl Engine {
+    pub fn activate(
+        &mut self,
+        key: &str,
+        hint: KeyHint,
+        dodo: &dyn Dodo,
+        now: i64,
+    ) -> Result<Activated, LicenseError> {
+        self.activation_allowed(key, hint, now)?;
+        let activation = match dodo.activate(key.trim(), ACTIVATION_NAME) {
+            Ok(activation) => activation,
+            Err(DodoError::RateLimited { retry_after }) => {
+                self.note_rate_limit(now, retry_after);
+                return Err(LicenseError::RateLimited { retry_after });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        match self.accept_activation(key, activation, now) {
+            Ok(activated) => Ok(activated),
+            Err(Refusal { probe, error }) => {
+                self.release(probe, dodo, now);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn commit(&mut self, activated: Activated, dodo: &dyn Dodo, now: i64) -> State {
+        if let Some(replaced) = self.commit_activation(activated) {
+            self.release(replaced, dodo, now);
+        }
+        self.state(now)
+    }
+
+    pub fn abandon_activation(&mut self, activated: Activated, dodo: &dyn Dodo, now: i64) {
+        self.release(activated.probe, dodo, now);
+    }
+
+    fn release(&mut self, probe: Probe, dodo: &dyn Dodo, now: i64) {
+        if self.held(now).is_err() {
+            self.remember_stale(probe);
+            return;
+        }
+        let answer = dodo.deactivate(&probe.license_key, &probe.instance_id);
+        self.apply_release(probe, answer, now);
+    }
+
+    pub fn release_stale(&mut self, dodo: &dyn Dodo, now: i64) -> bool {
+        let pending = self.take_stale(now);
+        let before = pending.len();
+        for probe in pending {
+            self.release(probe, dodo, now);
+        }
+        before > 0 && self.stored.stale.len() != before
+    }
+
+    pub fn check(&mut self, dodo: &dyn Dodo, now: i64) -> Result<State, LicenseError> {
+        let Some(probe) = self.begin_check(now, true)? else {
+            return Ok(self.state(now));
+        };
+        let answer = dodo.validate(&probe.license_key, &probe.instance_id);
+        self.finish_check(&probe, answer, now)
+    }
+
+    pub fn remove(&mut self, dodo: &dyn Dodo, now: i64) -> Result<State, LicenseError> {
+        let probe = self.begin_remove(now)?;
+        let answer = dodo.deactivate(&probe.license_key, &probe.instance_id);
+        self.finish_remove(&probe, answer, now)
     }
 }
 
@@ -713,7 +814,7 @@ pub(crate) mod tests {
         now: i64,
     ) -> Result<State, LicenseError> {
         let activated = engine.activate(key, hint, dodo, now)?;
-        Ok(engine.commit_activation(activated, dodo, now))
+        Ok(engine.commit(activated, dodo, now))
     }
 
     fn products() -> Products {
@@ -1293,7 +1394,7 @@ pub(crate) mod tests {
         );
         assert_eq!(dodo.calls().len(), 1, "the trial is not deactivated yet");
         // Saving failed: give the new slot back, keep the trial.
-        engine.abandon_activation(activated, &dodo);
+        engine.abandon_activation(activated, &dodo, NOW);
         assert_eq!(engine.stored, before);
         assert_eq!(engine.state(NOW), State::Trial { days_left: 2 });
         assert_eq!(
@@ -1305,7 +1406,7 @@ pub(crate) mod tests {
             .activate("KEY-PAID", KeyHint::Any, &dodo, NOW)
             .unwrap();
         let down = Fake::failing(DodoError::Offline("down".into()));
-        engine.abandon_activation(activated, &down);
+        engine.abandon_activation(activated, &down, NOW);
         assert_eq!(engine.stored.license, before.license);
         assert_eq!(engine.stored.stale.len(), 1);
         assert!(engine.release_stale(&Fake::default(), NOW + 60));
@@ -1392,6 +1493,80 @@ pub(crate) mod tests {
         assert!(engine.stored.license.is_some());
         assert!(!engine.release_stale(&dodo, NOW + 70));
         assert_eq!(engine.remove(&dodo, NOW + 121), Ok(State::Unlicensed));
+    }
+
+    #[test]
+    fn freeing_slots_honours_rate_limits_and_holds_are_bounded_to_a_day() {
+        let mut engine = licensed(HOUR);
+        let limited = Fake::failing(DodoError::RateLimited { retry_after: 120 });
+        let activated = engine
+            .activate("KEY-PAID-2", KeyHint::Any, &Fake::activating(P), NOW)
+            .unwrap();
+        // The old slot's deactivation is rate limited: remembered, and nothing else is called
+        // until the hold passes, including a refused key's slot.
+        assert_eq!(engine.commit(activated, &limited, NOW), State::Licensed);
+        assert_eq!(engine.stored.stale.len(), 1);
+        assert_eq!(engine.schedule.hold_until, Some(NOW + 120));
+        let refused = Fake::activating(X);
+        assert!(
+            engine
+                .activate("KEY-X", KeyHint::Any, &refused, NOW + 10)
+                .is_err()
+        );
+        assert!(
+            refused.calls().is_empty(),
+            "held: not even the activation call"
+        );
+        assert!(!engine.release_stale(&refused, NOW + 10));
+        assert!(refused.calls().is_empty());
+        assert_eq!(engine.stored.stale.len(), 1);
+        assert!(engine.release_stale(&Fake::default(), NOW + 120));
+        assert!(engine.stored.stale.is_empty());
+        // A hold never exceeds a day, and never rounds down to nothing.
+        engine.note_rate_limit(NOW, 10 * DAY);
+        assert_eq!(engine.schedule.hold_until, Some(NOW + DAY));
+        engine.note_rate_limit(NOW, -5);
+        assert_eq!(engine.schedule.hold_until, Some(NOW + 1));
+    }
+
+    #[test]
+    fn a_removal_answer_for_another_activation_is_ignored() {
+        let mut engine = licensed(HOUR);
+        let old = engine.begin_remove(NOW).unwrap();
+        assert_eq!(
+            activate(
+                &mut engine,
+                "KEY-PAID-2",
+                KeyHint::Any,
+                &Fake::activating(P),
+                NOW
+            ),
+            Ok(State::Licensed)
+        );
+        assert_eq!(engine.finish_remove(&old, Ok(()), NOW), Ok(State::Licensed));
+        assert_eq!(
+            engine.stored.license.as_ref().unwrap().license_key,
+            "KEY-PAID-2"
+        );
+    }
+
+    #[test]
+    fn a_failed_launch_check_retries_with_backoff_instead_of_waiting_a_day() {
+        let mut engine = licensed(HOUR);
+        assert!(!engine.check_due(NOW));
+        assert!(
+            engine
+                .check(&Fake::failing(DodoError::Offline("down".into())), NOW)
+                .is_err()
+        );
+        assert_eq!(engine.next_check_at(NOW), Some(NOW + MIN_BACKOFF));
+        assert_eq!(engine.state(NOW), State::Licensed);
+        assert_eq!(
+            engine.check(&Fake::validating(true), NOW + MIN_BACKOFF),
+            Ok(State::Licensed)
+        );
+        // Back on the daily schedule, counted from the server's time of the success.
+        assert_eq!(engine.next_check_at(NOW + MIN_BACKOFF), Some(NOW + DAY));
     }
 
     #[test]

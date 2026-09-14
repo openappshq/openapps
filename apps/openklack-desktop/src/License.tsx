@@ -6,6 +6,7 @@ import { BadgeCheck, KeyRound, WifiOff } from "lucide-react";
 
 export type LicenseView = {
   revision: number;
+  ready: boolean;
   environment: "test" | "live";
   state: "unlicensed" | "trial" | "trialEnded" | "licensed" | "grace" | "checkRequired" | "revoked";
   daysLeft?: number;
@@ -99,7 +100,23 @@ export function License({
     </Button>
   );
 
-  if (!view)
+  // Every state that keeps a record can give the slot back, except while a check is required.
+  const remove = (
+    <Button
+      variant="ghost"
+      isDisabled={busy}
+      onPress={() =>
+        void run(
+          () => invoke<LicenseView>("remove_license"),
+          "This Mac was removed from your license.",
+        )
+      }
+    >
+      Remove this Mac
+    </Button>
+  );
+
+  if (!view || !view.ready)
     return (
       <section className="license" aria-label="License">
         <h2>License</h2>
@@ -255,19 +272,11 @@ export function License({
               Check now
             </Button>
           )}
-          <Button
-            variant="ghost"
-            isDisabled={busy}
-            onPress={() =>
-              void run(
-                () => invoke<LicenseView>("remove_license"),
-                "This Mac was removed from your license.",
-              )
-            }
-          >
-            Remove this Mac
-          </Button>
+          {remove}
         </div>
+      )}
+      {(view.state === "trial" || view.state === "trialEnded" || view.state === "revoked") && (
+        <div className="actions">{remove}</div>
       )}
       {view.state === "checkRequired" && (
         <div className="actions">
