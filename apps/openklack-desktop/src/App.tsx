@@ -1,9 +1,9 @@
-import { motion } from "motion/react";
-import { enter } from "@openapps/ui/transitions";
+import { StateIcon } from "@openapps/ui/state-icon";
+import { withoutThemeTransitions } from "@openapps/ui/theme";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Link } from "@heroui/react";
-import { ArrowLeft, Settings2, ShieldCheck, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowLeft, Settings2, ShieldCheck, Volume2, VolumeX, Pause, X } from "lucide-react";
 import { useDesktop } from "./useDesktop";
 import { KeyAssignments } from "./KeyAssignments";
 import { CurrentPreset } from "./CurrentPreset";
@@ -17,6 +17,7 @@ type Page = "library" | "keyboard" | "rules" | "general";
 export default function App() {
   const desktop = useDesktop();
   const { snapshot, packs, busy } = desktop;
+  const [animatePower, setAnimatePower] = useState(false);
   const [page, setPage] = useState<Page>("library");
   const [key, setKey] = useState("Space");
   const [theme, setTheme] = useState(() => {
@@ -25,10 +26,11 @@ export default function App() {
   });
   useEffect(() => {
     const system = matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => {
-      document.documentElement.dataset.theme =
-        theme === "system" ? (system.matches ? "dark" : "light") : theme;
-    };
+    const apply = () =>
+      withoutThemeTransitions(() => {
+        document.documentElement.dataset.theme =
+          theme === "system" ? (system.matches ? "dark" : "light") : theme;
+      });
     apply();
     system.addEventListener("change", apply);
     return () => system.removeEventListener("change", apply);
@@ -97,20 +99,29 @@ export default function App() {
               {page === "rules" ? "Settings" : "Sounds"}
             </Button>
           )}
-          {(snapshot.pauseReason || snapshot.runtime.temporaryResume) && (
-            <div className="status" role="status">
-              {snapshot.pauseReason ??
-                (snapshot.runtime.temporaryResume ? "Temporarily resumed" : "")}
-            </div>
-          )}
           <Button
             variant="secondary"
             isDisabled={busy}
+            className="power-button"
             aria-pressed={!prefs.muted}
-            onPress={() => void desktop.save((p) => ({ ...p, muted: !p.muted }))}
+            onPress={(event) => {
+              setAnimatePower(event.pointerType !== "keyboard");
+              void desktop.save((p) => ({ ...p, muted: !p.muted }));
+            }}
           >
-            {prefs.muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
-            {prefs.muted ? "Sound off" : "Sound on"}
+            <StateIcon
+              state={prefs.muted ? "off" : snapshot.pauseReason ? "paused" : "on"}
+              static={!animatePower}
+            >
+              {prefs.muted ? (
+                <VolumeX size={16} />
+              ) : snapshot.pauseReason ? (
+                <Pause size={16} />
+              ) : (
+                <Volume2 size={16} />
+              )}
+            </StateIcon>
+            {prefs.muted ? "Sound off" : snapshot.pauseReason ? "Sound paused" : "Sound on"}
           </Button>
           <Button
             isIconOnly
@@ -142,19 +153,28 @@ export default function App() {
               </Button>
             </section>
           )}
-          {["Paused for this app", "Microphone in use", "Checking microphone activity"].includes(
-            snapshot.pauseReason ?? "",
-          ) && (
-            <div className="pause-banner">
-              <p>{snapshot.pauseReason}.</p>
-              <Button
-                variant="secondary"
-                onPress={() => void desktop.perform(() => invoke("resume_temporarily"))}
-              >
-                Resume temporarily
-              </Button>
-            </div>
-          )}
+          {!prefs.muted &&
+            snapshot.runtime.inputPermission &&
+            !snapshot.runtime.configurationError &&
+            !snapshot.runtime.audioError &&
+            (snapshot.pauseReason || snapshot.runtime.temporaryResume) && (
+              <div className="pause-banner" role="status">
+                <Pause size={16} aria-hidden="true" />
+                <p>{snapshot.pauseReason ?? "Temporarily resumed"}</p>
+                {[
+                  "Paused for this app",
+                  "Microphone in use",
+                  "Checking microphone activity",
+                ].includes(snapshot.pauseReason ?? "") && (
+                  <Button
+                    variant="ghost"
+                    onPress={() => void desktop.perform(() => invoke("resume_temporarily"))}
+                  >
+                    Resume temporarily
+                  </Button>
+                )}
+              </div>
+            )}
           <div className="feedback" role="status">
             {desktop.notice}
           </div>
@@ -199,7 +219,7 @@ export default function App() {
               </Button>
             </div>
           )}
-          <motion.div key={page} {...enter} className="page-transition">
+          <div className="page-content">
             {(page === "library" || page === "keyboard") && (
               <>
                 {effective?.id !== preset.id && (
@@ -207,26 +227,27 @@ export default function App() {
                     An app rule is active. Changes here apply to your default sound.
                   </p>
                 )}
-                <CurrentPreset
-                  desktop={desktop}
-                  preset={preset}
-                  pack={pack}
-                  selected={key}
-                  onSelect={setKey}
-                  editing={page === "keyboard"}
-                  onEdit={() => setPage(page === "keyboard" ? "library" : "keyboard")}
-                />
-                {page === "library" ? (
-                  <SoundLibrary desktop={desktop} preset={preset} />
-                ) : (
-                  <KeyAssignments
+                <div className="sound-workspace" data-editing={page === "keyboard"}>
+                  {page === "library" && <SoundLibrary desktop={desktop} preset={preset} />}
+                  <CurrentPreset
                     desktop={desktop}
                     preset={preset}
                     pack={pack}
                     selected={key}
                     onSelect={setKey}
+                    editing={page === "keyboard"}
+                    onEdit={() => setPage(page === "keyboard" ? "library" : "keyboard")}
                   />
-                )}
+                  {page === "keyboard" && (
+                    <KeyAssignments
+                      desktop={desktop}
+                      preset={preset}
+                      pack={pack}
+                      selected={key}
+                      onSelect={setKey}
+                    />
+                  )}
+                </div>
               </>
             )}
             {page === "rules" && <AppRules desktop={desktop} />}
@@ -246,7 +267,7 @@ export default function App() {
                 }}
               />
             )}
-          </motion.div>
+          </div>
         </main>
       </div>
     </div>

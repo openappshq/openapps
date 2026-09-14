@@ -132,8 +132,12 @@
   font-size: 18px;
   color: var(--muted);
 }
-.hero-intro .text-link {
-  margin-top: 14px;
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  margin-top: 18px;
 }
 .hero-note {
   display: block;
@@ -217,10 +221,16 @@
   color: var(--palette-neutral-950);
 }
 .settings-preview {
+  outline: 1px solid rgb(0 0 0 / 0.1);
+  outline-offset: -1px;
+  border-radius: 12px 12px 0 0;
   width: 100%;
-  max-width: 1030px;
+  max-width: 1000px;
   height: auto;
   margin-inline: auto;
+}
+.settings-preview[data-theme="dark"] {
+  outline-color: rgb(255 255 255 / 0.1);
 }
 .preview-caption {
   display: block;
@@ -285,18 +295,14 @@
 .menu-preview {
   background: var(--color-brand-orchid);
   border-radius: var(--radius-panel);
-  padding: 28px 24px 12px;
+  overflow: hidden;
   display: flex;
-  flex-direction: column;
   align-items: center;
-}
-.menu-preview-label {
-  font: 14px var(--font-mono);
-  color: var(--palette-neutral-950);
-  text-align: center;
+  justify-content: center;
 }
 .menu-preview img {
-  width: min(100%, 340px);
+  display: block;
+  width: 100%;
   height: auto;
 }
 .faq-section {
@@ -399,14 +405,10 @@
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .button-link,
   .theme-choice button {
     transition:
       background-color var(--motion-fast),
       color var(--motion-fast);
-  }
-  .button-link:active {
-    transform: translateY(1px);
   }
 }
 @media (max-width: 1150px) {
@@ -482,12 +484,6 @@
   }
   .menu-story h3 {
     font-size: 40px;
-  }
-  .menu-preview {
-    padding-inline: 8px;
-  }
-  .menu-preview-label {
-    font-size: 12px;
   }
   .faq-section {
     grid-template-columns: 1fr;
@@ -613,12 +609,6 @@
   }
   .menu-story p {
     font-size: 16px;
-  }
-  .menu-preview {
-    padding-top: 24px;
-  }
-  .menu-preview img {
-    max-width: 300px;
   }
   .faq-section {
     padding-block: 48px;

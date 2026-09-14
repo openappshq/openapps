@@ -93,12 +93,12 @@ The website’s primary Download for Mac links open `/OpenKlack/download/`, a se
 
 - Type in the playground or click the interactive 3D keyboard.
   Each key has damped travel and a radial lighting pulse.
-  The renderer sleeps between interactions and unmounts when hidden.
-- Enable sound or choose a pack. Sound requires a user gesture and works while the playground or interactive keyboard is focused.
+  The renderer sleeps between interactions and pauses offscreen without rebuilding the canvas.
+- Sound starts on; typing or clicking a keyboard key unlocks audio while the playground or interactive keyboard is focused.
 - Browse and search 18 sounds. Click a sound to apply it; Preview plays a short sample without changing the active sound.
 - Star sounds to pin them to the top. The desktop also shows those favorites in its native menu bar.
 - The website has free typing and 15/30/60-second tests. Switching sounds preserves the passage; text and results remain in memory only.
-- Browser sound, volume, and stars persist in localStorage. Legacy sound choices migrate, with old tuning and key overrides left out of the simple demo. Sound starts off on every visit.
+- Browser sound choice, volume, and stars persist in localStorage. Legacy sound choices migrate, with old tuning and key overrides left out of the simple demo.
 - Reduced motion removes lighting animation and key travel. Browser shortcuts and form controls keep their normal behavior.
 - Desktop per-key customization has an accessible key selector and explicit physical-key selection mode.
 

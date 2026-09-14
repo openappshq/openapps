@@ -70,7 +70,6 @@
   color: var(--color-text-tertiary, #8c8c93);
   font: 24px/40px var(--font-mono, monospace);
   pointer-events: none;
-  transition: transform 100ms ease-out;
 }
 .typing-word {
   display: inline-block;
@@ -181,10 +180,5 @@
   }
   .typing-session {
     height: 142px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .typing-passage {
-    transition: none;
   }
 }

@@ -36,8 +36,6 @@ const questions = [
   ],
 ];
 
-const MotionLink = motion.create(Link);
-
 function Question({ question, answer }: { question: string; answer: string }) {
   return (
     <Accordion className="faq-item">
@@ -89,14 +87,9 @@ export default function App() {
                 keyboard you already own.
               </p>
               <div className="hero-actions">
-                <MotionLink
-                  className="button-link primary"
-                  href="/OpenKlack/download/"
-                  whileHover={{ y: -2 }}
-                  whileTap={{ scale: 0.98 }}
-                >
+                <Link className="button-link primary" href="/OpenKlack/download/">
                   Download for Mac <Download size={18} />
-                </MotionLink>
+                </Link>
                 <Link className="text-link" href="#playground">
                   Try the sounds <ArrowDown size={18} />
                 </Link>
@@ -111,8 +104,8 @@ export default function App() {
         <section className="desktop-section" id="desktop" aria-labelledby="desktop-title">
           <div className="page-width">
             <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              whileInView={{ opacity: 1, y: 0 }}
+              initial={{ opacity: 0, transform: "translateY(8px)" }}
+              whileInView={{ opacity: 1, transform: "translateY(0)" }}
               viewport={{ once: true, amount: 0.3 }}
               className="section-heading"
             >
@@ -149,15 +142,13 @@ export default function App() {
                   ))}
                 </div>
               </div>
-              <motion.img
-                key={previewTheme}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
+              <img
                 className="settings-preview"
+                data-theme={previewTheme}
                 src={`/brand/openklack/ui/settings-${previewTheme}.png`}
                 alt={`${previewTheme === "light" ? "Light" : "Dark"} OpenKlack app design: sound selection, stars, volume, and live keyboard`}
-                width="1080"
-                height="760"
+                width="2000"
+                height="1200"
                 loading="lazy"
               />
             </div>
@@ -185,7 +176,7 @@ export default function App() {
                   <br />
                   for your sound.
                 </h3>
-                <p>Mute, adjust the volume, or switch to a favorite sound in one click.</p>
+                <p>Mute, adjust the volume, or switch to a favorite sound from your menu bar.</p>
                 <ul>
                   <li>
                     <Check size={18} /> Native input and audio
@@ -199,16 +190,16 @@ export default function App() {
                 </ul>
               </div>
               <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                whileInView={{ opacity: 1, y: 0 }}
+                initial={{ opacity: 0, transform: "translateY(8px)" }}
+                whileInView={{ opacity: 1, transform: "translateY(0)" }}
                 viewport={{ once: true, amount: 0.25 }}
                 className="menu-preview"
               >
                 <img
                   src="/brand/openklack/features/menu.svg"
-                  alt="Menu controls illustration: mute, volume, and favorite sounds"
-                  width="440"
-                  height="210"
+                  alt="OpenKlack in the Mac menu bar, with mute, volume, and favorite sounds"
+                  width="480"
+                  height="390"
                   loading="lazy"
                 />
               </motion.div>
@@ -236,14 +227,9 @@ export default function App() {
               <br />
               good noise.
             </h2>
-            <MotionLink
-              whileHover={{ y: -2 }}
-              whileTap={{ scale: 0.98 }}
-              className="button-link inverse"
-              href="/OpenKlack/download/"
-            >
+            <Link className="button-link inverse" href="/OpenKlack/download/">
               Download for Mac <Download size={20} />
-            </MotionLink>
+            </Link>
           </div>
           <img src="/brand/openklack/symbol-paper.svg" alt="" width="260" height="260" />
         </section>

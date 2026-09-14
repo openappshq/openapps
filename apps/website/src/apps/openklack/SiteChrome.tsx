@@ -1,10 +1,7 @@
 import { Link } from "@heroui/react";
-import { motion } from "motion/react";
 import { ArrowLeft, ArrowUpRight, Download } from "lucide-react";
 
 import StarButton from "../../shared/StarButton";
-
-const MotionLink = motion.create(Link);
 
 export function SiteHeader() {
   return (
@@ -29,14 +26,9 @@ export function SiteHeader() {
         <Link href="/OpenKlack/#desktop">The Mac app</Link>
         <Link href="/OpenKlack/#questions">Questions</Link>
         <StarButton />
-        <MotionLink
-          whileHover={{ y: -2 }}
-          whileTap={{ scale: 0.98 }}
-          className="button-link small primary"
-          href="/OpenKlack/download/"
-        >
+        <Link className="button-link small primary" href="/OpenKlack/download/">
           Download for Mac <Download size={16} />
-        </MotionLink>
+        </Link>
       </nav>
     </header>
   );

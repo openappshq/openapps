@@ -1,4 +1,4 @@
-import { ArrowUpRight, Code2, Gift, Laptop, ShieldCheck } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Code2, Gift, Laptop, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import StarButton from "../shared/StarButton";
 import { GITHUB_URL } from "../shared/github";
@@ -67,7 +67,7 @@ function AppCard({ app }: { app: Product }) {
           </div>
         </dl>
         <span className="app-cta" aria-hidden="true">
-          Visit <ArrowUpRight size={16} />
+          Explore <ArrowRight size={16} />
         </span>
       </a>
     </li>

@@ -29,6 +29,8 @@ Slider values illustrate states, not discrete volume choices.
 - Selection needs more than color; retain focus when lists reorder.
 - Search preserves its query and active selection; no results offers reset.
 - Errors preserve working settings and provide nearby recovery.
+- Pointer presses scale to 0.96; `data-static` opts out on frequent actions; keyboard activation stays still.
+- Tabs use concentric radii and a 150ms indicator; theme changes snap without color transitions.
 - Popovers support Escape and trigger-focus return; disclosures retain expansion semantics and reduced motion.
 - Give row, preview, and star actions separate sibling controls; never nest buttons.
 - Use real destinations for links and one clear action/focus ring per search field.

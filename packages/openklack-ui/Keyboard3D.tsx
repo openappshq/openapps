@@ -204,31 +204,29 @@ export default function Keyboard3D(props: Props) {
   );
   return (
     <div className="original-keyboard" ref={host} aria-label="Interactive 75 percent keyboard">
-      {visible && (
-        <RendererBoundary fallback={fallback}>
-          <Canvas
-            aria-hidden="true"
-            camera={{ position: [0, 4.5, 1.9], fov: 25, near: 0.1, far: 50 }}
-            frameloop="demand"
-            dpr={[1, 2]}
-            gl={async (defaults) => {
-              const renderer = new WebGPURenderer({
-                canvas: defaults.canvas as HTMLCanvasElement,
-                antialias: true,
-                alpha: true,
-              });
-              await renderer.init();
-              renderer.setClearColor(0x000000, 0);
-              return renderer;
-            }}
-            fallback={fallback}
-          >
-            <Suspense fallback={null}>
-              <Model {...props} />
-            </Suspense>
-          </Canvas>
-        </RendererBoundary>
-      )}
+      <RendererBoundary fallback={fallback}>
+        <Canvas
+          aria-hidden="true"
+          camera={{ position: [0, 4.5, 1.9], fov: 25, near: 0.1, far: 50 }}
+          frameloop={visible ? "demand" : "never"}
+          dpr={[1, 2]}
+          gl={async (defaults) => {
+            const renderer = new WebGPURenderer({
+              canvas: defaults.canvas as HTMLCanvasElement,
+              antialias: true,
+              alpha: true,
+            });
+            await renderer.init();
+            renderer.setClearColor(0x000000, 0);
+            return renderer;
+          }}
+          fallback={fallback}
+        >
+          <Suspense fallback={null}>
+            <Model {...props} />
+          </Suspense>
+        </Canvas>
+      </RendererBoundary>
     </div>
   );
 }

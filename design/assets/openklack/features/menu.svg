@@ -1,1 +1,48 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="440" height="210" viewBox="0 0 440 210" role="img" aria-label="OpenKlack menu controls illustration"><title>OpenKlack menu controls illustration</title><rect width="440" height="210" rx="16" fill="#fff"/><g font-family="Arial,sans-serif"><rect x="80" y="12" width="280" height="186" rx="12" fill="#f3f3f3"/><text x="100" y="39" font-size="12" fill="#626262" font-weight="400">Sound is on</text><text x="100" y="65" font-size="14" fill="#141414" font-weight="700">Mute</text><text x="100" y="94" font-size="12" fill="#626262" font-weight="400">Volume</text><rect x="100" y="107" width="240" height="4" rx="2" fill="#d9d9d9"/><rect x="100" y="107" width="150" height="4" rx="2" fill="#304bff"/><circle cx="250" cy="109" r="7" fill="#fff" stroke="#858585"/><text x="100" y="144" font-size="13" fill="#141414" font-weight="400">✓  Cherry MX Blue PBT</text><text x="100" y="178" font-size="13" fill="#141414" font-weight="400">More sounds</text><text x="327" y="178" font-size="18" fill="#626262" font-weight="400">›</text></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="390" viewBox="0 0 480 390" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">OpenKlack in the Mac menu bar</title>
+  <desc id="desc">A native menu with sound status, mute, volume, two favorite sounds, and shortcuts to open or quit OpenKlack.</desc>
+  <defs>
+    <linearGradient id="surface" x1="280" y1="52" x2="280" y2="344" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff" stop-opacity=".98"/>
+      <stop offset="1" stop-color="#faf7fb" stop-opacity=".97"/>
+    </linearGradient>
+    <filter id="shadow" x="66" y="26" width="418" height="368" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dy="16" stdDeviation="16" flood-color="#422749" flood-opacity=".18"/>
+      <feDropShadow dy="2" stdDeviation="3" flood-color="#422749" flood-opacity=".12"/>
+    </filter>
+  </defs>
+  <path d="M0 0h480v38H0z" fill="#fff" fill-opacity=".38"/>
+  <path d="M0 38h480" stroke="#6d4777" stroke-opacity=".12"/>
+  <rect x="328" y="3" width="40" height="32" rx="7" fill="#141414" fill-opacity=".1"/>
+  <g transform="translate(338 9) scale(.15625)" fill="#242027">
+    <path d="M26 16H14C10.686 16 8 18.686 8 22v84c0 3.314 2.686 6 6 6h12c3.314 0 6-2.686 6-6V22c0-3.314-2.686-6-6-6Z"/>
+    <path d="m40 64 48-48h32L72 64l48 48H88L40 64Z"/>
+  </g>
+  <g stroke="#242027" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M384 15.5a13 13 0 0 1 18 0m-15 3a9 9 0 0 1 12 0m-9 3a4.5 4.5 0 0 1 6 0"/>
+    <path d="M392.5 24.5h1"/>
+    <rect x="417" y="13" width="23" height="12" rx="3"/>
+    <path d="M443 17v4"/>
+  </g>
+  <rect x="420" y="16" width="16" height="6" rx="1" fill="#242027"/>
+  <rect x="114" y="47" width="330" height="298" rx="12" fill="url(#surface)" filter="url(#shadow)"/>
+  <rect x="114.5" y="47.5" width="329" height="297" rx="11.5" stroke="#fff" stroke-opacity=".8"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif" font-size="17" fill="#252128">
+    <text x="145" y="76" fill="#8a818e" font-size="15">Sound is on</text>
+    <text x="145" y="107">Mute</text>
+    <text x="145" y="137">Volume · 70%</text>
+    <path d="m420 127 5 5-5 5" fill="none" stroke="#77717b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M128 151h302" stroke="#ded8e1"/>
+    <rect x="121" y="161" width="316" height="30" rx="5" fill="#304bff"/>
+    <path d="m128 176 4 4 8-9" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="145" y="182" fill="#fff">Cherry MX Blue PBT</text>
+    <text x="145" y="213">Cherry MX Brown PBT</text>
+    <text x="145" y="243">More sounds</text>
+    <path d="m420 233 5 5-5 5" fill="none" stroke="#77717b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M128 258h302" stroke="#ded8e1"/>
+    <text x="145" y="287">Open OpenKlack…</text>
+    <text x="425" y="287" fill="#8a818e" text-anchor="end">⌘,</text>
+    <text x="145" y="319">Quit OpenKlack</text>
+    <text x="425" y="319" fill="#8a818e" text-anchor="end">⌘Q</text>
+  </g>
+</svg>

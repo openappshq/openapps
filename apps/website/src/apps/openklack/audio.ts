@@ -76,7 +76,11 @@ export function createAudio() {
   return {
     load,
     async unlock(packIds: string[]) {
-      await Promise.all([engine().resume(), ...[...new Set(packIds)].map(load)]);
+      const context = engine();
+      await Promise.all([
+        context.state === "running" ? undefined : context.resume(),
+        ...[...new Set(packIds)].map(load),
+      ]);
     },
     configure(nextVolume: number, nextEnabled: boolean) {
       volume = nextVolume / 100;
@@ -90,7 +94,7 @@ export function createAudio() {
       settings: Pick<Settings, "variation" | "releaseVolume" | "tone" | "pitch" | "width">,
       preview = false,
     ): PlayingSound | undefined {
-      if ((!enabled && !preview) || context?.state !== "running") return;
+      if ((!enabled && !preview) || !context) return;
       const recording = cache.get(voice.packId);
       const pack = getPack(voice.packId);
       const name = sampleFor(pack, code, down, settings.variation);

@@ -72,6 +72,8 @@ h3 {
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 4px;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
 }
 .sr-only {
   position: absolute;

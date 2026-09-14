@@ -1,6 +1,5 @@
 import { SoundBrowser } from "@openklack/ui/sound-browser";
 import "@openklack/ui/browser.css";
-import { motion } from "motion/react";
 import { useState } from "react";
 import { Button } from "@heroui/react";
 import { Check, Play, Square, Star } from "lucide-react";
@@ -37,15 +36,12 @@ export function SoundLibrary({ desktop, preset }: { desktop: Desktop; preset: Pr
       tabIndex={browse ? 0 : undefined}
     >
       {visible.map((pack) => (
-        <motion.div
-          layout="position"
-          className={`sound-choice ${pack.id === preset.packId ? "active" : ""}`}
-          key={pack.id}
-        >
+        <div className={`sound-choice ${pack.id === preset.packId ? "active" : ""}`} key={pack.id}>
           <Button
             variant="ghost"
             type="button"
             className="choose-sound"
+            data-static=""
             isDisabled={busy}
             aria-pressed={pack.id === preset.packId}
             aria-label={`Use ${packLabel(pack)}`}
@@ -67,6 +63,8 @@ export function SoundLibrary({ desktop, preset }: { desktop: Desktop; preset: Pr
             isIconOnly
             variant="ghost"
             isDisabled={busy}
+            className="star-sound"
+            data-static=""
             aria-pressed={favorites.includes(pack.id)}
             aria-label={`${favorites.includes(pack.id) ? "Unstar" : "Star"} ${packLabel(pack)}`}
             onPress={() =>
@@ -84,19 +82,21 @@ export function SoundLibrary({ desktop, preset }: { desktop: Desktop; preset: Pr
             isIconOnly
             variant="ghost"
             isDisabled={busy}
+            className="sound-preview"
+            data-static=""
             aria-label={`${preview === pack.id ? "Stop preview of" : "Preview"} ${packLabel(pack)}`}
             onPress={() => void desktop.audition(pack.id)}
           >
-            {preview === pack.id ? <Square size={16} /> : <Play size={16} />}
+            {preview === pack.id ? <Square size={16} /> : <Play className="play-glyph" size={16} />}
           </Button>
-        </motion.div>
+        </div>
       ))}
     </div>
   );
   return (
     <section className="sound-library" aria-labelledby="library-heading">
       <div className="section-heading">
-        <h2 id="library-heading">Choose a sound</h2>
+        <h2 id="library-heading">Sounds</h2>
         <Button
           variant="ghost"
           aria-expanded={browse}
@@ -106,7 +106,7 @@ export function SoundLibrary({ desktop, preset }: { desktop: Desktop; preset: Pr
             setKind("All");
           }}
         >
-          {browse ? "Show essentials" : `Browse all ${packs.length}`}
+          {browse ? "Show less" : `Browse all ${packs.length}`}
         </Button>
       </div>
       {browse ? (
@@ -118,9 +118,15 @@ export function SoundLibrary({ desktop, preset }: { desktop: Desktop; preset: Pr
       )}
       {!visible.length && (
         <div className="empty-state">
-          <p>No sounds match “{search}”.</p>
-          <Button variant="secondary" onPress={() => setSearch("")}>
-            Clear search
+          <p>No matching sounds.</p>
+          <Button
+            variant="secondary"
+            onPress={() => {
+              setSearch("");
+              setKind("All");
+            }}
+          >
+            Clear filters
           </Button>
         </div>
       )}

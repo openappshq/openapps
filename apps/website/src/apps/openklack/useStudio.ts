@@ -26,7 +26,7 @@ export function useStudio() {
   });
   const [audio] = useState(createAudio);
   const [input] = useState(createInput);
-  const [enabled, setEnabled] = useState(false);
+  const [enabled, setEnabled] = useState(true);
   const [enabling, setEnabling] = useState(false);
 
   const [error, setError] = useState("");
@@ -71,7 +71,25 @@ export function useStudio() {
       if (!input.press(code, source)) return;
       const voice = voiceForKey(latest.current.settings, code);
       heldVoices.current.set(code, voice);
-      audio.play(voice, code, true, latest.current.settings);
+      if (!latest.current.enabled) return;
+      const request = operation.current;
+      const ready = audio.unlock([voice.packId]);
+      // Schedule the first key immediately; a suspended audio clock waits for resume.
+      const sound = audio.play(voice, code, true, latest.current.settings);
+      void ready
+        .then(() => {
+          if (
+            !sound &&
+            request === operation.current &&
+            latest.current.enabled &&
+            heldVoices.current.get(code) === voice
+          )
+            audio.play(voice, code, true, latest.current.settings);
+        })
+        .catch((cause) => {
+          if (request === operation.current)
+            setError(cause instanceof Error ? cause.message : "Sound couldn’t start. Try again.");
+        });
     },
     [audio, input],
   );

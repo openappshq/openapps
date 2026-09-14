@@ -1,9 +1,16 @@
 import { MotionConfig, useReducedMotion } from "motion/react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { withoutThemeTransitions } from "./theme";
 import tokens from "../../design/tokens.json";
 
 export function AppMotion({ children }: { children: ReactNode }) {
   const reduced = useReducedMotion();
+  useEffect(() => {
+    const system = matchMedia("(prefers-color-scheme: dark)");
+    const change = () => withoutThemeTransitions(() => {});
+    system.addEventListener("change", change);
+    return () => system.removeEventListener("change", change);
+  }, []);
   return (
     <MotionConfig
       reducedMotion="user"

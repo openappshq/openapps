@@ -52,20 +52,6 @@ let sounds = text(24, 32, "Find your sound", 20, "#141414", 700);
 });
 await svg("sounds", "Sound choices with favorites and previews", sounds);
 await svg(
-  "menu",
-  "OpenKlack menu controls illustration",
-  box(80, 12, 280, 186, "#f3f3f3", 12) +
-    text(100, 39, "Sound is on", 12) +
-    text(100, 65, "Mute", 14, "#141414", 700) +
-    text(100, 94, "Volume", 12) +
-    box(100, 107, 240, 4, "#d9d9d9", 2) +
-    box(100, 107, 150, 4, "#304bff", 2) +
-    '<circle cx="250" cy="109" r="7" fill="#fff" stroke="#858585"/>' +
-    text(100, 144, "✓  Cherry MX Blue PBT", 13, "#141414") +
-    text(100, 178, "More sounds", 13, "#141414") +
-    text(327, 178, "›", 18),
-);
-await svg(
   "typing",
   "Typing playground illustration",
   box(20, 20, 400, 169, "#f3f3f3", 12) +

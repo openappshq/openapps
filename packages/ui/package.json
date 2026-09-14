@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./state-icon": "./StateIcon.tsx",
+    "./theme": "./theme.ts",
     "./motion": "./motion.tsx",
     "./transitions": "./transitions.ts",
     "./theme.css": "./theme.css"

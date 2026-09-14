@@ -18,3 +18,51 @@
   --default-foreground: var(--color-text-primary);
   --radius: var(--radius-control);
 }
+
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --shadow-control:
+    0 0 0 1px oklch(0 0 0 / 0.06), 0 1px 2px -1px oklch(0 0 0 / 0.06), 0 2px 4px oklch(0 0 0 / 0.04);
+  --shadow-control-hover:
+    0 0 0 1px oklch(0 0 0 / 0.08), 0 1px 2px -1px oklch(0 0 0 / 0.08), 0 2px 4px oklch(0 0 0 / 0.06);
+}
+:root[data-theme="dark"] {
+  --shadow-control: 0 0 0 1px oklch(1 0 0 / 0.08);
+  --shadow-control-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+}
+/* HeroUI's default pressed transform also affects keyboard activation. */
+.button:active,
+.button[data-pressed="true"] {
+  transform: none;
+}
+.state-icon,
+.state-icon > span {
+  display: inline-grid;
+  place-items: center;
+}
+.state-icon {
+  width: 18px;
+  height: 18px;
+  position: relative;
+  flex: 0 0 18px;
+}
+.state-icon > span {
+  grid-area: 1 / 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .button:not([data-static]),
+  .button-link:not([data-static]),
+  .star-button {
+    transition:
+      scale 150ms var(--ease-out),
+      background-color 100ms ease,
+      color 100ms ease;
+  }
+  .button:active:not(:focus-visible):not([data-focus-visible="true"]):not([data-static]):not(
+      :disabled
+    ),
+  .button-link:active:not(:focus-visible):not([data-static]),
+  .star-button:active:not(:focus-visible) {
+    scale: 0.96;
+  }
+}

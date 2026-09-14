@@ -203,7 +203,7 @@ h3 {
   .hero-accent {
     background-repeat: no-repeat;
     background-size: 100% 100%;
-    animation: marker-draw 260ms cubic-bezier(0.2, 0, 0, 1) 120ms both;
+    animation: marker-draw 260ms cubic-bezier(0.23, 1, 0.32, 1) 120ms both;
   }
 }
 @keyframes marker-draw {
@@ -242,7 +242,7 @@ h3 {
 }
 .app-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 20px;
   padding-top: 24px;
 }
@@ -256,6 +256,7 @@ h3 {
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
   background: var(--surface);
+  box-shadow: 0 2px 4px #00000005;
 }
 .app-card[data-accent="cobalt"] {
   --tile-glow: var(--brand-cobalt);
@@ -306,10 +307,7 @@ h3 {
   gap: 4px;
   font-size: 14px;
   font-weight: 600;
-  opacity: 0;
-}
-.app-card:focus-visible .app-cta {
-  opacity: 1;
+  color: var(--muted);
 }
 
 /* Principles */
@@ -390,26 +388,26 @@ h3 {
     border-color: var(--tile-glow);
   }
   .app-card:hover .app-cta {
-    opacity: 1;
+    color: var(--foreground);
   }
 }
 @media (prefers-reduced-motion: no-preference) {
   .app-card {
     transition:
-      transform var(--motion-standard) cubic-bezier(0.2, 0, 0, 1),
-      box-shadow var(--motion-standard) cubic-bezier(0.2, 0, 0, 1),
+      transform var(--motion-standard) cubic-bezier(0.23, 1, 0.32, 1),
+      box-shadow var(--motion-standard) cubic-bezier(0.23, 1, 0.32, 1),
       border-color var(--motion-fast);
   }
   .app-cta {
-    transition: opacity var(--motion-fast);
+    transition: color var(--motion-fast);
   }
   @media (hover: hover) {
     .app-card:hover {
-      transform: translateY(-3px);
+      transform: translateY(-2px);
       box-shadow: 0 16px 32px -16px rgb(20 20 20 / 0.35);
     }
   }
-  .app-card:active {
+  .app-card:active:not(:focus-visible) {
     transform: translateY(0);
   }
 }
