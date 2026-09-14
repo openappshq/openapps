@@ -14,6 +14,8 @@ The scripts the workflow runs are the ones you can run locally:
 | `scripts/make-dmg.sh` | Packages the app and an Applications link into `dist/OpenReaction-<version>.dmg` and signs it |
 | `scripts/notarize.sh <item>` | Submits an app or DMG with `notarytool`, waits, staples the ticket |
 | `scripts/verify-release.sh [--notarized] <dmg>` | Mounts the DMG and runs the checks a user's Mac runs |
+| `scripts/release-tag-ruleset.sh check\|apply` | Checks for, or creates, the ruleset that makes `openreaction-v*` tags immutable |
+| `scripts/publish-release.sh [--dry-run]` | Creates the GitHub Release for a tag, only once the tag provably names the built commit |
 
 ## One-time setup
 
@@ -32,10 +34,31 @@ The scripts the workflow runs are the ones you can run locally:
 
 ### GitHub
 
-Create the environment **`openreaction-release`** (Settings → Environments)
-and add, on that environment, the following. Restrict its deployment branches
-and tags to `main` and `openreaction-v*` so nothing else can reach the
-signing certificate.
+**Tag protection (required).** The publish step refuses to run unless an
+active repository ruleset makes `openreaction-v*` tags immutable: no
+updates, no force pushes, no deletions, and no bypass actors at all. That is
+what guarantees a release's binaries and its tag name the same commit even
+if someone tries to move the tag while a release is running. The definition
+is checked in at
+[`.github/rulesets/openreaction-release-tags.json`](../../.github/rulesets/openreaction-release-tags.json);
+a repository admin applies it once:
+
+```sh
+scripts/release-tag-ruleset.sh apply openappshq/openapps   # gh must be logged in as an admin
+scripts/release-tag-ruleset.sh check openappshq/openapps   # what the workflow runs
+```
+
+(Equivalent: `gh api --method POST repos/openappshq/openapps/rulesets --input .github/rulesets/openreaction-release-tags.json`.)
+Creating tags stays allowed; once a release tag exists it can only ever be
+left alone. A wrong release is fixed by a new patch version, never by
+re-tagging.
+
+**Environment.** Create the environment **`openreaction-release`**
+(Settings → Environments) and add, on that environment, the following.
+Restrict its deployment branches and tags to `main` and `openreaction-v*` so
+nothing else can reach the signing certificate or publish. Both the build
+job and the publish job run in this environment, so any required reviewers
+approve both.
 
 **Secrets** (the same names OpenKlack's `openklack-release` environment uses):
 
@@ -85,24 +108,31 @@ casing.
    git push origin openreaction-v1.0.0
    ```
 
-4. The workflow runs `checks` and then `release`, which in order imports the
-   certificate into a temporary keychain, builds the universal licensed app,
-   signs it, notarizes and staples the app, builds and signs the DMG,
-   notarizes and staples the DMG, verifies the result, and publishes the
-   GitHub Release `openreaction-v1.0.0` with `OpenReaction-1.0.0.dmg` and
-   `OpenReaction-1.0.0.dmg.sha256` (release notes are generated from the
-   commits). Expect 20–40 minutes; notarization is most of it.
+4. The workflow runs three jobs. `checks` as on every change. `release`
+   (read-only token) imports the certificate into a temporary keychain,
+   builds the universal licensed app, signs it, notarizes and staples the
+   app, builds and signs the DMG, removes the signing identity, notarizes
+   and staples the DMG, verifies the result and uploads
+   `OpenReaction-1.0.0.dmg` plus its `.sha256` as a workflow artifact.
+   `publish` (the only job that can write to the repository) downloads that
+   artifact, re-checks the SHA-256, confirms the tag ruleset is active,
+   confirms `openreaction-v1.0.0` names exactly the commit that was built,
+   creates a *draft* release, uploads the files, confirms the tag once more,
+   and only then publishes. Release notes are generated from the commits.
+   Expect 20–40 minutes; notarization is most of it.
 5. Open the release, check the notes, and download the DMG for the clean-Mac
    check below before linking it from the website.
 
-Before publishing, the job checks that `openreaction-v1.0.0` on GitHub
-points at exactly the commit it built and refuses otherwise, so a tag can
-never end up with binaries from another commit; releases also run one at a
-time. If the job fails after the tag is pushed, fix the cause on `main`,
-delete the tag (`git push --delete origin openreaction-v1.0.0`; a release is
-only created once everything before it passed) and tag the fixed commit.
-Re-running a failed job on the same tag also works and replaces the
-release's assets with a build of that same commit.
+Runs for the same version queue behind each other rather than racing, and a
+version lower than the newest published release is refused unless the
+manual run sets `allow_older` (a deliberate back-port).
+
+If `release` fails, fix the cause, but do not move or delete the tag: the
+ruleset forbids it, and a tag that exists is final. Push the fix to `main`
+and tag it as the next patch version. Re-running a failed run is fine as
+long as nothing was published yet (a leftover draft is discarded); once a
+release is published for a tag, the publish step refuses to touch it again.
+A release that turns out to be bad gets a new patch version.
 
 ### Release candidates
 
@@ -111,7 +141,18 @@ on an existing `openreaction-v*` tag (version comes from the tag), with
 `publish` left off, runs the same signed and notarized build and uploads
 `OpenReaction-<version>-signed` as a workflow artifact without creating a
 release. With `publish` on it creates the tag at that commit if it does not
-exist yet and publishes; prefer pushing a tag on `main`.
+exist yet and publishes exactly as a tag push would; prefer pushing a tag
+on `main`. `allow_older` permits publishing a version below the newest
+published one.
+
+To rehearse publication without changing anything, run the publish script
+locally against the downloaded artifact:
+
+```sh
+GH_REPO=openappshq/openapps TAG=openreaction-v1.0.0 VERSION=1.0.0 \
+BUILT_COMMIT=$(git rev-parse openreaction-v1.0.0^{commit}) DIST=path/to/artifact \
+scripts/publish-release.sh --dry-run
+```
 
 ## Verifying the download on a clean Mac
 

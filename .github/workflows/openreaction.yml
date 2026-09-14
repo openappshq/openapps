@@ -11,12 +11,14 @@ on:
     paths:
       - apps/openreaction/**
       - .github/workflows/openreaction.yml
+      - .github/rulesets/openreaction-release-tags.json
   push:
     branches: [main]
     tags: [openreaction-v*]
     paths:
       - apps/openreaction/**
       - .github/workflows/openreaction.yml
+      - .github/rulesets/openreaction-release-tags.json
   workflow_dispatch:
     inputs:
       version:
@@ -25,6 +27,10 @@ on:
         default: ""
       publish:
         description: Publish a GitHub Release (creates the openreaction-v<version> tag at this commit if it does not exist)
+        type: boolean
+        default: false
+      allow_older:
+        description: Allow publishing a version lower than the newest published release (a back-port)
         type: boolean
         default: false
 
@@ -40,6 +46,10 @@ env:
   # The checks job compiles the licensed flavour against Dodo test mode with
   # placeholder product IDs; nothing built with these is ever published.
   PLACEHOLDER_PAID_PRODUCT_ID: pdt_placeholder_openreaction
+  # The release tag this run is about: the pushed tag, or openreaction-v<input>
+  # on a manual run from a branch. Build and publish serialise per tag, so a
+  # second run for the same version queues behind the first instead of racing it.
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openreaction-v{0}', inputs.version) || github.ref_name }}
 
 jobs:
   checks:
@@ -88,18 +98,25 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # Builds, signs, notarizes and verifies the release. Read-only token: it
+  # never touches tags or releases; that is the publish job's business.
   release:
     if: startsWith(github.ref, 'refs/tags/openreaction-v') || github.event_name == 'workflow_dispatch'
     needs: checks
     runs-on: macos-26
     timeout-minutes: 90
     environment: openreaction-release
-    # One release at a time, so two runs can never publish the same tag concurrently.
     concurrency:
-      group: openreaction-release
+      group: openreaction-build-${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openreaction-v{0}', inputs.version) || github.ref_name }}
       cancel-in-progress: false
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+      commit: ${{ steps.version.outputs.commit }}
+      artifact: OpenReaction-${{ steps.version.outputs.version }}-signed
     env:
       KEYCHAIN_NAME: openreaction-release.keychain-db
     steps:
@@ -136,12 +153,16 @@ jobs:
           if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Version must be MAJOR.MINOR.PATCH (got '$version')."; exit 1
           fi
+          if [ "openreaction-v$version" != "$RELEASE_TAG" ]; then
+            echo "Internal error: resolved openreaction-v$version but this run is serialised as $RELEASE_TAG."; exit 1
+          fi
           {
             echo "version=$version"
             echo "tag=openreaction-v$version"
             echo "publish=$publish"
+            echo "commit=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
-          echo "Building OpenReaction $version (publish: $publish)"
+          echo "Building OpenReaction $version from $(git rev-parse HEAD) (publish: $publish)"
       - name: Check release configuration
         # Everything the release needs is checked up front, so a missing
         # secret fails here with its name and never produces an unsigned build.
@@ -263,49 +284,6 @@ jobs:
             apps/openreaction/dist/*.dmg
             apps/openreaction/dist/*.sha256
           if-no-files-found: error
-      - name: Publish the GitHub Release
-        if: steps.version.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          built="$(git rev-parse HEAD)"
-          # The commit the remote tag points at, peeled through an annotated tag; empty when the tag does not exist.
-          tag_commit() {
-            local ref sha type
-            ref="$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" 2>/dev/null)" || return 0
-            sha="$(printf '%s' "$ref" | jq -r .object.sha)"
-            type="$(printf '%s' "$ref" | jq -r .object.type)"
-            if [ "$type" = tag ]; then
-              gh api "repos/$GH_REPO/git/tags/$sha" --jq .object.sha
-            else
-              printf '%s\n' "$sha"
-            fi
-          }
-          existing="$(tag_commit)"
-          if [ -z "$existing" ]; then
-            case "$GITHUB_REF" in
-              refs/tags/*) echo "::error::Tag $TAG no longer exists on the remote."; exit 1 ;;
-            esac
-            echo "Creating tag $TAG at $built."
-            gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$built" >/dev/null
-            existing="$(tag_commit)"
-          fi
-          if [ "$existing" != "$built" ]; then
-            echo "::error::Tag $TAG points at $existing but this build is $built; refusing to publish. Delete the tag or build from the tagged commit."
-            exit 1
-          fi
-          cd dist
-          files=("OpenReaction-$VERSION.dmg" "OpenReaction-$VERSION.dmg.sha256")
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists; replacing its assets with this build of the same commit."
-            gh release upload "$TAG" "${files[@]}" --clobber
-          else
-            gh release create "$TAG" "${files[@]}" --title "OpenReaction $VERSION" --generate-notes --verify-tag
-          fi
-          gh release view "$TAG" --json url --jq .url
       - name: Remove temporary signing material
         # Fallback for runs that fail before the identity was removed above.
         if: always()
@@ -313,3 +291,37 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/$KEYCHAIN_NAME" 2>/dev/null || true
           security list-keychains -d user -s login.keychain-db || true
           rm -f "$RUNNER_TEMP/openreaction.p12"
+
+  # Publishes the verified DMG. The only job with a token that can write to
+  # the repository; it runs no build, only scripts/publish-release.sh, which
+  # requires the openreaction-v* tag ruleset to be active and refuses unless
+  # the tag names exactly the commit the DMG was built from.
+  publish:
+    if: needs.release.outputs.publish == 'true'
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: openreaction-release
+    concurrency:
+      group: openreaction-publish-${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openreaction-v{0}', inputs.version) || github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.release.outputs.artifact }}
+          path: apps/openreaction/dist
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          BUILT_COMMIT: ${{ needs.release.outputs.commit }}
+          CREATE_TAG: ${{ github.event_name == 'workflow_dispatch' }}
+          ALLOW_OLDER: ${{ inputs.allow_older == true }}
+        run: scripts/publish-release.sh
