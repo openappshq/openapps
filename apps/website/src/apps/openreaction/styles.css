@@ -1,6 +1,7 @@
 @import "./tokens.css";
 @import "../../shared/star-button.css";
 @import "../../shared/hq-badge.css";
+@import "../../shared/licensing.css";
 
 :root {
   --font-sans: "Instrument Sans Variable", var(--font-body), sans-serif;
@@ -252,6 +253,27 @@ kbd {
 }
 .hero-intro .text-link {
   margin-top: 14px;
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  margin-top: 18px;
+}
+.hero-actions .text-link {
+  margin-top: 0;
+}
+.start-actions {
+  margin-top: 24px;
+}
+.start-alt {
+  font-size: 22px;
+  letter-spacing: -0.03em;
+}
+.start-panel > p a {
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 .hero-note {
   display: block;

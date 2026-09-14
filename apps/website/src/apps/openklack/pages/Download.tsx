@@ -5,6 +5,8 @@ import { ArrowDown, ArrowUpRight, Download, Star } from "lucide-react";
 import { enter } from "@openapps/ui/transitions";
 import { SiteFooter, SiteHeader } from "../SiteChrome";
 import { GITHUB_URL } from "../../../shared/github";
+import BuyButtons from "../../../shared/BuyButtons";
+import { MACS_PER_LICENSE, PRICE, TRIAL_DAYS } from "../../../shared/licensing";
 import "../styles.css";
 import "../download.css";
 
@@ -35,7 +37,7 @@ export default function DownloadPage({
         <motion.section {...enter} className="download-intro" aria-labelledby="download-title">
           <img src="/brand/openklack/app-icon.svg" alt="" width="112" height="112" />
           <span className="download-status">
-            {downloadUrl ? "Free & open source" : "Mac release coming soon"}
+            {downloadUrl ? "Open source · Official build" : "Mac release coming soon"}
           </span>
           <h1 id="download-title">
             {downloadUrl ? (
@@ -76,6 +78,19 @@ export default function DownloadPage({
             macOS 14+ · Apple Silicon{!downloadUrl && " · Planned support"}
           </span>
         </motion.section>
+
+        <section className="download-license" aria-labelledby="license-title">
+          <div className="download-section-heading">
+            <h2 id="license-title">
+              {PRICE} once for {MACS_PER_LICENSE} Macs, or try it free for {TRIAL_DAYS} days.
+            </h2>
+            <p>
+              Official builds need a license key; it arrives by email right after checkout. Free to
+              build from source, no key needed.
+            </p>
+          </div>
+          <BuyButtons app="openklack" />
+        </section>
 
         <section className="download-install" aria-labelledby="install-title">
           <div className="download-section-heading">

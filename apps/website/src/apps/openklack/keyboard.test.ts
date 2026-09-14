@@ -50,7 +50,10 @@ test("all 18 packs retain real sample regions, per-key mappings and release sema
     for (const extension of ["ogg", "mp3"])
       expect(
         existsSync(
-          new URL(`../../../../../packages/soundpacks/sounds/${pack.id}.${extension}`, import.meta.url),
+          new URL(
+            `../../../../../packages/soundpacks/sounds/${pack.id}.${extension}`,
+            import.meta.url,
+          ),
         ),
       ).toBe(true);
     expect(pack.license.type).toBe("MIT");

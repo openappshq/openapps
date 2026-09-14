@@ -4,6 +4,8 @@ import { motion } from "motion/react";
 import { enter } from "@openapps/ui/transitions";
 import { ArrowDown, Check, Download } from "lucide-react";
 import HqBadge from "../../../shared/HqBadge";
+import BuyButtons from "../../../shared/BuyButtons";
+import { MACS_PER_LICENSE, OFFLINE_GRACE, PRICE, TRIAL_DAYS } from "../../../shared/licensing";
 import SoundStudio from "../SoundStudio";
 import { SiteHeader, SiteFooter } from "../SiteChrome";
 
@@ -25,6 +27,30 @@ const questions = [
   [
     "Does it record what I type?",
     "OpenKlack does not save your keystrokes or typed text. The desktop app processes key events locally to play sounds. No account or automatic telemetry is part of the app; diagnostic reports are local and shared only by you.",
+  ],
+  [
+    "What does the official build send anywhere?",
+    "Official builds of OpenKlack check your license with Dodo Payments, our payment provider. The license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use the app are never sent. Builds from source never contact the license service.",
+  ],
+  [
+    `What does the ${PRICE} buy?`,
+    `A license for the official, signed and notarized build, for up to ${MACS_PER_LICENSE} Macs, forever. One price, no subscription, no account. It also keeps the project going.`,
+  ],
+  [
+    "How does the free trial work?",
+    `The trial gives you a ${TRIAL_DAYS}-day license key for one Mac, with nothing but an email address at checkout. When it ends, OpenKlack goes quiet until you buy or build from source; nothing is charged automatically.`,
+  ],
+  [
+    "Does it work offline?",
+    `Yes. Official builds check the license once a day, and a Mac that is offline keeps working for ${OFFLINE_GRACE} since its last successful check. Builds from source never check at all.`,
+  ],
+  [
+    "I sold or lost a Mac. Can I free up its seat?",
+    "Yes. Settings › License › Remove this Mac frees a seat while you still have the machine. If the Mac is gone, contact support and we will release it for you.",
+  ],
+  [
+    "Is building from source really free?",
+    "Yes. OpenKlack is MIT licensed. Clone the repository and build it yourself; source builds need no license, no key and no trial. Only the official builds are licensed.",
   ],
   [
     "Where do the sounds come from?",
@@ -87,14 +113,14 @@ export default function App() {
                 keyboard you already own.
               </p>
               <div className="hero-actions">
-                <Link className="button-link primary" href="/OpenKlack/download/">
-                  Download for Mac <Download size={18} />
-                </Link>
+                <BuyButtons app="openklack" />
                 <Link className="text-link" href="#playground">
                   Try the sounds <ArrowDown size={18} />
                 </Link>
               </div>
-              <span className="hero-note">Free & open source. Made for Mac.</span>
+              <span className="hero-note">
+                Open source · Official build {PRICE} · Free {TRIAL_DAYS}-day trial. Made for Mac.
+              </span>
             </div>
           </div>
         </section>
@@ -185,7 +211,10 @@ export default function App() {
                     <Check size={18} /> Follows your Mac’s audio output
                   </li>
                   <li>
-                    <Check size={18} /> Free official builds planned
+                    <Check size={18} /> Official build {PRICE} once, {MACS_PER_LICENSE} Macs
+                  </li>
+                  <li>
+                    <Check size={18} /> Free to build from source
                   </li>
                 </ul>
               </div>

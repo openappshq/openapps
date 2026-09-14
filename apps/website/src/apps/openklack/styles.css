@@ -1,5 +1,6 @@
 @import "../../shared/star-button.css";
 @import "../../shared/hq-badge.css";
+@import "../../shared/licensing.css";
 .page-width {
   width: min(1280px, calc(100% - 96px));
   margin-inline: auto;

@@ -19,6 +19,14 @@ import {
 import ReactionDemo from "../demo/ReactionDemo";
 import HqBadge from "../../../shared/HqBadge";
 import StarButton from "../../../shared/StarButton";
+import BuyButtons from "../../../shared/BuyButtons";
+import {
+  MACS_PER_LICENSE,
+  OFFLINE_GRACE,
+  PRICE,
+  SUPPORT_URL,
+  TRIAL_DAYS,
+} from "../../../shared/licensing";
 import { GITHUB_URL } from "../../../shared/github";
 
 const REPO = GITHUB_URL;
@@ -74,7 +82,27 @@ const features: { icon: ReactNode; title: string; body: string }[] = [
 const questions: [string, string][] = [
   [
     "Can I download it yet?",
-    "Not yet. OpenReaction is in development, and we want it dependable in everyday use before offering a signed, notarized download. Until then, you can build it from source.",
+    "OpenReaction is in development, and we want it dependable in everyday use before the first official build ships. Buying or starting a trial now gets you a license key that will work with it; until then, you can build it from source.",
+  ],
+  [
+    `What does the ${PRICE} buy?`,
+    `A license for the official, signed and notarized build, for up to ${MACS_PER_LICENSE} Macs, forever. One price, no subscription, no account. It also keeps the project going.`,
+  ],
+  [
+    "How does the free trial work?",
+    `The trial gives you a ${TRIAL_DAYS}-day license key for one Mac, with nothing but an email address at checkout. When it ends, OpenReaction switches off until you buy or build from source; nothing is charged automatically.`,
+  ],
+  [
+    "Does it work offline?",
+    `Yes. Official builds check the license once a day, and a Mac that is offline keeps working for ${OFFLINE_GRACE} since its last successful check. Builds from source never check at all.`,
+  ],
+  [
+    "I sold or lost a Mac. Can I free up its seat?",
+    "Yes. Settings › License › Remove this Mac frees a seat while you still have the machine. If the Mac is gone, contact support and we will release it for you.",
+  ],
+  [
+    "Is building from source really free?",
+    "Yes. OpenReaction is MIT licensed. Clone the repository, run the bundle script, and use the app with no license, no key and no trial. Only the official builds are licensed.",
   ],
   [
     "Does it read what I type?",
@@ -222,10 +250,15 @@ export default function App() {
                 The emoji shortcodes you know from Slack and GitHub, in every text field on your
                 Mac. A tiny menu-bar app. Nothing to learn.
               </p>
-              <a className="text-link" href="#try">
-                Try it right here <ArrowDown size={18} />
-              </a>
-              <span className="hero-note">Free & open source. Made for Mac.</span>
+              <div className="hero-actions">
+                <BuyButtons app="openreaction" />
+                <a className="text-link" href="#try">
+                  Try it right here <ArrowDown size={18} />
+                </a>
+              </div>
+              <span className="hero-note">
+                Open source · Official build {PRICE} · Free {TRIAL_DAYS}-day trial. Made for Mac.
+              </span>
             </div>
           </div>
         </section>
@@ -346,6 +379,12 @@ export default function App() {
               <ShieldCheck size={18} /> Matched on your Mac. Never stored, never sent. Turn either
               off any time in System Settings › Privacy & Security.
             </p>
+            <p className="permission-note">
+              <ShieldCheck size={18} /> Official builds of OpenReaction check your license with Dodo
+              Payments, our payment provider. The license key and an activation ID are sent when you
+              activate and once a day after that. Your Mac’s name, what you type, and how you use
+              the app are never sent. Builds from source never contact the license service.
+            </p>
           </div>
         </section>
 
@@ -356,19 +395,31 @@ export default function App() {
         >
           <div>
             <span className="eyebrow">05 / Get started</span>
-            <h2 id="start-title">Build it tonight.</h2>
+            <h2 id="start-title">Get OpenReaction.</h2>
             <p>
               <span className="release-label">
                 <span className="status-dot" /> In development
               </span>
             </p>
             <p className="start-copy">
-              There’s no notarized download yet. If you’re comfortable with a terminal, you can
-              build the app yourself on macOS 14 or later with Xcode 26 (Swift 6.2 or later)
-              installed.
+              The official build is signed, notarized and {PRICE} once for up to {MACS_PER_LICENSE}{" "}
+              Macs, or try it free for {TRIAL_DAYS} days. Your key arrives by email and works with
+              the first official release.
+            </p>
+            <div className="start-actions">
+              <BuyButtons app="openreaction" />
+            </div>
+            <p className="start-copy">
+              <a href={SUPPORT_URL}>Questions about a purchase?</a>
             </p>
           </div>
           <div className="start-panel">
+            <h3 className="start-alt">Free to build from source</h3>
+            <p>
+              If you’re comfortable with a terminal, build the app yourself on macOS 14 or later
+              with Xcode 26 (Swift 6.2 or later). Source builds need no license and never contact
+              the license service.
+            </p>
             <CopyCommands />
             <p>
               On first launch, grant Input Monitoring and Accessibility when macOS asks, then type{" "}
