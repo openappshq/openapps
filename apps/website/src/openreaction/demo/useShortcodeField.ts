@@ -22,14 +22,14 @@ import {
 
 export type Field = HTMLTextAreaElement | HTMLInputElement;
 
-export const PILL_HEIGHT = 52;
-const PILL_ITEM = 40;
-const PILL_PADDING = 6;
-const PILL_MAX_WIDTH = 440;
-const PILL_LEADING = 26;
-const LABEL_CHAR = 7.8;
-const LABEL_MAX = 180;
-const LABEL_TRAILING = 12;
+export const PILL_HEIGHT = 34;
+const PILL_ITEM = 26;
+const PILL_PADDING = 4;
+const PILL_MAX_WIDTH = 340;
+const PILL_LEADING = 17;
+const LABEL_CHAR = 6.6;
+const LABEL_MAX = 150;
+const LABEL_TRAILING = 8;
 /** Insert history kept for frecency ranking (most recent first, repeats allowed). */
 export const MAX_RECENT = 50;
 const CARET_GAP = 6;

@@ -736,8 +736,8 @@ kbd {
 }
 .picker {
   display: flex;
-  height: 52px;
-  padding: 6px 0;
+  height: 34px;
+  padding: 4px 0;
   border-radius: 999px;
 }
 .picker ul {
@@ -748,7 +748,7 @@ kbd {
   gap: 2px;
   min-width: 0;
   margin: 0;
-  padding: 0 6px;
+  padding: 0 4px;
   list-style: none;
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -772,15 +772,15 @@ kbd {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 40px;
-  min-width: 40px;
-  padding-inline: 8px;
+  gap: 5px;
+  height: 26px;
+  min-width: 26px;
+  padding-inline: 4px;
   border-radius: 999px;
   cursor: pointer;
 }
 .picker li[aria-selected="true"] {
-  padding-right: 12px;
+  padding-inline: 6px 8px;
 }
 .picker-highlight {
   position: absolute;
@@ -795,17 +795,17 @@ kbd {
 }
 .picker-emoji {
   display: inline-block;
-  width: 24px;
-  font-size: 22px;
+  width: 18px;
+  font-size: 18px;
   line-height: 1;
   text-align: center;
 }
 .picker-label {
-  max-width: 180px;
+  max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: 500 13px/1 var(--font-mono);
+  font: 500 11.5px/1 var(--font-mono);
   color: var(--glass-select-text);
 }
 .picker-name {

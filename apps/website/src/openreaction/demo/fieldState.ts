@@ -8,7 +8,7 @@ import {
 } from "./trigger";
 
 /** Suggestions the pill holds; about seven fit, the rest scroll. */
-export const PICKER_LIMIT = 12;
+export const PICKER_LIMIT = 8;
 
 /** Everything the shortcode picker needs to know about one text field. */
 export interface FieldState {

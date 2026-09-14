@@ -79,7 +79,7 @@ function Picker({ field, layer }: { field: OverlayModel; layer: HTMLElement | nu
     const list = listRef.current;
     const item = list?.children[view.activeIndex] as HTMLElement | undefined;
     if (!list || !item) return;
-    const peek = 20;
+    const peek = 14;
     const start = item.offsetLeft - peek;
     const end = item.offsetLeft + item.offsetWidth + peek - list.clientWidth;
     const target = list.scrollLeft > start ? start : list.scrollLeft < end ? end : list.scrollLeft;
