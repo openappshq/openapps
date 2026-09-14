@@ -124,7 +124,24 @@ export function License({
     return (
       <section className="license" aria-label="License">
         <h2>License</h2>
-        <p role="status">Loading license…</p>
+        {view?.lastError ? (
+          <>
+            <p className="inline-error" role="alert">
+              Couldn’t read your license. {view.lastError}
+            </p>
+            <div className="actions">
+              <Button
+                variant="secondary"
+                isDisabled={busy}
+                onPress={() => void run(() => invoke<LicenseView>("reload_license"))}
+              >
+                Try again
+              </Button>
+            </div>
+          </>
+        ) : (
+          <p role="status">Loading license…</p>
+        )}
       </section>
     );
 

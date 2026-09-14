@@ -229,7 +229,8 @@ impl From<DodoError> for LicenseError {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Schedule {
     pub failures: u32,
-    pub retry_at: Option<i64>,
+    /// The next attempt, on the local clock: a day after any answer, sooner with backoff.
+    pub next_attempt_at: Option<i64>,
     pub hold_until: Option<i64>,
     /// The last failure was at the network level, so a reachability probe is worth running.
     pub network_down: bool,
@@ -253,18 +254,22 @@ impl Schedule {
     /// Dodo did not answer: retry with backoff.
     fn failed(&mut self, now: i64, network_down: bool) {
         self.failures += 1;
-        self.retry_at = Some(now + Self::backoff(self.failures));
+        self.next_attempt_at = Some(now + Self::backoff(self.failures));
         self.network_down = network_down;
+    }
+
+    /// Dodo answered, whatever it said: back to the daily schedule from now.
+    fn answered(&mut self, now: i64) {
+        *self = Self {
+            next_attempt_at: Some(now + CHECK_INTERVAL),
+            ..Self::default()
+        };
     }
 
     /// `429`: no call of any kind until `Retry-After` has passed. Not a failure, so the state
     /// does not change.
     fn hold(&mut self, now: i64, retry_after: i64) {
         self.hold_until = Some(now + retry_after.clamp(1, MAX_HOLD));
-    }
-
-    fn succeeded(&mut self) {
-        *self = Self::default();
     }
 }
 
@@ -288,6 +293,9 @@ pub struct Engine {
     pub stored: Stored,
     pub products: Products,
     pub schedule: Schedule,
+    /// Counts changes that grant or extend access. Playback may only be unlocked once the
+    /// record carrying the current value has been saved.
+    pub grant_version: u64,
 }
 
 impl Engine {
@@ -296,6 +304,7 @@ impl Engine {
             stored,
             products,
             schedule: Schedule::default(),
+            grant_version: 0,
         }
     }
 
@@ -423,11 +432,12 @@ impl Engine {
     /// When the scheduler should run the next check, or `None` while there is nothing to check.
     pub fn next_check_at(&self, now: i64) -> Option<i64> {
         let record = self.checkable(now)?;
-        // After a failure the backoff decides; otherwise the daily schedule does.
-        let mut due = match self.schedule.retry_at {
-            Some(retry_at) => retry_at,
+        // The schedule lives on the local clock; before any attempt this run, a day after the
+        // last answer's local moment.
+        let mut due = match self.schedule.next_attempt_at {
+            Some(at) => at,
             None if !Self::clock_trusted(record, now) => now,
-            None => record.last_success_at + CHECK_INTERVAL,
+            None => Self::local_anchor(record) + CHECK_INTERVAL,
         };
         if let Some(hold_until) = self.schedule.hold_until {
             due = due.max(hold_until);
@@ -539,9 +549,10 @@ impl Engine {
 
     /// Puts a saved activation into effect. Returns the activation it replaced (for example the
     /// trial), whose slot the caller frees with `apply_release`.
-    pub fn commit_activation(&mut self, activated: Activated) -> Option<Probe> {
+    pub fn commit_activation(&mut self, activated: Activated, now: i64) -> Option<Probe> {
         self.stored = activated.next;
-        self.schedule.succeeded();
+        self.schedule.answered(now);
+        self.grant_version += 1;
         activated.replaced
     }
 
@@ -617,10 +628,11 @@ impl Engine {
                     // this, but an answer from Dodo sets it.
                     record.last_observed_at = record.last_success_at;
                     record.revoked = false;
+                    self.grant_version += 1;
                 } else {
                     record.revoked = true;
                 }
-                self.schedule.succeeded();
+                self.schedule.answered(now);
                 Ok(self.state(now))
             }
             Err(DodoError::RateLimited { retry_after }) => {
@@ -667,7 +679,7 @@ impl Engine {
             Ok(()) | Err(DodoError::KeyNotFound) | Err(DodoError::KeyDisabled) => {
                 if matches {
                     self.stored.license = None;
-                    self.schedule.succeeded();
+                    self.schedule = Schedule::default();
                 }
                 Ok(self.state(now))
             }
@@ -717,7 +729,7 @@ impl Engine {
     }
 
     pub fn commit(&mut self, activated: Activated, dodo: &dyn Dodo, now: i64) -> State {
-        if let Some(replaced) = self.commit_activation(activated) {
+        if let Some(replaced) = self.commit_activation(activated, now) {
             self.release(replaced, dodo, now);
         }
         self.state(now)
@@ -1064,7 +1076,7 @@ pub(crate) mod tests {
             engine.stored.license.as_ref().unwrap().last_success_at,
             NOW - 2 * DAY
         );
-        assert_eq!(engine.schedule.retry_at, Some(NOW + MIN_BACKOFF));
+        assert_eq!(engine.schedule.next_attempt_at, Some(NOW + MIN_BACKOFF));
     }
 
     #[test]
@@ -1101,8 +1113,9 @@ pub(crate) mod tests {
         assert_eq!(engine.check(&dodo, NOW), Ok(State::Revoked));
         assert!(!engine.core_feature(NOW));
         assert!(engine.stored.license.as_ref().unwrap().revoked);
-        // Checks continue daily: `valid: true` for this activation clears the revocation.
-        assert_eq!(engine.next_check_at(NOW), Some(NOW - HOUR + DAY));
+        // Checks continue daily, on the local clock: `valid: true` for this activation clears
+        // the revocation.
+        assert_eq!(engine.next_check_at(NOW), Some(NOW + DAY));
         assert_eq!(
             engine.check(&Fake::validating(true), NOW + DAY),
             Ok(State::Licensed)
@@ -1345,6 +1358,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(engine.stored.license.as_ref().unwrap().last_success_at, NOW);
         // A late failure for the old activation must not touch the retry schedule either.
+        let schedule = engine.schedule.clone();
         engine
             .finish_check(
                 &trial_probe,
@@ -1352,7 +1366,7 @@ pub(crate) mod tests {
                 NOW + 30,
             )
             .unwrap();
-        assert_eq!(engine.schedule, Schedule::default());
+        assert_eq!(engine.schedule, schedule);
         // Removal: a late `true` for the removed activation must not resurrect it.
         let paid_probe = engine.begin_check(NOW + DAY + 1, false).unwrap().unwrap();
         assert_eq!(
@@ -1712,8 +1726,36 @@ pub(crate) mod tests {
             engine.check(&Fake::validating(true), NOW + MIN_BACKOFF),
             Ok(State::Licensed)
         );
-        // Back on the daily schedule, counted from the server's time of the success.
-        assert_eq!(engine.next_check_at(NOW + MIN_BACKOFF), Some(NOW + DAY));
+        // Back on the daily schedule, a day after the answer on the local clock.
+        assert_eq!(
+            engine.next_check_at(NOW + MIN_BACKOFF),
+            Some(NOW + MIN_BACKOFF + DAY)
+        );
+    }
+
+    #[test]
+    fn the_schedule_runs_on_the_local_clock_whatever_the_server_offset() {
+        // The Mac is two days ahead of Dodo: a fresh success must not be due again at once.
+        let mut engine = licensed(0);
+        let local = NOW + 2 * DAY;
+        let dodo = Fake::default();
+        dodo.validate.borrow_mut().push(Ok(Validation {
+            valid: true,
+            server_time: Some(NOW),
+        }));
+        assert_eq!(engine.check(&dodo, local), Ok(State::Licensed));
+        assert!(!engine.check_due(local));
+        assert!(!engine.check_due(local + DAY - 1));
+        assert!(engine.check_due(local + DAY));
+        // A revoked record is on the daily schedule too, not immediately due again.
+        assert_eq!(
+            engine.check(&Fake::validating(false), local + DAY),
+            Ok(State::Revoked)
+        );
+        assert!(!engine.check_due(local + DAY + 1));
+        assert_eq!(engine.next_check_at(local + DAY), Some(local + 2 * DAY));
+        // Entitlement still follows the anchored clock, not the raw offset.
+        assert_eq!(engine.grant_version, 1);
     }
 
     #[test]

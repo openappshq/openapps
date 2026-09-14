@@ -535,7 +535,9 @@ pub fn run() {
             #[cfg(feature = "licensing")]
             licensing::runtime::open_license_link,
             #[cfg(feature = "licensing")]
-            licensing::runtime::start_license_trial
+            licensing::runtime::start_license_trial,
+            #[cfg(feature = "licensing")]
+            licensing::runtime::reload_license
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
