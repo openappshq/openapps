@@ -38,10 +38,12 @@ export type Snapshot = {
     frontmostApp: string;
     outputSampleRate: number;
     temporaryResume: boolean;
+    licenseBlocked: boolean;
   };
   pauseReason: string | null;
   effectivePresetId: string;
   recoveryNotices: string[];
+  licensingEnabled: boolean;
 };
 export type Pack = {
   id: string;

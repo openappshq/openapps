@@ -502,6 +502,67 @@ textarea {
   display: grid;
   gap: 12px;
 }
+.license {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+  padding: 24px;
+  background: var(--panel);
+  border-radius: var(--radius-panel);
+}
+.license-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.license-heading h2 {
+  font-size: 21px;
+}
+.license-heading .eyebrow {
+  color: var(--secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.license-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.license-status > svg {
+  color: var(--color-accent-text);
+}
+.license-status p {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 500;
+}
+.license-status p[data-warning="true"] {
+  color: var(--color-danger-solid);
+}
+.license .feedback,
+.license .inline-hint {
+  margin-bottom: 0;
+}
+.license-key {
+  display: grid;
+  gap: 12px;
+}
+.license-field {
+  max-width: 420px;
+}
+.license-field .label {
+  font-size: 13px;
+}
+.license-field input {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.license-privacy {
+  font-size: 13px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline);
+}
 .starting {
   display: grid;
   min-height: 100vh;

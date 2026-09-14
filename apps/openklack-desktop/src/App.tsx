@@ -173,6 +173,11 @@ export default function App() {
                     Resume temporarily
                   </Button>
                 )}
+                {snapshot.pauseReason === "License needed" && page !== "general" && (
+                  <Button variant="ghost" onPress={() => setPage("general")}>
+                    Open License
+                  </Button>
+                )}
               </div>
             )}
           <div className="feedback" role="status">

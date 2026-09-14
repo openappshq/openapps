@@ -4,6 +4,7 @@ import { Button, TextArea } from "@heroui/react";
 import { ChevronRight } from "lucide-react";
 import { Choice, Disclosure, Toggle } from "./controls";
 import { Updates } from "./Updates";
+import { License } from "./License";
 import { packLabel, type Desktop, type Preset } from "./useDesktop";
 
 export function General({
@@ -79,6 +80,7 @@ export function General({
           ]}
         />
       </div>
+      {snapshot!.licensingEnabled && <License onError={setError} disabled={busy} />}
       <Disclosure title="Sounds & settings files">
         <div className="disclosure-content">
           <div className="actions">
