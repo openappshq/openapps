@@ -2,8 +2,11 @@ import { products } from "../catalog";
 
 /** Where the site is served; checkout returns here. */
 export const SITE_ORIGIN = "https://openapps.space";
-/** Dodo Payments static checkout. Test mode uses `https://test.checkout.dodopayments.com`. */
-export const DODO_CHECKOUT_ORIGIN = "https://checkout.dodopayments.com";
+/** Dodo Payments static checkout origins. Anything else in the environment is ignored. */
+export const DODO_CHECKOUT_ORIGINS = {
+  live: "https://checkout.dodopayments.com",
+  test: "https://test.checkout.dodopayments.com",
+} as const;
 /** Placeholder until the user sets a real support address. */
 export const SUPPORT_URL = "mailto:support@openapps.space";
 
@@ -12,33 +15,72 @@ export const TRIAL_DAYS = 3;
 export const MACS_PER_LICENSE = 3;
 export const OFFLINE_GRACE = "a week";
 
-/** Dodo product IDs per app. A `PLACEHOLDER_` value renders a disabled "Coming soon" button. */
-export const dodoProducts: Record<string, { paid: string; trial: string }> = {
-  openreaction: { paid: "pdt_0NnbAzI0N8T63rCLtnBxv", trial: "pdt_0NnbAzM7iVdlBBksxe0s4" },
-  openklack: { paid: "pdt_0NnbAzPn7LOJRuOC74G1Q", trial: "pdt_0NnbAzTpBJLGJo3JmjbaX" },
+export interface DodoConfig {
+  checkoutOrigin: string;
+  /** Product IDs per app; an app without both IDs renders "Coming soon". */
+  products: Record<string, { paid: string; trial: string }>;
+}
+
+type Env = Record<string, string | boolean | undefined>;
+
+const PRODUCT_ID = /^pdt_[A-Za-z0-9]+$/;
+
+const envValue = (env: Env, name: string) => {
+  const value = env[name];
+  return typeof value === "string" ? value.trim() : "";
 };
 
 /**
+ * Reads Dodo settings from build-time environment variables:
+ * `VITE_DODO_CHECKOUT_ORIGIN` (live checkout when unset) and, per app,
+ * `VITE_<APP>_DODO_PAID_PRODUCT_ID` and `VITE_<APP>_DODO_TRIAL_PRODUCT_ID`.
+ * Malformed values are treated as unset, so a typo disables the buttons
+ * instead of linking to a broken checkout.
+ */
+export function dodoConfigFrom(env: Env): DodoConfig {
+  const origin = envValue(env, "VITE_DODO_CHECKOUT_ORIGIN").replace(/\/+$/, "");
+  const known = Object.values(DODO_CHECKOUT_ORIGINS) as string[];
+  const config: DodoConfig = {
+    checkoutOrigin: known.includes(origin) ? origin : DODO_CHECKOUT_ORIGINS.live,
+    products: {},
+  };
+  if (origin && !known.includes(origin)) {
+    // An unknown origin could send buyers anywhere; sell nothing until it is fixed.
+    return config;
+  }
+  for (const product of products) {
+    const prefix = `VITE_${product.id.toUpperCase()}_DODO`;
+    const paid = envValue(env, `${prefix}_PAID_PRODUCT_ID`);
+    const trial = envValue(env, `${prefix}_TRIAL_PRODUCT_ID`);
+    if (PRODUCT_ID.test(paid) && PRODUCT_ID.test(trial)) {
+      config.products[product.id] = { paid, trial };
+    }
+  }
+  return config;
+}
+
+export const dodoConfig = dodoConfigFrom(import.meta.env);
+
+/**
  * Whether an app has an official build to sell. Until it does, the buy and
- * trial buttons stay disabled: a key with nothing to activate helps no one.
+ * trial buttons stay disabled even when product IDs are configured: a key
+ * with nothing to activate helps no one.
  */
 export const officialBuilds: Record<string, boolean> = {
   openreaction: false,
   openklack: false,
 };
 
-export const isPlaceholder = (productId: string) => /^PLACEHOLDER_/.test(productId);
-
 /**
  * Static payment link. Dodo appends `payment_id`, `status`, `email` and, for
  * products with license keys, `license_key` to the redirect URL.
  */
 export function checkoutUrl(
-  productId: string,
+  productId: string | undefined,
   redirectUrl: string,
-  origin = DODO_CHECKOUT_ORIGIN,
+  origin: string = DODO_CHECKOUT_ORIGINS.live,
 ): string | null {
-  if (!productId || isPlaceholder(productId)) return null;
+  if (!productId || !PRODUCT_ID.test(productId)) return null;
   const params = new URLSearchParams({ quantity: "1", redirect_url: redirectUrl });
   return `${origin}/buy/${encodeURIComponent(productId)}?${params}`;
 }
@@ -56,7 +98,7 @@ export interface AppLicensing {
   trialThanksUrl: string;
   /** False while there is no official build to license. */
   officialBuildAvailable: boolean;
-  /** Null while the product is a placeholder or no official build exists. */
+  /** Null while product IDs are not configured or no official build exists. */
   buyUrl: string | null;
   trialUrl: string | null;
   supportUrl: string;
@@ -66,17 +108,17 @@ export interface LicensingOptions {
   origin?: string;
   /** Overrides `officialBuilds` (tests and previews). */
   officialBuildAvailable?: boolean;
+  /** Overrides the environment's Dodo settings (tests). */
+  dodo?: DodoConfig;
 }
 
 export function licensingFor(appId: string, options: LicensingOptions = {}): AppLicensing {
   const product = products.find((p) => p.id === appId);
   if (!product) throw new Error(`Unknown app: ${appId}`);
   const origin = options.origin ?? SITE_ORIGIN;
-  const available = options.officialBuildAvailable ?? officialBuilds[appId] ?? false;
-  const ids = dodoProducts[appId] ?? {
-    paid: `PLACEHOLDER_${appId}_PAID`,
-    trial: `PLACEHOLDER_${appId}_TRIAL`,
-  };
+  const dodo = options.dodo ?? dodoConfig;
+  const ids = dodo.products[appId];
+  const available = (options.officialBuildAvailable ?? officialBuilds[appId] ?? false) && !!ids;
   const thanksUrl = `${origin}${product.route}/thanks/`;
   const trialThanksUrl = `${origin}${product.route}/thanks/trial/`;
   return {
@@ -87,8 +129,8 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
     thanksUrl,
     trialThanksUrl,
     officialBuildAvailable: available,
-    buyUrl: available ? checkoutUrl(ids.paid, thanksUrl) : null,
-    trialUrl: available ? checkoutUrl(ids.trial, trialThanksUrl) : null,
+    buyUrl: available ? checkoutUrl(ids?.paid, thanksUrl, dodo.checkoutOrigin) : null,
+    trialUrl: available ? checkoutUrl(ids?.trial, trialThanksUrl, dodo.checkoutOrigin) : null,
     supportUrl: SUPPORT_URL,
   };
 }

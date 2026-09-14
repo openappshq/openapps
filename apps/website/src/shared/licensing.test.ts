@@ -2,11 +2,18 @@ import { describe, expect, it } from "vite-plus/test";
 import { products } from "../catalog";
 import {
   checkoutUrl,
-  dodoProducts,
-  isPlaceholder,
+  DODO_CHECKOUT_ORIGINS,
+  dodoConfigFrom,
   licensingFor,
   officialBuilds,
 } from "./licensing";
+
+const liveEnv = {
+  VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
+  VITE_OPENREACTION_DODO_TRIAL_PRODUCT_ID: "pdt_orTrial",
+  VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
+  VITE_OPENKLACK_DODO_TRIAL_PRODUCT_ID: "pdt_okTrial",
+};
 import { activateUrl, cleanedUrl, parseCheckoutReturn, readCheckoutReturn } from "./thanks";
 import { CHECKOUT_GLOBAL } from "./checkoutCapture";
 
@@ -20,30 +27,89 @@ describe("checkoutUrl", () => {
     );
   });
 
-  it("returns null for placeholders and empty IDs so buttons render disabled", () => {
-    expect(isPlaceholder("PLACEHOLDER_OPENREACTION_PAID")).toBe(true);
+  it("returns null for missing or malformed IDs so buttons render disabled", () => {
     expect(checkoutUrl("PLACEHOLDER_OPENREACTION_PAID", "https://x/")).toBeNull();
     expect(checkoutUrl("", "https://x/")).toBeNull();
+    expect(checkoutUrl(undefined, "https://x/")).toBeNull();
+    expect(checkoutUrl("pdt_a/../b", "https://x/")).toBeNull();
+  });
+});
+
+describe("dodoConfigFrom", () => {
+  it("reads both product IDs per app and defaults to live checkout", () => {
+    const config = dodoConfigFrom(liveEnv);
+    expect(config.checkoutOrigin).toBe(DODO_CHECKOUT_ORIGINS.live);
+    expect(config.products).toEqual({
+      openreaction: { paid: "pdt_orPaid", trial: "pdt_orTrial" },
+      openklack: { paid: "pdt_okPaid", trial: "pdt_okTrial" },
+    });
+  });
+
+  it("uses test checkout when asked, ignoring a trailing slash and whitespace", () => {
+    const config = dodoConfigFrom({
+      ...liveEnv,
+      VITE_DODO_CHECKOUT_ORIGIN: " https://test.checkout.dodopayments.com/ ",
+    });
+    expect(config.checkoutOrigin).toBe(DODO_CHECKOUT_ORIGINS.test);
+    expect(Object.keys(config.products)).toHaveLength(2);
+  });
+
+  it("sells nothing when the checkout origin is not Dodo's", () => {
+    const config = dodoConfigFrom({ ...liveEnv, VITE_DODO_CHECKOUT_ORIGIN: "https://evil.example" });
+    expect(config.checkoutOrigin).toBe(DODO_CHECKOUT_ORIGINS.live);
+    expect(config.products).toEqual({});
+  });
+
+  it("skips an app unless both of its IDs are present and well formed", () => {
+    const config = dodoConfigFrom({
+      VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
+      VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
+      VITE_OPENKLACK_DODO_TRIAL_PRODUCT_ID: "not-an-id",
+    });
+    expect(config.products).toEqual({});
+    expect(dodoConfigFrom({}).products).toEqual({});
   });
 });
 
 describe("licensingFor", () => {
+  const dodo = dodoConfigFrom(liveEnv);
+
   it("keeps both buttons disabled until an official build exists", () => {
     for (const product of products) {
       expect(officialBuilds[product.id], product.id).toBe(false);
-      const licensing = licensingFor(product.id);
+      const licensing = licensingFor(product.id, { dodo });
       expect(licensing.officialBuildAvailable).toBe(false);
       expect(licensing.buyUrl).toBeNull();
       expect(licensing.trialUrl).toBeNull();
     }
   });
 
-  it("links live product IDs to kind-specific return pages once a build is available", () => {
+  it("keeps both buttons disabled when product IDs are not configured", () => {
     for (const product of products) {
-      const licensing = licensingFor(product.id, { officialBuildAvailable: true });
-      expect(dodoProducts[product.id], product.id).toBeDefined();
-      expect(licensing.buyUrl, product.id).toContain(`/buy/${dodoProducts[product.id]!.paid}?`);
-      expect(licensing.trialUrl, product.id).toContain(`/buy/${dodoProducts[product.id]!.trial}?`);
+      const licensing = licensingFor(product.id, {
+        officialBuildAvailable: true,
+        dodo: dodoConfigFrom({}),
+      });
+      expect(licensing.officialBuildAvailable).toBe(false);
+      expect(licensing.buyUrl).toBeNull();
+      expect(licensing.trialUrl).toBeNull();
+    }
+  });
+
+  it("links configured product IDs to the configured checkout", () => {
+    const test = dodoConfigFrom({ ...liveEnv, VITE_DODO_CHECKOUT_ORIGIN: DODO_CHECKOUT_ORIGINS.test });
+    const licensing = licensingFor("openreaction", { officialBuildAvailable: true, dodo: test });
+    expect(licensing.buyUrl).toMatch(/^https:\/\/test\.checkout\.dodopayments\.com\/buy\/pdt_orPaid\?/);
+    expect(licensing.trialUrl).toMatch(/^https:\/\/test\.checkout\.dodopayments\.com\/buy\/pdt_orTrial\?/);
+  });
+
+  it("links product IDs to kind-specific return pages once a build is available", () => {
+    for (const product of products) {
+      const licensing = licensingFor(product.id, { officialBuildAvailable: true, dodo });
+      const ids = dodo.products[product.id];
+      expect(ids, product.id).toBeDefined();
+      expect(licensing.buyUrl, product.id).toContain(`${DODO_CHECKOUT_ORIGINS.live}/buy/${ids!.paid}?`);
+      expect(licensing.trialUrl, product.id).toContain(`${DODO_CHECKOUT_ORIGINS.live}/buy/${ids!.trial}?`);
       expect(licensing.thanksUrl).toBe(`https://openapps.space${product.route}/thanks/`);
       expect(licensing.trialThanksUrl).toBe(`https://openapps.space${product.route}/thanks/trial/`);
       expect(licensing.buyUrl).toContain(encodeURIComponent(licensing.thanksUrl));
