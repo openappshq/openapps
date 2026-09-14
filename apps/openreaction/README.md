@@ -18,7 +18,7 @@ Free & open source · Mac native · No account · No telemetry
 - A glass pill of emoji at your caret: arrow keys to choose, Return or Tab to insert, Esc to dismiss
 - A full `:tada:` with the closing colon turns straight into 🎉
 - Emoji, names and languages come from macOS itself; familiar shortcodes like `:+1:` still work
-- Stays out of password fields, secure input, terminals and apps that already expand shortcodes
+- Stays out of password fields, secure input, terminals and apps that already expand shortcodes — the app list in Settings shows the defaults and lets you switch them on or add your own
 - Liquid Glass on macOS 26 Tahoe, native materials on Sonoma and Sequoia
 - GIFs and stickers are planned
 
