@@ -11,12 +11,13 @@ import Foundation
 /// network answer is applied only to the activation it was about. Time
 /// metadata never changes the generation.
 ///
-/// Invalidation (`valid: false`) is journaled outside the Keychain first,
-/// then takes effect in memory at once; if the Keychain refuses the write it
-/// is retried on every tick and surfaced as a storage problem, and the
-/// journal keeps the activation revoked across a restart until the record
-/// is durable. Nothing ever re-enables an invalidated activation except a
-/// successful check of that same activation or a successful new activation.
+/// Invalidation (`valid: false`) and removal are journaled outside the
+/// Keychain first, then take effect in memory at once; if the Keychain
+/// refuses the write it is retried on every tick and surfaced as a storage
+/// problem, and the journal entry keeps the activation dead across a restart
+/// until the record is durably saved as revoked, deleted or replaced. Nothing
+/// ever re-enables an invalidated activation except a successful check of
+/// that same activation or a successful new activation.
 @MainActor
 public final class LicenseManager {
     public static let activationName = "Mac"
@@ -37,6 +38,15 @@ public final class LicenseManager {
     /// The cleanups on disk could not be read; nothing may overwrite them
     /// until they were merged in.
     private var cleanupsUnread = false
+    /// A journal entry that could not be persisted yet; retried on ticks.
+    private var pendingJournalRecord: (instanceID: String, revokedAt: Date)?
+    /// Journal entries whose removal could not be persisted yet; retried on ticks.
+    private var pendingJournalClears: Set<String> = []
+    /// The instance whose record is being deleted; its journal entry goes
+    /// once the deletion is durable.
+    private var removingInstanceID: String?
+    /// The journal could not be written; surfaced like a storage problem.
+    public private(set) var journalError = false
     /// Storage could not be read or written; retried on every tick.
     public private(set) var storageError: LicenseStoreError?
     /// Consecutive failed checks, for backoff.
@@ -67,16 +77,22 @@ public final class LicenseManager {
         reloadFromStore()
     }
 
-    /// Reads what the store has. A journaled invalidation wins over the
-    /// stored record: the record is revoked in memory and its save owed.
+    /// Reads what the store has. A journal entry for the stored activation
+    /// wins over the record unless the record shows a newer authoritative
+    /// grant: then the entry is stale and goes away. A winning entry revokes
+    /// the record in memory and owes its save.
     private func reloadFromStore() {
         var failure: LicenseStoreError?
         do {
             var loaded = try store.loadRecord()
             if var current = loaded, !current.isRevoked, let revokedAt = journal.revokedAt(instanceID: current.instanceID) {
-                current.revokedAt = revokedAt
-                loaded = current
-                pendingDurableWrite = .some(current)
+                if revokedAt > current.lastSuccessAt {
+                    current.revokedAt = revokedAt
+                    loaded = current
+                    pendingDurableWrite = .some(current)
+                } else {
+                    clearJournal(current.instanceID)
+                }
             }
             record = loaded
         } catch {
@@ -99,9 +115,11 @@ public final class LicenseManager {
         known + stored.filter { candidate in !known.contains { $0.instanceID == candidate.instanceID } }
     }
 
-    /// Whether memory holds something the store has not accepted yet, or
-    /// the store holds cleanups memory has not seen.
-    private var owesDurableWrite: Bool { pendingDurableWrite != nil || cleanupsDirty || cleanupsUnread }
+    /// Whether memory holds something the store or journal has not accepted
+    /// yet, or the store holds cleanups memory has not seen.
+    private var owesDurableWrite: Bool {
+        pendingDurableWrite != nil || cleanupsDirty || cleanupsUnread || pendingJournalRecord != nil || !pendingJournalClears.isEmpty
+    }
 
     // MARK: State
 
@@ -165,7 +183,7 @@ public final class LicenseManager {
                 candidates.append(0)
             }
         }
-        if !pendingCleanups.isEmpty || owesDurableWrite || storageError != nil {
+        if !pendingCleanups.isEmpty || owesDurableWrite || storageError != nil || journalError {
             if let blockedUntil, current < blockedUntil {
                 candidates.append(blockedUntil.timeIntervalSince(current))
             } else {
@@ -201,12 +219,45 @@ public final class LicenseManager {
         do {
             if let pending { try store.saveRecord(pending) } else { try store.clearRecord() }
             pendingDurableWrite = nil
-            // Durable now: a revoked record carries its own revocation.
-            if let pending, pending.isRevoked { journal.clear(instanceID: pending.instanceID) }
+            // Durable now: a revoked record carries its own revocation, and a
+            // deleted one is gone.
+            if let pending, pending.isRevoked { clearJournal(pending.instanceID) }
+            if pending == nil, let removed = removingInstanceID {
+                removingInstanceID = nil
+                clearJournal(removed)
+            }
             if !cleanupsDirty, !cleanupsUnread { storageError = nil }
         } catch {
             storageError = error
         }
+    }
+
+    /// Journals a dead activation before anything else is touched. A failed
+    /// write keeps the in-memory lock, is retried on ticks and reported.
+    private func journalRecord(_ instanceID: String, revokedAt: Date) {
+        if journal.record(instanceID: instanceID, revokedAt: revokedAt) {
+            pendingJournalRecord = nil
+            journalError = !pendingJournalClears.isEmpty
+        } else {
+            pendingJournalRecord = (instanceID, revokedAt)
+            journalError = true
+        }
+    }
+
+    /// Removes a journal entry; retried on ticks until it is really gone.
+    private func clearJournal(_ instanceID: String) {
+        if journal.clear(instanceID: instanceID) {
+            pendingJournalClears.remove(instanceID)
+            journalError = pendingJournalRecord != nil || !pendingJournalClears.isEmpty
+        } else {
+            pendingJournalClears.insert(instanceID)
+            journalError = true
+        }
+    }
+
+    private func retryJournal() {
+        if let pending = pendingJournalRecord { journalRecord(pending.instanceID, revokedAt: pending.revokedAt) }
+        for instanceID in pendingJournalClears { clearJournal(instanceID) }
     }
 
     /// Writes the cleanups, first merging in whatever the store holds if it
@@ -233,9 +284,10 @@ public final class LicenseManager {
         }
     }
 
-    /// Retries whatever the store refused; with no write owed, a store that
-    /// could not be read is read again (merging in unread cleanups).
+    /// Retries whatever the store or journal refused; with no write owed, a
+    /// store that could not be read is read again (merging in unread cleanups).
     private func retryStorage() {
+        retryJournal()
         guard pendingDurableWrite != nil || cleanupsDirty else {
             if storageError != nil { reloadFromStore() }
             return
@@ -244,17 +296,24 @@ public final class LicenseManager {
         flushCleanups()
     }
 
-    /// A removed activation: answers about the old one are stale.
-    private func replaceActivation(with newRecord: LicenseRecord?) {
+    /// A removed activation: answers about the old one are stale. The
+    /// activation is journaled dead first; the entry goes once the record's
+    /// deletion is durable.
+    private func removeActivation() {
         activationGeneration += 1
-        if let previous = record { journal.clear(instanceID: previous.instanceID) }
-        write(newRecord)
+        if let previous = record {
+            journalRecord(previous.instanceID, revokedAt: now())
+            removingInstanceID = previous.instanceID
+        }
+        write(nil)
     }
 
-    /// A new activation whose record the store already holds.
+    /// A new activation whose record the store already holds: the previous
+    /// activation's record is durably replaced, so its journal entry goes.
     private func commitActivation(_ newRecord: LicenseRecord) {
         activationGeneration += 1
-        if let previous = record { journal.clear(instanceID: previous.instanceID) }
+        if let previous = record, previous.instanceID != newRecord.instanceID { clearJournal(previous.instanceID) }
+        removingInstanceID = nil
         record = newRecord
         pendingDurableWrite = nil
         if !cleanupsDirty, !cleanupsUnread { storageError = nil }
@@ -270,7 +329,7 @@ public final class LicenseManager {
         var revoked = current
         let revokedAt = now()
         revoked.revokedAt = revokedAt
-        journal.record(instanceID: current.instanceID, revokedAt: revokedAt)
+        journalRecord(current.instanceID, revokedAt: revokedAt)
         write(revoked)
         failedChecks = 0
         blockedUntil = nil
@@ -489,7 +548,7 @@ public final class LicenseManager {
         updated.lastSuccessAt = successAt
         updated.revokedAt = nil
         updated.lastObservedAt = serverDate.map { max($0, current.activatedAt) } ?? max(current.lastObservedAt, now())
-        journal.clear(instanceID: current.instanceID)
+        clearJournal(current.instanceID)
         write(updated)
         failedChecks = 0
         blockedUntil = nil
@@ -530,11 +589,11 @@ public final class LicenseManager {
             self.callCount += 1
             switch await self.client.deactivate(licenseKey: record.licenseKey, instanceID: record.instanceID) {
             case .deactivated:
-                self.replaceActivation(with: nil)
+                self.removeActivation()
                 self.failedChecks = 0
                 self.blockedUntil = nil
                 self.lastAttemptAt = nil
-                return self.storageError == nil ? .removed : .storageUnavailable
+                return self.storageError == nil && !self.journalError ? .removed : .storageUnavailable
             case .rateLimited(let retryAfter):
                 self.block(for: retryAfter)
                 return .rateLimited(seconds: Int(retryAfter.rounded(.up)))

@@ -20,6 +20,11 @@ struct LicenseSection: View {
                     .font(Brand.body(12))
                     .foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if license.manager.journalError {
+                Text("OpenReaction couldn’t save its license notes in Preferences. It keeps retrying.")
+                    .font(Brand.body(12))
+                    .foregroundStyle(Brand.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let message = license.message {
                 Text(message.text)

@@ -99,9 +99,18 @@ struct LicensingTests {
 
     final class MemoryJournal: InvalidationJournal, @unchecked Sendable {
         var entries: [String: Date] = [:]
+        var failsWrites = false
         func revokedAt(instanceID: String) -> Date? { entries[instanceID] }
-        func record(instanceID: String, revokedAt: Date) { entries[instanceID] = revokedAt }
-        func clear(instanceID: String) { entries[instanceID] = nil }
+        func record(instanceID: String, revokedAt: Date) -> Bool {
+            guard !failsWrites else { return false }
+            entries[instanceID] = revokedAt
+            return true
+        }
+        func clear(instanceID: String) -> Bool {
+            guard !failsWrites else { return false }
+            entries[instanceID] = nil
+            return true
+        }
     }
 
     let clock = Clock()
@@ -1023,6 +1032,121 @@ struct LicensingTests {
         #expect(await manager.removeThisMac() == .removed)
         #expect(journal.entries.isEmpty)
         #expect(makeManager().state == .unlicensed)
+    }
+
+    @Test("R2. Remove whose Keychain delete fails keeps the activation dead across a restart")
+    func removalDeleteFailureKeepsTombstone() async {
+        // The reviewer's sequence: invalid → failing store → Remove succeeds
+        // at Dodo but the delete fails → offline restart.
+        store.record = paidRecord(lastSuccessAge: 3600)
+        client.validation = .invalid
+        let manager = makeManager()
+        store.failsWrites = true
+        await manager.check()
+        #expect(manager.state == .revoked)
+        #expect(journal.entries["inst_1"] != nil)
+        client.deactivation = .deactivated
+        #expect(await manager.removeThisMac() == .storageUnavailable)
+        #expect(manager.state == .unlicensed)
+        #expect(store.record?.isRevoked == false) // the stale record is still there
+        #expect(journal.entries["inst_1"] != nil) // and still tombstoned
+        client.validation = .unreachable
+        let restarted = makeManager()
+        #expect(!restarted.isFeatureEnabled)
+        #expect(restarted.state == .revoked)
+        await restarted.checkOnLaunch()
+        #expect(!restarted.isFeatureEnabled)
+        // The delete goes through later in the first process: tombstone gone.
+        store.failsWrites = false
+        await manager.tick()
+        #expect(store.record == nil)
+        #expect(journal.entries.isEmpty)
+        #expect(manager.storageError == nil)
+    }
+
+    @Test("R2. Remove that deletes durably clears the tombstone at once")
+    func removalClearsTombstoneWhenDurable() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        client.deactivation = .deactivated
+        let manager = makeManager()
+        #expect(await manager.removeThisMac() == .removed)
+        #expect(store.record == nil)
+        #expect(journal.entries.isEmpty)
+    }
+
+    @Test("R2. Replacement by a new activation clears the old tombstone only once the new record is stored")
+    func replacementClearsTombstoneAfterDurableReplace() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_1"] = clock.now
+        client.activation = .activated(activation(Self.paid, instance: "inst_2"))
+        store.failsWrites = true
+        let manager = makeManager()
+        #expect(await manager.activate(key: "KEY-PAID-2") == .storageFailed)
+        #expect(journal.entries["inst_1"] != nil) // nothing replaced: still dead
+        #expect(manager.state == .revoked)
+        store.failsWrites = false
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(journal.entries.isEmpty)
+        #expect(store.record?.instanceID == "inst_2")
+    }
+
+    @Test("R3. A journal that cannot be written keeps the lock, reports it and retries")
+    func journalWriteFailureIsReportedAndRetried() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        client.validation = .invalid
+        journal.failsWrites = true
+        store.failsWrites = true
+        let manager = makeManager()
+        await manager.check()
+        #expect(manager.state == .revoked) // locked in memory regardless
+        #expect(manager.journalError)
+        #expect(journal.entries.isEmpty)
+        #expect(manager.nextCheckDelay == LicenseManager.cleanupRetryInterval)
+        journal.failsWrites = false
+        client.validation = .unreachable
+        await manager.tick()
+        #expect(journal.entries["inst_1"] != nil)
+        #expect(!manager.journalError)
+        // The Keychain still refuses: the journal now protects the restart.
+        #expect(makeManager().state == .revoked)
+    }
+
+    @Test("R3. A journal clear that fails is retried, and never blocks the grant meanwhile")
+    func journalClearFailureIsRetried() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_1"] = clock.now.addingTimeInterval(-60)
+        journal.failsWrites = true
+        let manager = makeManager()
+        #expect(manager.state == .revoked)
+        #expect(store.record?.isRevoked == true) // durable, so the entry is due to go
+        #expect(manager.journalError) // ... but could not be cleared
+        client.validation = .valid(serverDate: clock.now)
+        await manager.check()
+        #expect(manager.state == .licensed)
+        #expect(manager.journalError)
+        #expect(journal.entries["inst_1"] != nil) // stale, but older than the grant
+        // A restart with the stale entry: the newer grant wins and the entry goes.
+        journal.failsWrites = false
+        let restarted = makeManager()
+        #expect(restarted.state == .licensed)
+        #expect(journal.entries.isEmpty)
+        // And in the first process the retry clears it too.
+        journal.entries["inst_1"] = clock.now.addingTimeInterval(-60)
+        await manager.tick()
+        #expect(journal.entries.isEmpty)
+        #expect(!manager.journalError)
+    }
+
+    @Test("R3. A stale journal entry never overrides a newer authoritative grant")
+    func staleJournalEntryIsIgnored() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_1"] = clock.now.addingTimeInterval(-2 * 3600) // before last_success_at
+        let manager = makeManager()
+        #expect(manager.state == .licensed)
+        #expect(journal.entries.isEmpty)
+        // A newer entry does win.
+        journal.entries["inst_1"] = clock.now.addingTimeInterval(-60)
+        #expect(makeManager().state == .revoked)
     }
 
     @Test("T2. The journal never wins over a different activation")

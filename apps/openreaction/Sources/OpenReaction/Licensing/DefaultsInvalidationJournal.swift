@@ -23,13 +23,18 @@ struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
         return Date(timeIntervalSince1970: seconds)
     }
 
-    func record(instanceID: String, revokedAt: Date) {
-        defaults.set(revokedAt.timeIntervalSince1970, forKey: Self.key(instanceID))
-        defaults.synchronize() // before the Keychain is even tried
+    func record(instanceID: String, revokedAt: Date) -> Bool {
+        let key = Self.key(instanceID)
+        defaults.set(revokedAt.timeIntervalSince1970, forKey: key)
+        // Flushed before the Keychain is even tried, and read back: only a
+        // value that is on disk counts as protection.
+        return defaults.synchronize() && defaults.object(forKey: key) as? Double == revokedAt.timeIntervalSince1970
     }
 
-    func clear(instanceID: String) {
-        defaults.removeObject(forKey: Self.key(instanceID))
+    func clear(instanceID: String) -> Bool {
+        let key = Self.key(instanceID)
+        defaults.removeObject(forKey: key)
+        return defaults.synchronize() && defaults.object(forKey: key) == nil
     }
 
     private static func key(_ instanceID: String) -> String {

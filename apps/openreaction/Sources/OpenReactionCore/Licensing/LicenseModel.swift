@@ -235,15 +235,18 @@ public protocol LicenseStore: Sendable {
     func savePendingCleanups(_ cleanups: [PendingCleanup]) throws(LicenseStoreError)
 }
 
-/// A non-secret note that an activation was invalidated, kept outside the
-/// Keychain so a `valid: false` survives a restart even when the Keychain
-/// refused to save the revoked record. Keyed by activation (the instance id,
-/// hashed by the implementation); never holds the license key.
+/// A non-secret note that an activation is dead (revoked by Dodo, or removed
+/// by the user), kept outside the Keychain so it survives a restart even when
+/// the Keychain refused to save or delete the record. Keyed by activation
+/// (the instance id, hashed by the implementation); never holds the license
+/// key. Both writes report whether they were made durable.
 public protocol InvalidationJournal: Sendable {
     func revokedAt(instanceID: String) -> Date?
-    /// Written synchronously, before the record is saved.
-    func record(instanceID: String, revokedAt: Date)
-    func clear(instanceID: String)
+    /// Written synchronously, before the record is touched. False if the
+    /// entry could not be persisted.
+    func record(instanceID: String, revokedAt: Date) -> Bool
+    /// False if the removal could not be persisted.
+    func clear(instanceID: String) -> Bool
 }
 
 /// An activation this Mac owes a deactivation for.
