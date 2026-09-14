@@ -40,6 +40,8 @@ pub struct Snapshot {
     pub pause_reason: Option<String>,
     pub effective_preset_id: String,
     pub recovery_notices: Vec<String>,
+    /// Whether this build includes licensing; source builds hide the License section.
+    pub licensing_enabled: bool,
 }
 
 pub struct Controller {
@@ -247,6 +249,10 @@ impl Controller {
                                 output = worker.reopen_output();
                             }
                             worker.publish();
+                            #[cfg(feature = "licensing")]
+                            if kind == 102 && value == 0 {
+                                crate::licensing::runtime::wake(&worker.app);
+                            }
                         }
                         Message::Preview(pack, completed) => {
                             let mut duration = Duration::ZERO;
@@ -371,6 +377,7 @@ impl Controller {
             preferences: playback.prefs.clone(),
             runtime,
             recovery_notices: self.recovery_notices.clone(),
+            licensing_enabled: crate::licensing::ENABLED,
         }
     }
 
@@ -490,6 +497,18 @@ impl Controller {
         self.cancel();
         self.publish();
         Ok(self.snapshot())
+    }
+
+    #[cfg(feature = "licensing")]
+    pub fn set_license_blocked(&self, blocked: bool) {
+        let changed = {
+            let mut runtime = self.runtime.lock().unwrap();
+            std::mem::replace(&mut runtime.license_blocked, blocked) != blocked
+        };
+        if changed {
+            self.cancel();
+            self.publish();
+        }
     }
 
     pub fn resume_temporarily(&self) -> Snapshot {

@@ -351,6 +351,8 @@ pub struct Runtime {
     pub audio_error: Option<String>,
     pub configuration_error: Option<String>,
     pub output_sample_rate: u32,
+    /// Official builds without a valid license stop keyboard sounds and nothing else.
+    pub license_blocked: bool,
 }
 
 impl Runtime {
@@ -366,6 +368,8 @@ impl Runtime {
             Some("Muted")
         } else if !self.input_permission {
             Some("Input Monitoring permission needed")
+        } else if self.license_blocked {
+            Some("License needed")
         } else if self.suspended {
             Some("Mac is resting")
         } else if self.secure_input {

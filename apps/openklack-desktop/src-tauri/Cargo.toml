@@ -25,6 +25,18 @@ sha2 = "0.10"
 tauri-plugin-updater = "~2.11.0"
 tokio = { version = "1", features = ["macros", "sync"] }
 biquad = "0.6.0"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "system-proxy"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
+url = { version = "2", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3", optional = true }
+
+[features]
+# Off by default: builds from source have no License UI and never contact the license service.
+# Official builds enable it and provide OPENKLACK_LICENSE_ENV plus the Dodo product IDs at build time (see build.rs).
+licensing = ["dep:reqwest", "dep:rustls", "dep:chrono", "dep:url", "dep:security-framework"]
 
 [profile.release]
 lto = "thin"

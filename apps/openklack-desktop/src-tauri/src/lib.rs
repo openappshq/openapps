@@ -2,6 +2,7 @@ mod audio;
 mod diagnostics;
 mod engine;
 mod library;
+mod licensing;
 mod model;
 mod pack_io;
 mod shaping;
@@ -520,7 +521,21 @@ pub fn run() {
             choose_application,
             updates::updater_status,
             updates::check_for_updates,
-            updates::install_update
+            updates::install_update,
+            #[cfg(feature = "licensing")]
+            licensing::runtime::license_status,
+            #[cfg(feature = "licensing")]
+            licensing::runtime::activate_license,
+            #[cfg(feature = "licensing")]
+            licensing::runtime::remove_license,
+            #[cfg(feature = "licensing")]
+            licensing::runtime::check_license_now,
+            #[cfg(feature = "licensing")]
+            licensing::runtime::dismiss_license_key,
+            #[cfg(feature = "licensing")]
+            licensing::runtime::open_license_link,
+            #[cfg(feature = "licensing")]
+            licensing::runtime::start_license_trial
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -584,6 +599,10 @@ pub fn run() {
                 })
                 .build(app)?;
             add_tray_volume(app.handle(), &controller.snapshot());
+            // Licensing starts after the controller so a check can gate playback, and in the
+            // background so it never delays launch.
+            #[cfg(feature = "licensing")]
+            licensing::runtime::Service::start(app.handle()).map_err(std::io::Error::other)?;
             engine::start_input();
             if !std::env::args().any(|arg| arg == "--background") {
                 show_settings(app.handle())?;
@@ -610,6 +629,17 @@ pub fn run() {
                 ..
             } => {
                 let _ = show_settings(app);
+            }
+            // openklack://activate?key=… from the website's thanks page.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                #[cfg(feature = "licensing")]
+                licensing::runtime::opened(app, &urls);
+                #[cfg(not(feature = "licensing"))]
+                {
+                    let _ = urls;
+                    let _ = show_settings(app);
+                }
             }
             _ => {}
         });

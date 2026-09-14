@@ -4,4 +4,11 @@
   <key>LSUIElement</key><true/>
   <key>NSInputMonitoringUsageDescription</key>
   <string>OpenKlack observes key presses to play your chosen sounds. Typed text is never stored or sent anywhere.</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>OpenKlack license activation</string>
+      <key>CFBundleURLSchemes</key><array><string>openklack</string></array>
+    </dict>
+  </array>
 </dict></plist>

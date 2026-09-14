@@ -11,5 +11,71 @@ fn main() {
         }
         println!("cargo:rerun-if-changed=native/macos.m");
     }
+    if std::env::var_os("CARGO_FEATURE_LICENSING").is_some() {
+        licensing_config();
+    }
     tauri_build::build();
+}
+
+/// Official builds compile the Dodo host and product IDs in from the environment.
+/// Missing or malformed values stop the build instead of shipping an app that can never activate.
+fn licensing_config() {
+    const VARIABLES: [(&str, &str); 5] = [
+        ("OPENKLACK_LICENSE_ENV", "test or live"),
+        ("OPENKLACK_DODO_PAID_PRODUCT_ID", "the OpenKlack product ID"),
+        (
+            "OPENKLACK_DODO_TRIAL_PRODUCT_ID",
+            "the OpenKlack Trial product ID",
+        ),
+        (
+            "OPENKLACK_BUY_URL",
+            "the https checkout link for the paid product",
+        ),
+        (
+            "OPENKLACK_TRIAL_URL",
+            "the https checkout link for the trial product",
+        ),
+    ];
+    for (name, _) in VARIABLES {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    let mut missing = Vec::new();
+    let mut values = std::collections::HashMap::new();
+    for (name, meaning) in VARIABLES {
+        match std::env::var(name) {
+            Ok(value) if !value.trim().is_empty() && !value.contains(char::is_whitespace) => {
+                values.insert(name, value);
+            }
+            _ => missing.push(format!("  {name}: {meaning}")),
+        }
+    }
+    if !missing.is_empty() {
+        panic!(
+            "The `licensing` feature needs build-time configuration. Set:\n{}\nBuild without `--features licensing` for an unrestricted source build.",
+            missing.join("\n")
+        );
+    }
+    let host = match values["OPENKLACK_LICENSE_ENV"].as_str() {
+        "live" => "https://live.dodopayments.com",
+        "test" => "https://test.dodopayments.com",
+        other => panic!("OPENKLACK_LICENSE_ENV must be `test` or `live`, not `{other}`."),
+    };
+    if values["OPENKLACK_DODO_PAID_PRODUCT_ID"] == values["OPENKLACK_DODO_TRIAL_PRODUCT_ID"] {
+        panic!("The paid and trial product IDs must differ.");
+    }
+    for name in ["OPENKLACK_BUY_URL", "OPENKLACK_TRIAL_URL"] {
+        if !values[name].starts_with("https://") {
+            panic!("{name} must be an https:// link.");
+        }
+    }
+    println!("cargo:rustc-env=OPENKLACK_DODO_HOST={host}");
+    for (name, value) in values {
+        println!("cargo:rustc-env={name}={value}");
+    }
+    println!("cargo:rerun-if-env-changed=OPENKLACK_SUPPORT_URL");
+    let support = std::env::var("OPENKLACK_SUPPORT_URL")
+        .ok()
+        .filter(|value| value.starts_with("https://") && !value.contains(char::is_whitespace))
+        .unwrap_or_else(|| "https://openapps.space/OpenKlack/".into());
+    println!("cargo:rustc-env=OPENKLACK_SUPPORT_URL={support}");
 }
