@@ -18,6 +18,15 @@ export const dodoProducts: Record<string, { paid: string; trial: string }> = {
   openklack: { paid: "pdt_0NnbAzPn7LOJRuOC74G1Q", trial: "pdt_0NnbAzTpBJLGJo3JmjbaX" },
 };
 
+/**
+ * Whether an app has an official build to sell. Until it does, the buy and
+ * trial buttons stay disabled: a key with nothing to activate helps no one.
+ */
+export const officialBuilds: Record<string, boolean> = {
+  openreaction: false,
+  openklack: false,
+};
+
 export const isPlaceholder = (productId: string) => /^PLACEHOLDER_/.test(productId);
 
 /**
@@ -41,29 +50,45 @@ export interface AppLicensing {
   scheme: string;
   /** The app's page on this site, e.g. `/openreaction/`. */
   pageUrl: string;
+  /** Where paid checkout returns. */
   thanksUrl: string;
-  /** Null while the product is still a placeholder. */
+  /** Where trial checkout returns; a separate path so the page knows the kind. */
+  trialThanksUrl: string;
+  /** False while there is no official build to license. */
+  officialBuildAvailable: boolean;
+  /** Null while the product is a placeholder or no official build exists. */
   buyUrl: string | null;
   trialUrl: string | null;
   supportUrl: string;
 }
 
-export function licensingFor(appId: string, origin = SITE_ORIGIN): AppLicensing {
+export interface LicensingOptions {
+  origin?: string;
+  /** Overrides `officialBuilds` (tests and previews). */
+  officialBuildAvailable?: boolean;
+}
+
+export function licensingFor(appId: string, options: LicensingOptions = {}): AppLicensing {
   const product = products.find((p) => p.id === appId);
   if (!product) throw new Error(`Unknown app: ${appId}`);
+  const origin = options.origin ?? SITE_ORIGIN;
+  const available = options.officialBuildAvailable ?? officialBuilds[appId] ?? false;
   const ids = dodoProducts[appId] ?? {
     paid: `PLACEHOLDER_${appId}_PAID`,
     trial: `PLACEHOLDER_${appId}_TRIAL`,
   };
   const thanksUrl = `${origin}${product.route}/thanks/`;
+  const trialThanksUrl = `${origin}${product.route}/thanks/trial/`;
   return {
     id: appId,
     name: product.name,
     scheme: appId,
     pageUrl: `${product.route}/`,
     thanksUrl,
-    buyUrl: checkoutUrl(ids.paid, thanksUrl),
-    trialUrl: checkoutUrl(ids.trial, thanksUrl),
+    trialThanksUrl,
+    officialBuildAvailable: available,
+    buyUrl: available ? checkoutUrl(ids.paid, thanksUrl) : null,
+    trialUrl: available ? checkoutUrl(ids.trial, trialThanksUrl) : null,
     supportUrl: SUPPORT_URL,
   };
 }

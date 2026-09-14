@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 import { products } from "../catalog";
-import { checkoutUrl, dodoProducts, isPlaceholder, licensingFor } from "./licensing";
-import { activateUrl, cleanedUrl, parseCheckoutReturn } from "./thanks";
+import {
+  checkoutUrl,
+  dodoProducts,
+  isPlaceholder,
+  licensingFor,
+  officialBuilds,
+} from "./licensing";
+import { activateUrl, cleanedUrl, parseCheckoutReturn, readCheckoutReturn } from "./thanks";
+import { CHECKOUT_GLOBAL } from "./checkoutCapture";
 
 describe("checkoutUrl", () => {
   it("builds Dodo's static payment link with quantity and redirect", () => {
@@ -21,14 +28,26 @@ describe("checkoutUrl", () => {
 });
 
 describe("licensingFor", () => {
-  it("has live product IDs for every catalog app", () => {
+  it("keeps both buttons disabled until an official build exists", () => {
     for (const product of products) {
+      expect(officialBuilds[product.id], product.id).toBe(false);
       const licensing = licensingFor(product.id);
+      expect(licensing.officialBuildAvailable).toBe(false);
+      expect(licensing.buyUrl).toBeNull();
+      expect(licensing.trialUrl).toBeNull();
+    }
+  });
+
+  it("links live product IDs to kind-specific return pages once a build is available", () => {
+    for (const product of products) {
+      const licensing = licensingFor(product.id, { officialBuildAvailable: true });
       expect(dodoProducts[product.id], product.id).toBeDefined();
       expect(licensing.buyUrl, product.id).toContain(`/buy/${dodoProducts[product.id]!.paid}?`);
       expect(licensing.trialUrl, product.id).toContain(`/buy/${dodoProducts[product.id]!.trial}?`);
       expect(licensing.thanksUrl).toBe(`https://openapps.space${product.route}/thanks/`);
+      expect(licensing.trialThanksUrl).toBe(`https://openapps.space${product.route}/thanks/trial/`);
       expect(licensing.buyUrl).toContain(encodeURIComponent(licensing.thanksUrl));
+      expect(licensing.trialUrl).toContain(encodeURIComponent(licensing.trialThanksUrl));
     }
   });
 
@@ -64,6 +83,53 @@ describe("activateUrl", () => {
     expect(activateUrl("openklack", "a b&c=d/é")).toBe(
       "openklack://activate?key=a%20b%26c%3Dd%2F%C3%A9",
     );
+  });
+
+  it("marks trial keys for the app", () => {
+    expect(activateUrl("openreaction", "LK-T", "trial")).toBe(
+      "openreaction://activate?key=LK-T&kind=trial",
+    );
+  });
+});
+
+describe("readCheckoutReturn", () => {
+  it("prefers what the head script captured and leaves the URL alone", () => {
+    const replaceState = () => {
+      throw new Error("must not touch history");
+    };
+    const win = {
+      [CHECKOUT_GLOBAL]: { license_key: "LK-1", email: "a@b.c", status: "succeeded" },
+      location: {
+        search: "",
+        href: "https://openapps.space/thanks/",
+        pathname: "/thanks/",
+        hash: "",
+      },
+      history: { state: null, replaceState },
+    } as unknown as Window;
+    expect(readCheckoutReturn(win)).toEqual({
+      keys: ["LK-1"],
+      email: "a@b.c",
+      status: "succeeded",
+    });
+  });
+
+  it("falls back to the query string and scrubs it when the head script did not run", () => {
+    const replaced: string[] = [];
+    const win = {
+      location: {
+        search: "?license_key=LK-2&status=succeeded",
+        href: "https://openapps.space/openreaction/thanks/?license_key=LK-2&status=succeeded",
+        pathname: "/openreaction/thanks/",
+        hash: "",
+      },
+      history: {
+        state: null,
+        replaceState: (_s: unknown, _t: string, url: string) => replaced.push(url),
+      },
+    } as unknown as Window;
+    expect(readCheckoutReturn(win).keys).toEqual(["LK-2"]);
+    expect(replaced).toEqual(["/openreaction/thanks/"]);
   });
 });
 

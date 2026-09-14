@@ -22,6 +22,12 @@
 .buy-buttons .button-link {
   gap: 10px;
 }
+.buy-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
 .button-link.secondary {
   border: 1px solid var(--color-border-control);
   background: var(--color-bg-canvas);
@@ -75,6 +81,7 @@
 }
 .license-key {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 8px 8px 8px 20px;
@@ -88,6 +95,16 @@
   overflow-wrap: anywhere;
   font: 500 16px/1.4 var(--font-mono);
   user-select: all;
+  border-radius: var(--radius-small);
+}
+.license-key code:focus-visible {
+  outline-offset: 6px;
+}
+.license-key-help {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 .license-key button {
   display: inline-flex;

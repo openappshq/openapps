@@ -27,7 +27,7 @@ function Action({
 
 /** "Buy" and "Try" checkout buttons for an app; disabled until its Dodo products exist. */
 export default function BuyButtons({ app, small = false }: { app: string; small?: boolean }) {
-  const { buyUrl, trialUrl } = licensingFor(app);
+  const { buyUrl, trialUrl, officialBuildAvailable } = licensingFor(app);
   const size = small ? " small" : "";
   return (
     <div className="buy-buttons">
@@ -37,6 +37,9 @@ export default function BuyButtons({ app, small = false }: { app: string; small?
       <Action href={trialUrl} className={`button-link secondary${size}`}>
         <Timer size={18} aria-hidden="true" /> Try free for {TRIAL_DAYS} days
       </Action>
+      {!officialBuildAvailable && (
+        <p className="buy-note">Official build coming soon — build from source today.</p>
+      )}
     </div>
   );
 }

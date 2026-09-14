@@ -12,13 +12,16 @@ test("each product owns its routes and adding another product cannot shadow Open
     "/OpenKlack/",
     "/OpenKlack/download/",
     "/OpenKlack/thanks/",
+    "/OpenKlack/thanks/trial/",
     "/openreaction/",
     "/openreaction/thanks/",
+    "/openreaction/thanks/trial/",
     "/another_route/",
     "/another_route/download/",
     "/another_route/thanks/",
+    "/another_route/thanks/trial/",
   ]);
-  expect(combined[5]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(combined[7]?.module).toBe("./apps/another-app/pages/Home.tsx");
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
   for (const path of ["/OpenKlack", "/OpenKlack/", "/openklack/index.html"])
     expect(findPage(path)?.entry).toBe("Home");
@@ -57,6 +60,25 @@ test("catalog routes emit separate static HTML entries with product metadata", (
       'name="robots" content="noindex"',
     );
     expect(readFileSync(join(root, "openreaction/index.html"), "utf8")).not.toContain("noindex");
+    for (const file of [
+      "thanks",
+      "openreaction/thanks",
+      "OpenKlack/thanks",
+      "OpenKlack/thanks/trial",
+    ]) {
+      const html = readFileSync(join(root, `${file}/index.html`), "utf8");
+      const head = html.slice(html.indexOf("<head>") + 6);
+      // The referrer policy and capture script must precede every other head tag.
+      expect(
+        head.trimStart().startsWith('<meta name="referrer" content="no-referrer" />'),
+        file,
+      ).toBe(true);
+      expect(head.indexOf("__openappsCheckout"), file).toBeLessThan(head.indexOf("<meta charset"));
+      expect(head.indexOf("<script>"), file).toBeLessThan(head.indexOf("<link"));
+    }
+    expect(readFileSync(join(root, "openreaction/index.html"), "utf8")).not.toContain(
+      "__openappsCheckout",
+    );
     expect(inputs).toContain(join(root, "OpenKlack/download/index.html"));
     expect(readFileSync(join(root, "OpenKlack/download/index.html"), "utf8")).toContain(
       "Download for Mac · OpenKlack",

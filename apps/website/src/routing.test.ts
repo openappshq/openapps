@@ -15,6 +15,8 @@ describe("classifyPath", () => {
       "/openreaction/thanks/",
       "/OpenKlack/thanks/",
       "/openklack/thanks",
+      "/openreaction/thanks/trial/",
+      "/OpenKlack/thanks/trial",
       "/thanks/",
       "/thanks",
     ]) {

@@ -17,6 +17,8 @@ export type Product = {
     template?: string;
     /** Keep search engines away, e.g. from the checkout return page. */
     noindex?: boolean;
+    /** Checkout returns here: the head captures and scrubs the query before anything loads. */
+    checkoutReturn?: boolean;
   }[];
 };
 
@@ -56,6 +58,15 @@ export const products: Product[] = [
         title: "Thank you · OpenKlack",
         description: "Your OpenKlack license key and how to activate it.",
         noindex: true,
+        checkoutReturn: true,
+      },
+      {
+        path: "thanks/trial",
+        entry: "TrialThanks",
+        title: "Your trial · OpenKlack",
+        description: "Your OpenKlack trial key and how to activate it.",
+        noindex: true,
+        checkoutReturn: true,
       },
     ],
   },
@@ -88,6 +99,16 @@ export const products: Product[] = [
         description: "Your OpenReaction license key and how to activate it.",
         template: "src/apps/openreaction/template.html",
         noindex: true,
+        checkoutReturn: true,
+      },
+      {
+        path: "thanks/trial",
+        entry: "TrialThanks",
+        title: "Your trial · OpenReaction",
+        description: "Your OpenReaction trial key and how to activate it.",
+        template: "src/apps/openreaction/template.html",
+        noindex: true,
+        checkoutReturn: true,
       },
     ],
   },
@@ -112,7 +133,7 @@ export function productPages(catalog = products) {
     return product.pages.map((page) => {
       if (
         !/^[A-Za-z][A-Za-z0-9_-]*$/.test(page.entry) ||
-        (page.path && !/^[a-z][a-z0-9-]*$/.test(page.path))
+        (page.path && !/^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)?$/.test(page.path))
       )
         throw new Error(`Invalid page in ${product.name}: ${page.path}`);
       const path = `${product.route}/${page.path ? `${page.path}/` : ""}`;
@@ -139,6 +160,7 @@ export interface SitePage {
   module: string;
   template?: string;
   noindex?: boolean;
+  checkoutReturn?: boolean;
 }
 
 /** Pages that belong to the site rather than to one product. */
@@ -152,6 +174,7 @@ export const sitePages: SitePage[] = [
     siteName: "OpenApps HQ",
     module: "./site/Thanks.tsx",
     noindex: true,
+    checkoutReturn: true,
   },
 ];
 
