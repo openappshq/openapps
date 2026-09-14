@@ -4,26 +4,14 @@ import Testing
 
 @Suite("Preferences")
 struct PreferencesTests {
-    @Test func recentsMoveToFrontWithoutDuplicates() {
-        var recents = RecentItems(limit: 3)
-        recents.record("a")
-        recents.record("b")
-        recents.record("a")
-        #expect(recents.items == ["a", "b"])
-    }
-
-    @Test func recentsAreCapped() {
-        var recents = RecentItems(limit: 2)
-        ["a", "b", "c"].forEach { recents.record($0) }
-        #expect(recents.items == ["c", "b"])
-    }
-
     @Test func defaultsAreExcluded() {
         let exclusions = AppExclusions()
         #expect(exclusions.isExcluded("com.tinyspeck.slackmacgap"))
         #expect(exclusions.isExcluded("com.apple.Terminal"))
         #expect(!exclusions.isExcluded("com.apple.TextEdit"))
         #expect(!exclusions.isExcluded(nil))
+        // The onboarding practice field types into OpenReaction's own window.
+        #expect(!exclusions.isExcluded("com.openappshq.openreaction"))
     }
 
     @Test func userCanIncludeADefaultAndExcludeOthers() {
@@ -38,36 +26,38 @@ struct PreferencesTests {
         #expect(exclusions == AppExclusions())
     }
 
-    @Test func renderabilityFilterUsesInjectedCapability() throws {
-        let database = try EmojiDatabase.bundled()
-        let filtered = database.filtered { $0.emoji != "🎉" }
-        #expect(filtered.entries.count == database.entries.count - 1)
-        #expect(filtered.entry(forShortcode: "tada") == nil)
-        #expect(EmojiMatcher(database: filtered).matches(for: "tada").allSatisfy { $0.entry.emoji != "🎉" })
+    @Test func frecencyFavorsFrequentAndRecentUse() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let day: TimeInterval = 24 * 60 * 60
+        var frecency = Frecency(halfLife: 7 * day)
+        frecency.record("old", now: start)
+        frecency.record("old", now: start)
+        frecency.record("old", now: start)
+        frecency.record("new", now: start.addingTimeInterval(21 * day))
+
+        let now = start.addingTimeInterval(21 * day)
+        // Three uses three half-lives ago are worth 3/8; one use today is worth 1.
+        #expect(abs(frecency.score("old", now: now) - 0.375) < 0.0001)
+        #expect(frecency.score("new", now: now) == 1)
+        #expect(frecency.score("never", now: now) == 0)
     }
 
-    @Test func versionFallbackHidesEmojiNewerThanTheSystem() {
-        func entry(_ version: String?) -> EmojiEntry {
-            EmojiEntry(emoji: "x", description: "", category: "", aliases: ["x"], tags: [], iosVersion: version)
-        }
-        let sonoma = OperatingSystemVersion(majorVersion: 14, minorVersion: 0, patchVersion: 0)
-        let sonoma4 = OperatingSystemVersion(majorVersion: 14, minorVersion: 4, patchVersion: 0)
-        let tahoe = OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
-        #expect(EmojiDatabase.isSupported(entry("16.4"), onMacOS: sonoma))
-        #expect(EmojiDatabase.isSupported(entry("17.0"), onMacOS: sonoma))
-        #expect(!EmojiDatabase.isSupported(entry("17.4"), onMacOS: sonoma))
-        #expect(EmojiDatabase.isSupported(entry("17.4"), onMacOS: sonoma4))
-        #expect(!EmojiDatabase.isSupported(entry("18.4"), onMacOS: sonoma4))
-        #expect(EmojiDatabase.isSupported(entry("18.4"), onMacOS: tahoe))
-        #expect(EmojiDatabase.isSupported(entry(nil), onMacOS: sonoma))
+    @Test func frecencyDropsWeakestBeyondLimit() {
+        let now = Date(timeIntervalSince1970: 0)
+        var frecency = Frecency(limit: 2)
+        frecency.record("a", now: now)
+        frecency.record("a", now: now)
+        frecency.record("b", now: now)
+        frecency.record("c", now: now)
+        let scores = frecency.scores(now: now)
+        #expect(scores.count == 2)
+        #expect(scores["a"] == 2)
     }
 
-    @Test func emojiProviderMapsMatches() throws {
-        let provider = EmojiSuggestionProvider(database: try EmojiDatabase.bundled())
-        #expect(provider.exactMatch(for: "Tada")?.payload == .text("🎉"))
-        #expect(provider.exactMatch(for: "not_an_emoji_code") == nil)
-        let first = provider.suggestions(for: "tad", recents: [], limit: 3).first
-        #expect(first?.title == "tada")
-        #expect(first?.preview == .glyph("🎉"))
+    @Test func frecencyRoundTripsThroughCodable() throws {
+        var frecency = Frecency()
+        frecency.record("🎉", now: Date(timeIntervalSince1970: 5))
+        let decoded = try JSONDecoder().decode(Frecency.self, from: JSONEncoder().encode(frecency))
+        #expect(decoded == frecency)
     }
 }

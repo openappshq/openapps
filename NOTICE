@@ -7,6 +7,10 @@ its original license.
 -------------------------------------------------------------------------------
 gemoji emoji database
 -------------------------------------------------------------------------------
+Use:      shortcode aliases and tags, and the full emoji list only when the
+          system's emoji names are unavailable. This revision covers emoji
+          through Unicode 15.1; newer emoji have no gemoji shortcode and use
+          a shortcode derived from their system name.
 File:     Sources/OpenReactionCore/Resources/emoji.json (unmodified)
 Source:   https://github.com/github/gemoji/blob/0eca75db9301421efc8710baf7a7576793ae452a/db/emoji.json
 Revision: 0eca75db9301421efc8710baf7a7576793ae452a (2024-04-02)
@@ -48,6 +52,13 @@ Source:    https://github.com/google/fonts at revision
                        License text: Fonts/OFL-InstrumentSans.txt
 - IBM Plex Mono        ofl/ibmplexmono/IBMPlexMono-Regular.ttf, IBMPlexMono-Medium.ttf
                        License text: Fonts/OFL-IBMPlexMono.txt
+
+-------------------------------------------------------------------------------
+System emoji names
+-------------------------------------------------------------------------------
+At runtime OpenReaction reads emoji names from the macOS CoreEmoji framework's
+resources on the user's own Mac. Those files are not included in, copied into,
+or distributed with this repository or the app.
 
 -------------------------------------------------------------------------------
 Brand system

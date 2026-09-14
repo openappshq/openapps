@@ -43,8 +43,8 @@ public struct AppExclusions: Codable, Equatable, Sendable {
         "com.github.wez.wezterm",
         "org.alacritty",
         "net.kovidgoyal.kitty",
-        // Self
-        "com.openappshq.openreaction",
+        // OpenReaction itself is deliberately not listed: onboarding's
+        // practice field relies on the picker working in its own window.
     ]
 
     public private(set) var added: Set<String>
