@@ -444,8 +444,9 @@ impl Engine {
         let record = self.checkable(now)?;
         // The schedule lives on the local clock; before any attempt this run, a day after the
         // last answer's local moment.
-        let mut due = if !Self::clock_trusted(record, now) {
-            // An untrusted clock needs Dodo's answer now, whatever was scheduled.
+        let mut due = if !Self::clock_trusted(record, now) && self.schedule.failures == 0 {
+            // An untrusted clock needs Dodo's answer now, whatever was scheduled; once an
+            // attempt has failed, the backoff decides.
             now
         } else {
             self.schedule
@@ -1842,6 +1843,15 @@ pub(crate) mod tests {
             engine.next_check_at(NOW - 2 * DAY),
             Some(NOW - 2 * DAY + 60)
         );
+        // One forced attempt fails: the backoff decides from there, not every second.
+        let rolled = NOW - 2 * DAY + 60;
+        assert!(
+            engine
+                .check(&Fake::failing(DodoError::Offline("down".into())), rolled)
+                .is_err()
+        );
+        assert!(!engine.check_due(rolled + 1));
+        assert_eq!(engine.next_check_at(rolled), Some(rolled + MIN_BACKOFF));
     }
 
     #[test]

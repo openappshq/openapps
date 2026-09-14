@@ -13,6 +13,7 @@ export type LicenseView = {
   daysOffline?: number;
   coreFeature: boolean;
   clockChanged: boolean;
+  journalUnreadable: boolean;
   trialUsed: boolean;
   graceWarning: boolean;
   checking: boolean;
@@ -181,7 +182,23 @@ export function License({
           {status[view.state]}
         </p>
       </div>
-      {view.state === "checkRequired" && view.lastError && (
+      {view.journalUnreadable && (
+        <>
+          <p className="inline-error" role="alert">
+            Couldn’t read license data — checking with the license server… {view.lastError}
+          </p>
+          <div className="actions">
+            <Button
+              variant="secondary"
+              isDisabled={busy}
+              onPress={() => void run(() => invoke<LicenseView>("reload_license"))}
+            >
+              {view.checking ? "Checking…" : "Try again"}
+            </Button>
+          </div>
+        </>
+      )}
+      {view.state === "checkRequired" && !view.journalUnreadable && view.lastError && (
         <p className="inline-error" role="alert">
           {view.lastError}
         </p>
