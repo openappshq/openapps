@@ -46,13 +46,13 @@ swift test           # unit tests for the core library
 scripts/bundle.sh    # release build → build/OpenReaction.app (licensing off)
 ```
 
-Official builds opt into licensing; the script generates the compiled-in configuration and refuses to build without the Dodo product IDs:
+Official builds opt into licensing; the script generates the compiled-in configuration and refuses to build without the Dodo paid product ID:
 
 ```sh
-OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test \
-OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… OPENAPPS_DODO_TRIAL_PRODUCT_ID=pdt_… \
-scripts/bundle.sh
+OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… scripts/bundle.sh
 ```
+
+The signed, notarized download is built by CI from an `openreaction-v*` tag; see [RELEASING.md](RELEASING.md).
 
 `scripts/bundle.sh` signs with `APPLE_SIGNING_IDENTITY` when set, and ad-hoc otherwise:
 

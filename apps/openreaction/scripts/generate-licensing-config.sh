@@ -3,11 +3,12 @@
 #
 #   scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
 #
-# Reads OPENAPPS_DODO_ENV (test|live), OPENAPPS_DODO_PAID_PRODUCT_ID,
-# OPENAPPS_DODO_TRIAL_PRODUCT_ID and optional OPENAPPS_BUY_URL,
-# OPENAPPS_TRIAL_URL, OPENAPPS_SUPPORT_URL. Product IDs are public
-# configuration; there are no secrets here. Fails loudly when anything a
-# licensed build needs is missing, so a placeholder can never ship.
+# Reads OPENAPPS_DODO_ENV (test|live) and OPENAPPS_DODO_PAID_PRODUCT_ID, plus
+# optional OPENAPPS_DODO_TRIAL_PRODUCT_ID, OPENAPPS_BUY_URL, OPENAPPS_TRIAL_URL
+# and OPENAPPS_SUPPORT_URL. The trial product is optional: without it no key
+# is recognised as a trial key (the trial is moving in-app). Product IDs are
+# public configuration; there are no secrets here. Fails loudly when anything
+# a licensed build needs is missing, so a placeholder can never ship.
 set -euo pipefail
 
 out="${1:?output path}"
@@ -24,17 +25,23 @@ case "$env_name" in
     *) echo "error: OPENAPPS_DODO_ENV must be 'test' or 'live' (got '${env_name}')" >&2; exit 1 ;;
 esac
 # Product IDs: Dodo's `pdt_` form, and paid ≠ trial (equal IDs would make
-# every trial key look paid).
-for var in OPENAPPS_DODO_PAID_PRODUCT_ID OPENAPPS_DODO_TRIAL_PRODUCT_ID; do
-    value="${!var:-}"
+# every trial key look paid). The trial ID may be left unset.
+check_product_id() {
+    local var="$1" value="$2"
     if [[ ! "$value" =~ ^pdt_[A-Za-z0-9_-]{4,}$ ]] || [[ "$value" == *PLACEHOLDER* || "$value" == *TODO* ]]; then
         echo "error: $var must be a real Dodo product id (pdt_…); create the products first (LICENSING.md)" >&2
         exit 1
     fi
-done
-if [[ "$paid" == "$trial" ]]; then
-    echo "error: paid and trial product ids must differ" >&2
-    exit 1
+}
+check_product_id OPENAPPS_DODO_PAID_PRODUCT_ID "$paid"
+trial_literal="[]"
+if [[ -n "$trial" ]]; then
+    check_product_id OPENAPPS_DODO_TRIAL_PRODUCT_ID "$trial"
+    if [[ "$paid" == "$trial" ]]; then
+        echo "error: paid and trial product ids must differ" >&2
+        exit 1
+    fi
+    trial_literal="[\"${trial}\"]"
 fi
 
 # URLs are optional (the app shows "coming soon" without them) but must be
@@ -51,7 +58,7 @@ swift_optional_url() {
     echo "URL(string: \"${value}\")"
 }
 buy_literal="$(swift_optional_url "$buy_url" OPENAPPS_BUY_URL)"
-trial_literal="$(swift_optional_url "$trial_url" OPENAPPS_TRIAL_URL)"
+trial_url_literal="$(swift_optional_url "$trial_url" OPENAPPS_TRIAL_URL)"
 support_literal="$(swift_optional_url "$support_url" OPENAPPS_SUPPORT_URL)"
 
 mkdir -p "$(dirname "$out")"
@@ -67,11 +74,11 @@ enum LicensingConfig {
     static let host = URL(string: "${host}")!
     static let products = LicenseProducts(
         paid: ["${paid}"],
-        trial: ["${trial}"]
+        trial: ${trial_literal}
     )
     /// nil until the checkout pages exist; the app shows "coming soon".
     static let buyURL: URL? = ${buy_literal}
-    static let trialURL: URL? = ${trial_literal}
+    static let trialURL: URL? = ${trial_url_literal}
     static let supportURL: URL? = ${support_literal}
 }
 #endif
