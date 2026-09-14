@@ -1,5 +1,6 @@
 import { cp, mkdir } from "node:fs/promises";
 import { basename } from "node:path";
+import { writeGithubStars } from "./github-stars.mjs";
 import { openreactionFiles, openreactionSourceDir } from "./openreaction-source.mjs";
 
 const publicDir = new URL("../public/", import.meta.url);
@@ -29,6 +30,8 @@ if (!openreaction) {
     "OpenReaction sources not found: expected apps/openreaction or OPENREACTION_SOURCE_DIR.",
   );
 }
+await writeGithubStars("openappshq/openklack", new URL("data/github.json", publicDir));
+
 await mkdir(new URL("brand/openreaction/", publicDir), { recursive: true });
 await mkdir(new URL("data/openreaction/", publicDir), { recursive: true });
 await Promise.all([

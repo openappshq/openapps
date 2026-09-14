@@ -15,8 +15,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import ReactionDemo from "./demo/ReactionDemo";
+import HqBadge from "../shared/HqBadge";
+import StarButton from "../shared/StarButton";
+import { GITHUB_URL } from "../shared/github";
 
-const REPO = "https://github.com/openappshq/openklack";
+const REPO = GITHUB_URL;
 const APP_DIR = `${REPO}/tree/main/apps/openreaction`;
 
 const enter = {
@@ -180,6 +183,7 @@ export default function App() {
           <a href="#how">How it works</a>
           <a href="#privacy">Privacy</a>
           <a href="#questions">Questions</a>
+          <StarButton />
           <motion.a
             whileHover={{ y: -2 }}
             whileTap={{ scale: 0.98 }}
@@ -193,8 +197,7 @@ export default function App() {
       <main>
         <section className="hero page-width" aria-labelledby="hero-title">
           <div className="hero-kicker">
-            <span className="status-dot" /> An OpenApps HQ original{" "}
-            <span>Say it with a colon.</span>
+            <HqBadge /> <span>Say it with a colon.</span>
           </div>
           <div className="hero-grid">
             <motion.h1

@@ -1,8 +1,8 @@
 import { ArrowUpRight, Code2, Gift, Laptop, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
+import StarButton from "../shared/StarButton";
+import { GITHUB_URL } from "../shared/github";
 import { apps, type AppEntry } from "./apps";
-
-const GITHUB = "https://github.com/openappshq/openklack";
 
 const principles: { icon: ReactNode; title: string; body: string }[] = [
   { icon: <Gift size={20} />, title: "Free", body: "No trials, no upsells, no accounts." },
@@ -86,18 +86,16 @@ export default function App() {
         </a>
         <nav aria-label="Main navigation">
           <a href="#apps">Apps</a>
-          <a href={GITHUB} target="_blank" rel="noreferrer">
-            GitHub <ArrowUpRight size={14} />
-          </a>
+          <StarButton />
         </nav>
       </header>
       <main>
         <section className="hero page-width" aria-labelledby="hero-title">
           <span className="eyebrow">A small studio for small apps</span>
           <h1 id="hero-title">
-            Small apps.
+            Small <span className="hero-accent">apps</span>.
             <br />
-            <span>Room for personality.</span>
+            <span className="hero-quiet">Room for personality.</span>
           </h1>
           <p>
             Free, open-source Mac apps that do one thing well and stay out of your way. No accounts,
@@ -145,7 +143,7 @@ export default function App() {
               {app.name}
             </a>
           ))}
-          <a href={GITHUB} target="_blank" rel="noreferrer">
+          <a href={GITHUB_URL} target="_blank" rel="noreferrer">
             GitHub <ArrowUpRight size={14} />
           </a>
         </div>

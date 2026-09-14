@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "@heroui/styles";
 @import "../../../design/tokens.css";
+@import "./shared/star-button.css";
+@import "./shared/hq-badge.css";
 
 :root {
   --font-sans: "Instrument Sans Variable", var(--font-body), sans-serif;
@@ -142,7 +144,7 @@ h3 {
   font-size: 14px;
   font-weight: 600;
 }
-.site-header nav > a:not(.button-link) {
+.site-header nav > a:not(.button-link, .star-button) {
   padding-block: 12px;
 }
 .button-link {
@@ -1133,7 +1135,7 @@ h3 {
     background: var(--color-accent-hover);
   }
   .text-link:hover,
-  .site-header nav > a:not(.button-link):hover,
+  .site-header nav > a:not(.button-link, .star-button):hover,
   .site-footer a:hover {
     color: var(--color-accent-solid);
   }
@@ -1238,7 +1240,7 @@ h3 {
   .site-header nav {
     gap: 20px;
   }
-  .site-header nav > a:not(.button-link) {
+  .site-header nav > a:not(.button-link, .star-button) {
     display: none;
   }
   .hero-grid {

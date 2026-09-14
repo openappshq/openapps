@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "@heroui/styles";
 @import "./tokens.css";
+@import "../shared/star-button.css";
+@import "../shared/hq-badge.css";
 
 :root {
   --font-sans: "Instrument Sans Variable", var(--font-body), sans-serif;
@@ -148,7 +150,7 @@ kbd {
   font-size: 14px;
   font-weight: 600;
 }
-.site-header nav > a:not(.button-link) {
+.site-header nav > a:not(.button-link, .star-button) {
   padding-block: 12px;
 }
 .button-link {
@@ -1200,7 +1202,7 @@ kbd {
     background: var(--color-accent-hover);
   }
   .text-link:hover,
-  .site-header nav > a:not(.button-link):hover,
+  .site-header nav > a:not(.button-link, .star-button):hover,
   .site-footer a:hover {
     color: var(--color-accent-text);
   }
@@ -1246,7 +1248,7 @@ kbd {
   .site-header nav {
     gap: 20px;
   }
-  .site-header nav > a:not(.button-link) {
+  .site-header nav > a:not(.button-link, .star-button) {
     display: none;
   }
   .hero-grid {
@@ -1337,10 +1339,17 @@ kbd {
     width: 26px;
     height: 26px;
   }
+  .site-header nav {
+    gap: 8px;
+  }
   .site-header .button-link {
     font-size: 13px;
     padding-inline: 12px;
     gap: 6px;
+    white-space: nowrap;
+  }
+  .site-header .button-link svg {
+    display: none;
   }
   .hero {
     padding-block: 24px 36px;

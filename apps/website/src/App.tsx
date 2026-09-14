@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { enter } from "@openklack/ui/transitions";
 import { ArrowDown, ArrowUpRight, Check, Plus } from "lucide-react";
 import SoundStudio from "./SoundStudio";
+import HqBadge from "./shared/HqBadge";
+import StarButton from "./shared/StarButton";
 
 const questions = [
   [
@@ -95,6 +97,7 @@ export default function App() {
         <nav aria-label="Main navigation">
           <a href="#desktop">The Mac app</a>
           <a href="#questions">Questions</a>
+          <StarButton />
           <motion.a
             whileHover={{ y: -2 }}
             whileTap={{ scale: 0.98 }}
@@ -108,7 +111,7 @@ export default function App() {
       <main>
         <section className="hero page-width" aria-labelledby="hero-title">
           <div className="hero-kicker">
-            <span className="status-dot" /> An OpenApps HQ original <span>Sound on. Smile on.</span>
+            <HqBadge /> <span>Sound on. Smile on.</span>
           </div>
           <div className="hero-grid">
             <motion.h1 {...enter} id="hero-title">
