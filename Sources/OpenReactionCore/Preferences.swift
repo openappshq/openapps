@@ -1,20 +1,3 @@
-/// Most-recently-used emoji, most recent first.
-public struct RecentItems: Codable, Equatable, Sendable {
-    public private(set) var items: [String]
-    public let limit: Int
-
-    public init(items: [String] = [], limit: Int = 24) {
-        self.limit = limit
-        self.items = Array(items.prefix(limit))
-    }
-
-    public mutating func record(_ item: String) {
-        items.removeAll { $0 == item }
-        items.insert(item, at: 0)
-        if items.count > limit { items.removeLast(items.count - limit) }
-    }
-}
-
 /// Apps where OpenReaction stays inactive. Defaults cover apps that already
 /// expand `:shortcodes:` themselves, and terminals where `:` starts commands
 /// (`:wq` in vim) and Return must never be intercepted. User overrides are
