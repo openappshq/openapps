@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the signed OpenReaction.app (scripts/bundle.sh).
+
+  Deliberately empty: the app is not sandboxed, because the session event tap
+  and the Accessibility queries it makes into other apps are unavailable to a
+  sandboxed process. The hardened runtime is enabled on the codesign command
+  line, and none of its exceptions are needed: the app loads no plug-ins, no
+  unsigned libraries and no JIT. Accessibility and Input Monitoring are user
+  grants in System Settings, not entitlements.
+-->
+<plist version="1.0">
+<dict/>
+</plist>
