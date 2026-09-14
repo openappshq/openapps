@@ -28,7 +28,7 @@ macOS 14 Sonoma or later.
 
 OpenReaction needs **Accessibility** and **Input Monitoring** permission to notice shortcodes as you type and insert the result into the app you are using.
 
-**Privacy.** Typing is read only while the focused field is known to be an ordinary text field, matched on your Mac, and never stored or sent anywhere. Password fields and secure input are never read. To rank suggestions, OpenReaction remembers which emoji you pick (on this Mac only, with the day of last use); Settings has a "Clear Usage History" button.
+**Privacy.** Keystrokes are inspected in memory as they pass, only to spot a shortcode after a colon, and are never stored, logged or sent anywhere. Outside a shortcode nothing is kept beyond whether the last character was part of a word; a shortcode is kept only while you type it. When macOS Secure Input is on (most password fields, Terminal's Secure Keyboard Entry) OpenReaction reads nothing. Other password fields are detected through Accessibility on a best-effort basis: macOS reports focus changes asynchronously, so a field that becomes a password field programmatically can be seen a moment late. To rank suggestions, OpenReaction remembers which emoji you pick (on this Mac only, with the day of last use); Settings has a "Clear Usage History" button.
 
 ## Build and run
 
