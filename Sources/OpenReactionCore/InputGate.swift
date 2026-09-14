@@ -85,7 +85,8 @@ public enum VerifyResult: Equatable, Sendable {
 
 /// What the gate wants the app layer to do. Effects are executed in order.
 public enum GateEffect: Equatable, Sendable {
-    /// Query the focused element and call `probeResult` with these ids.
+    /// Query the focused element and call `probeResult` with these ids. A
+    /// non-nil `tokenID` is a token probe: keys are being held until it answers.
     case requestProbe(generation: Int, tokenID: Int?)
     case presentPicker(query: String, anchor: CGRect)
     case dismissPicker
@@ -102,9 +103,6 @@ public enum GateEffect: Equatable, Sendable {
     case replay(eventIDs: [Int])
     /// Release the app layer's copies of these held events.
     case drop(eventIDs: [Int])
-    /// Post key-ups for presses that were replayed but whose releases may
-    /// have reached the host already (recovery only).
-    case release(keyCodes: [UInt16])
     /// Send a synthetic press of this key; the tap swallowed a physical one
     /// the picker could not use.
     case repost(keyCode: UInt16)
@@ -120,6 +118,12 @@ public enum InsertionSource: Equatable, Sendable {
     case shortcode(String)
 }
 
+public enum MouseEventKind: Equatable, Sendable {
+    case down
+    case up
+    case drag
+}
+
 /// Decides what happens to every keyboard and mouse event, when text may be
 /// decoded, when the picker shows, and how a text replacement runs.
 ///
@@ -130,42 +134,38 @@ public enum InsertionSource: Equatable, Sendable {
 ///
 /// ```mermaid
 /// stateDiagram-v2
-///     [*] --> Closed
-///     Closed --> Closed: keys pass undecoded / mouse / focus event
-///     Closed --> Open: probeResult(gen == current, editable) while focus tracking is active
-///     Open --> Closed: mouse down · Tab/Return/chord passes · activation · secure input · probe not editable · tracking lost
-///     Open --> Open: typed text → TriggerMachine → picker
-///     state Transaction {
-///         [*] --> Verifying: insert requested (keys held)
-///         Verifying --> Authorized: verifyResult keystrokes
-///         Authorized --> Posting: commit (checked again at execution time)
-///         Verifying --> Draining: refused · cancel
-///         Authorized --> Draining: cancel · commit refused
-///         Posting --> Draining: flushAck
-///         Draining --> Draining: flushAck with new held keys (replay again)
-///         Draining --> [*]: flushAck, nothing held (reopen)
-///         Posting --> Recovering: repeated timeout / tap re-enabled (replay, flush)
-///         Recovering --> Draining: flushAck
-///         Recovering --> [*]: still no ack (replay, balance releases, reopen)
-///     }
-///     Open --> Transaction: closing colon / confirm / click
-///     Transaction --> Open
+///     [*] --> Idle
+///     Idle --> Idle: keys pass; only "last char was a word char" is kept
+///     Idle --> Probing: boundary colon (colon and following keys held)
+///     Probing --> Idle: probe not editable / stale / cancelled → replay untouched
+///     Probing --> InToken: probe editable → held keys interpreted, replayed, flushed
+///     InToken --> Idle: token ends (space, Esc, backspace over colon)
+///     InToken --> Verifying: closing colon / confirm / click (keys held)
+///     Verifying --> Authorized: verifyResult keystrokes
+///     Authorized --> Posting: commit succeeds at execution time (mouse now held too)
+///     Verifying --> Draining: refused · cancel
+///     Authorized --> Draining: cancel · commit refused
+///     Posting --> Draining: flushAck
+///     Draining --> Draining: flushAck with newly held events → drain, replay, re-flush
+///     Draining --> Idle: flushAck, nothing held → deferred colon or shortcode starts next
+///     Posting --> Recovering: second missed ack / tap re-enabled → replay held, flush
+///     Recovering --> Draining: flushAck
+///     Recovering --> Idle: still no ack → replay owed in order, forget
 /// ```
 ///
 /// Invariants:
-/// - Text is decoded only in `Open`, never during secure input, and never
-///   with Command, Control or Option held. Anything that may move focus
-///   closes the gate before it is passed to the host.
-/// - Capture opens only while focused-element tracking is active for the
-///   frontmost app, so a programmatic focus change is always noticed.
-/// - A swallowed key press is owned until its release: repeats and the
-///   key-up are swallowed regardless of what else is going on.
-/// - During a transaction physical keys are held, then fed through this same
-///   logic exactly once when drained, and only those that pass are replayed
-///   to the host, after the replacement's own events.
-/// - Nothing is posted unless `commit` succeeds at execution time: the
-///   transaction is current, verified, uncancelled, on the same focus
-///   generation, the gate is open, and secure input is off.
+/// - Outside a token nothing typed is retained: only one bit, whether the
+///   previous character was part of a word (for the colon boundary rule).
+/// - A colon is interpreted only after a fresh probe of the focused element,
+///   for the current focus generation, says editable and tracked. Until then
+///   the colon and everything after it are held undecoded; if the probe says
+///   otherwise they are replayed untouched.
+/// - Text is decoded only in a validated token or for the colon/boundary
+///   check, never during secure input, never with a chord modifier held.
+/// - A swallowed key press is owned until its release. A held press keeps
+///   its release held until the flush after its replay is acknowledged.
+/// - Nothing is posted unless `commit` succeeds at execution time; from then
+///   until the flush is acknowledged, mouse events are held as well.
 public struct InputGate: Sendable {
     public enum KeyDecision: Equatable, Sendable {
         case pass
@@ -187,61 +187,85 @@ public struct InputGate: Sendable {
 
     private struct Session: Equatable {
         let tokenID: Int
-        /// Focus as confirmed by this token's probe; nil until it answers.
-        var focus: (anchor: CGRect, target: FocusTarget)?
-        let isExcluded: Bool
+        let anchor: CGRect
+        let target: FocusTarget
+    }
 
-        static func == (lhs: Session, rhs: Session) -> Bool {
-            lhs.tokenID == rhs.tokenID && lhs.isExcluded == rhs.isExcluded
-                && lhs.focus?.anchor == rhs.focus?.anchor && lhs.focus?.target == rhs.focus?.target
+    private enum HeldEvent: Equatable {
+        case key(KeyEvent)
+        case mouse(id: Int, kind: MouseEventKind)
+
+        var id: Int {
+            switch self {
+            case .key(let event): event.id
+            case .mouse(let id, _): id
+            }
         }
     }
 
-    private struct HeldEvent: Equatable {
-        let event: KeyEvent
-        /// Text decoded when the event arrived, if decoding was allowed then.
-        let text: String?
-    }
-
     private enum Phase: Equatable {
+        /// A colon was typed; waiting for the token probe. Nothing decoded yet.
+        case probing
         /// Waiting for `verifyResult`; nothing posted yet.
         case verifying
         /// Verified; the replacement is queued but not yet committed.
         case authorized
         /// Deletes, text and a flush are posted; waiting for `flushAck`.
         case posting
-        /// Held keys replayed and another flush posted; waiting for `flushAck`.
+        /// Held events replayed and another flush posted; waiting for `flushAck`.
         case draining
-        /// Acknowledgements stopped coming; held keys were replayed and a
+        /// Acknowledgements stopped coming; held events were replayed and a
         /// flush posted to find out whether the stream is alive.
         case recovering
 
-        var isBeforeCommit: Bool { self == .verifying || self == .authorized }
+        var isBeforeCommit: Bool { self == .probing || self == .verifying || self == .authorized }
+        var holdsMouse: Bool { self == .posting || self == .draining || self == .recovering }
+    }
+
+    private enum Kind: Equatable {
+        case tokenStart(tokenID: Int)
+        case replacement(typed: String, target: FocusTarget)
     }
 
     private struct Transaction: Equatable {
         let id: Int
-        let typed: String
-        let target: FocusTarget
+        let kind: Kind
         let focusGeneration: Int
         var phase: Phase
         var held: [HeldEvent] = []
-        /// Keys whose press is held, so their release is held too (in order).
+        /// Presses in `held` (chronologically), so their releases are held too.
         var heldDownKeys: Set<UInt16> = []
-        /// Presses replayed to the host during recovery whose release has not
-        /// been seen; balanced with synthetic releases if recovery gives up.
-        var replayedDownKeys: Set<UInt16> = []
+        /// Presses replayed but not yet acknowledged; their releases stay held.
+        var replayingDownKeys: Set<UInt16> = []
         /// Set once the replacement was carried out.
         var inserted: String?
         var cancelled = false
         var missedAcks = 0
+
+        /// Appends an event, tracking presses chronologically so their
+        /// releases are held too (a release then a new press counts again).
+        mutating func hold(_ event: HeldEvent) {
+            held.append(event)
+            if case .key(let key) = event {
+                if key.isDown { heldDownKeys.insert(key.keyCode) } else { heldDownKeys.remove(key.keyCode) }
+            }
+        }
+
+        mutating func recomputeHeldDownKeys() {
+            heldDownKeys = []
+            for event in held {
+                if case .key(let key) = event {
+                    if key.isDown { heldDownKeys.insert(key.keyCode) } else { heldDownKeys.remove(key.keyCode) }
+                }
+            }
+        }
     }
 
-    /// A `:shortcode:` completed by drained keys while a transaction was still
-    /// running; started once that transaction ends.
-    private struct DeferredCompletion: Equatable {
-        let shortcode: String
-        let typed: String
+    /// Something a drained key started that must wait for the current
+    /// transaction to end, so replay order is preserved.
+    private enum Deferred: Equatable {
+        case tokenStart
+        case completion(shortcode: String, typed: String)
     }
 
     public let minimumQueryLength: Int
@@ -250,13 +274,16 @@ public struct InputGate: Sendable {
 
     private var machine = TriggerMachine()
     private var session: Session?
+    /// Outside a token: whether a colon here would follow a word boundary.
+    private var atBoundary = true
     private var capture = Capture.closed
     private var focusGeneration = 0
     private var trackingActive = false
     private var frontmostExcluded = false
     private var transaction: Transaction?
-    private var deferred: DeferredCompletion?
+    private var deferred: Deferred?
     private var nextTransactionID = 0
+    private var nextTokenID = 0
     private var ownedKeys: Set<UInt16> = []
     public private(set) var isPickerVisible = false
 
@@ -266,9 +293,9 @@ public struct InputGate: Sendable {
 
     // MARK: Introspection
 
-    public var token: TriggerMachine.Token? { machine.current.token }
+    public var token: TriggerMachine.Token? { session == nil ? nil : machine.current.token }
 
-    /// Typed characters may be decoded and buffered.
+    /// A validated field has focus, so a colon may start a token.
     public var capturesText: Bool {
         if case .open = capture { return true }
         return false
@@ -276,29 +303,28 @@ public struct InputGate: Sendable {
 
     public var isHolding: Bool { transaction != nil }
 
+    /// The transaction currently holding input, if any.
+    public var currentTransactionID: Int? { transaction?.id }
+
     public var currentFocusGeneration: Int { focusGeneration }
 
     // MARK: Keyboard
 
-    /// - Parameter text: decodes the typed characters; called only when the
-    ///   gate is open, secure input is off and no chord modifier is held.
+    /// - Parameter text: decodes the typed characters; called only for a key
+    ///   pressed in a validated field with no chord modifier and secure input
+    ///   off. Outside a token the result is used for one check and dropped.
     public mutating func key(_ event: KeyEvent, text: () -> String) -> KeyResult {
         if let owned = ownershipDecision(event) { return owned }
 
-        let mayDecode = capturesText && !event.secureInput && !Self.isChord(event.modifiers) && event.isDown
-        let decoded = mayDecode ? text() : nil
-
         if var current = transaction {
-            // Physical keys are held for the whole transaction, including the
-            // drain, so nothing overtakes the replacement or its replay. A
-            // release whose press already reached the host passes straight
-            // through; it cannot reorder text.
-            if !event.isDown && !current.heldDownKeys.contains(event.keyCode) {
-                if current.replayedDownKeys.remove(event.keyCode) != nil { transaction = current }
+            // Everything physical is held for the whole transaction so nothing
+            // overtakes the replacement or its replay. A release passes only
+            // if its press already reached the host.
+            if !event.isDown,
+               !current.heldDownKeys.contains(event.keyCode), !current.replayingDownKeys.contains(event.keyCode) {
                 return KeyResult(decision: .pass, effects: [])
             }
-            if event.isDown { current.heldDownKeys.insert(event.keyCode) } else { current.heldDownKeys.remove(event.keyCode) }
-            current.held.append(HeldEvent(event: event, text: decoded))
+            current.hold(.key(event))
             transaction = current
             var effects: [GateEffect] = []
             if event.secureInput, current.phase.isBeforeCommit {
@@ -306,7 +332,7 @@ public struct InputGate: Sendable {
             }
             return KeyResult(decision: .hold, effects: effects)
         }
-        return process(event, text: decoded)
+        return process(event, text: text)
     }
 
     /// Ownership comes before everything else: a swallowed press stays ours
@@ -316,34 +342,45 @@ public struct InputGate: Sendable {
             return ownedKeys.remove(event.keyCode) != nil ? KeyResult(decision: .swallow, effects: []) : nil
         }
         guard ownedKeys.contains(event.keyCode) else { return nil }
-        // A repeat of a swallowed press: keep it away from the host, and let
-        // the picker use it while it is open.
         guard isPickerVisible, transaction == nil else { return KeyResult(decision: .swallow, effects: []) }
-        let input = Self.classify(event, text: "")
+        let input = Self.classify(event, text: { "" })
         return KeyResult(decision: .swallow, effects: input.isPickerCommand ? handlePickerCommand(input, keyCode: event.keyCode) : [])
     }
 
-    /// Runs one event through classification and the trigger logic. For live
-    /// events the decision goes back to the tap; for drained events a `.pass`
-    /// decision becomes a replay.
-    private mutating func process(_ event: KeyEvent, text: String?) -> KeyResult {
+    /// Runs one live or drained event through classification and the trigger
+    /// logic. `.pass` for a drained event means replay.
+    private mutating func process(_ event: KeyEvent, text: () -> String) -> KeyResult {
         guard event.isDown else { return KeyResult(decision: .pass, effects: []) }
-
         if event.secureInput {
             return KeyResult(decision: .pass, effects: forgetTyping())
         }
-        let input = Self.classify(event, text: text ?? "")
+        let mayDecode = capturesText && !Self.isChord(event.modifiers)
+        let input = Self.classify(event, text: mayDecode ? text : { "" })
         switch input {
         case .text(let string):
-            guard capturesText else { return KeyResult(decision: .pass, effects: []) }
-            return KeyResult(decision: .pass, effects: apply(machine.handle(.text(string))))
+            let wasHolding = transaction != nil
+            let wasDeferred = deferred != nil
+            let effects = typed(string)
+            if !wasHolding, var started = transaction, case .tokenStart = started.kind {
+                // A boundary colon: hold it (and what follows) until the probe answers.
+                started.hold(.key(event))
+                transaction = started
+                return KeyResult(decision: .hold, effects: effects)
+            }
+            if !wasDeferred, deferred == .tokenStart {
+                // A drained colon: it waits, with everything after it, for its own probe.
+                return KeyResult(decision: .hold, effects: effects)
+            }
+            return KeyResult(decision: .pass, effects: effects)
         case .backspace:
-            guard capturesText else { return KeyResult(decision: .pass, effects: []) }
-            return KeyResult(decision: .pass, effects: apply(machine.handle(.backspace)))
+            if session != nil {
+                return KeyResult(decision: .pass, effects: apply(machine.handle(.backspace)))
+            }
+            atBoundary = false
+            return KeyResult(decision: .pass, effects: [])
         case .ignore:
             return KeyResult(decision: .pass, effects: [])
         case .reset:
-            // Arrows and the like move the caret, not focus.
             return KeyResult(decision: .pass, effects: forgetTyping())
         case .focusMoving:
             return KeyResult(decision: .pass, effects: closeGate())
@@ -358,9 +395,30 @@ public struct InputGate: Sendable {
                 ownedKeys.insert(event.keyCode)
                 return KeyResult(decision: .swallow, effects: handlePickerCommand(input, keyCode: event.keyCode))
             }
-            // Return or Tab reaching the host may submit a form or move focus.
             return KeyResult(decision: .pass, effects: closeGate())
         }
+    }
+
+    /// A printable character in a validated field.
+    private mutating func typed(_ string: String) -> [GateEffect] {
+        if session != nil {
+            let effects = apply(machine.handle(.text(string)))
+            if session == nil, transaction == nil {
+                atBoundary = string.last.map(TriggerMachine.isBoundary) ?? true
+            }
+            return effects
+        }
+        // Outside a token: is this a colon at a word boundary? Nothing else
+        // about the character is kept.
+        let startsToken = string == ":" && atBoundary
+        atBoundary = string.last.map(TriggerMachine.isBoundary) ?? true
+        guard startsToken, !frontmostExcluded else { return [] }
+        if transaction != nil {
+            // Typed by a drained key: probe once the current transaction ends.
+            deferred = .tokenStart
+            return []
+        }
+        return beginTokenStart()
     }
 
     private mutating func handlePickerCommand(_ input: KeyInput, keyCode: UInt16) -> [GateEffect] {
@@ -374,22 +432,27 @@ public struct InputGate: Sendable {
     }
 
     private mutating func confirmSelection(fallbackKeyCode: UInt16?) -> [GateEffect] {
-        guard let token = machine.current.token, let session, session.tokenID == token.id,
-              let focus = session.focus, !session.isExcluded, transaction == nil
-        else {
+        guard let session, let token = machine.current.token, session.tokenID == token.id, transaction == nil else {
             var effects: [GateEffect] = []
             if let fallbackKeyCode { effects.append(.repost(keyCode: fallbackKeyCode)) }
             return effects + forgetTyping()
         }
-        return beginTransaction(source: .selection, typed: token.typed, target: focus.target)
+        return beginReplacement(source: .selection, typed: token.typed, target: session.target)
     }
 
     // MARK: Mouse, focus, picker
 
-    /// A mouse button went down. Clicks inside the picker are its own.
-    public mutating func mouseDown(onPicker: Bool) -> [GateEffect] {
-        guard !onPicker else { return [] }
-        return closeGate()
+    /// A mouse button event. Clicks inside the picker are its own. After a
+    /// replacement is committed, mouse events are held until its flush is
+    /// acknowledged so they cannot land between our posted events.
+    public mutating func mouse(_ kind: MouseEventKind, id: Int, onPicker: Bool) -> KeyResult {
+        if var current = transaction, current.phase.holdsMouse {
+            current.hold(.mouse(id: id, kind: kind))
+            transaction = current
+            return KeyResult(decision: .hold, effects: [])
+        }
+        guard kind == .down, !onPicker else { return KeyResult(decision: .pass, effects: []) }
+        return KeyResult(decision: .pass, effects: closeGate())
     }
 
     /// A picker row was clicked (the app layer selected it first).
@@ -399,15 +462,13 @@ public struct InputGate: Sendable {
     }
 
     /// Focus may have moved (app activation, Accessibility notification).
-    /// Capture closes immediately; a probe reopens it if the field is editable.
     public mutating func focusMayHaveMoved() -> [GateEffect] {
         closeGate()
     }
 
     /// Whether focused-element notifications are being received for the
-    /// frontmost app. Capture needs them; without them a programmatic focus
-    /// change (say, a login form advancing to its password field) would go
-    /// unnoticed. Becoming active asks for a fresh probe.
+    /// frontmost app. Without them a programmatic focus change would go
+    /// unnoticed, so capture stays closed.
     public mutating func focusTracking(active: Bool) -> [GateEffect] {
         guard trackingActive != active else { return [] }
         trackingActive = active
@@ -423,17 +484,25 @@ public struct InputGate: Sendable {
         frontmostExcluded = excluded
     }
 
-    /// Answer to `.requestProbe`.
-    public mutating func probeResult(generation: Int, tokenID: Int?, _ result: FocusResult) -> [GateEffect] {
+    /// Answer to `.requestProbe`. For a token probe, `decode` returns the
+    /// characters of a held key by event id; it is called only when the probe
+    /// authorized interpretation.
+    public mutating func probeResult(
+        generation: Int, tokenID: Int?, _ result: FocusResult, decode: (Int) -> String = { _ in "" }
+    ) -> [GateEffect] {
         guard generation == focusGeneration else { return [] }
         switch result {
         case .editable(let anchor, let target) where trackingActive:
             capture = .open(anchor: anchor, target: target)
-            if let tokenID, var current = session, current.tokenID == tokenID {
-                current.focus = (anchor, target)
-                session = current
+            guard let tokenID, var current = transaction, current.kind == .tokenStart(tokenID: tokenID), current.phase == .probing else {
+                return refreshPicker()
             }
-            return refreshPicker()
+            // The field is safe: interpret the held colon and what followed.
+            session = Session(tokenID: tokenID, anchor: anchor, target: target)
+            machine.handle(.reset)
+            current.phase = .draining
+            transaction = current
+            return drain(decode: decode)
         case .editable, .secure, .unavailable:
             capture = .closed
             var effects = forgetTyping()
@@ -454,10 +523,11 @@ public struct InputGate: Sendable {
         guard var current = transaction, current.id == id, current.phase == .verifying else { return [] }
         switch result {
         case .keystrokes(let text) where isAuthorized(current):
+            guard case .replacement(let typed, _) = current.kind else { return cancelTransaction() }
             current.phase = .authorized
             current.inserted = text
             transaction = current
-            return [.post(transaction: id, deleteCount: current.typed.count, text: text), .armWatchdog(transaction: id)]
+            return [.post(transaction: id, deleteCount: typed.count, text: text), .armWatchdog(transaction: id)]
         default:
             return cancelTransaction()
         }
@@ -465,8 +535,8 @@ public struct InputGate: Sendable {
 
     /// Called by the app layer at the moment the queued replacement is about
     /// to be posted. Returns true only if every condition still holds; then
-    /// the transaction is in `posting` and the caller must post the events
-    /// and the flush at once. Returns false with cancel effects otherwise.
+    /// the transaction is in `posting`, mouse events are held, and the caller
+    /// must post the events and the flush at once.
     public mutating func commit(transaction id: Int, secureInput: Bool) -> (proceed: Bool, effects: [GateEffect]) {
         guard var current = transaction, current.id == id, current.phase == .authorized else {
             return (false, [])
@@ -484,22 +554,34 @@ public struct InputGate: Sendable {
     }
 
     /// The flush marker for `id` came back through the tap: everything posted
-    /// before it has reached the host. Drain held keys, then replay them.
-    public mutating func flushAck(transaction id: Int) -> [GateEffect] {
+    /// before it, including any replay, has reached the host.
+    public mutating func flushAck(transaction id: Int, decode: (Int) -> String = { _ in "" }) -> [GateEffect] {
         guard var current = transaction, current.id == id, !current.phase.isBeforeCommit else { return [] }
-        if current.phase == .posting {
-            // Our deletes and text have reached the host; update history
-            // before any drained key is appended after them.
-            if let inserted = current.inserted {
-                machine.handle(.replaced(count: current.typed.count, with: inserted))
-            }
+        if current.phase == .posting, let inserted = current.inserted, case .replacement(let typed, _) = current.kind {
+            // Our deletes and text have reached the host; account for them
+            // before any drained key is interpreted after them.
+            machine.handle(.replaced(count: typed.count, with: inserted))
+            session = nil
+            atBoundary = true
+        }
+        if current.phase == .recovering {
+            // Delivered, but what was replayed was never interpreted.
+            machine.handle(.reset)
+            session = nil
+            atBoundary = true
         }
         current.phase = .draining
         current.missedAcks = 0
-        current.replayedDownKeys.removeAll()
+        current.replayingDownKeys.removeAll()
         transaction = current
-        // Keys held after a drained shortcode completion belong to the next
-        // transaction; nothing else is drained here.
+        return drain(decode: decode)
+    }
+
+    /// Feeds held events through the same logic, once, in order; replays the
+    /// ones that pass and flushes again, or finishes if nothing was held.
+    private mutating func drain(decode: (Int) -> String) -> [GateEffect] {
+        guard var current = transaction else { return [] }
+        let id = current.id
         guard deferred == nil, !current.held.isEmpty else {
             return finishTransaction()
         }
@@ -507,27 +589,46 @@ public struct InputGate: Sendable {
         current.held = []
         current.heldDownKeys = []
         transaction = current
-        // Feed held keys through the same logic, once, in order. Keys that
-        // pass are replayed. If a drained key completes a shortcode, the
-        // keys after it wait for the next transaction so they land after
-        // that replacement too.
+
         var effects: [GateEffect] = []
         var replay: [Int] = []
         var dropped: [Int] = []
-        for (index, entry) in held.enumerated() {
-            let result = ownershipDecision(entry.event) ?? process(entry.event, text: entry.text)
-            effects += result.effects
-            switch result.decision {
-            case .pass: replay.append(entry.event.id)
-            case .swallow, .hold: dropped.append(entry.event.id)
+        if current.cancelled {
+            // Nothing was authorized: everything goes back to the host untouched.
+            replay = held.map(\.id)
+        }
+        for (index, entry) in held.enumerated() where !current.cancelled {
+            let result: KeyResult
+            switch entry {
+            case .key(let event):
+                result = ownershipDecision(event) ?? process(event) { decode(event.id) }
+            case .mouse(_, let kind):
+                result = KeyResult(decision: .pass, effects: kind == .down ? closeGate() : [])
             }
-            if deferred != nil, var current = transaction {
-                let rest = Array(held[(index + 1)...])
-                current.held = rest
-                current.heldDownKeys = Set(rest.filter(\.event.isDown).map(\.event.keyCode))
-                transaction = current
+            effects += result.effects
+            if deferred != nil, var now = transaction {
+                // What this key started must wait for the next transaction. A
+                // colon that starts a token waits with it; a closing colon is
+                // replayed (the replacement deletes it).
+                if result.decision == .pass { replay.append(entry.id) }
+                let from = result.decision == .hold ? index : index + 1
+                now.held = Array(held[from...])
+                now.recomputeHeldDownKeys()
+                transaction = now
                 break
             }
+            switch result.decision {
+            case .pass: replay.append(entry.id)
+            case .swallow, .hold: dropped.append(entry.id)
+            }
+        }
+        if var now = transaction, now.id == id {
+            for entryID in replay {
+                if case .key(let event)? = held.first(where: { $0.id == entryID }) {
+                    if event.isDown { now.replayingDownKeys.insert(event.keyCode) } else { now.replayingDownKeys.remove(event.keyCode) }
+                }
+            }
+            transaction = now
         }
         if !replay.isEmpty { effects.append(.replay(eventIDs: replay)) }
         if !dropped.isEmpty { effects.append(.drop(eventIDs: dropped)) }
@@ -539,17 +640,14 @@ public struct InputGate: Sendable {
     public mutating func timeout(transaction id: Int) -> [GateEffect] {
         guard var current = transaction, current.id == id else { return [] }
         switch current.phase {
-        case .verifying, .authorized:
-            // Verification or the queue is slow: nothing may be posted any more.
+        case .probing, .verifying, .authorized:
             return cancelTransaction()
         case .posting, .draining:
             current.missedAcks += 1
+            transaction = current
             if current.missedAcks == 1 {
-                // One more chance for the flush; meanwhile nothing else is posted.
-                transaction = current
                 return [.postFlush(transaction: id), .armWatchdog(transaction: id)]
             }
-            transaction = current
             return recover()
         case .recovering:
             current.missedAcks += 1
@@ -569,8 +667,9 @@ public struct InputGate: Sendable {
         return effects + closeGate()
     }
 
-    /// The tap is gone (stopped or the app paused): no event will flow until
-    /// it starts again, so ordering is moot; deliver what is owed and reset.
+    /// The tap is gone (stopped or the app paused). Whatever is owed to the
+    /// host goes out in order; a key still physically down is resolved by
+    /// its next physical release, which now passes directly.
     public mutating func tapStopped() -> [GateEffect] {
         ownedKeys.removeAll()
         var effects: [GateEffect] = []
@@ -580,14 +679,24 @@ public struct InputGate: Sendable {
 
     // MARK: Internals
 
-    private mutating func beginTransaction(
+    private mutating func beginTokenStart(carrying held: [HeldEvent] = []) -> [GateEffect] {
+        nextTransactionID += 1
+        nextTokenID += 1
+        var next = Transaction(id: nextTransactionID, kind: .tokenStart(tokenID: nextTokenID), focusGeneration: focusGeneration, phase: .probing)
+        next.held = held
+        next.recomputeHeldDownKeys()
+        transaction = next
+        return [.requestProbe(generation: focusGeneration, tokenID: nextTokenID), .armWatchdog(transaction: nextTransactionID)]
+    }
+
+    private mutating func beginReplacement(
         source: InsertionSource, typed: String, target: FocusTarget, carrying held: [HeldEvent] = []
     ) -> [GateEffect] {
         nextTransactionID += 1
         let id = nextTransactionID
-        var next = Transaction(id: id, typed: typed, target: target, focusGeneration: focusGeneration, phase: .verifying)
+        var next = Transaction(id: id, kind: .replacement(typed: typed, target: target), focusGeneration: focusGeneration, phase: .verifying)
         next.held = held
-        next.heldDownKeys = Set(held.filter(\.event.isDown).map(\.event.keyCode)).subtracting(held.filter { !$0.event.isDown }.map(\.event.keyCode))
+        next.recomputeHeldDownKeys()
         transaction = next
         session = nil
         return [
@@ -597,56 +706,61 @@ public struct InputGate: Sendable {
         ]
     }
 
-    /// Stops a transaction before anything was posted and drains its held keys.
+    /// Stops a transaction before anything was posted: the held keys are
+    /// replayed untouched once the flush comes back.
     private mutating func cancelTransaction() -> [GateEffect] {
         guard var current = transaction, current.phase.isBeforeCommit else { return [] }
         current.cancelled = true
         current.inserted = nil
         current.phase = .draining
         transaction = current
-        _ = machine.handle(.reset)
+        machine.handle(.reset)
         session = nil
-        // Nothing of ours is in flight, so the flush comes straight back and
-        // the drain replays the held keys in order.
         return [.dismissPicker, .postFlush(transaction: current.id), .armWatchdog(transaction: current.id)]
     }
 
-    /// Transaction over: count the replacement, reopen, and resume anything
-    /// the drain left pending (a visible picker, a completed shortcode).
+    /// Transaction over: count the replacement and resume whatever a drained
+    /// key started (a colon, a completed shortcode, a visible picker).
     private mutating func finishTransaction() -> [GateEffect] {
         guard let current = transaction else { return [] }
         transaction = nil
         var effects: [GateEffect] = [
             .transactionEnded(transaction: current.id, recordUse: current.inserted != nil && !current.cancelled),
         ]
-        if let completion = deferred {
-            deferred = nil
-            let excluded = session?.isExcluded ?? true
-            session = nil
-            if case .open(_, let target) = capture, !excluded {
-                return effects + beginTransaction(
-                    source: .shortcode(completion.shortcode), typed: completion.typed, target: target, carrying: current.held
-                )
-            }
-            // Cannot insert after all: let the keys that waited through.
-            let ids = current.held.map(\.event.id)
-            if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
-            machine.handle(.reset)
-            return effects + [.dismissPicker]
+        if current.cancelled, case .tokenStart = current.kind {
+            atBoundary = false
         }
-        effects += refreshPicker()
-        return effects
+        switch deferred {
+        case .tokenStart?:
+            deferred = nil
+            if capturesText, !frontmostExcluded {
+                return effects + beginTokenStart(carrying: current.held)
+            }
+        case .completion(let shortcode, let typed)?:
+            deferred = nil
+            if let session {
+                return effects + beginReplacement(source: .shortcode(shortcode), typed: typed, target: session.target, carrying: current.held)
+            }
+        case nil:
+            effects += refreshPicker()
+            return effects
+        }
+        // Cannot continue: let the keys that waited through, uninterpreted.
+        let ids = current.held.map(\.id)
+        if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
+        return effects + forgetTyping()
     }
 
     /// Acknowledgements stopped: replay what is held now, keep holding, and
-    /// post another flush to see whether the stream is alive. Presses replayed
-    /// this way are remembered so their releases can be balanced.
+    /// post another flush to see whether the stream is alive.
     private mutating func recover() -> [GateEffect] {
         guard var current = transaction else { return [] }
         current.phase = .recovering
-        let ids = current.held.map(\.event.id)
+        let ids = current.held.map(\.id)
         for entry in current.held {
-            if entry.event.isDown { current.replayedDownKeys.insert(entry.event.keyCode) } else { current.replayedDownKeys.remove(entry.event.keyCode) }
+            if case .key(let event) = entry {
+                if event.isDown { current.replayingDownKeys.insert(event.keyCode) } else { current.replayingDownKeys.remove(event.keyCode) }
+            }
         }
         current.held = []
         current.heldDownKeys = []
@@ -656,27 +770,25 @@ public struct InputGate: Sendable {
         return effects + [.postFlush(transaction: current.id), .armWatchdog(transaction: current.id)]
     }
 
-    /// The stream is not answering. Deliver everything owed in order, release
-    /// any press whose release may already have passed, and forget typing.
+    /// The stream is not answering. Deliver everything owed in order and
+    /// forget typing; nothing is known about the host any more.
     private mutating func giveUp() -> [GateEffect] {
-        guard var current = transaction else { return [] }
+        guard let current = transaction else { return [] }
         transaction = nil
         deferred = nil
-        let ids = current.held.map(\.event.id)
-        for entry in current.held {
-            if entry.event.isDown { current.replayedDownKeys.insert(entry.event.keyCode) } else { current.replayedDownKeys.remove(entry.event.keyCode) }
-        }
+        let ids = current.held.map(\.id)
         var effects: [GateEffect] = []
         if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
-        if !current.replayedDownKeys.isEmpty { effects.append(.release(keyCodes: current.replayedDownKeys.sorted())) }
         effects.append(.transactionEnded(transaction: current.id, recordUse: false))
         return effects + forgetTyping()
     }
 
+    /// Leaves any token. Unknown context counts as a boundary.
     private mutating func forgetTyping() -> [GateEffect] {
         machine.handle(.reset)
         session = nil
         deferred = nil
+        atBoundary = true
         return [.dismissPicker]
     }
 
@@ -694,47 +806,34 @@ public struct InputGate: Sendable {
         return effects
     }
 
+    /// Reacts to the trigger machine while inside a validated token.
     private mutating func apply(_ output: TriggerMachine.Output) -> [GateEffect] {
+        guard let session else { return [.dismissPicker] }
         if let shortcode = output.completedShortcode, let typed = output.completedText {
-            guard let session, !session.isExcluded else {
-                self.session = nil
-                return [.dismissPicker]
-            }
             if transaction != nil {
                 // Completed by a drained key: start after the current one ends.
-                deferred = DeferredCompletion(shortcode: shortcode, typed: typed)
+                deferred = .completion(shortcode: shortcode, typed: typed)
                 return []
             }
-            guard let focus = session.focus else {
-                self.session = nil
-                return [.dismissPicker]
-            }
-            return beginTransaction(source: .shortcode(shortcode), typed: typed, target: focus.target)
+            return beginReplacement(source: .shortcode(shortcode), typed: typed, target: session.target)
         }
-        guard let token = output.token, !token.isDismissed else {
-            session = nil
+        guard output.token != nil else {
+            // The token ended; nothing of it is kept.
+            self.session = nil
+            atBoundary = false
+            machine.handle(.reset)
             return [.dismissPicker]
         }
-        var effects: [GateEffect] = []
-        if session?.tokenID != token.id {
-            session = Session(tokenID: token.id, focus: nil, isExcluded: frontmostExcluded)
-            if !frontmostExcluded {
-                // Re-check the element at the colon: focus may have moved
-                // without notice, and the caret position is needed anyway.
-                effects.append(.requestProbe(generation: focusGeneration, tokenID: token.id))
-            }
-        }
-        return effects + refreshPicker()
+        return refreshPicker()
     }
 
     private func refreshPicker() -> [GateEffect] {
-        guard let session, !session.isExcluded, let focus = session.focus,
-              let token = machine.current.token, token.id == session.tokenID, !token.isDismissed,
-              token.query.count >= minimumQueryLength, transaction == nil
+        guard let session, let token = machine.current.token,
+              !token.isDismissed, token.query.count >= minimumQueryLength, transaction == nil
         else {
             return [.dismissPicker]
         }
-        return [.presentPicker(query: token.query, anchor: focus.anchor)]
+        return [.presentPicker(query: token.query, anchor: session.anchor)]
     }
 
     // MARK: Classification
@@ -745,7 +844,9 @@ public struct InputGate: Sendable {
         modifiers.contains(.command) || modifiers.contains(.control) || modifiers.contains(.option)
     }
 
-    static func classify(_ event: KeyEvent, text: String) -> KeyInput {
+    /// `text` is consulted only for keys that are not navigation or editing
+    /// keys, so a Tab or arrow never has its characters read.
+    static func classify(_ event: KeyEvent, text: () -> String) -> KeyInput {
         if isChord(event.modifiers) {
             return .focusMoving
         }
@@ -764,6 +865,7 @@ public struct InputGate: Sendable {
         case KeyCode.forwardDelete, KeyCode.home, KeyCode.end, KeyCode.pageUp, KeyCode.pageDown, KeyCode.help:
             return .reset
         default:
+            let text = text()
             guard !text.isEmpty else { return .ignore }
             let isControlOrFunctionKey = text.unicodeScalars.contains {
                 $0.value < 0x20 || $0.value == 0x7F || (0xF700...0xF8FF).contains($0.value)

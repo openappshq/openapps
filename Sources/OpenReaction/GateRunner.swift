@@ -72,17 +72,33 @@ final class GateRunner: @unchecked Sendable {
         }
     }
 
-    func mouseDown(at location: CGPoint) {
-        state.withLock { state in
+    func mouse(_ kind: MouseEventKind, at location: CGPoint, event: CGEvent) -> InputGate.KeyDecision {
+        let copy = HeldCopy(event: event.copy() ?? event)
+        return state.withLock { state in
+            state.nextEventID += 1
+            let id = state.nextEventID
             let onPicker = state.gate.isPickerVisible && state.pickerFrame.contains(location)
-            dispatch(state.gate.mouseDown(onPicker: onPicker), state: &state)
+            let result = state.gate.mouse(kind, id: id, onPicker: onPicker)
+            if result.decision == .hold {
+                state.held[id] = copy
+            }
+            dispatch(result.effects, state: &state)
+            return result.decision
         }
     }
 
     func flushAck(transaction id: Int) {
         state.withLock { state in
-            dispatch(state.gate.flushAck(transaction: id), state: &state)
+            let held = state.held
+            dispatch(state.gate.flushAck(transaction: id, decode: { Self.text(of: held[$0]) }), state: &state)
         }
+    }
+
+    /// Characters a held key event would type, read only when the gate has
+    /// decided the field is safe.
+    private static func text(of copy: HeldCopy?) -> String {
+        guard let copy else { return "" }
+        return KeyboardTap.typedText(copy.event)
     }
 
     /// The system disabled and re-enabled the tap; the stream is still alive.
@@ -119,7 +135,11 @@ final class GateRunner: @unchecked Sendable {
     }
 
     func probeResult(generation: Int, tokenID: Int?, _ result: FocusResult) {
-        state.withLock { state in dispatch(state.gate.probeResult(generation: generation, tokenID: tokenID, result), state: &state) }
+        state.withLock { state in
+            let held = state.held
+            let effects = state.gate.probeResult(generation: generation, tokenID: tokenID, result, decode: { Self.text(of: held[$0]) })
+            dispatch(effects, state: &state)
+        }
     }
 
     func verifyResult(transaction id: Int, _ result: VerifyResult) {
@@ -186,8 +206,6 @@ final class GateRunner: @unchecked Sendable {
                 TextInserter.replay(copies.map(\.event))
             case .drop(let eventIDs):
                 for id in eventIDs { state.held.removeValue(forKey: id) }
-            case .release(let keyCodes):
-                TextInserter.release(keyCodes: keyCodes)
             case .repost(let keyCode):
                 TextInserter.repost(keyCode: keyCode)
             }

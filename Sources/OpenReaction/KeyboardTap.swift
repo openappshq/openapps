@@ -28,14 +28,17 @@ final class KeyboardTap: @unchecked Sendable {
     }
 
     private let runner: GateRunner
+    /// `IsSecureEventInputEnabled` in the app; tests supply a controlled value.
+    private let isSecureInputEnabled: @Sendable () -> Bool
 
     // Written on the main thread in start/stop; the port is read on the tap
     // thread only while the tap is installed.
     private var machPort: CFMachPort?
     private var runLoop: CFRunLoop?
 
-    init(runner: GateRunner) {
+    init(runner: GateRunner, isSecureInputEnabled: @escaping @Sendable () -> Bool = { IsSecureEventInputEnabled() }) {
         self.runner = runner
+        self.isSecureInputEnabled = isSecureInputEnabled
     }
 
     var isRunning: Bool { machPort != nil }
@@ -44,8 +47,12 @@ final class KeyboardTap: @unchecked Sendable {
     /// Accessibility or Input Monitoring access is missing or not yet applied.
     func start() -> Bool {
         if machPort != nil { return true }
-        let mask: CGEventMask = [CGEventType.keyDown, .keyUp, .leftMouseDown, .rightMouseDown, .otherMouseDown]
-            .reduce(0) { $0 | (1 << $1.rawValue) }
+        let mask: CGEventMask = [
+            CGEventType.keyDown, .keyUp,
+            .leftMouseDown, .rightMouseDown, .otherMouseDown,
+            .leftMouseUp, .rightMouseUp, .otherMouseUp,
+            .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+        ].reduce(0) { $0 | (1 << $1.rawValue) }
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -91,8 +98,11 @@ final class KeyboardTap: @unchecked Sendable {
 
     // MARK: - Tap thread
 
-    private func process(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    /// Internal so tests can drive it with constructed, unposted events.
+    func process(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         let pass = Unmanaged.passUnretained(event)
+        let (tag, id) = Tag.split(event.getIntegerValueField(.eventSourceUserData))
+        let mouseKind: MouseEventKind?
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             // macOS turned the tap off; keystrokes may have been missed and
@@ -100,24 +110,22 @@ final class KeyboardTap: @unchecked Sendable {
             if let machPort { CGEvent.tapEnable(tap: machPort, enable: true) }
             runner.tapInterrupted()
             return pass
-        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            runner.mouseDown(at: event.location)
-            return pass
-        case .keyDown, .keyUp:
-            break
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown: mouseKind = .down
+        case .leftMouseUp, .rightMouseUp, .otherMouseUp: mouseKind = .up
+        case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: mouseKind = .drag
+        case .keyDown, .keyUp: mouseKind = nil
         default:
             return pass
         }
-
-        let (tag, id) = Tag.split(event.getIntegerValueField(.eventSourceUserData))
-        switch tag {
-        case Tag.passthrough:
+        if tag == Tag.passthrough {
             return pass
-        case Tag.flush:
+        }
+        if let mouseKind {
+            return runner.mouse(mouseKind, at: event.location, event: event) == .pass ? pass : nil
+        }
+        if tag == Tag.flush {
             runner.flushAck(transaction: id)
             return nil
-        default:
-            break
         }
 
         let flags = event.flags
@@ -132,7 +140,7 @@ final class KeyboardTap: @unchecked Sendable {
             isDown: type == .keyDown,
             isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0,
             modifiers: modifiers,
-            secureInput: IsSecureEventInputEnabled(),
+            secureInput: isSecureInputEnabled(),
             event: event,
             text: { Self.typedText(event) }
         )
@@ -142,7 +150,7 @@ final class KeyboardTap: @unchecked Sendable {
         }
     }
 
-    private static func typedText(_ event: CGEvent) -> String {
+    static func typedText(_ event: CGEvent) -> String {
         var length = 0
         var buffer = [UniChar](repeating: 0, count: 8)
         event.keyboardGetUnicodeString(maxStringLength: buffer.count, actualStringLength: &length, unicodeString: &buffer)

@@ -24,6 +24,11 @@ let package = Package(
             name: "OpenReactionCoreTests",
             dependencies: ["OpenReactionCore"]
         ),
+        // Drives the real tap callback with constructed, unposted CGEvents.
+        .testTarget(
+            name: "OpenReactionTests",
+            dependencies: ["OpenReaction", "OpenReactionCore"]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

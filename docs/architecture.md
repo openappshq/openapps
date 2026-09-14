@@ -19,7 +19,7 @@ flowchart LR
 
 **Active, session-level `CGEventTap`.** A listen-only tap (or `NSEvent` global monitor) can observe keys but cannot remove them. While the picker is open, arrows, Return, Tab and Esc must not reach the host app, so the tap is created with `.defaultTap` and returns `nil` for those events. A swallowed press stays *owned* until its key-up: repeats and the release are swallowed too, so the host never sees an orphaned key-up or a stray repeat after the picker closed. Only unmodified keys count; ⌘, ⌃ and ⌥ chords belong to the host and reset typing.
 
-**The tap is thin.** It turns each event into a `KeyEvent` (key code, up/down, repeat, modifiers, whether secure input is on) and asks the gate what to do. Typed characters are decoded only when the gate calls the decoder, which it does only while capture is open, secure input is off and no modifier is held. In a password field or an unknown field, keystrokes pass through without being read.
+**The tap is thin.** It turns each event into a `KeyEvent` (key code, up/down, repeat, modifiers, whether secure input is on) or a mouse event and asks the gate what to do. Typed characters are decoded only when the gate calls the decoder: for the colon/boundary check in a validated field, or inside a validated token. Held keys are decoded only after their token probe answered, from the tap's stored copies. In a password field or an unknown field, keystrokes pass through without being read.
 
 **Ordering is by construction.** Every input — tap events, mouse downs, focus notifications, probe answers, verification results, flush acknowledgements, watchdog timeouts — goes through one lock into the pure `InputGate`, so the gate sees one ordered stream regardless of thread. Effects that post events are enqueued on the single insertion queue while that lock is still held, so they reach the event stream in the order the gate decided.
 
@@ -40,40 +40,37 @@ The picker opens once the query has two characters and at least one result.
 
 ### The gate — `InputGate`
 
-Every decision about an event is made by one pure, single-threaded state machine (`OpenReactionCore/InputGate.swift`), tested with scripted event sequences typed with real US-layout key codes and modifier flags.
+Every decision about an event is made by one pure, single-threaded state machine (`OpenReactionCore/InputGate.swift`), tested with scripted event sequences typed with real US-layout key codes and modifier flags, plus a tap-level suite that drives the actual `CGEventTap` callback with constructed `CGEvent`s.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Closed
-    Closed --> Closed: keys pass undecoded / mouse / focus event
-    Closed --> Open: probeResult(gen == current, editable) while focused-element tracking is active
-    Open --> Closed: mouse down · Tab/Return/chord passes · activation · AX notification · secure input · probe not editable · tracking lost
-    Open --> Open: typed text (Shift allowed) → TriggerMachine → picker
-    state Transaction {
-        [*] --> Verifying: closing colon / confirm / click (keys held)
-        Verifying --> Authorized: verifyResult keystrokes
-        Authorized --> Posting: commit succeeds at execution time
-        Verifying --> Draining: refused · cancel
-        Authorized --> Draining: cancel · commit refused
-        Posting --> Draining: flushAck
-        Draining --> Draining: flushAck with newly held keys → drain through gate, replay, re-flush
-        Draining --> [*]: flushAck, nothing held → reopen, resume picker or deferred shortcode
-        Posting --> Recovering: second missed ack / tap re-enabled → replay held, flush
-        Recovering --> Draining: flushAck
-        Recovering --> [*]: still no ack → replay, balance releases, reopen
-    }
-    Open --> Transaction
-    Transaction --> Open
+    [*] --> Idle
+    Idle --> Idle: keys pass; only "last char was a word char" is kept
+    Idle --> Probing: boundary colon → colon and following keys held, token probe requested
+    Probing --> Idle: probe secure / unavailable / stale / cancelled → replay untouched
+    Probing --> InToken: probe editable + tracked → held keys interpreted once, replayed, flushed
+    InToken --> Idle: token ends (space, Esc, backspace over colon)
+    InToken --> Verifying: closing colon / confirm / click (keys held)
+    Verifying --> Authorized: verifyResult keystrokes
+    Authorized --> Posting: commit succeeds at execution time (mouse held from here)
+    Verifying --> Draining: refused · cancel
+    Authorized --> Draining: cancel · commit refused
+    Posting --> Draining: flushAck
+    Draining --> Draining: flushAck with newly held events → drain, replay, re-flush
+    Draining --> Idle: flushAck, nothing held → deferred colon or shortcode starts next
+    Posting --> Recovering: second missed ack / tap re-enabled → replay held, flush
+    Recovering --> Draining: flushAck → history reset to a boundary
+    Recovering --> Idle: still no ack → replay owed in order, forget
 ```
 
 Rules the gate enforces:
 
-- **Fail closed.** Text is captured only in `Open`. Anything that may move focus — a mouse down, Tab or Return reaching the host, a ⌘/⌃/⌥ chord, app activation, an Accessibility focus notification — closes the gate *before* the event passes and bumps the focus generation. Capture reopens only when a probe for the current generation says editable **and** focused-element notifications are being received for the frontmost app; without them a programmatic focus change (a login form advancing to its password field) could go unnoticed, so such apps get no capture. Shift is ordinary typing (`:` is Shift-semicolon); only chords are refused. Secure input drops the event and forgets typing.
-- **Ownership.** A swallowed key press stays owned until released: its repeats and its key-up are swallowed whatever else happens, so the host never sees an orphaned release or a stray repeat.
-- **Commit at execution time.** Verification only *authorizes*. When the queued replacement is about to be posted, the insertion queue asks the gate to `commit`, under the same lock: the transaction must still be current, uncancelled, on the same focus generation, with the gate open, tracking active and secure input off. A mouse click, focus change, pause or timeout that the gate saw first wins and nothing is posted; after commit, our events are already ahead of anything that arrives later.
-- **Drains keep order.** Held keys are fed through the gate once when drained; those that pass are replayed after the replacement's events. If a drained colon completes a shortcode, the keys after it wait for the next transaction, which starts as soon as the current one ends, so both replacements and all typing land in the order typed. A drained token's picker appears when the transaction ends.
-- **Recovery.** If acknowledgements stop, the gate re-flushes once, then replays what it holds while still holding new input (Recovering), and only if the stream stays silent delivers everything owed in order and posts releases for replayed presses whose releases were not seen. Picker-owned presses never get synthetic releases. A stopped tap (or pause) does this at once, since no events flow.
-- **Picker keys.** Arrows, Return, Tab and Esc act on the picker only when the tap actually swallowed them; a swallowed key the picker can no longer use is re-sent synthetically.
+- **Retain nothing until a probe says the field is safe.** Outside a token the gate keeps one bit: whether the previous character was part of a word (for the colon boundary rule). Each character is looked at for that check and dropped. A boundary colon is *held*, together with every key after it, undecoded, while a token probe (focused element, subrole, pid, generation-tagged) runs off the tap thread. Only an answer of editable-and-tracked for the current generation lets the held keys be interpreted — once, in order — and replayed to the host; anything else replays them untouched. So a programmatic move into a password field whose notification has not arrived yet cannot leak typed text: at most the colon itself was read. Secure input drops the event and forgets typing; ⌘/⌃/⌥ chords are refused, Shift is ordinary typing.
+- **Fail closed on focus.** A mouse down, Tab or Return reaching the host, a chord, app activation, an Accessibility focus notification, or lost focused-element tracking closes the gate before the event passes and bumps the focus generation.
+- **Ownership.** A swallowed key press stays owned until released: its repeats and its key-up are swallowed whatever else happens. A held press keeps its release held until the flush after its replay is acknowledged, so a release can never overtake its own press.
+- **Commit at execution time.** Verification only *authorizes*. The insertion queue asks the gate to `commit` under the lock right before posting; the transaction must still be current, uncancelled, on the same focus generation, open, tracked, with secure input off. From commit until the flush is acknowledged, mouse down/up/drag events are held too, so a click cannot land between the deletes and the emoji; they replay afterwards and the click still closes the gate.
+- **Drains keep order.** Held events are fed through the gate once when drained; those that pass are replayed after the replacement's events. A drained colon at a boundary or a drained closing colon waits, with everything after it, for the next transaction, which starts as soon as the current one ends.
+- **Recovery.** If acknowledgements stop, the gate re-flushes once, then replays what it holds while still holding new input (Recovering); an acknowledgement there resets history to a safe boundary, since what was replayed was never interpreted. If the stream stays silent, or the tap stops, everything owed goes out in order and typing is forgotten. No synthetic releases are ever posted; a key still physically down is resolved by its next real release.
 
 **Verification (`CaretLocator.verify`)** is read-only and fails closed: the focused element must be the remembered one (`CFEqual`, same pid) and answer that it is not secure; the selection must be readable and empty with room for the token; the text before the caret must be readable (`AXStringForRange`) and equal the typed token. Anything else refuses, and the host is never touched by verification. Apps that expose no selection or text through Accessibility (most terminals, some Java/Qt/game windows, web views that have not enabled accessibility) therefore get no insertion — and usually no capture either, since they post no focus notifications.
 

@@ -58,20 +58,6 @@ enum TextInserter {
         }
     }
 
-    /// Releases keys whose presses were replayed during recovery but whose
-    /// physical releases may already have passed.
-    static func release(keyCodes: [UInt16]) {
-        queue.async {
-            guard let source = makeSource() else { return }
-            for keyCode in keyCodes {
-                guard let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: false) else { continue }
-                up.flags = []
-                up.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
-                up.post(tap: .cgSessionEventTap)
-            }
-        }
-    }
-
     /// Sends a synthetic press of a key the tap swallowed but could not use.
     static func repost(keyCode: UInt16) {
         queue.async {
