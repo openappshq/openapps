@@ -1,0 +1,74 @@
+/// Most-recently-used emoji, most recent first.
+public struct RecentItems: Codable, Equatable, Sendable {
+    public private(set) var items: [String]
+    public let limit: Int
+
+    public init(items: [String] = [], limit: Int = 24) {
+        self.limit = limit
+        self.items = Array(items.prefix(limit))
+    }
+
+    public mutating func record(_ item: String) {
+        items.removeAll { $0 == item }
+        items.insert(item, at: 0)
+        if items.count > limit { items.removeLast(items.count - limit) }
+    }
+}
+
+/// Apps where OpenReaction stays inactive. Defaults cover apps that already
+/// expand `:shortcodes:` themselves, and terminals where `:` starts commands
+/// (`:wq` in vim) and Return must never be intercepted. User overrides are
+/// stored as differences so default-list updates still reach existing users.
+public struct AppExclusions: Codable, Equatable, Sendable {
+    public static let defaultBundleIdentifiers: Set<String> = [
+        // Native shortcode pickers
+        "com.tinyspeck.slackmacgap",
+        "com.hnc.Discord",
+        "com.hnc.DiscordPTB",
+        "com.hnc.DiscordCanary",
+        "com.microsoft.teams2",
+        "com.microsoft.teams",
+        "Mattermost.Desktop",
+        "org.zulip.zulip-electron",
+        "im.riot.app",
+        "ru.keepcoder.Telegram",
+        "com.linear",
+        "notion.id",
+        "com.github.GitHubClient",
+        // Terminals
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "com.mitchellh.ghostty",
+        "dev.warp.Warp-Stable",
+        "com.github.wez.wezterm",
+        "org.alacritty",
+        "net.kovidgoyal.kitty",
+        // Self
+        "com.openappshq.openreaction",
+    ]
+
+    public private(set) var added: Set<String>
+    public private(set) var removed: Set<String>
+
+    public init(added: Set<String> = [], removed: Set<String> = []) {
+        self.added = added
+        self.removed = removed
+    }
+
+    public func isExcluded(_ bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        if added.contains(bundleIdentifier) { return true }
+        return Self.defaultBundleIdentifiers.contains(bundleIdentifier) && !removed.contains(bundleIdentifier)
+    }
+
+    public mutating func setExcluded(_ excluded: Bool, bundleIdentifier: String) {
+        let isDefault = Self.defaultBundleIdentifiers.contains(bundleIdentifier)
+        if excluded {
+            removed.remove(bundleIdentifier)
+            if !isDefault { added.insert(bundleIdentifier) }
+        } else {
+            added.remove(bundleIdentifier)
+            if isDefault { removed.insert(bundleIdentifier) }
+        }
+    }
+}
