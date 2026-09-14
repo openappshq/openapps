@@ -22,6 +22,12 @@ Free & open source · Mac native · No account · No telemetry
 - Liquid Glass on macOS 26 Tahoe, native materials on Sonoma and Sequoia
 - GIFs and stickers are planned
 
+## License
+
+OpenReaction is MIT licensed and **a build from source is unrestricted**: licensing is compiled out, every feature works, and nothing contacts the license service. The license pays for the official build — the signed, notarized download with updates: $5 one-time per app, lifetime updates, 3 Macs, with a 3-day free trial. Details in [LICENSING.md](../../LICENSING.md).
+
+> Official builds check your license with Dodo Payments, our payment provider. The license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use OpenReaction are never sent. Builds from source never contact the license service.
+
 ## Requirements
 
 macOS 14 Sonoma or later.
@@ -37,7 +43,15 @@ Requires Xcode 26 (Swift 6.2 or later).
 ```sh
 swift build          # debug build
 swift test           # unit tests for the core library
-scripts/bundle.sh    # release build → build/OpenReaction.app
+scripts/bundle.sh    # release build → build/OpenReaction.app (licensing off)
+```
+
+Official builds opt into licensing; the script generates the compiled-in configuration and refuses to build without the Dodo product IDs:
+
+```sh
+OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test \
+OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… OPENAPPS_DODO_TRIAL_PRODUCT_ID=pdt_… \
+scripts/bundle.sh
 ```
 
 `scripts/bundle.sh` signs with `APPLE_SIGNING_IDENTITY` when set, and ad-hoc otherwise:
