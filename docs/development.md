@@ -50,11 +50,11 @@ design/
 ```
 
 The workspace remains pnpm + Vite+, with no additional task runner.
-`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/OpenKlack/`, its download page at `/OpenKlack/download/`, and OpenReaction at `/openreaction/`.
+`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/openklack/`, its download page at `/openklack/download/`, and OpenReaction at `/openreaction/`.
 `pnpm openklack:dev` runs the native utility.
 `pnpm build` emits one static `dist/` with a real HTML entry for each catalog page and a `404.html` fallback.
 The website loads each product's code and styles only when its route opens.
-Models and sounds live under `/OpenKlack/`; logos remain in `/brand/<app-id>/`.
+Models and sounds live under `/openklack/`; logos remain in `/brand/<app-id>/`.
 Catalog HTML and copied assets are generated during dev/build; authored social images remain tracked.
 The desktop bundle identifier and saved-settings format are unchanged by the directory move.
 
@@ -88,7 +88,7 @@ Run `pnpm design:check` to verify tokens against the saved Figma snapshot and va
 
 ## Behavior
 
-The website’s primary Download for Mac links open `/OpenKlack/download/`, a separate static HTML entry. Without `VITE_OPENKLACK_MAC_DOWNLOAD_URL`, this page shows the unreleased state and never attempts a download. Once a signed public installer is available, set that variable in `apps/website/.env.local` (see `.env.example`) and rebuild. The page then attempts the download once and exposes the same URL as a manual retry link. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
+The website’s primary Download for Mac links open `/openklack/download/`, a separate static HTML entry. Without `VITE_OPENKLACK_MAC_DOWNLOAD_URL`, this page shows the unreleased state and never attempts a download. Once a signed public installer is available, set that variable in `apps/website/.env.local` (see `.env.example`) and rebuild. The page then attempts the download once and exposes the same URL as a manual retry link. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
 
 - Type in the playground or click the interactive 3D keyboard.
   Each key has damped travel and a radial lighting pulse.

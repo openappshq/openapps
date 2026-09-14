@@ -10,7 +10,6 @@ export const DODO_CHECKOUT_ORIGINS = {
 /** Placeholder until the user sets a real support address. */
 export const SUPPORT_URL = "mailto:support@openapps.space";
 
-export const PRICE = "$5";
 export const TRIAL_DAYS = 3;
 export const MACS_PER_LICENSE = 3;
 export const OFFLINE_GRACE = "a week";
@@ -63,13 +62,13 @@ export function dodoConfigFrom(env: Env): DodoConfig {
 export const dodoConfig = dodoConfigFrom(import.meta.env);
 
 /**
- * Whether an app has an official build to sell. Until it does, the buy and
- * trial buttons stay disabled even when product IDs are configured: a key
- * with nothing to activate helps no one.
+ * Whether an app is on sale. Set false to pull one: the buy and trial buttons
+ * go quiet even when product IDs are configured, because a key with nothing to
+ * activate helps no one.
  */
 export const officialBuilds: Record<string, boolean> = {
-  openreaction: false,
-  openklack: false,
+  openreaction: true,
+  openklack: true,
 };
 
 /**
@@ -93,13 +92,15 @@ export interface AppLicensing {
   scheme: string;
   /** The app's page on this site, e.g. `/openreaction/`. */
   pageUrl: string;
+  /** What this app costs, once. */
+  price: string;
   /** Where paid checkout returns. */
   thanksUrl: string;
   /** Where trial checkout returns; a separate path so the page knows the kind. */
   trialThanksUrl: string;
-  /** False while there is no official build to license. */
+  /** False only while an app is off sale. */
   officialBuildAvailable: boolean;
-  /** Null while product IDs are not configured or no official build exists. */
+  /** Null while product IDs are not configured or the app is off sale. */
   buyUrl: string | null;
   trialUrl: string | null;
   supportUrl: string;
@@ -127,6 +128,7 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
     name: product.name,
     scheme: appId,
     pageUrl: `${product.route}/`,
+    price: product.price,
     thanksUrl,
     trialThanksUrl,
     officialBuildAvailable: available,

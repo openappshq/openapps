@@ -1,0 +1,119 @@
+/* A drifting strip of the product's catalogue. Full-bleed, faded at both ends
+   so it reads as passing through the page rather than starting and stopping. */
+.marquee {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+}
+.marquee-row {
+  display: flex;
+  align-items: center;
+  gap: clamp(28px, 4.4vw, 56px);
+  margin: 0;
+  padding: 0 clamp(14px, 2.2vw, 28px) 0 0;
+  list-style: none;
+}
+.marquee-row > li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  white-space: nowrap;
+}
+
+/* OpenKlack: every switch in the library, each with its own recorded colour. */
+.marquee-pack {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 1.4vw, 16px);
+}
+.marquee-switch {
+  font: 800 clamp(23px, 4vw, 54px) / 1 var(--font-heading);
+  letter-spacing: -0.045em;
+  color: var(--foreground);
+}
+.marquee-switch small {
+  display: block;
+  margin-top: 6px;
+  font: 400 11px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.marquee-chip {
+  width: clamp(22px, 2.6vw, 34px);
+  height: clamp(22px, 2.6vw, 34px);
+  flex-shrink: 0;
+  border-radius: clamp(7px, 0.8vw, 10px);
+  background: var(--chip);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.28), 0 2px 5px -2px oklch(0 0 0 / 0.35);
+}
+
+/* OpenReaction: a shortcode and what it becomes. */
+.marquee-code {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: clamp(9px, 1.1vw, 12px) clamp(14px, 1.8vw, 20px);
+  border-radius: var(--radius-soft);
+  background: var(--surface-face);
+  font: 500 clamp(14px, 1.6vw, 21px) / 1 var(--font-mono);
+  color: var(--muted);
+}
+.marquee-code b {
+  font-size: 1.5em;
+  line-height: 1;
+  font-weight: 400;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .marquee-track {
+    animation: marquee-pass var(--pass, 64s) linear infinite;
+  }
+  .marquee-track[data-reverse] {
+    animation-direction: reverse;
+  }
+  /* Let someone stop it to read a name. */
+  .marquee:hover .marquee-track,
+  .marquee:focus-within .marquee-track {
+    animation-play-state: paused;
+  }
+  @keyframes marquee-pass {
+    to {
+      transform: translateX(-50%);
+    }
+  }
+}
+
+/* Scrolling nudges the strip along on top of its own drift, so the page and the
+   catalogue feel connected. The rows carry it on `translate` while the track
+   keeps its pass on `transform`, so the two never fight over one property. The
+   strip's `overflow: hidden` makes it its own scroll container, so it publishes
+   a named timeline from its place in the page for the rows to ride. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .marquee {
+      view-timeline-name: --marquee-pass;
+    }
+    .marquee-row {
+      animation: marquee-nudge linear both;
+      animation-timeline: --marquee-pass;
+      animation-range: cover 0% cover 100%;
+    }
+    .marquee-track[data-reverse] .marquee-row {
+      animation-direction: reverse;
+    }
+    @keyframes marquee-nudge {
+      from {
+        translate: 40px 0;
+      }
+      to {
+        translate: -40px 0;
+      }
+    }
+  }
+}

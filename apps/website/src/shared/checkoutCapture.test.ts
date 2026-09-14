@@ -30,8 +30,8 @@ describe("checkout capture script", () => {
   });
 
   it("keeps unrelated parameters and the hash", () => {
-    const { replaced } = run("?license_key=LK&ref=newsletter", "/OpenKlack/thanks/", "#steps");
-    expect(replaced).toEqual(["/OpenKlack/thanks/?ref=newsletter#steps"]);
+    const { replaced } = run("?license_key=LK&ref=newsletter", "/openklack/thanks/", "#steps");
+    expect(replaced).toEqual(["/openklack/thanks/?ref=newsletter#steps"]);
   });
 
   it("does nothing on a plain visit", () => {

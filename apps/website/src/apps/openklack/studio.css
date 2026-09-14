@@ -1,9 +1,7 @@
 .studio-shell {
   background: var(--surface);
-  border-radius: var(--radius-panel);
+  border-radius: var(--radius-soft);
   padding: 28px 32px;
-  border: 1px solid var(--border);
-  scroll-margin-top: 24px;
 }
 .studio-topline,
 .studio-controls,
@@ -16,7 +14,6 @@
 .studio-topline {
   justify-content: space-between;
   padding-bottom: 24px;
-  border-bottom: 1px solid var(--border);
 }
 .studio-topline h2 {
   font-size: 26px;
@@ -37,7 +34,7 @@
   font-weight: 600;
 }
 .sound-power.enabled {
-  background: var(--background);
+  background: var(--control-face);
   color: var(--foreground);
   box-shadow: var(--shadow-control);
 }
@@ -51,7 +48,6 @@
 .studio-playarea {
   min-width: 0;
   padding-left: 28px;
-  border-left: 1px solid var(--border);
 }
 .library-heading {
   justify-content: space-between;
@@ -165,8 +161,6 @@
   }
   .studio-playarea {
     padding: 24px 0 0;
-    border-left: 0;
-    border-top: 1px solid var(--border);
   }
   .sound-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

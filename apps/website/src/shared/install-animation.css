@@ -1,0 +1,119 @@
+/* --- The install, shown rather than listed -----------------------------------
+   The disk image that will open on the visitor's Mac, running the one gesture
+   macOS asks for.
+
+   The drag is one `transform` per keyframe on one element, with the origin
+   pinned to that element's own (0, 0). `offset-path` was the obvious tool and
+   the wrong one: it cannot be combined with `scale` on the same element without
+   the scale resolving against the canvas, which slides the icon off the folder
+   as it shrinks. A transform list composes in order and has no such trap. */
+.install-scene {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 14px;
+  box-shadow:
+    0 2px 6px -2px oklch(0 0 0 / 0.16),
+    0 24px 56px -24px oklch(0 0 0 / 0.42);
+}
+:root[data-theme="dark"] .install-scene {
+  box-shadow:
+    0 2px 6px -2px oklch(0 0 0 / 0.5),
+    0 28px 64px -26px oklch(0 0 0 / 0.72);
+}
+.ia-shadow,
+.ia-folder-shadow {
+  fill: oklch(0 0 0 / 0.26);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ia-drag {
+    transform-origin: 0 0;
+    animation: ia-drag 5.4s cubic-bezier(0.5, 0, 0.2, 1) infinite;
+  }
+  .ia-shadow {
+    transform-origin: 0 0;
+    animation: ia-shadow 5.4s cubic-bezier(0.5, 0, 0.2, 1) infinite;
+  }
+  /* The pocket opens by settling, not by swinging: rotating a panel this wide
+     lifts its far edge clear of the folder and reads as a broken hinge. */
+  .ia-folder-front {
+    animation: ia-open 5.4s cubic-bezier(0.34, 1.2, 0.5, 1) infinite;
+  }
+
+  @keyframes ia-drag {
+    /* In its slot, then lifted. */
+    0%,
+    16% {
+      transform: translate(0, 0) scale(1);
+      opacity: 1;
+    }
+    24% {
+      transform: translate(24px, -26px) scale(1.06);
+      opacity: 1;
+    }
+    /* Carried across, and held over Applications for a beat. */
+    52%,
+    60% {
+      transform: translate(300px, -34px) scale(1.06);
+      opacity: 1;
+    }
+    /* Sinks in behind the front panel, and stays down until the reset. */
+    73% {
+      transform: translate(300px, 18px) scale(0.74);
+      opacity: 1;
+    }
+    /* Out of sight only long enough to get home: leave it any longer and the
+       slot it came from just looks empty. */
+    78%,
+    82% {
+      transform: translate(300px, 18px) scale(0.74);
+      opacity: 0;
+    }
+    83% {
+      transform: translate(0, 0) scale(1);
+      opacity: 0;
+    }
+    88%,
+    100% {
+      transform: translate(0, 0) scale(1);
+      opacity: 1;
+    }
+  }
+  /* A contact shadow: tight under the icon on the desk, gone once it is away. */
+  @keyframes ia-shadow {
+    0%,
+    16% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    28% {
+      opacity: 0.32;
+      transform: scale(1.3);
+    }
+    40%,
+    83% {
+      opacity: 0;
+      transform: scale(1.3);
+    }
+    90%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes ia-open {
+    0%,
+    50% {
+      transform: translate(0, 0);
+    }
+    61%,
+    72% {
+      transform: translate(0, 8px);
+    }
+    86%,
+    100% {
+      transform: translate(0, 0);
+    }
+  }
+}

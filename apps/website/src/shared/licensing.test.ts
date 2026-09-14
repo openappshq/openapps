@@ -75,13 +75,17 @@ describe("dodoConfigFrom", () => {
 describe("licensingFor", () => {
   const dodo = dodoConfigFrom(liveEnv);
 
-  it("keeps both buttons disabled until an official build exists", () => {
+  it("sells every catalogued app, and disables both buttons for one taken off sale", () => {
     for (const product of products) {
-      expect(officialBuilds[product.id], product.id).toBe(false);
+      expect(officialBuilds[product.id], product.id).toBe(true);
       const licensing = licensingFor(product.id, { dodo });
-      expect(licensing.officialBuildAvailable).toBe(false);
-      expect(licensing.buyUrl).toBeNull();
-      expect(licensing.trialUrl).toBeNull();
+      expect(licensing.officialBuildAvailable, product.id).toBe(true);
+      expect(licensing.buyUrl, product.id).not.toBeNull();
+      expect(licensing.trialUrl, product.id).not.toBeNull();
+
+      const offSale = licensingFor(product.id, { dodo, officialBuildAvailable: false });
+      expect(offSale.buyUrl).toBeNull();
+      expect(offSale.trialUrl).toBeNull();
     }
   });
 
@@ -115,6 +119,13 @@ describe("licensingFor", () => {
       expect(licensing.trialThanksUrl).toBe(`https://openapps.space${product.route}/thanks/trial/`);
       expect(licensing.buyUrl).toContain(encodeURIComponent(licensing.thanksUrl));
       expect(licensing.trialUrl).toContain(encodeURIComponent(licensing.trialThanksUrl));
+    }
+  });
+
+  it("quotes each app's own price rather than one price for the catalogue", () => {
+    for (const product of products) {
+      expect(product.price, product.id).toMatch(/^\$\d/);
+      expect(licensingFor(product.id).price, product.id).toBe(product.price);
     }
   });
 
@@ -207,8 +218,8 @@ describe("cleanedUrl", () => {
         "https://openapps.space/openreaction/thanks/?payment_id=p&status=succeeded&license_key=LK&email=a%40b.c",
       ),
     ).toBe("/openreaction/thanks/");
-    expect(cleanedUrl("https://openapps.space/OpenKlack/thanks/?license_key=LK&ref=x#steps")).toBe(
-      "/OpenKlack/thanks/?ref=x#steps",
+    expect(cleanedUrl("https://openapps.space/openklack/thanks/?license_key=LK&ref=x#steps")).toBe(
+      "/openklack/thanks/?ref=x#steps",
     );
   });
 });

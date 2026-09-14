@@ -150,6 +150,23 @@
   padding: 12px 16px;
   min-height: 44px;
 }
+/* The same instruction, in the verb the visitor's device actually uses. */
+.hint-touch {
+  display: none;
+}
+@media (hover: none) {
+  .hint-pointer {
+    display: none;
+  }
+  .hint-touch {
+    display: inline;
+  }
+  /* Comfortable thumb targets; the row still fits because only the height grows. */
+  .typing-modes button,
+  .typing-restart {
+    min-height: 44px;
+  }
+}
 @media (max-width: 600px) {
   .typing-passage,
   .typing-surface textarea {

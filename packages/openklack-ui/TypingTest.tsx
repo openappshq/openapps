@@ -19,6 +19,13 @@ export function TypingTest() {
   const typed = text.split(" ");
   const current = typed.length - 1;
   const score = typingScore(text, target, Math.min(elapsed, duration || elapsed));
+  // One instruction, both verbs; CSS shows the one that matches the device.
+  const hint = (
+    <>
+      <span className="hint-pointer">Click</span>
+      <span className="hint-touch">Tap</span> the words to begin
+    </>
+  );
   useEffect(() => {
     if (!running || !duration) return;
     const timer = setInterval(() => {
@@ -88,7 +95,7 @@ export function TypingTest() {
                   ? ""
                   : focused
                     ? "Start typing"
-                    : "Click the words to begin"}
+                    : hint}
             </span>
           </div>
         )}

@@ -14,7 +14,14 @@
   box-sizing: border-box;
 }
 html {
-  scroll-padding-top: 24px;
+  /* One landing offset for every in-page target, so a section never arrives
+     flush against the top edge. Per-element scroll-margin is not needed. */
+  scroll-padding-top: 40px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
 }
 body {
   margin: 0;

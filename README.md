@@ -10,7 +10,7 @@ Free, open-source Mac apps. One home for their code, websites, and design system
 
 | Our apps | A closer look |
 | :--- | :---: |
-| **OpenKlack**<br />Mechanical keyboard sounds for the keyboard you already own.<br />[Try the sounds](https://openapps.space/OpenKlack/) · [Source](apps/openklack-desktop) | <img src="design/assets/openklack/ui/settings-light.png" alt="OpenKlack app preview: sound library, favorites, volume, and live keyboard" width="440" /> |
+| **OpenKlack**<br />Mechanical keyboard sounds for the keyboard you already own.<br />[Try the sounds](https://openapps.space/openklack/) · [Source](apps/openklack-desktop) | <img src="design/assets/openklack/ui/settings-light.png" alt="OpenKlack app preview: sound library, favorites, volume, and live keyboard" width="440" /> |
 | **OpenReaction**<br />Emoji shortcodes in every text field on your Mac.<br />[Try the demo](https://openapps.space/openreaction/) · [Source](apps/openreaction) | <img src="design/assets/openapps-hq/readme/openreaction.svg" alt="OpenReaction illustration: :heart: becomes a heart emoji" width="440" /> |
 
 Both apps are in development; public Mac downloads are coming later.
@@ -23,7 +23,7 @@ Requires Node.js 24 and pnpm 12.4.1. See each app’s build requirements in the 
 git clone https://github.com/openappshq/openapps.git
 cd openapps
 pnpm install
-pnpm dev              # OpenApps website, including /OpenKlack/
+pnpm dev              # OpenApps website, including /openklack/
 pnpm openklack:dev    # OpenKlack desktop app
 ```
 

@@ -485,6 +485,11 @@ export default function ReactionDemo() {
         </div>
       </div>
       <div className="demo-stage" ref={setLayer}>
+        <div className="stage-field" aria-hidden="true">
+          {["🎉", "✨", "🚀", "❤️", "🔥", "👍", "💯", "👀", "🥳", "⚡"].map((glyph) => (
+            <span key={glyph}>{glyph}</span>
+          ))}
+        </div>
         <div className="mac-window" data-app={app}>
           <div className="titlebar">
             <span className="traffic" aria-hidden="true">
@@ -515,9 +520,24 @@ export default function ReactionDemo() {
           </div>
         </div>
       </div>
+      {/* Each clause is one unbreakable unit, so a narrow line never strands a
+          comma or a key. Which half shows depends on whether the visitor has
+          arrow keys to press or a screen to tap. */}
       <p className="demo-caption">
-        Type <kbd>:</kbd> and two letters, choose with <kbd>←</kbd> <kbd>→</kbd>, insert with{" "}
-        <kbd>Return</kbd>. Close with <kbd>:</kbd> for an exact match.
+        <span>
+          Type <kbd>:</kbd> and two letters,
+        </span>{" "}
+        <span className="hint-pointer">
+          choose with <kbd>←</kbd> <kbd>→</kbd>,
+        </span>{" "}
+        <span className="hint-pointer">
+          insert with <kbd>Return</kbd>.
+        </span>
+        <span className="hint-touch">then tap an emoji.</span>{" "}
+        <span>
+          Close with <kbd>:</kbd>
+        </span>{" "}
+        <span>for an exact match.</span>
       </p>
       <p className="sr-only" aria-live="polite">
         {announcement}
