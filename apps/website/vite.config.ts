@@ -1,10 +1,13 @@
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, lazyPlugins } from "vite-plus";
+import { unknownPageRedirects } from "./redirects.ts";
 
 export default defineConfig({
   server: { host: "127.0.0.1", port: 5173, strictPort: true },
-  plugins: lazyPlugins(() => [react(), tailwindcss()]),
+  // Several standalone pages; unknown ones redirect to /home/ (see public/404.html for hosting).
+  appType: "mpa",
+  plugins: lazyPlugins(() => [react(), tailwindcss(), unknownPageRedirects()]),
   build: {
     outDir: "../../dist",
     emptyOutDir: true,
