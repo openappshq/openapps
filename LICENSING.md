@@ -125,6 +125,10 @@ One Keychain item per app, service `space.openapps.<app>.license`. Never store i
 
 **Write order:** a change that removes access (revocation, trial end) takes effect in memory immediately, then is saved; a failed save is retried on every tick and shown as a storage error. A change that grants access is saved first and only then takes effect.
 
+**Revocation journal:** so a revocation survives a failed Keychain save followed by a restart, each app also keeps a small non-secret journal outside the Keychain (user defaults or a file in its support directory), keyed by a SHA-256 hash of the activation ID, holding only the revocation time. It's written before the Keychain save. On load, a journal entry for the stored activation forces Revoked regardless of the Keychain record. The entry is cleared only when the revoked record is saved, on `valid: true` for that activation, or when the activation is replaced or removed. The journal never contains the license key.
+
+**Unreadable storage:** if the Keychain record or `pending_cleanups` can't be read, the app shows a storage error and retries; it never treats unreadable storage as "no license" or overwrites entries it couldn't read.
+
 ### Daily check
 - **When:**
   - on launch, in the background, never delaying launch or the core feature;
