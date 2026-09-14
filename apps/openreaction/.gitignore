@@ -9,3 +9,4 @@ xcuserdata/
 .vscode/*
 .idea
 *.local
+Sources/OpenReaction/Licensing/LicensingConfig.swift

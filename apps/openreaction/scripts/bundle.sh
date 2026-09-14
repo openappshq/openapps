@@ -8,6 +8,17 @@
 # Accessibility and Input Monitoring grants to the code signature, and an
 # ad-hoc signature changes on every build, so expect to grant permissions
 # again after each ad-hoc rebuild. A stable identity avoids that.
+#
+# Licensing (LICENSING.md) is compiled out by default. Official builds opt in:
+#
+#   OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test \
+#   OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… OPENAPPS_DODO_TRIAL_PRODUCT_ID=pdt_… \
+#   scripts/bundle.sh
+#
+# OPENAPPS_DODO_ENV is `test` (test.dodopayments.com) or `live`. Optional:
+# OPENAPPS_BUY_URL, OPENAPPS_TRIAL_URL, OPENAPPS_SUPPORT_URL. The script
+# generates Sources/OpenReaction/Licensing/LicensingConfig.swift (gitignored)
+# and refuses to build a licensed app without product IDs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,9 +29,18 @@ BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)
 IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 APP="build/${APP_NAME}.app"
 
+CONFIG_FILE="Sources/OpenReaction/Licensing/LicensingConfig.swift"
+rm -f "$CONFIG_FILE"
+if [[ "${OPENAPPS_LICENSING:-0}" == "1" ]]; then
+    scripts/generate-licensing-config.sh "$CONFIG_FILE"
+    echo "==> Licensing on (${OPENAPPS_DODO_ENV})"
+else
+    echo "==> Licensing off (source build: no License UI, no license network calls)"
+fi
+
 echo "==> Building release binary"
-swift build -c release --product "$APP_NAME"
-BIN_DIR="$(swift build -c release --show-bin-path)"
+OPENAPPS_LICENSING="${OPENAPPS_LICENSING:-0}" swift build -c release --product "$APP_NAME"
+BIN_DIR="$(OPENAPPS_LICENSING="${OPENAPPS_LICENSING:-0}" swift build -c release --show-bin-path)"
 
 echo "==> Assembling ${APP}"
 rm -rf "$APP"
@@ -69,6 +89,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>MIT License. An OpenApps HQ original.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>${BUNDLE_ID}.activate</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>openreaction</string>
+            </array>
+        </dict>
+    </array>
     <!-- Informational. macOS does not show custom text in the Accessibility
          or Input Monitoring prompts; the onboarding window explains both. -->
     <key>NSAccessibilityUsageDescription</key>

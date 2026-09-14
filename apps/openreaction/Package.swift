@@ -1,5 +1,10 @@
 // swift-tools-version: 6.0
+import Foundation
 import PackageDescription
+
+// Official builds set OPENAPPS_LICENSING=1 (see scripts/bundle.sh); source
+// builds compile licensing out entirely.
+let licensing = ProcessInfo.processInfo.environment["OPENAPPS_LICENSING"] == "1"
 
 let package = Package(
     name: "OpenReaction",
@@ -18,7 +23,8 @@ let package = Package(
         .executableTarget(
             name: "OpenReaction",
             dependencies: ["OpenReactionCore"],
-            resources: [.copy("Resources")]
+            resources: [.copy("Resources")],
+            swiftSettings: licensing ? [.define("OPENAPPS_LICENSING")] : []
         ),
         .testTarget(
             name: "OpenReactionCoreTests",
