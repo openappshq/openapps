@@ -12,6 +12,7 @@ dist
 dist-ssr
 apps/website/public/brand/
 apps/website/public/sounds/
+apps/website/public/data/
 .sites-runtime/
 target/
 apps/desktop/src-tauri/gen/
