@@ -528,13 +528,27 @@ impl Engine {
         seen
     }
 
-    /// Whether the trial is held because launch or wake found the clock behind it.
-    pub fn trial_clock_behind(&self, at: impl Into<Moment>) -> bool {
-        let at = at.into();
+    /// Whether the trial is held because launch or wake found the clock behind it. The hold is
+    /// latched: it restricts access and freezes trial writes until a fresh `observe` finds the
+    /// clock corrected, even if the wall clock already looks right. `at` is unused but keeps the
+    /// call sites uniform.
+    pub fn trial_clock_behind(&self, _at: impl Into<Moment>) -> bool {
         self.clock_behind
             && self.license().is_none()
-            && matches!(&self.trial, TrialSlot::Present(trial)
-                if at.wall < trial.last_seen_at - CLOCK_ROLLBACK_TOLERANCE)
+            && matches!(&self.trial, TrialSlot::Present(_))
+    }
+
+    /// Whether a held trial's clock looks corrected at `at`. This only tells the scheduler to
+    /// observe soon; it never grants anything by itself.
+    pub fn clock_corrected(&self, at: impl Into<Moment>) -> bool {
+        let at = at.into();
+        self.trial_clock_behind(at) && !self.wall_behind_trial(at)
+    }
+
+    /// Whether the wall clock is more than the tolerance behind the trial's latest moment.
+    fn wall_behind_trial(&self, at: Moment) -> bool {
+        matches!(&self.trial, TrialSlot::Present(trial)
+            if at.wall < trial.last_seen_at - CLOCK_ROLLBACK_TOLERANCE)
     }
 
     /// Launch or wake: with no license, a clock more than an hour behind the trial holds it until
@@ -677,12 +691,15 @@ impl Engine {
                 }
                 _ => false,
             };
-        if self.trial_clock_behind(at) {
+        if self.trial_clock_behind(at) && self.wall_behind_trial(at) {
+            // Still behind: the hold stays, and nothing about the trial changes.
             return Observed {
                 license,
                 trial: false,
             };
         }
+        // A fresh observation is the only way out of the hold: it re-anchors below, and the
+        // time the hold lasted is not counted (`trial_seen` adds no monotonic time while held).
         let seen = match &self.trial {
             TrialSlot::Present(trial) => self.trial_seen(trial, at),
             _ => {
@@ -1687,7 +1704,10 @@ pub(crate) mod tests {
         );
         assert_eq!(engine.next_transition_at(rolled_back), None);
         // Within the hour counts as corrected, and the hold added no time.
-        assert_eq!(engine.state(NOW - HOUR / 2), State::Trial { days_left: 1 });
+        // A corrected-looking clock only schedules an observation; the hold stays until then.
+        assert!(engine.clock_corrected(NOW - HOUR / 2));
+        assert_eq!(engine.state(NOW - HOUR / 2), State::ClockBehind);
+        assert!(engine.trial_frozen(NOW - HOUR / 2));
         assert!(!engine.observe(NOW).trial);
         assert!(!engine.clock_behind);
         assert_eq!(engine.state(NOW), State::Trial { days_left: 1 });
@@ -1831,6 +1851,63 @@ pub(crate) mod tests {
         assert_eq!(trial.started_at, NOW - 10 * DAY - HOUR);
         assert_eq!(trial.last_seen_at, NOW);
         assert_eq!(engine.state(fixed), State::TrialEnded);
+    }
+
+    #[test]
+    fn a_held_clock_behind_state_restricts_until_a_fresh_observation() {
+        let mut engine = in_trial(71 * HOUR + 45 * 60);
+        engine.anchor_trial(Moment { wall: NOW, mono: 0 });
+        engine.check_clock(Moment {
+            wall: NOW - 2 * HOUR,
+            mono: 60,
+        });
+        assert!(engine.clock_behind);
+        let saved = engine.trial.clone();
+        for at in [
+            Moment {
+                wall: NOW,
+                mono: 120,
+            },
+            Moment {
+                wall: NOW - 30 * 60,
+                mono: 120 + 30 * 60,
+            },
+        ] {
+            assert!(engine.clock_corrected(at), "it looks right");
+            assert_eq!(engine.state(at), State::ClockBehind, "but still held");
+            assert_eq!(
+                engine.durable_state(&Stored::default(), &saved, at),
+                State::ClockBehind
+            );
+            assert!(engine.trial_frozen(at));
+            assert_eq!(engine.next_transition_at(at), None);
+            assert!(!engine.registration_wanted(at) || engine.trial_frozen(at));
+        }
+        // A still-behind observation keeps the hold; a corrected one ends it and re-anchors.
+        assert_eq!(
+            engine.observe(Moment {
+                wall: NOW - 2 * HOUR,
+                mono: 1_900
+            }),
+            Observed::default()
+        );
+        assert!(engine.clock_behind);
+        let fixed = Moment {
+            wall: NOW - 30 * 60,
+            mono: 2_000,
+        };
+        engine.observe(fixed);
+        assert!(!engine.clock_behind);
+        assert_eq!(engine.trial_anchor.unwrap().mono, 2_000);
+        assert_eq!(engine.state(fixed), State::Trial { days_left: 0 });
+        // From here monotonic time counts again, whatever the wall clock does.
+        assert_eq!(
+            engine.state(Moment {
+                wall: NOW - 30 * 60,
+                mono: 2_000 + 15 * 60
+            }),
+            State::TrialEnded
+        );
     }
 
     #[test]

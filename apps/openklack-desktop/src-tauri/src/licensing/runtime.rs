@@ -1573,8 +1573,16 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             .min()
             .unwrap_or(MAX_SLEEP);
         if clock_behind {
-            // Sound comes back soon after the clock is corrected.
+            // Sound comes back soon after the clock is corrected: once it looks right, the next
+            // tick's observation is what ends the hold.
             wait = wait.min(DEADLINE_RECHECK);
+            let corrected = {
+                let engine = self.engine.lock().unwrap();
+                engine.clock_corrected(self.now())
+            };
+            if corrected {
+                wait = Duration::from_secs(1);
+            }
         }
         {
             let meta = self.meta.lock().unwrap();
@@ -1601,6 +1609,14 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     /// The Mac woke from sleep: `last_seen_at` rises by the time slept, a clock found behind the
     /// trial holds it, deadlines are re-evaluated, and an unregistered trial asks the registry
     /// again whatever the backoff.
+    /// A fresh trial clock observation, sampled under the engine lock: for Try again, since
+    /// only an observation can end a clock-behind hold. The scheduler saves what it raised.
+    pub fn observe_now(&self) {
+        let mut engine = self.engine.lock().unwrap();
+        let now = self.now();
+        engine.observe(now);
+    }
+
     pub fn woke(&self) {
         {
             let mut engine = self.engine.lock().unwrap();
@@ -1886,7 +1902,11 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 meta.pending_key = None;
             }
         });
-        self.apply();
+        // Only a saved activation may unlock; a refused or failed one leaves access exactly as
+        // it was (restrictions were already published where they happened).
+        if outcome.is_ok() {
+            self.apply();
+        }
         self.poke();
         outcome.map(|_| self.view())
     }
@@ -2096,6 +2116,7 @@ pub async fn reload_license(state: tauri::State<'_, Arc<Live>>) -> Result<View, 
     let service = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         if service.view().ready {
+            service.observe_now();
             service.retry_trial();
             let _ = service.check_once(true);
             service.register_once(true);
@@ -2160,6 +2181,8 @@ mod tests {
     struct FakeDodo {
         product_id: String,
         validate: Mutex<Vec<Result<Validation, DodoError>>>,
+        /// When set, every activation fails with it.
+        activate_error: Mutex<Option<DodoError>>,
         calls: Mutex<Vec<String>>,
     }
 
@@ -2168,6 +2191,7 @@ mod tests {
             Self {
                 product_id: PAID_PRODUCT_ID.split(',').next().unwrap().into(),
                 validate: Mutex::new(Vec::new()),
+                activate_error: Mutex::new(None),
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -2185,6 +2209,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("activate {key} {name}"));
+            if let Some(error) = self.activate_error.lock().unwrap().clone() {
+                return Err(error);
+            }
             Ok(Activation {
                 id: format!("lki_{key}"),
                 product_id: self.product_id.clone(),
@@ -3484,6 +3511,95 @@ mod tests {
     }
 
     #[test]
+    fn a_held_clock_behind_never_unlocks_without_a_fresh_observation() {
+        // Review 3's scenario, registered at 71 h 45 min and unregistered at 23 h 45 min: the
+        // scheduler is stuck in an hourly save, a wake finds the clock behind, the user corrects
+        // it and submits a bad key.
+        for (elapsed, registered, expired) in [
+            (71 * HOUR + 45 * 60, true, State::TrialEnded),
+            (23 * HOUR + 45 * 60, false, State::TrialOffline),
+        ] {
+            let clock = Arc::new(AtomicI64::new(NOW));
+            let mono = Arc::new(AtomicI64::new(0));
+            let vault = FakeVault::default();
+            *vault.trial.lock().unwrap() = Some(TrialRecord {
+                started_at: NOW - elapsed,
+                last_seen_at: NOW - 2 * HOUR,
+                registered,
+                device_id: None,
+            });
+            let service = monotonic_service(
+                vault,
+                Arc::new(FakeJournal::default()),
+                clock.clone(),
+                mono.clone(),
+            );
+            service.load();
+            assert!(!service.host.blocked());
+            service.vault.trial_write_pause.arm();
+            let ticker = {
+                let service = service.clone();
+                thread::spawn(move || service.tick())
+            };
+            service.vault.trial_write_pause.wait_entered();
+            clock.store(NOW - 2 * HOUR, Ordering::SeqCst);
+            mono.store(60, Ordering::SeqCst);
+            service.woke();
+            assert!(service.host.blocked());
+            // Corrected, then a key that fails: nothing unlocks from the held state.
+            clock.store(NOW, Ordering::SeqCst);
+            mono.store(120, Ordering::SeqCst);
+            *service.dodo.activate_error.lock().unwrap() = Some(DodoError::KeyNotFound);
+            assert!(service.activate("BAD-KEY").is_err());
+            *service.dodo.activate_error.lock().unwrap() = Some(DodoError::Offline("down".into()));
+            assert!(service.activate("BAD-KEY").is_err());
+            let _enforcer = {
+                let service = service.clone();
+                thread::spawn(move || service.run_deadlines())
+            };
+            for wall in [NOW, NOW - 30 * 60] {
+                // Thirty minutes of monotonic time, the wall clock frozen then rolled back
+                // within the hour, the save still stuck.
+                clock.store(wall, Ordering::SeqCst);
+                mono.fetch_add(15 * 60, Ordering::SeqCst);
+                service.apply();
+                service.poke_deadlines();
+                service.enforce();
+                let view = service.view();
+                assert_eq!(view.state, State::ClockBehind, "elapsed {elapsed}");
+                assert!(!view.core_feature);
+                assert!(service.host.blocked(), "no unlock from the held state");
+                let engine = service.engine.lock().unwrap();
+                let now = service.now();
+                assert!(engine.clock_corrected(now));
+                assert_eq!(engine.next_transition_at(now), None);
+            }
+            // Released; a fresh observation ends the hold without counting it.
+            service.vault.trial_write_pause.open();
+            ticker.join().unwrap();
+            assert!(
+                service.host.blocked(),
+                "the stuck tick's own apply unlocks nothing"
+            );
+            service.tick();
+            assert!(!service.host.blocked());
+            {
+                let engine = service.engine.lock().unwrap();
+                let TrialSlot::Present(trial) = &engine.trial else {
+                    panic!("a trial is running")
+                };
+                assert_eq!(trial.last_seen_at, NOW + 60, "the hold added no time");
+                assert!(!engine.clock_behind);
+            }
+            // Observed again: monotonic time runs the limit out with the wall clock rolled back.
+            mono.fetch_add(20 * 60, Ordering::SeqCst);
+            service.enforce();
+            assert!(service.host.blocked(), "stopped at the limit");
+            assert_eq!(service.view().state, expired);
+        }
+    }
+
+    #[test]
     fn a_tick_that_waited_behind_a_stalled_save_cannot_undo_a_newer_wake() {
         // Review 2's scenario: a 25 h unregistered trial, a manual registration whose save
         // stalls, a tick waiting behind it, a wake two hours later, then the release.
@@ -3514,7 +3630,16 @@ mod tests {
             let service = service.clone();
             thread::spawn(move || service.tick())
         };
-        thread::sleep(Duration::from_millis(100));
+        // Arrival barrier: the tick holds the license ordering lock only inside `ensure_trial`,
+        // where it then waits for the trial lock the stalled save holds.
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        while service.mutate.try_lock().is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the tick never reached the lock"
+            );
+            thread::yield_now();
+        }
         assert!(!ticker.is_finished(), "the tick waits behind the save");
         clock.store(NOW + 2 * HOUR, Ordering::SeqCst);
         mono.store(2 * HOUR, Ordering::SeqCst);
