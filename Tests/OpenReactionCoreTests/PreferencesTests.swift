@@ -53,6 +53,19 @@ struct PreferencesTests {
         #expect(frecency.score("🎉", now: Date(timeIntervalSince1970: 86_400 * 101 - 1)) == 1)
     }
 
+    @Test func legacyFrecencyWithTimestampsMigratesToDays() throws {
+        let legacy = """
+        {"halfLife":1209600,"limit":200,"entries":{"🎉":{"value":2.5,"updated":8640012.5}}}
+        """
+        let migrated = try JSONDecoder().decode(Frecency.self, from: Data(legacy.utf8))
+        #expect(migrated.halfLifeDays == 14)
+        #expect(!migrated.isEmpty)
+        let json = String(decoding: try JSONEncoder().encode(migrated), as: UTF8.self)
+        #expect(json.contains("\"day\":"))
+        #expect(!json.contains("updated"))
+        #expect(!json.contains("8640012"))
+    }
+
     @Test func frecencyCanBeCleared() {
         var frecency = Frecency()
         frecency.record("🎉")

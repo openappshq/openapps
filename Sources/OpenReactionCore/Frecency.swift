@@ -26,6 +26,41 @@ public struct Frecency: Codable, Equatable, Sendable {
 
     public var isEmpty: Bool { entries.isEmpty }
 
+    private enum CodingKeys: String, CodingKey {
+        case halfLifeDays, limit, entries
+        // Keys written by the first release, which stored exact timestamps.
+        case legacyHalfLife = "halfLife"
+    }
+
+    private struct LegacyEntry: Decodable {
+        let value: Double
+        let updated: Date
+    }
+
+    /// Reads the current format, and converts entries from the first release
+    /// (a half-life in seconds and an exact `updated` date per emoji) to day
+    /// buckets so re-saving drops the timestamps.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        limit = try container.decodeIfPresent(Int.self, forKey: .limit) ?? 200
+        if let days = try container.decodeIfPresent(Double.self, forKey: .halfLifeDays) {
+            halfLifeDays = days
+            entries = try container.decodeIfPresent([String: Entry].self, forKey: .entries) ?? [:]
+        } else {
+            let seconds = try container.decodeIfPresent(Double.self, forKey: .legacyHalfLife) ?? 14 * 86_400
+            halfLifeDays = max(1, seconds / 86_400)
+            let legacy = try container.decodeIfPresent([String: LegacyEntry].self, forKey: .entries) ?? [:]
+            entries = legacy.mapValues { Entry(value: $0.value, day: Self.day(of: $0.updated)) }
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(halfLifeDays, forKey: .halfLifeDays)
+        try container.encode(limit, forKey: .limit)
+        try container.encode(entries, forKey: .entries)
+    }
+
     public mutating func record(_ item: String, now: Date = Date()) {
         let today = Self.day(of: now)
         entries[item] = Entry(value: score(item, now: now) + 1, day: today)

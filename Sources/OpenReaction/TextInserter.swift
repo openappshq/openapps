@@ -2,7 +2,7 @@ import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
 
-/// Replaces the typed shortcode in the focused app by posting keyboard events.
+/// Posts the keyboard events that carry out a replacement, in order.
 ///
 /// Why synthetic Unicode key events rather than the pasteboard: pasting
 /// overwrites the user's clipboard, and restoring it races the target app's
@@ -12,58 +12,74 @@ import Foundation
 /// typing path, so undo, autocorrect and field formatters behave as if the
 /// user typed the emoji.
 ///
-/// A replacement is a transaction against the physical event stream: the tap
-/// holds keyboard events from `beginHold` until a flush marker posted after
-/// the last synthetic event reaches it, then replays them. Typing during the
-/// replacement therefore lands after the emoji, never between the deletes.
+/// Everything here is posted from one serial queue, enqueued in the order the
+/// `InputGate` decided, so deletes, text, flush markers and replayed physical
+/// keys reach the session event stream in that order.
 ///
 /// Media payloads (GIFs, images) cannot be typed and will need a pasteboard
 /// path with explicit clipboard save and restore.
 enum TextInserter {
-    /// Also used by the tap to replay held events, so posts stay in order.
     static let queue = DispatchQueue(label: "com.openappshq.openreaction.insertion", qos: .userInteractive)
     /// CGEventKeyboardSetUnicodeString accepts at most 20 UTF-16 units per event.
     private static let maxUnitsPerEvent = 20
 
-    /// Deletes `count` characters and types `text`, then posts a flush so the
-    /// tap can replay keys typed meanwhile. The caller must have called
-    /// `tap.beginHold()` first.
-    static func replace(deleting count: Int, with text: String, completion: @escaping @Sendable () -> Void) {
+    /// Deletes `deleteCount` characters, types `text`, then posts the flush for
+    /// the transaction. If events cannot be created the flush is still posted,
+    /// so the gate learns the phase is over instead of waiting for the watchdog.
+    static func postReplacement(transaction: Int, deleteCount: Int, text: String) {
         queue.async {
-            defer { completion() }
-            guard let source = makeSource() else { return }
-            for _ in 0..<max(0, count) {
-                postKey(CGKeyCode(kVK_Delete), source: source)
+            if let source = makeSource() {
+                for _ in 0..<max(0, deleteCount) {
+                    postKey(CGKeyCode(kVK_Delete), source: source)
+                }
+                for chunk in utf16Chunks(text) {
+                    postUnicode(chunk, source: source)
+                }
             }
-            for chunk in utf16Chunks(text) {
-                postUnicode(chunk, source: source)
-            }
-            postFlush()
+            postFlushNow(transaction: transaction)
         }
     }
 
-    /// Ends a hold without inserting anything.
-    static func postFlush() {
+    static func postFlush(transaction: Int) {
+        queue.async { postFlushNow(transaction: transaction) }
+    }
+
+    /// Re-posts physical events the tap held, tagged so it passes them through.
+    static func replay(_ events: [CGEvent]) {
+        let boxed = events.map(EventBox.init)
+        queue.async {
+            for box in boxed {
+                box.event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
+                box.event.post(tap: .cgSessionEventTap)
+            }
+        }
+    }
+
+    /// Sends a synthetic press of a key the tap swallowed but could not use.
+    static func repost(keyCode: UInt16) {
+        queue.async {
+            guard let source = makeSource() else { return }
+            postKey(CGKeyCode(keyCode), source: source)
+        }
+    }
+
+    private struct EventBox: @unchecked Sendable {
+        let event: CGEvent
+    }
+
+    private static func postFlushNow(transaction: Int) {
         guard let source = makeSource(),
               let marker = CGEvent(keyboardEventSource: source, virtualKey: 0xFF, keyDown: false) else { return }
         marker.flags = []
-        marker.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.flush)
+        marker.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.flush, id: transaction))
         marker.post(tap: .cgSessionEventTap)
-    }
-
-    /// Re-sends a key that the tap swallowed but the picker could no longer use.
-    static func repost(keyCode: CGKeyCode) {
-        queue.async {
-            guard let source = makeSource() else { return }
-            postKey(keyCode, source: source)
-        }
     }
 
     private static func makeSource() -> CGEventSource? {
         // A private state source does not inherit modifier keys the user is
         // still holding, so a held Shift cannot turn Delete into something else.
         let source = CGEventSource(stateID: .privateState)
-        source?.userData = KeyboardTap.Tag.passthrough
+        source?.userData = KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough)
         return source
     }
 
@@ -71,7 +87,7 @@ enum TextInserter {
         for keyDown in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown) else { continue }
             event.flags = []
-            event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.passthrough)
+            event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
             event.post(tap: .cgSessionEventTap)
         }
     }
@@ -80,7 +96,7 @@ enum TextInserter {
         for keyDown in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown) else { continue }
             event.flags = []
-            event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.passthrough)
+            event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
             units.withUnsafeBufferPointer { buffer in
                 event.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
             }

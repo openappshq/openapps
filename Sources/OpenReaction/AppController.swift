@@ -27,11 +27,13 @@ final class AppController {
     @ObservationIgnored private let picker = PickerPanelController()
     @ObservationIgnored private let locator = CaretLocator()
     @ObservationIgnored private let focusMonitor = FocusMonitor()
-    @ObservationIgnored private var focusGeneration = 0
     @ObservationIgnored private var isRelaunching = false
     @ObservationIgnored private var tap: KeyboardTap?
-    /// All keystroke decisions and safety rules; see `TypingCoordinator`.
-    @ObservationIgnored private var coordinator: TypingCoordinator
+    /// All keystroke decisions and safety rules live in the core `InputGate`;
+    /// the runner serializes inputs to it and carries out its effects.
+    @ObservationIgnored private var runner: GateRunner?
+    @ObservationIgnored private var watchdog: Task<Void, Never>?
+    @ObservationIgnored private var pendingSuggestions: [Int: Suggestion] = [:]
     @ObservationIgnored private var frecency: Frecency
     /// Which emoji data is in use, for About and diagnostics.
     @ObservationIgnored let dataSourceSummary: String
@@ -48,20 +50,20 @@ final class AppController {
         self.dataSourceSummary = dataSourceSummary
         let defaults = UserDefaults.standard
         isEnabled = defaults.object(forKey: DefaultsKey.enabled) as? Bool ?? true
-        frecency = Self.decode(Frecency.self, key: DefaultsKey.frecency) ?? Frecency()
+        hasStoredUsage = defaults.data(forKey: DefaultsKey.frecency) != nil
+        if let stored = Self.decode(Frecency.self, key: DefaultsKey.frecency) {
+            frecency = stored
+            // Rewrites entries from the first release in the day-based format.
+            Self.encode(stored, key: DefaultsKey.frecency)
+        } else {
+            frecency = Frecency()
+        }
         let exclusions = Self.decode(AppExclusions.self, key: DefaultsKey.exclusions) ?? AppExclusions()
         self.exclusions = exclusions
-        let box = ExclusionsBox(exclusions)
-        exclusionsBox = box
-        coordinator = TypingCoordinator(
-            isSecureInputEnabled: { IsSecureEventInputEnabled() },
-            isFrontmostAppExcluded: {
-                box.value.isExcluded(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-            }
-        )
+        exclusionsBox = ExclusionsBox(exclusions)
     }
 
-    /// Lets the coordinator's `Sendable` closure read the current exclusions.
+    /// Lets the gate's `Sendable` closure read the current exclusions.
     private final class ExclusionsBox: @unchecked Sendable {
         var value: AppExclusions
         init(_ value: AppExclusions) { self.value = value }
@@ -70,21 +72,25 @@ final class AppController {
     @ObservationIgnored private let exclusionsBox: ExclusionsBox
 
     func start() {
-        tap = KeyboardTap(replayQueue: TextInserter.queue) { [weak self] event in
+        let box = exclusionsBox
+        let gate = InputGate(isFrontmostAppExcluded: {
+            box.value.isExcluded(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        })
+        let runner = GateRunner(gate: gate) { [weak self] effects in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.handle(event) }
+                MainActor.assumeIsolated { self?.perform(effects) }
             }
         }
-        focusMonitor.onFocusChange = { [weak self] in self?.focusMayHaveChanged() }
+        self.runner = runner
+        tap = KeyboardTap(runner: runner)
+        focusMonitor.onFocusChange = { [weak self] in self?.runner?.focusMayHaveMoved() }
         picker.onVisibilityChange = { [weak self] frame in
-            self?.coordinator.isPickerVisible = frame != nil
-            self?.tap?.setPicker(visible: frame != nil, quartzFrame: frame)
+            self?.runner?.pickerVisibility(frame)
         }
         picker.model.onChoose = { [weak self] index in
             guard let self, self.picker.model.suggestions.indices.contains(index) else { return }
             self.picker.select(index)
-            // A click is ours alone, so it counts as a swallowed confirm.
-            self.run(self.coordinator.handle(.confirm, swallowed: true), keyCode: 0)
+            self.runner?.pickerClicked()
         }
         picker.model.onHover = { [weak self] index in self?.picker.select(index) }
 
@@ -101,6 +107,7 @@ final class AppController {
     func setEnabled(_ enabled: Bool) {
         isEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: DefaultsKey.enabled)
+        if !enabled { runner?.paused() }
         updateTap()
     }
 
@@ -167,7 +174,6 @@ final class AppController {
                 permissions.recordTap(running: running)
                 if running {
                     focusMonitor.start()
-                    focusMayHaveChanged()
                 }
             }
         } else if tap.isRunning {
@@ -179,44 +185,16 @@ final class AppController {
         if wasReady != isReady { onStateChange?() }
     }
 
-    // MARK: - Input
+    // MARK: - Gate effects
 
-    private func handle(_ event: TapEvent) {
-        run(coordinator.handle(event.input, swallowed: event.swallowed), keyCode: event.keyCode)
-        // Keys that reach the host and may move focus (Tab, Return, clicks,
-        // navigation) get a re-check, for apps that post no focus notifications.
-        if event.input == .reset || (event.input == .confirm && !event.swallowed) {
-            focusMayHaveChanged(assumeMoved: false)
-        }
-    }
-
-    private func resetTyping() {
-        run(coordinator.handle(.reset), keyCode: 0)
-    }
-
-    /// Re-checks the focused element. When focus is known to have moved,
-    /// capture stops until the answer arrives; otherwise the current knowledge
-    /// stands until it is replaced.
-    private func focusMayHaveChanged(assumeMoved: Bool = true) {
-        if assumeMoved {
-            run(coordinator.focusChanged(.unavailable), keyCode: 0)
-        }
-        let generation = focusGeneration &+ 1
-        focusGeneration = generation
-        Task {
-            let info = await locator.focusInfo()
-            guard generation == focusGeneration else { return }
-            run(coordinator.focusChanged(focusResult(info)), keyCode: 0)
-        }
-    }
-
-    private func run(_ effects: [TypingCoordinator.Effect], keyCode: CGKeyCode) {
+    /// Runs the effects the gate handed to the main actor, in order.
+    private func perform(_ effects: [GateRunner.MainEffect]) {
         for effect in effects {
             switch effect {
-            case .requestFocus(let tokenID):
+            case .requestProbe(let generation, let tokenID):
                 Task {
                     let info = await locator.focusInfo()
-                    run(coordinator.focusResolved(tokenID: tokenID, focusResult(info)), keyCode: 0)
+                    runner?.probeResult(generation: generation, tokenID: tokenID, focusResult(info))
                 }
             case .presentPicker(let query, let anchor):
                 let suggestions = provider.suggestions(for: query, usage: frecency.scores(), limit: PickerMetrics.maxItems)
@@ -229,20 +207,59 @@ final class AppController {
                 picker.dismiss()
             case .moveSelection(let delta):
                 picker.moveSelection(by: delta)
-            case .insert(let insertion):
-                perform(insertion)
-            case .repost:
-                // The tap removed a key the picker could not use; send it on so
-                // the user's keystroke is not lost.
-                if keyCode != 0 { TextInserter.repost(keyCode: keyCode) }
+            case .beginInsertion(let transaction, let source, let typed, let target):
+                beginInsertion(transaction: transaction, source: source, typed: typed, target: target)
+            case .armWatchdog(let transaction):
+                armWatchdog(transaction: transaction)
+            case .disarmWatchdog:
+                watchdog?.cancel()
+                watchdog = nil
+            case .recordUse(let transaction):
+                if let suggestion = pendingSuggestions.removeValue(forKey: transaction) {
+                    frecency.record(suggestion.id)
+                    Self.encode(frecency, key: DefaultsKey.frecency)
+                }
             }
         }
-        tap?.setCapturesText(coordinator.capturesText)
     }
 
-    // MARK: - Focus and insertion
+    private func armWatchdog(transaction: Int) {
+        watchdog?.cancel()
+        let task = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            self?.runner?.timeout(transaction: transaction)
+        }
+        watchdog = task
+    }
 
-    /// Converts Accessibility geometry to the coordinator's view of focus.
+    /// Resolves what to insert and verifies the target while the gate holds
+    /// physical keys. The answer goes back through the runner; the gate
+    /// decides whether it is still allowed to post.
+    private func beginInsertion(transaction: Int, source: InsertionSource, typed: String, target: FocusTarget) {
+        picker.dismiss()
+        let suggestion: Suggestion?
+        switch source {
+        case .selection: suggestion = picker.selectedSuggestion
+        case .shortcode(let shortcode): suggestion = provider.exactMatch(for: shortcode)
+        }
+        guard let suggestion, case .text(let text) = suggestion.payload, !IsSecureEventInputEnabled() else {
+            runner?.verifyResult(transaction: transaction, .refused)
+            return
+        }
+        pendingSuggestions[transaction] = suggestion
+        Task {
+            let result = await locator.verify(target, typed: typed, text: text)
+            if case .refused = result { pendingSuggestions.removeValue(forKey: transaction) }
+            runner?.verifyResult(transaction: transaction, result)
+        }
+    }
+
+    private func resetTyping() {
+        runner?.focusMayHaveMoved()
+    }
+
+    /// Converts Accessibility geometry to the gate's view of focus.
     /// A non-secure field with no geometry anchors below the mouse pointer.
     private func focusResult(_ info: FocusInfo) -> FocusResult {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
@@ -262,55 +279,16 @@ final class AppController {
         }
     }
 
-    /// Carries out one replacement as a transaction: hold physical keys, verify
-    /// the target field still has focus with the typed token before the caret,
-    /// post the deletes and the emoji, then let held keys through in order.
-    private func perform(_ insertion: Insertion) {
-        let suggestion: Suggestion?
-        switch insertion.source {
-        case .selection: suggestion = picker.selectedSuggestion
-        case .shortcode(let shortcode): suggestion = provider.exactMatch(for: shortcode)
-        }
-        picker.dismiss()
-        guard let suggestion, case .text(let text) = suggestion.payload, let tap, !IsSecureEventInputEnabled() else {
-            run(coordinator.insertionFinished(insertion, inserted: nil), keyCode: 0)
-            return
-        }
-
-        tap.beginHold()
-        // If the flush never comes back (tap disabled mid-way), release the keys.
-        let deadline = Task {
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled else { return }
-            tap.endHold()
-            run(coordinator.insertionFinished(insertion, inserted: nil), keyCode: 0)
-        }
-
-        Task {
-            guard await locator.verify(insertion.target, typed: insertion.typed) else {
-                deadline.cancel()
-                TextInserter.postFlush()
-                run(coordinator.insertionFinished(insertion, inserted: nil), keyCode: 0)
-                return
-            }
-            TextInserter.replace(deleting: insertion.replacingCount, with: text) {
-                Task { @MainActor in
-                    deadline.cancel()
-                    self.run(self.coordinator.insertionFinished(insertion, inserted: text), keyCode: 0)
-                    self.frecency.record(suggestion.id)
-                    Self.encode(self.frecency, key: DefaultsKey.frecency)
-                }
-            }
-        }
-    }
-
     /// Forgets which emoji were picked. Nothing else about typing is ever kept.
     func clearUsageHistory() {
         frecency.removeAll()
         UserDefaults.standard.removeObject(forKey: DefaultsKey.frecency)
+        hasStoredUsage = false
     }
 
-    var hasUsageHistory: Bool { !frecency.isEmpty }
+    /// Whether anything is on disk, including data this build could not read.
+    private(set) var hasStoredUsage: Bool
+    var hasUsageHistory: Bool { !frecency.isEmpty || hasStoredUsage }
 
     // MARK: - Persistence
 
