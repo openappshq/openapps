@@ -106,7 +106,7 @@ stateDiagram-v2
    - immediately deactivate the new activation, so the customer's slot isn't used up;
    - store nothing;
    - show "This key is for <product name>, not <App>".
-4. A future bundle product is added to each app's allowed list; nothing else changes.
+4. Bundles and discounts: a bundle is one checkout containing several apps' paid products plus a discount code (percentage varies by offer, restricted to the included products). Each app receives its own key for its own product, so apps need no bundle awareness and the product check stays {paid, trial} per app.
 
 ### Stored record
 One Keychain item per app, service `space.openapps.<app>.license`. Never store it in plain preferences.
@@ -169,7 +169,8 @@ One Keychain item per app, service `space.openapps.<app>.license`. Never store i
   - never logs, stores or sends the key;
   - is `noindex`;
   - is on the site's known-pages list.
-- **Deep link:** it only pre-fills the key field. The user confirms before activating.
+- **Deep link:** it only pre-fills the key field. The user confirms before activating. The trial thanks page links with `&kind=trial`, so the app can refuse a second trial locally.
+- **Bundles and discounts:** static `/buy/{product_id}` links are single-product. A cart with several apps' paid products and a discount code needs a Dodo checkout session (`POST /checkouts` with `product_cart` and `discount_codes`), which requires the secret API key, so bundles get a tiny serverless endpoint when they ship (not now). Dodo returns the keys comma-separated in `license_key` without saying which app each belongs to: the thanks page lists all keys and tells the user to paste each into its app; an app's product check rejects a key for another app without using up a slot.
 
 ## Privacy copy
 
@@ -219,9 +220,11 @@ Every app implements these against a fake Dodo client with an injectable clock. 
 
 ## Still to verify in Dodo test mode
 
+Verified so far: activating an unknown key answers `404 NOT_FOUND`; validating an unknown key answers `200 {"valid": false}`; deactivating an unknown instance answers `404`.
+
 - [ ] A $0 trial checkout issues and emails a key.
 - [ ] A 3-day key validates as `false` after 3 days, and whether the 3 days count from checkout.
-- [ ] Activation error codes for limit reached, unknown key and disabled key.
+- [ ] Activation error codes for limit reached and disabled key.
 - [ ] Validation returns `false` for an activation removed in the dashboard.
 - [ ] A refund makes validation return `false`.
 - [ ] Emails and invoices show the app's brand.
