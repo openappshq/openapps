@@ -6,7 +6,7 @@ Creative tools label: expressive identities, simple utilities.
 Use short oversized headlines, generous section spacing, and contrasting white, charcoal, and signature-color fields; keep settings compact and quiet.
 Avoid filler copy, repetitive card grids, and decorative glow on controls.
 
-HQ owns yellow, OpenKlack cobalt; orchid supports compositions.
+HQ owns yellow, OpenKlack cobalt, OpenReaction orchid.
 Products share typography, neutral surfaces, geometry, and behavior while owning their glyph and signature color.
 For marks, use [asset masters and rules](assets/README.md).
 
@@ -39,6 +39,10 @@ Never delay input/audio for animation.
 Stop hidden decoration and release closed canvases.
 Reduced motion removes decorative travel/glow while preserving immediate state feedback.
 Control accessibility and state requirements are in [components](components.md).
+
+## Marketing websites
+
+Reuse [MarketingChrome](../apps/website/src/shared/MarketingChrome.tsx), [Questions](../apps/website/src/shared/Questions.tsx), and [marketing.css](../apps/website/src/shared/marketing.css) for navigation, typography, spacing, actions, FAQs, and footer. All routes follow the system theme; product styles only extend shared tokens. Keep demos product-specific. Product links must work from download pages too.
 
 ## Adding a product
 

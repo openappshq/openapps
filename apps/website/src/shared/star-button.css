@@ -1,14 +1,13 @@
-/* Shared "Star on GitHub" pill. Pages supply --color-accent-solid / --color-accent-on. */
 .star-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 44px;
   padding-inline: 14px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  background: var(--color-accent-solid);
-  color: var(--color-accent-on);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
   font-size: 14px;
   font-weight: 600;
   line-height: 1;
@@ -21,14 +20,14 @@
   margin-left: 2px;
   padding: 3px 7px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent-on) 16%, transparent);
+  background: var(--surface);
   font-family: var(--font-mono);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 @media (hover: hover) {
   .star-button:hover {
-    background: var(--color-accent-hover, var(--color-accent-solid));
+    background: var(--color-bg-hover);
   }
 }
 @media (prefers-reduced-motion: no-preference) {

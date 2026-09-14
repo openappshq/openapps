@@ -1,8 +1,9 @@
-import { Accordion, Button, Link } from "@heroui/react";
+import { Button, Link } from "@heroui/react";
 import { useState } from "react";
 import { motion } from "motion/react";
 import { enter } from "@openapps/ui/transitions";
 import { ArrowDown, Check, Download } from "lucide-react";
+import Questions from "../../../shared/Questions";
 import HqBadge from "../../../shared/HqBadge";
 import BuyButtons from "../../../shared/BuyButtons";
 import { MACS_PER_LICENSE, OFFLINE_GRACE, PRICE, TRIAL_DAYS } from "../../../shared/licensing";
@@ -62,26 +63,6 @@ const questions = [
   ],
 ];
 
-function Question({ question, answer }: { question: string; answer: string }) {
-  return (
-    <Accordion className="faq-item">
-      <Accordion.Item id={question}>
-        <Accordion.Heading>
-          <Accordion.Trigger className="faq-trigger">
-            {question}
-            <Accordion.Indicator />
-          </Accordion.Trigger>
-        </Accordion.Heading>
-        <Accordion.Panel>
-          <Accordion.Body>
-            <p>{answer}</p>
-          </Accordion.Body>
-        </Accordion.Panel>
-      </Accordion.Item>
-    </Accordion>
-  );
-}
-
 export default function App() {
   const [previewTheme, setPreviewTheme] = useState("light");
   return (
@@ -102,12 +83,6 @@ export default function App() {
               <span>With character.</span>
             </motion.h1>
             <div className="hero-intro">
-              <img
-                src="/brand/openklack/app-icon.svg"
-                alt="OpenKlack app icon"
-                width="92"
-                height="92"
-              />
               <p>
                 The deep thock. The crisp click. Give every keystroke a sound you love, with the
                 keyboard you already own.
@@ -136,7 +111,7 @@ export default function App() {
               className="section-heading"
             >
               <div>
-                <span className="eyebrow">02 / Beyond the browser</span>
+                <span className="eyebrow">Beyond the browser</span>
                 <h2 id="desktop-title">
                   Small app.
                   <br />
@@ -237,17 +212,10 @@ export default function App() {
         </section>
         <section className="faq-section page-width" id="questions" aria-labelledby="faq-title">
           <div>
-            <span className="eyebrow">03 / A few good questions</span>
-            <h2 id="faq-title">
-              Before <br />
-              you click.
-            </h2>
+            <span className="eyebrow">A few details</span>
+            <h2 id="faq-title">Good questions.</h2>
           </div>
-          <div className="faq-list">
-            {questions.map(([question, answer]) => (
-              <Question key={question} question={question} answer={answer} />
-            ))}
-          </div>
+          <Questions items={questions} />
         </section>
         <section className="closing-section page-width">
           <div>

@@ -1,6 +1,9 @@
 import { ArrowRight, Code2, Gift, Laptop, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
-import { SiteFooter, SiteHeader } from "./SiteChrome";
+import { Link } from "@heroui/react";
+import { motion } from "motion/react";
+import { enter } from "@openapps/ui/transitions";
+import { MarketingHeader, MarketingFooter } from "../shared/MarketingChrome";
 import { products, type Product } from "../catalog";
 import { MACS_PER_LICENSE, PRICE, TRIAL_DAYS } from "../shared/licensing";
 import "./styles.css";
@@ -15,7 +18,7 @@ const principles: { icon: ReactNode; title: string; body: string }[] = [
   {
     icon: <ShieldCheck size={20} />,
     title: "Private by default",
-    body: "No telemetry. Nothing leaves your Mac.",
+    body: "Your typing stays on your Mac.",
   },
   {
     icon: <Laptop size={20} />,
@@ -27,7 +30,7 @@ const principles: { icon: ReactNode; title: string; body: string }[] = [
 function AppCard({ app }: { app: Product }) {
   return (
     <li>
-      <a className="app-card" data-accent={app.accent} href={`${app.route}/`}>
+      <Link className="app-card" data-accent={app.accent} href={`${app.route}/`}>
         <img className="app-tile" src={app.icon} alt="" width="72" height="72" />
         <h3>{app.name}</h3>
         <p>{app.description}</p>
@@ -52,7 +55,7 @@ function AppCard({ app }: { app: Product }) {
         <span className="app-cta" aria-hidden="true">
           Explore <ArrowRight size={16} />
         </span>
-      </a>
+      </Link>
     </li>
   );
 }
@@ -60,21 +63,21 @@ function AppCard({ app }: { app: Product }) {
 export default function App() {
   return (
     <>
-      <a className="skip-link" href="#apps">
+      <Link className="skip-link" href="#apps">
         Skip to the apps
-      </a>
-      <SiteHeader />
+      </Link>
+      <MarketingHeader links={[{ label: "The apps", href: "#apps" }]} />
       <main>
-        <section className="hero page-width" aria-labelledby="hero-title">
+        <section className="hq-hero page-width" aria-labelledby="hero-title">
           <span className="eyebrow">A small studio for small apps</span>
-          <h1 id="hero-title">
+          <motion.h1 {...enter} id="hero-title">
             Small <span className="hero-accent">apps</span>.
             <br />
             <span className="hero-quiet">Room for personality.</span>
-          </h1>
+          </motion.h1>
           <p>
-            Free, open-source Mac apps that do one thing well and stay out of your way. No accounts,
-            no telemetry, no nonsense.
+            Open-source Mac apps that do one thing well and stay out of your way. No accounts or
+            telemetry.
           </p>
         </section>
         <section className="apps-section page-width" id="apps" aria-labelledby="apps-title">
@@ -105,7 +108,7 @@ export default function App() {
           </ul>
         </section>
       </main>
-      <SiteFooter />
+      <MarketingFooter />
     </>
   );
 }

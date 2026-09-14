@@ -1,18 +1,6 @@
-.hero-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 24px;
-  margin-top: 20px;
-}
-.hero-actions .text-link {
-  margin-top: 0;
-}
-.hero-actions .button-link {
-  gap: 12px;
-}
 .download-page {
   max-width: 1080px;
+  padding-bottom: 64px;
 }
 .download-intro {
   display: flex;
@@ -38,7 +26,7 @@
   margin: 24px 0;
 }
 .download-intro h1 span {
-  color: var(--color-brand-klack);
+  color: var(--color-accent-text);
 }
 .download-intro > p {
   font-size: 18px;

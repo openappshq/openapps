@@ -116,6 +116,7 @@
   border: 0;
   border-radius: var(--radius-small);
   background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
   font-size: 14px;
   font-weight: 600;
 }

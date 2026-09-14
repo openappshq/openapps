@@ -21,6 +21,8 @@ test("each product owns its routes and adding another product cannot shadow Open
     "/another_route/thanks/",
     "/another_route/thanks/trial/",
   ]);
+  expect(combined[7]?.productId).toBe("another-app");
+  expect(findPage("/OpenKlack/download/")?.productId).toBe("openklack");
   expect(combined[7]?.module).toBe("./apps/another-app/pages/Home.tsx");
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
   for (const path of ["/OpenKlack", "/OpenKlack/", "/openklack/index.html"])

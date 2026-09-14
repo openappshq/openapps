@@ -1,3 +1,4 @@
+import { Button, Input, TextArea } from "@heroui/react";
 import {
   useCallback,
   useEffect,
@@ -29,7 +30,7 @@ const apps: { id: AppId; label: string; icon: ReactNode }[] = [
   { id: "mail", label: "Mail", icon: <Mail size={16} /> },
 ];
 
-const tryCodes = [":tada", ":+1", ":sparkles", ":heart_eyes", ":rocket"];
+const tryCodes = [":tada", ":+1", ":heart"];
 
 /** What the autoplay and Try chips can do to the app on screen. */
 interface AppDriver {
@@ -104,7 +105,7 @@ function Picker({ field, layer }: { field: OverlayModel; layer: HTMLElement | nu
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.1 } }}
-          transition={{ type: "spring", duration: 0.18, bounce: 0.2 }}
+          transition={{ type: "spring", duration: 0.18, bounce: 0 }}
         >
           <ul
             ref={listRef}
@@ -116,10 +117,8 @@ function Picker({ field, layer }: { field: OverlayModel; layer: HTMLElement | nu
             {view.suggestions.map((suggestion, index) => {
               const selected = index === view.activeIndex;
               return (
-                <motion.li
+                <li
                   key={suggestion.entry.emoji}
-                  layout
-                  transition={{ type: "spring", duration: 0.24, bounce: 0.12 }}
                   id={optionId(index)}
                   role="option"
                   aria-selected={selected}
@@ -128,28 +127,16 @@ function Picker({ field, layer }: { field: OverlayModel; layer: HTMLElement | nu
                   onPointerEnter={(event) => event.pointerType === "mouse" && select(index)}
                   onClick={() => pick(index)}
                 >
-                  {selected && (
-                    <motion.span
-                      layoutId={`${listId}-highlight`}
-                      className="picker-highlight"
-                      transition={{ type: "spring", duration: 0.24, bounce: 0.12 }}
-                    />
-                  )}
-                  <motion.span layout="position" className="picker-emoji" aria-hidden="true">
+                  {selected && <span className="picker-highlight" />}
+                  <span className="picker-emoji" aria-hidden="true">
                     {suggestion.entry.emoji}
-                  </motion.span>
+                  </span>
                   {selected && (
-                    <motion.span
-                      className="picker-label"
-                      aria-hidden="true"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ duration: 0.12, delay: 0.04 }}
-                    >
+                    <span className="picker-label" aria-hidden="true">
                       <Highlighted suggestion={suggestion} />
-                    </motion.span>
+                    </span>
                   )}
-                </motion.li>
+                </li>
               );
             })}
           </ul>
@@ -279,22 +266,22 @@ function MessagesApp(shared: Shared) {
         <label className="sr-only" htmlFor="demo-messages">
           Message
         </label>
-        <textarea
+        <TextArea
           id="demo-messages"
           rows={1}
           placeholder="iMessage · try :tada"
           {...field.fieldProps}
           onKeyDown={onKeyDown}
         />
-        <button
-          type="button"
+        <Button
+          isIconOnly
           className="send"
           aria-label="Send"
-          onClick={send}
-          disabled={!field.value.trim()}
+          onPress={send}
+          isDisabled={!field.value.trim()}
         >
           <SendHorizontal size={15} />
-        </button>
+        </Button>
       </div>
       <Picker field={field} layer={shared.layer} />
       <FakeCaret field={field} layer={shared.layer} />
@@ -324,7 +311,7 @@ function NotesApp(shared: Shared) {
         <label className="sr-only" htmlFor="demo-notes">
           Note
         </label>
-        <textarea id="demo-notes" {...field.fieldProps} onKeyDown={field.onKeyDown} />
+        <TextArea id="demo-notes" {...field.fieldProps} onKeyDown={field.onKeyDown} />
       </div>
       <Picker field={field} layer={shared.layer} />
       <FakeCaret field={field} layer={shared.layer} />
@@ -351,12 +338,12 @@ function MailApp(shared: Shared) {
       </div>
       <div className="mail-row">
         <label htmlFor="demo-subject">Subject:</label>
-        <input id="demo-subject" {...subject.fieldProps} onKeyDown={subject.onKeyDown} />
+        <Input id="demo-subject" {...subject.fieldProps} onKeyDown={subject.onKeyDown} />
       </div>
       <label className="sr-only" htmlFor="demo-mail">
         Message body
       </label>
-      <textarea id="demo-mail" {...body.fieldProps} onKeyDown={body.onKeyDown} />
+      <TextArea id="demo-mail" {...body.fieldProps} onKeyDown={body.onKeyDown} />
       <Picker field={subject} layer={shared.layer} />
       <Picker field={body} layer={shared.layer} />
       <FakeCaret field={body} layer={shared.layer} />
@@ -467,26 +454,33 @@ export default function ReactionDemo() {
       <div className="demo-toolbar">
         <div className="app-choice" role="group" aria-label="Demo app">
           {apps.map(({ id, label, icon }) => (
-            <button key={id} type="button" aria-pressed={app === id} onClick={() => setApp(id)}>
+            <Button
+              data-static
+              key={id}
+              type="button"
+              aria-pressed={app === id}
+              onPress={() => setApp(id)}
+            >
               {icon}
               {label}
-            </button>
+            </Button>
           ))}
         </div>
         <div className="try-codes">
           <span>Try</span>
           {tryCodes.map((code) => (
-            <button
+            <Button
+              data-static
               key={code}
               type="button"
               onPointerDown={(event) => event.preventDefault()}
-              onClick={() => {
+              onPress={() => {
                 takeOver();
                 requestAnimationFrame(() => driverRef.current?.insertText(code));
               }}
             >
               {code}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
@@ -522,9 +516,8 @@ export default function ReactionDemo() {
         </div>
       </div>
       <p className="demo-caption">
-        A browser recreation of the Mac app. Type <kbd>:</kbd> and two letters, choose with{" "}
-        <kbd>←</kbd> <kbd>→</kbd>, insert with <kbd>Return</kbd> or <kbd>Tab</kbd>. Type the closing{" "}
-        <kbd>:</kbd> to insert an exact match.
+        Type <kbd>:</kbd> and two letters, choose with <kbd>←</kbd> <kbd>→</kbd>, insert with{" "}
+        <kbd>Return</kbd>. Close with <kbd>:</kbd> for an exact match.
       </p>
       <p className="sr-only" aria-live="polite">
         {announcement}

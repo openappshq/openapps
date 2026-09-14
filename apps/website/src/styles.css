@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@heroui/styles";
 @import "@openapps/ui/theme.css";
+@import "./shared/marketing.css";
 
 :root {
   font-family: var(--font-sans);

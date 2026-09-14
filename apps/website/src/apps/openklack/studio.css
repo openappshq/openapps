@@ -1,8 +1,8 @@
 .studio-shell {
   background: var(--surface);
-  border-radius: 24px;
-  padding: 28px;
-  box-shadow: var(--shadow-control);
+  border-radius: var(--radius-panel);
+  padding: 28px 32px;
+  border: 1px solid var(--border);
   scroll-margin-top: 24px;
 }
 .studio-topline,
@@ -145,13 +145,6 @@
   border-radius: 50%;
   box-shadow: var(--shadow-control);
 }
-.faq-item .accordion__body-inner {
-  padding: 0;
-}
-.faq-trigger .accordion__indicator {
-  width: 20px;
-  height: 20px;
-}
 :root {
   --field: var(--background);
   --field-foreground: var(--foreground);
@@ -188,7 +181,6 @@
 @media (max-width: 760px) {
   .studio-shell {
     padding: 20px 16px 12px;
-    border-radius: 20px;
   }
   .studio-topline {
     align-items: stretch;

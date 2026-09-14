@@ -25,7 +25,7 @@ describe.skipIf(!tokens)("tokens.css", () => {
   });
 
   it("uses the design system's accent roles in both themes", () => {
-    const [light, dark] = tokensCss.split("@media (prefers-color-scheme: dark)");
+    const [light, dark] = tokensCss.split('[data-theme="dark"]');
     for (const role of [
       "accent/solid",
       "accent/hover",

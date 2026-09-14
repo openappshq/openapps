@@ -1,4 +1,4 @@
-import { Star } from "lucide-react";
+import { Link } from "@heroui/react";
 import { useEffect, useState } from "react";
 import { formatStars, GITHUB_URL, loadStars, shownStars } from "./github";
 
@@ -23,7 +23,7 @@ export default function StarButton() {
   const label =
     stars === null ? "Star OpenApps HQ on GitHub" : `Star OpenApps HQ on GitHub, ${stars} stars`;
   return (
-    <a
+    <Link
       className="star-button"
       href={GITHUB_URL}
       target="_blank"
@@ -31,7 +31,6 @@ export default function StarButton() {
       aria-label={label}
     >
       <GithubMark />
-      <Star size={14} aria-hidden="true" />
       <span className="star-label" aria-hidden="true">
         Star
       </span>
@@ -40,6 +39,6 @@ export default function StarButton() {
           {formatStars(stars)}
         </span>
       )}
-    </a>
+    </Link>
   );
 }

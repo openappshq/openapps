@@ -1,83 +1,27 @@
-/* OpenApps HQ "Tactile Studio" tokens for OpenReaction, mirroring ../design/tokens.json
-   (checked by tokens.test.ts). */
-:root {
-  --palette-white: #ffffff;
-  --palette-neutral-0: #f8f8f8;
-  --palette-neutral-50: #f3f3f3;
-  --palette-neutral-100: #ebebeb;
-  --palette-neutral-200: #d9d9d9;
-  --palette-neutral-400: #bababa;
-  --palette-neutral-500: #858585;
-  --palette-neutral-600: #626262;
-  --palette-neutral-700: #484848;
-  --palette-neutral-800: #2c2c2c;
-  --palette-neutral-850: #202020;
-  --palette-neutral-950: #141414;
-  --palette-yellow-400: #ffd528;
-  /* Orchid ramp from ../design/tokens.json (300 is shared; other steps derived for OpenReaction). */
+:root[data-product="openreaction"] {
   --palette-orchid-50: #fdf0fa;
   --palette-orchid-100: #fbe0f4;
   --palette-orchid-200: #f8c6ea;
-  --palette-orchid-300: #f3a0dc;
   --palette-orchid-400: #e57dc8;
   --palette-orchid-500: #d35db4;
   --palette-orchid-600: #b43e97;
   --palette-orchid-700: #922f7a;
   --palette-orchid-800: #6f245d;
   --palette-orchid-950: #3a1631;
-  --space-4: 0.25rem;
-  --space-8: 0.5rem;
-  --space-12: 0.75rem;
-  --space-16: 1rem;
-  --space-24: 1.5rem;
-  --space-32: 2rem;
-  --space-48: 3rem;
-  --space-64: 4rem;
-  --space-96: 6rem;
-  --radius-small: 0.25rem;
-  --radius-control: 0.5rem;
-  --radius-panel: 1rem;
-  --radius-pill: 62.4375rem;
-  --motion-fast: 100ms;
-  --motion-standard: 180ms;
-  --motion-expressive: 260ms;
-  --font-display: "Bricolage Grotesque";
-  --font-body: "Instrument Sans";
-}
-:root {
-  color-scheme: light;
-  --color-bg-canvas: var(--palette-white);
-  --color-bg-surface: var(--palette-neutral-50);
-  --color-bg-hover: var(--palette-neutral-100);
-  --color-text-primary: var(--palette-neutral-950);
-  --color-text-secondary: var(--palette-neutral-600);
-  --color-border-subtle: var(--palette-neutral-200);
-  --color-border-control: var(--palette-neutral-500);
   --color-accent-solid: var(--palette-orchid-700);
   --color-accent-hover: var(--palette-orchid-800);
   --color-accent-subtle: var(--palette-orchid-50);
   --color-accent-text: var(--palette-orchid-700);
   --color-accent-on: var(--palette-white);
   --color-focus-ring: var(--palette-orchid-700);
-  --color-brand-hq: var(--palette-yellow-400);
   --color-brand-reaction: var(--palette-orchid-300);
   --color-brand-reaction-shade: var(--palette-orchid-500);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --color-bg-canvas: var(--palette-neutral-950);
-    --color-bg-surface: var(--palette-neutral-850);
-    --color-bg-hover: var(--palette-neutral-800);
-    --color-text-primary: var(--palette-neutral-0);
-    --color-text-secondary: var(--palette-neutral-400);
-    --color-border-subtle: var(--palette-neutral-700);
-    --color-border-control: var(--palette-neutral-500);
-    --color-accent-solid: var(--palette-orchid-300);
-    --color-accent-hover: var(--palette-orchid-200);
-    --color-accent-subtle: var(--palette-orchid-950);
-    --color-accent-text: var(--palette-orchid-200);
-    --color-accent-on: var(--palette-neutral-950);
-    --color-focus-ring: var(--palette-orchid-300);
-  }
+:root[data-product="openreaction"][data-theme="dark"] {
+  --color-accent-solid: var(--palette-orchid-300);
+  --color-accent-hover: var(--palette-orchid-200);
+  --color-accent-subtle: var(--palette-orchid-950);
+  --color-accent-text: var(--palette-orchid-200);
+  --color-accent-on: var(--palette-neutral-950);
+  --color-focus-ring: var(--palette-orchid-300);
 }

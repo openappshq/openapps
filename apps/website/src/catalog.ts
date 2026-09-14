@@ -43,7 +43,7 @@ export const products: Product[] = [
         entry: "Home",
         title: "OpenKlack · Your keyboard, with character",
         description:
-          "Try 18 recorded keyboard sounds and meet OpenKlack, the free, open-source Mac utility.",
+          "Try 18 recorded keyboard sounds and meet OpenKlack, the open-source Mac utility.",
       },
       {
         path: "download",
@@ -89,7 +89,7 @@ export const products: Product[] = [
         entry: "Home",
         title: "OpenReaction · Emoji shortcodes, everywhere on your Mac",
         description:
-          "Type :tada in any text field on your Mac and get 🎉. OpenReaction is a free, open-source menu-bar app for emoji shortcodes everywhere. No account, no telemetry.",
+          "Type :tada in any text field on your Mac and get 🎉. OpenReaction is an open-source menu-bar app for emoji shortcodes everywhere. No account, no telemetry.",
         template: "src/apps/openreaction/template.html",
       },
       {
@@ -141,6 +141,7 @@ export function productPages(catalog = products) {
       paths.add(path.toLowerCase());
       return {
         ...page,
+        productId: product.id,
         path,
         icon: product.icon,
         siteName: product.name,
@@ -151,6 +152,7 @@ export function productPages(catalog = products) {
 }
 
 export interface SitePage {
+  productId?: string;
   path: string;
   entry: string;
   title: string;

@@ -1,4 +1,4 @@
-import { SiteFooter, SiteHeader } from "../home/SiteChrome";
+import { MarketingHeader, MarketingFooter } from "../shared/MarketingChrome";
 import ThanksPage from "../shared/ThanksPage";
 import "../home/styles.css";
 
@@ -6,9 +6,9 @@ import "../home/styles.css";
 export default function Thanks() {
   return (
     <>
-      <SiteHeader />
+      <MarketingHeader links={[{ label: "The apps", href: "/#apps" }]} />
       <ThanksPage />
-      <SiteFooter />
+      <MarketingFooter />
     </>
   );
 }
