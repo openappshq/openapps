@@ -39,6 +39,8 @@ final class GateRunner: @unchecked Sendable {
         var nextEventID = 0
         /// Picker frame in Quartz coordinates while it is visible.
         var pickerFrame = CGRect.null
+        /// Shutdowns waiting for the gate to owe the host nothing.
+        var idleWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
     private let state: OSAllocatedUnfairLock<State>
@@ -118,6 +120,22 @@ final class GateRunner: @unchecked Sendable {
     /// Nothing is held or in flight in the gate.
     var isIdle: Bool {
         state.withLock { !$0.gate.isHolding }
+    }
+
+    /// Returns once the gate holds nothing and has nothing in flight: after
+    /// `beginShutdown`, that is when every held or replayed event has been
+    /// acknowledged by the tap. No timer ends the wait.
+    func waitUntilIdle() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let idle = state.withLock { state in
+                if state.gate.isHolding {
+                    state.idleWaiters.append(continuation)
+                    return false
+                }
+                return true
+            }
+            if idle { continuation.resume() }
+        }
     }
 
     /// The tap stopped or the app paused; no events flow until it restarts.
@@ -224,6 +242,11 @@ final class GateRunner: @unchecked Sendable {
         }
         if !main.isEmpty {
             mainHandler(main)
+        }
+        if !state.gate.isHolding, !state.idleWaiters.isEmpty {
+            let waiters = state.idleWaiters
+            state.idleWaiters = []
+            for waiter in waiters { waiter.resume() }
         }
     }
 }

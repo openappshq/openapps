@@ -470,7 +470,7 @@ public struct InputGate: Sendable {
     /// frontmost app. Without them a programmatic focus change would go
     /// unnoticed, so capture stays closed.
     public mutating func focusTracking(active: Bool) -> [GateEffect] {
-        guard trackingActive != active else { return [] }
+        guard !isShuttingDown, trackingActive != active else { return [] }
         trackingActive = active
         if active {
             return [.requestProbe(generation: focusGeneration, tokenID: nil)]
@@ -490,7 +490,7 @@ public struct InputGate: Sendable {
     public mutating func probeResult(
         generation: Int, tokenID: Int?, _ result: FocusResult, decode: (Int) -> String = { _ in "" }
     ) -> [GateEffect] {
-        guard generation == focusGeneration else { return [] }
+        guard !isShuttingDown, generation == focusGeneration else { return [] }
         switch result {
         case .editable(let anchor, let target) where trackingActive:
             capture = .open(anchor: anchor, target: target)
@@ -652,14 +652,23 @@ public struct InputGate: Sendable {
         case .recovering:
             current.missedAcks += 1
             transaction = current
+            // While shutting down no timer may decide that input was
+            // delivered: keep asking the stream until it answers or the
+            // system disables the tap.
+            if isShuttingDown { return recover() }
             return current.missedAcks > Self.recoveryAttempts ? giveUp() : recover()
         }
     }
 
     /// The tap was disabled by the system and re-enabled: events may have
-    /// been lost, including a flush marker, but the stream is alive.
+    /// been lost, including a flush marker, but the stream is alive. During a
+    /// shutdown this is the one signal that ends the wait: the acknowledgement
+    /// may never come, so what is owed goes out in order, best effort.
     public mutating func tapInterrupted() -> [GateEffect] {
         ownedKeys.removeAll()
+        if isShuttingDown {
+            return transaction == nil ? [] : giveUp()
+        }
         var effects: [GateEffect] = []
         if let current = transaction {
             effects += current.phase.isBeforeCommit ? cancelTransaction() : recover()
@@ -668,10 +677,13 @@ public struct InputGate: Sendable {
     }
 
     /// A deliberate stop is coming (pause, license lock, relaunch, quit).
-    /// Nothing new is authorized from here on; anything owed to the host keeps
-    /// draining through the acknowledged flush protocol while the tap still
-    /// owns the stream. The app layer waits for `isHolding` to become false
-    /// (bounded by the watchdog), then calls `tapStopped` and uninstalls the tap.
+    /// Nothing new is authorized from here on: focus tracking and probe
+    /// answers are ignored, capture never reopens. Anything owed to the host
+    /// keeps draining through the acknowledged flush protocol while the tap
+    /// still owns the stream; new input that arrives meanwhile is held behind
+    /// it and goes out the same way. The app layer waits for `isHolding` to
+    /// become false, then calls `tapStopped` and uninstalls the tap. No timer
+    /// ends the wait; only `tapInterrupted` does, best effort.
     public mutating func beginShutdown() -> [GateEffect] {
         isShuttingDown = true
         trackingActive = false
@@ -686,9 +698,10 @@ public struct InputGate: Sendable {
     }
 
     /// The tap is gone (stopped or the app paused) after `beginShutdown`
-    /// drained what it could. Anything still held goes out in order as a
-    /// last resort; a key still physically down is resolved by its next
-    /// physical release, which now passes directly.
+    /// drained everything, or after the tap was uninstalled without a
+    /// shutdown. Anything still held goes out in order as a last resort; a
+    /// key still physically down is resolved by its next physical release,
+    /// which now passes directly.
     public mutating func tapStopped() -> [GateEffect] {
         ownedKeys.removeAll()
         isShuttingDown = false

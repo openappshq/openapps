@@ -194,20 +194,19 @@ final class AppController {
         await stopTapDraining()
     }
 
-    /// Stops the tap without reordering input: the gate stops authorizing at
-    /// once, everything it still owes the host drains through acknowledged
-    /// flushes while the tap owns the stream, and only then is the tap
-    /// uninstalled. Bounded by the gate's own watchdogs.
+    /// Stops the tap without reordering input. Focus tracking stops first so
+    /// nothing can reopen capture; the gate stops authorizing at once, and
+    /// everything it still owes the host (held keys, and input typed while
+    /// they drain) goes out through acknowledged flushes while the tap owns
+    /// the stream. Only then is the tap uninstalled. The wait has no deadline:
+    /// it ends when the tap acknowledges, or when macOS disables the tap and
+    /// the gate lets what is owed out best effort.
     private func stopTapDraining() async {
         guard let tap, let runner, tap.isRunning else { return }
-        runner.beginShutdown()
-        let deadline = ContinuousClock.now + .seconds(3)
-        while !runner.isIdle, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        runner.tapStopped()
-        tap.stop()
         focusMonitor.stop()
+        runner.beginShutdown()
+        await runner.waitUntilIdle()
+        tap.stop() // reports `tapStopped` to the gate
         if isTapRunning { isTapRunning = false }
     }
 

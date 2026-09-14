@@ -930,6 +930,105 @@ struct InputGateTests {
         #expect(replays(after).joined().count == 8)
     }
 
+    // MARK: P0-3 — shutdown ends only when the tap acknowledges delivery
+
+    @Test func shutdownWaitsForTheReplayToBeAcknowledgedBeforeNewInputGoesOut() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        let held = Array(1...6)
+        harness.run(harness.gate.beginShutdown())
+        // The held keys are replayed with a flush behind them.
+        let drain = harness.ack()
+        #expect(replays(drain) == [held])
+        #expect(harness.lastFlush == 1)
+        #expect(harness.gate.isHolding)
+        // Typed while that replay is in flight: held behind it, not passed.
+        #expect(harness.press(KeyCode.delete).decision == .hold)
+        let backspace = harness.nextID
+        #expect(harness.release(KeyCode.delete).decision == .hold)
+        #expect(harness.gate.isHolding)
+        // The replay's flush comes back: only now is the Backspace replayed.
+        let next = harness.ack()
+        #expect(replays(next) == [[backspace, backspace + 1]])
+        #expect(harness.gate.isHolding)
+        // And it, in turn, is acknowledged before the gate reports done.
+        let done = harness.ack()
+        #expect(ended(done, 1, recorded: false))
+        #expect(!harness.gate.isHolding)
+        #expect(harness.decodedHeld.isEmpty)
+    }
+
+    @Test func trackingAndProbesDuringShutdownNeverReopenCapture() {
+        var harness = makeHarness()
+        harness.run(harness.gate.beginShutdown())
+        #expect(harness.run(harness.gate.focusTracking(active: true)).isEmpty)
+        #expect(harness.run(harness.gate.focusTracking(active: false)).isEmpty)
+        // Even a probe answer for the current generation opens nothing.
+        let generation = harness.gate.currentFocusGeneration
+        harness.run(harness.gate.probeResult(generation: generation, tokenID: nil, editable))
+        #expect(!harness.gate.capturesText)
+        #expect(harness.press(41, ":", modifiers: .shift).decision == .pass)
+        #expect(harness.decodedLive.isEmpty)
+        #expect(!harness.gate.isHolding)
+        // The same while something is still draining.
+        var draining = makeHarness()
+        draining.type(":ta")
+        draining.run(draining.gate.beginShutdown())
+        draining.run(draining.gate.focusTracking(active: true))
+        draining.run(draining.gate.probeResult(generation: draining.gate.currentFocusGeneration, tokenID: nil, editable))
+        #expect(!draining.gate.capturesText)
+        #expect(probes(draining.log.suffix(2)).isEmpty)
+        draining.settle()
+        #expect(!draining.gate.isHolding)
+        #expect(!draining.gate.capturesText)
+    }
+
+    @Test func timeoutsDuringShutdownNeverDecideDelivery() {
+        var harness = harnessWithToken()
+        let id = postReplacement(&harness)
+        harness.press(7, "x")
+        let xDown = harness.nextID
+        harness.run(harness.gate.beginShutdown())
+        // Many missed acknowledgements: the gate keeps asking, never gives up.
+        var replayed: [[Int]] = []
+        for _ in 0..<(InputGate.recoveryAttempts + 5) {
+            let effects = harness.run(harness.gate.timeout(transaction: id))
+            replayed += replays(effects)
+            #expect(effects.contains(.postFlush(transaction: id)))
+            #expect(!effects.contains { if case .transactionEnded = $0 { return true } else { return false } })
+            #expect(harness.gate.isHolding)
+        }
+        #expect(replayed == [[xDown]]) // replayed once, then only re-flushed
+        // Something typed meanwhile waits behind the replay too.
+        #expect(harness.press(8, "c").decision == .hold)
+        let cDown = harness.nextID
+        // The stream answers: the new key goes out, and its flush ends it.
+        let drain = harness.ack()
+        #expect(replays(drain) == [[cDown]])
+        let done = harness.ack()
+        #expect(ended(done, id, recorded: true)) // the flush came back: the replacement got through
+        #expect(!harness.gate.isHolding)
+    }
+
+    @Test func onlyAnOSDisabledTapEndsAShutdownBestEffort() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        harness.press(KeyCode.delete)
+        let backspace = harness.nextID
+        #expect(harness.gate.isHolding)
+        // macOS disabled the tap: the acknowledgement may never come, so what
+        // is owed goes out in order and the gate reports done.
+        let effects = harness.run(harness.gate.tapInterrupted())
+        #expect(replays(effects) == [Array(1...6) + [backspace]])
+        #expect(ended(effects, 1, recorded: false))
+        #expect(!harness.gate.isHolding)
+        #expect(probes(effects).isEmpty)
+        #expect(!harness.gate.capturesText)
+        harness.run(harness.gate.tapStopped())
+        #expect(!harness.gate.isHolding)
+    }
+
     // MARK: Picker commands
 
     @Test func pickerCommandsPassWhileHiddenAndResetTyping() {
