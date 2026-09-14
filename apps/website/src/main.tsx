@@ -8,7 +8,10 @@ import "./styles.css";
 import { AppMotion } from "@openapps/ui/motion";
 import { findPage } from "./catalog";
 
-const modules = import.meta.glob<{ default: ComponentType }>("./apps/*/pages/*.tsx");
+const modules = import.meta.glob<{ default: ComponentType }>([
+  "./apps/*/pages/*.tsx",
+  "./site/*.tsx",
+]);
 const page = findPage(location.pathname);
 const isHome = location.pathname === "/" || location.pathname === "/index.html";
 const Page = page ? lazy(modules[page.module]!) : isHome ? lazy(() => import("./home/App")) : null;

@@ -1,4 +1,5 @@
 @import "../shared/star-button.css";
+@import "../shared/licensing.css";
 
 /* OpenApps HQ home: Tactile Studio tokens with the HQ yellow as the brand colour.
    Yellow carries surfaces and marks; text stays ink/paper for contrast. */
@@ -39,6 +40,15 @@
   --color-accent-solid: var(--brand);
   --color-accent-hover: #f5c800;
   --color-accent-on: var(--palette-neutral-950);
+  --color-accent-text: var(--foreground);
+  --color-bg-canvas: var(--background);
+  --color-bg-surface: var(--surface);
+  --color-bg-hover: var(--hover);
+  --color-text-primary: var(--foreground);
+  --color-text-secondary: var(--muted);
+  --color-border-subtle: var(--border);
+  --color-border-control: var(--palette-neutral-500);
+  --radius-small: 0.25rem;
   font-family: var(--font-sans);
   color: var(--foreground);
   background: var(--background);

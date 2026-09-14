@@ -12,6 +12,11 @@ describe("classifyPath", () => {
       "/OpenKlack/download/index.html",
       "/openreaction/",
       "/openreaction",
+      "/openreaction/thanks/",
+      "/OpenKlack/thanks/",
+      "/openklack/thanks",
+      "/thanks/",
+      "/thanks",
     ]) {
       expect(classifyPath(path), path).toBe("page");
     }

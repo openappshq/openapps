@@ -9,7 +9,15 @@ export type Product = {
   accent: "cobalt" | "orchid";
   brandSource: string;
   assets: { source: string; destination: string }[];
-  pages: { path: string; entry: string; title: string; description: string; template?: string }[];
+  pages: {
+    path: string;
+    entry: string;
+    title: string;
+    description: string;
+    template?: string;
+    /** Keep search engines away, e.g. from the checkout return page. */
+    noindex?: boolean;
+  }[];
 };
 
 export const products: Product[] = [
@@ -42,6 +50,13 @@ export const products: Product[] = [
         description:
           "Get OpenKlack for Mac. Installation steps, release information, and ways to support the app.",
       },
+      {
+        path: "thanks",
+        entry: "Thanks",
+        title: "Thank you · OpenKlack",
+        description: "Your OpenKlack license key and how to activate it.",
+        noindex: true,
+      },
     ],
   },
   {
@@ -65,6 +80,14 @@ export const products: Product[] = [
         description:
           "Type :tada in any text field on your Mac and get 🎉. OpenReaction is a free, open-source menu-bar app for emoji shortcodes everywhere. No account, no telemetry.",
         template: "src/apps/openreaction/template.html",
+      },
+      {
+        path: "thanks",
+        entry: "Thanks",
+        title: "Thank you · OpenReaction",
+        description: "Your OpenReaction license key and how to activate it.",
+        template: "src/apps/openreaction/template.html",
+        noindex: true,
       },
     ],
   },
@@ -106,7 +129,33 @@ export function productPages(catalog = products) {
   });
 }
 
-export const pages = productPages();
+export interface SitePage {
+  path: string;
+  entry: string;
+  title: string;
+  description: string;
+  icon: string;
+  siteName: string;
+  module: string;
+  template?: string;
+  noindex?: boolean;
+}
+
+/** Pages that belong to the site rather than to one product. */
+export const sitePages: SitePage[] = [
+  {
+    path: "/thanks/",
+    entry: "Thanks",
+    title: "Thank you · OpenApps",
+    description: "Your OpenApps license keys and how to activate each app.",
+    icon: "/brand/openapps-hq/app-icon.svg",
+    siteName: "OpenApps HQ",
+    module: "./site/Thanks.tsx",
+    noindex: true,
+  },
+];
+
+export const pages: SitePage[] = [...productPages(), ...sitePages];
 
 export function findPage(pathname: string) {
   const path = pathname

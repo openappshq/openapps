@@ -11,11 +11,14 @@ test("each product owns its routes and adding another product cannot shadow Open
   expect(combined.map((page) => page.path)).toEqual([
     "/OpenKlack/",
     "/OpenKlack/download/",
+    "/OpenKlack/thanks/",
     "/openreaction/",
+    "/openreaction/thanks/",
     "/another_route/",
     "/another_route/download/",
+    "/another_route/thanks/",
   ]);
-  expect(combined[3]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(combined[5]?.module).toBe("./apps/another-app/pages/Home.tsx");
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
   for (const path of ["/OpenKlack", "/OpenKlack/", "/openklack/index.html"])
     expect(findPage(path)?.entry).toBe("Home");
@@ -47,6 +50,13 @@ test("catalog routes emit separate static HTML entries with product metadata", (
       }
     }
     const inputs = preparePages(root);
+    expect(readFileSync(join(root, "thanks/index.html"), "utf8")).toContain(
+      'name="robots" content="noindex"',
+    );
+    expect(readFileSync(join(root, "openreaction/thanks/index.html"), "utf8")).toContain(
+      'name="robots" content="noindex"',
+    );
+    expect(readFileSync(join(root, "openreaction/index.html"), "utf8")).not.toContain("noindex");
     expect(inputs).toContain(join(root, "OpenKlack/download/index.html"));
     expect(readFileSync(join(root, "OpenKlack/download/index.html"), "utf8")).toContain(
       "Download for Mac · OpenKlack",

@@ -1,12 +1,16 @@
-import { ArrowRight, ArrowUpRight, Code2, Gift, Laptop, ShieldCheck } from "lucide-react";
+import { ArrowRight, Code2, Gift, Laptop, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
-import StarButton from "../shared/StarButton";
-import { GITHUB_URL } from "../shared/github";
+import { SiteFooter, SiteHeader } from "./SiteChrome";
 import { products, type Product } from "../catalog";
+import { MACS_PER_LICENSE, PRICE, TRIAL_DAYS } from "../shared/licensing";
 import "./styles.css";
 
 const principles: { icon: ReactNode; title: string; body: string }[] = [
-  { icon: <Gift size={20} />, title: "Free", body: "No trials, no upsells, no accounts." },
+  {
+    icon: <Gift size={20} />,
+    title: `${PRICE}, once`,
+    body: `Per app, for ${MACS_PER_LICENSE} Macs. No subscriptions, no accounts.`,
+  },
   { icon: <Code2 size={20} />, title: "Open source", body: "MIT licensed, built in the open." },
   {
     icon: <ShieldCheck size={20} />,
@@ -19,29 +23,6 @@ const principles: { icon: ReactNode; title: string; body: string }[] = [
     body: "Real Mac apps that feel like they belong.",
   },
 ];
-
-/** The ink mark in light mode, the paper mark in dark mode. */
-function ThemedMark({
-  name,
-  alt,
-  width,
-  height,
-}: {
-  name: string;
-  alt: string;
-  width: number;
-  height: number;
-}) {
-  return (
-    <picture>
-      <source
-        srcSet={`/brand/openapps-hq/${name}-paper.svg`}
-        media="(prefers-color-scheme: dark)"
-      />
-      <img src={`/brand/openapps-hq/${name}-ink.svg`} alt={alt} width={width} height={height} />
-    </picture>
-  );
-}
 
 function AppCard({ app }: { app: Product }) {
   return (
@@ -57,7 +38,9 @@ function AppCard({ app }: { app: Product }) {
           </div>
           <div>
             <dt className="sr-only">Price</dt>
-            <dd>Free & open source</dd>
+            <dd>
+              Open source · {PRICE} official build · Free {TRIAL_DAYS}-day trial
+            </dd>
           </div>
           <div>
             <dt className="sr-only">Status</dt>
@@ -80,16 +63,7 @@ export default function App() {
       <a className="skip-link" href="#apps">
         Skip to the apps
       </a>
-      <header className="site-header page-width">
-        <a className="brand" href="/" aria-label="OpenApps HQ home">
-          <img src="/brand/openapps-hq/app-icon.svg" alt="" width="40" height="40" />
-          <ThemedMark name="wordmark" alt="OpenApps HQ" width={150} height={27} />
-        </a>
-        <nav aria-label="Main navigation">
-          <a href="#apps">Apps</a>
-          <StarButton />
-        </nav>
-      </header>
+      <SiteHeader />
       <main>
         <section className="hero page-width" aria-labelledby="hero-title">
           <span className="eyebrow">A small studio for small apps</span>
@@ -131,24 +105,7 @@ export default function App() {
           </ul>
         </section>
       </main>
-      <footer className="site-footer page-width">
-        <div className="hq-lockup">
-          <ThemedMark name="symbol" alt="" width={40} height={40} />
-          <p>
-            <strong>OpenApps HQ</strong> / 2026
-          </p>
-        </div>
-        <div className="footer-links">
-          {products.map((app) => (
-            <a key={app.id} href={`${app.route}/`}>
-              {app.name}
-            </a>
-          ))}
-          <a href={GITHUB_URL} target="_blank" rel="noreferrer">
-            GitHub <ArrowUpRight size={14} />
-          </a>
-        </div>
-      </footer>
+      <SiteFooter />
     </>
   );
 }

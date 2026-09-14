@@ -33,7 +33,11 @@ export function preparePages(root: string) {
         /property="og:description"\s+content="[^"]*"/,
         `property="og:description" content="${escapeHtml(page.description)}"`,
       )
-      .replace(/rel="icon"\s+href="[^"]*"/, `rel="icon" href="${escapeHtml(page.icon)}"`);
+      .replace(/rel="icon"\s+href="[^"]*"/, `rel="icon" href="${escapeHtml(page.icon)}"`)
+      .replace(
+        /\s*<\/head>/,
+        page.noindex ? '\n    <meta name="robots" content="noindex" />\n  </head>' : "\n  </head>",
+      );
     mkdirSync(dirname(file), { recursive: true });
     if (!existsSync(file) || readFileSync(file, "utf8") !== html) writeFileSync(file, html);
     inputs.push(file);
