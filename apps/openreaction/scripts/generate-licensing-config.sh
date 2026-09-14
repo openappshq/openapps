@@ -4,19 +4,21 @@
 #   scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
 #
 # Reads OPENAPPS_DODO_ENV (test|live) and OPENAPPS_DODO_PAID_PRODUCT_ID, plus
-# optional OPENAPPS_DODO_TRIAL_PRODUCT_ID, OPENAPPS_BUY_URL, OPENAPPS_TRIAL_URL
-# and OPENAPPS_SUPPORT_URL. The trial product is optional: without it no key
-# is recognised as a trial key (the trial is moving in-app). Product IDs are
-# public configuration; there are no secrets here. Fails loudly when anything
-# a licensed build needs is missing, so a placeholder can never ship.
+# optional OPENAPPS_TRIAL_REGISTRY_BASE_URL, OPENAPPS_BUY_URL and
+# OPENAPPS_SUPPORT_URL. There is no trial product: the trial lives in the
+# app and registers with the trial registry at
+# ${OPENAPPS_TRIAL_REGISTRY_BASE_URL:-https://openapps.space}/api/trial, with
+# `env` = OPENAPPS_DODO_ENV. A test build may point the registry at a local
+# `wrangler dev` (http://127.0.0.1:8787 or http://localhost:8787). Product IDs
+# are public configuration; there are no secrets here. Fails loudly when
+# anything a licensed build needs is missing, so a placeholder can never ship.
 set -euo pipefail
 
 out="${1:?output path}"
 env_name="${OPENAPPS_DODO_ENV:-}"
 paid="${OPENAPPS_DODO_PAID_PRODUCT_ID:-}"
-trial="${OPENAPPS_DODO_TRIAL_PRODUCT_ID:-}"
+registry_base="${OPENAPPS_TRIAL_REGISTRY_BASE_URL:-https://openapps.space}"
 buy_url="${OPENAPPS_BUY_URL:-}"
-trial_url="${OPENAPPS_TRIAL_URL:-}"
 support_url="${OPENAPPS_SUPPORT_URL:-}"
 
 case "$env_name" in
@@ -24,16 +26,16 @@ case "$env_name" in
     live) host="https://live.dodopayments.com" ;;
     *) echo "error: OPENAPPS_DODO_ENV must be 'test' or 'live' (got '${env_name}')" >&2; exit 1 ;;
 esac
-# Product IDs: Dodo's `pdt_` form, and paid ≠ trial (equal IDs would make
-# every trial key look paid). The trial ID may be left unset. Placeholder
-# names are refused outright in their shouting form and, for a live build,
-# in any casing: the CI checks job compiles the test flavour with
-# `pdt_placeholder_…`, and that must never be what a release ships.
+
+# Product IDs: Dodo's `pdt_` form. Placeholder names are refused outright in
+# their shouting form and, for a live build, in any casing: the CI checks job
+# compiles the test flavour with `pdt_placeholder_…`, and that must never be
+# what a release ships.
 check_product_id() {
     local var="$1" value="$2" lowered
     lowered="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
     if [[ ! "$value" =~ ^pdt_[A-Za-z0-9_-]{4,}$ ]] || [[ "$value" == *PLACEHOLDER* || "$value" == *TODO* ]]; then
-        echo "error: $var must be a real Dodo product id (pdt_…); create the products first (LICENSING.md)" >&2
+        echo "error: $var must be a real Dodo product id (pdt_…); create the product first (LICENSING.md)" >&2
         exit 1
     fi
     if [[ "$env_name" == live ]] && [[ "$lowered" == *placeholder* || "$lowered" == *todo* || "$lowered" == *example* || "$lowered" == *dummy* ]]; then
@@ -42,14 +44,23 @@ check_product_id() {
     fi
 }
 check_product_id OPENAPPS_DODO_PAID_PRODUCT_ID "$paid"
-trial_literal="[]"
-if [[ -n "$trial" ]]; then
-    check_product_id OPENAPPS_DODO_TRIAL_PRODUCT_ID "$trial"
-    if [[ "$paid" == "$trial" ]]; then
-        echo "error: paid and trial product ids must differ" >&2
+
+# The registry base: an https origin (no path, query or credentials), or for
+# a test build only, a local `wrangler dev` over http. A trailing slash is
+# dropped.
+registry_base="${registry_base%/}"
+https_origin='^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$'
+local_origin='^http://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?$'
+if [[ "$registry_base" =~ $https_origin ]]; then
+    :
+elif [[ "$registry_base" =~ $local_origin ]]; then
+    if [[ "$env_name" != test ]]; then
+        echo "error: OPENAPPS_TRIAL_REGISTRY_BASE_URL may use a local http registry only in a test build (got '${registry_base}' for ${env_name})" >&2
         exit 1
     fi
-    trial_literal="[\"${trial}\"]"
+else
+    echo "error: OPENAPPS_TRIAL_REGISTRY_BASE_URL must be an https:// origin, or http://127.0.0.1[:port] / http://localhost[:port] for a test build (got '${registry_base}')" >&2
+    exit 1
 fi
 
 # URLs are optional (the app shows "coming soon" without them) but must be
@@ -66,7 +77,6 @@ swift_optional_url() {
     echo "URL(string: \"${value}\")"
 }
 buy_literal="$(swift_optional_url "$buy_url" OPENAPPS_BUY_URL)"
-trial_url_literal="$(swift_optional_url "$trial_url" OPENAPPS_TRIAL_URL)"
 support_literal="$(swift_optional_url "$support_url" OPENAPPS_SUPPORT_URL)"
 
 mkdir -p "$(dirname "$out")"
@@ -77,18 +87,15 @@ import Foundation
 import OpenReactionCore
 
 enum LicensingConfig {
-    /// Dodo environment: ${env_name}
+    /// Dodo environment, and the trial registry's \`env\`: ${env_name}
     static let environment = "${env_name}"
     static let host = URL(string: "${host}")!
-    static let products = LicenseProducts(
-        paid: ["${paid}"],
-        trial: ${trial_literal}
-    )
-    /// nil until the checkout pages exist; the app shows "coming soon".
+    static let products = LicenseProducts(paid: ["${paid}"])
+    static let trialRegistryURL = URL(string: "${registry_base}/api/trial")!
+    /// nil until the checkout page exists; the app shows "coming soon".
     static let buyURL: URL? = ${buy_literal}
-    static let trialURL: URL? = ${trial_url_literal}
     static let supportURL: URL? = ${support_literal}
 }
 #endif
 SWIFT
-echo "==> Wrote ${out} (env ${env_name})"
+echo "==> Wrote ${out} (env ${env_name}, trial registry ${registry_base})"

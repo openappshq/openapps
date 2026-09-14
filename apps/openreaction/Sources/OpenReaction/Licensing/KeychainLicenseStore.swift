@@ -4,8 +4,7 @@ import OpenReactionCore
 import Security
 
 /// The license record as a generic-password Keychain item, plus the
-/// trial-used flag as a second item that survives removing the record, and
-/// the activations still owed a deactivation as a third.
+/// activations still owed a deactivation as a second.
 /// Service `space.openapps.openreaction.license`, this device only.
 ///
 /// Every SecItem status is checked: "not found" is an absent item, anything
@@ -14,50 +13,69 @@ import Security
 struct KeychainLicenseStore: LicenseStore {
     static let service = "space.openapps.openreaction.license"
     private static let recordAccount = "record"
-    private static let trialAccount = "trial_used"
     private static let cleanupsAccount = "pending_cleanups"
+    private let keychain = KeychainItems(service: KeychainLicenseStore.service)
 
     func loadRecord() throws(LicenseStoreError) -> LicenseRecord? {
-        guard let data = try Self.read(account: Self.recordAccount) else { return nil }
+        guard let data = try keychain.read(account: Self.recordAccount) else { return nil }
         guard let record = try? JSONDecoder().decode(LicenseRecord.self, from: data) else { throw .corrupt }
         return record
     }
 
     func saveRecord(_ record: LicenseRecord) throws(LicenseStoreError) {
         guard let data = try? JSONEncoder().encode(record) else { throw .corrupt }
-        try Self.write(data, account: Self.recordAccount)
+        try keychain.write(data, account: Self.recordAccount)
     }
 
     func clearRecord() throws(LicenseStoreError) {
-        try Self.delete(account: Self.recordAccount)
-    }
-
-    func loadTrialUsed() throws(LicenseStoreError) -> Bool {
-        try Self.read(account: Self.trialAccount) != nil
-    }
-
-    func markTrialUsed() throws(LicenseStoreError) {
-        try Self.write(Data("1".utf8), account: Self.trialAccount)
+        try keychain.delete(account: Self.recordAccount)
     }
 
     func loadPendingCleanups() throws(LicenseStoreError) -> [PendingCleanup] {
-        guard let data = try Self.read(account: Self.cleanupsAccount) else { return [] }
+        guard let data = try keychain.read(account: Self.cleanupsAccount) else { return [] }
         guard let cleanups = try? JSONDecoder().decode([PendingCleanup].self, from: data) else { throw .corrupt }
         return cleanups
     }
 
     func savePendingCleanups(_ cleanups: [PendingCleanup]) throws(LicenseStoreError) {
         if cleanups.isEmpty {
-            try Self.delete(account: Self.cleanupsAccount)
+            try keychain.delete(account: Self.cleanupsAccount)
             return
         }
         guard let data = try? JSONEncoder().encode(cleanups) else { throw .corrupt }
-        try Self.write(data, account: Self.cleanupsAccount)
+        try keychain.write(data, account: Self.cleanupsAccount)
+    }
+}
+
+/// The trial record as its own generic-password item, service
+/// `space.openapps.openreaction.trial`, this device only. The app never
+/// deletes it.
+struct KeychainTrialStore: TrialStore {
+    static let service = "space.openapps.openreaction.trial"
+    private static let account = "record"
+    private let keychain: KeychainItems
+
+    init(service: String = KeychainTrialStore.service) {
+        keychain = KeychainItems(service: service)
     }
 
-    // MARK: - SecItem
+    func loadTrial() throws(LicenseStoreError) -> TrialRecord? {
+        guard let data = try keychain.read(account: Self.account) else { return nil }
+        guard let trial = try? JSONDecoder().decode(TrialRecord.self, from: data) else { throw .corrupt }
+        return trial
+    }
 
-    private static func query(account: String) -> [String: Any] {
+    func saveTrial(_ trial: TrialRecord) throws(LicenseStoreError) {
+        guard let data = try? JSONEncoder().encode(trial) else { throw .corrupt }
+        try keychain.write(data, account: Self.account)
+    }
+}
+
+/// Generic-password items under one service.
+struct KeychainItems: Sendable {
+    let service: String
+
+    private func query(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -65,7 +83,8 @@ struct KeychainLicenseStore: LicenseStore {
         ]
     }
 
-    private static func read(account: String) throws(LicenseStoreError) -> Data? {
+    /// nil only when the item positively does not exist.
+    func read(account: String) throws(LicenseStoreError) -> Data? {
         var query = query(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -78,11 +97,11 @@ struct KeychainLicenseStore: LicenseStore {
         case errSecItemNotFound:
             return nil
         default:
-            throw .unavailable(describe(status))
+            throw .unavailable(Self.describe(status))
         }
     }
 
-    private static func write(_ data: Data, account: String) throws(LicenseStoreError) {
+    func write(_ data: Data, account: String) throws(LicenseStoreError) {
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
@@ -95,15 +114,15 @@ struct KeychainLicenseStore: LicenseStore {
             var item = query(account: account)
             item.merge(attributes) { _, new in new }
             let added = SecItemAdd(item as CFDictionary, nil)
-            guard added == errSecSuccess else { throw .unavailable(describe(added)) }
+            guard added == errSecSuccess else { throw .unavailable(Self.describe(added)) }
         default:
-            throw .unavailable(describe(updated))
+            throw .unavailable(Self.describe(updated))
         }
     }
 
-    private static func delete(account: String) throws(LicenseStoreError) {
+    func delete(account: String) throws(LicenseStoreError) {
         let status = SecItemDelete(query(account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw .unavailable(describe(status)) }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw .unavailable(Self.describe(status)) }
     }
 
     private static func describe(_ status: OSStatus) -> String {

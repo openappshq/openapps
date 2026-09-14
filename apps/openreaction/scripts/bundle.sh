@@ -28,11 +28,13 @@
 #   OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test \
 #   OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… scripts/bundle.sh
 #
-# OPENAPPS_DODO_ENV is `test` (test.dodopayments.com) or `live`. Optional:
-# OPENAPPS_DODO_TRIAL_PRODUCT_ID, OPENAPPS_BUY_URL, OPENAPPS_TRIAL_URL,
-# OPENAPPS_SUPPORT_URL — the live checkout links, whose redirect_url is the
-# website's return page (https://openapps.space/openreaction/thanks/, which
-# deep-links the key back into the app):
+# OPENAPPS_DODO_ENV is `test` (test.dodopayments.com, trial registry
+# env "test") or `live`. Optional: OPENAPPS_TRIAL_REGISTRY_BASE_URL (default
+# https://openapps.space; a test build may use a local `wrangler dev` such as
+# http://127.0.0.1:8787), OPENAPPS_BUY_URL, OPENAPPS_SUPPORT_URL — the live
+# checkout link, whose redirect_url is the website's return page
+# https://openapps.space/openreaction/thanks/, which deep-links the key back
+# into the app:
 #
 #   OPENAPPS_BUY_URL='https://checkout.dodopayments.com/buy/pdt_0NnbAzI0N8T63rCLtnBxv?quantity=1&redirect_url=https://openapps.space/openreaction/thanks/'
 #
@@ -65,9 +67,19 @@ fi
 
 CONFIG_FILE="Sources/OpenReaction/Licensing/LicensingConfig.swift"
 rm -f "$CONFIG_FILE"
+# A local registry over plain http (test builds only; the config generator
+# enforces that) needs App Transport Security's local-networking exception.
+ATS_PLIST=""
 if [[ "${OPENAPPS_LICENSING:-0}" == "1" ]]; then
     scripts/generate-licensing-config.sh "$CONFIG_FILE"
     echo "==> Licensing on (${OPENAPPS_DODO_ENV})"
+    if [[ "${OPENAPPS_TRIAL_REGISTRY_BASE_URL:-}" == http://* ]]; then
+        ATS_PLIST="<key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>"
+    fi
 else
     echo "==> Licensing off (source build: no License UI, no license network calls)"
 fi
@@ -138,6 +150,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>MIT License. An OpenApps HQ original.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    ${ATS_PLIST}
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

@@ -1,9 +1,15 @@
 import Foundation
 
 /// Runs the licensing rules from LICENSING.md against a store and a Dodo
-/// client, with an injectable clock. The app layer owns timers, wake and
+/// client, and the in-app trial against a trial store and the trial
+/// registry, with an injectable clock. The app layer owns timers, wake and
 /// network notifications and calls `checkOnLaunch` / `tick` at the right
 /// moments.
+///
+/// A license always wins over the trial. Without a license record the trial
+/// record decides: a Mac whose trial record is positively absent starts a
+/// provisional trial (saved before the core turns on) and registers it in
+/// the background; the registry's answer can only move the start earlier.
 ///
 /// Every operation that may change the record runs through one serial queue
 /// (`perform`). The *activation* is identified by `activationGeneration`,
@@ -24,13 +30,52 @@ public final class LicenseManager {
     /// How often pending cleanups and durable writes are retried.
     public static let cleanupRetryInterval: TimeInterval = 5 * 60
 
+    /// The app id the trial registry and the device hash use.
+    public nonisolated static let trialAppID = "openreaction"
+
     public let products: LicenseProducts
+    public nonisolated let trialTiming: TrialTiming
     private let client: any LicenseClient
     private let store: any LicenseStore
     private let journal: any InvalidationJournal
+    private let trialStore: any TrialStore
+    private let registry: any TrialRegistryClient
+    private let device: any DeviceIdentity
     private let now: @Sendable () -> Date
 
     public private(set) var record: LicenseRecord?
+    /// The license record was read, present or positively absent. No trial
+    /// starts or runs before that.
+    public private(set) var licenseRead = false
+
+    // MARK: Trial state
+
+    /// The trial record in memory; nil while absent or unread.
+    public private(set) var trial: TrialRecord?
+    private enum TrialLoad { case unread, absent, present }
+    private var trialLoad: TrialLoad = .unread
+    /// The trial record could not be read or saved; retried on ticks.
+    public private(set) var trialStorageError: LicenseStoreError?
+    /// Memory holds trial data the store does not have yet.
+    private var trialDirty = false
+    /// That data must be saved on the next tick (not only hourly): a
+    /// registry answer, a fallback device id, the end, or a failed save.
+    private var trialSaveRequired = false
+    private var lastTrialSaveAt: Date?
+    /// The ended trial's `last_seen_at` has been saved in this process.
+    private var trialEndSaved = false
+    /// Identity of the trial record in memory; a registry answer applies
+    /// only to the record it was asked for.
+    private var trialGeneration = 0
+    /// Consecutive failed registry calls, for backoff.
+    public private(set) var registryFailures = 0
+    /// No registry call before this moment (`Retry-After`).
+    public private(set) var registryBlockedUntil: Date?
+    public private(set) var registryLastAttemptAt: Date?
+    /// Registry calls made, for diagnostics and tests.
+    public private(set) var registryCallCount = 0
+    private var isRegistering = false
+
     /// The record as it should be on disk while the last write has failed.
     private var pendingDurableWrite: LicenseRecord??
     /// The cleanups list on disk is behind memory.
@@ -105,19 +150,26 @@ public final class LicenseManager {
     /// license actor to read what is stored.
     public nonisolated init(
         products: LicenseProducts, client: any LicenseClient, store: any LicenseStore,
-        journal: any InvalidationJournal, now: @escaping @Sendable () -> Date = Date.init
+        journal: any InvalidationJournal, trialStore: any TrialStore, registry: any TrialRegistryClient,
+        device: any DeviceIdentity, trialTiming: TrialTiming = .standard, now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.products = products
         self.client = client
         self.store = store
         self.journal = journal
+        self.trialStore = trialStore
+        self.registry = registry
+        self.device = device
+        self.trialTiming = trialTiming
         self.now = now
     }
 
-    /// Reads the stored record, journal and cleanups. Until it ran, there is
-    /// no record: the feature is off.
+    /// Reads the stored records, journal and cleanups, and starts a
+    /// provisional trial on a Mac that has neither a license nor a trial
+    /// record. Until it ran, there is no record: the feature is off.
     public func load() {
         reloadFromStore()
+        settleTrial()
     }
 
     /// Reads what the store has. A journal entry for the stored activation
@@ -153,7 +205,9 @@ public final class LicenseManager {
                 }
             }
             record = loaded
+            licenseRead = true
         } catch {
+            licenseRead = false
             failure = error
         }
         do {
@@ -164,7 +218,6 @@ public final class LicenseManager {
             cleanupsUnread = true
             failure = failure ?? error
         }
-        trialUsedCache = try? store.loadTrialUsed()
         storageError = failure
         notify()
         flushRecord()
@@ -192,8 +245,9 @@ public final class LicenseManager {
     public var snapshot: LicenseSnapshot {
         let current = now()
         return LicenseSnapshot(
-            record: record, isRestricted: isRestricted, storageError: storageError, journalError: journalError,
-            journalUnreadable: journalUnreadable, trialUsed: trialUsed,
+            record: record, licenseRead: licenseRead, isRestricted: isRestricted, storageError: storageError,
+            journalError: journalError, journalUnreadable: journalUnreadable,
+            trial: trial, trialStorageError: trialApplies ? trialStorageError : nil, trialTiming: trialTiming,
             nextCheckAt: nextCheckDelay.map { current.addingTimeInterval($0) },
             nextDeadline: nextDeadline, hasPendingCleanups: !pendingCleanups.isEmpty
         )
@@ -206,28 +260,17 @@ public final class LicenseManager {
 
     public var isFeatureEnabled: Bool { state.isFeatureEnabled }
 
-    /// The trial marker as last read (`load`, ticks) or written. Fails
-    /// closed: unknown counts as used. Kept in memory so snapshots never
-    /// touch storage.
-    private var trialUsedCache: Bool?
-
-    /// Fails closed: if the marker cannot be read, a trial is refused.
-    public var trialUsed: Bool {
-        trialUsedCache ?? true
-    }
-
-    /// Reads the marker now; nil when it cannot be read. Only the activation
-    /// routes call this (they may do I/O); enforcement never does.
-    private func readTrialUsed() -> Bool? {
-        let used = try? store.loadTrialUsed()
-        trialUsedCache = used
-        return used
-    }
-
-    /// The next moment the state changes on its own (trial expiry, grace
-    /// warning or end), independent of any network schedule.
+    /// The next moment the state changes on its own (a trial day boundary or
+    /// its end, grace warning or end), independent of any network schedule.
     public var nextDeadline: Date? {
-        LicensePolicy.nextDeadline(record: record, now: now())
+        if let record { return LicensePolicy.nextDeadline(record: record, now: now()) }
+        guard licenseRead, let trial else { return nil }
+        return LicensePolicy.nextTrialDeadline(trial, timing: trialTiming, now: now())
+    }
+
+    /// The trial is what decides the state: no license record, and that is known.
+    private var trialApplies: Bool {
+        licenseRead && record == nil
     }
 
     /// Whether a check should be attempted now: a day since the last attempt
@@ -277,6 +320,34 @@ public final class LicenseManager {
             } else {
                 candidates.append(Self.cleanupRetryInterval)
             }
+        }
+        if let trialDelay = nextTrialTickDelay(now: current) { candidates.append(trialDelay) }
+        return candidates.min()
+    }
+
+    /// The trial's share of the schedule: registration (due now, after
+    /// `Retry-After`, or after backoff), a trial save that failed or cannot
+    /// wait, and the hourly `last_seen_at` save while the trial runs.
+    private func nextTrialTickDelay(now current: Date) -> TimeInterval? {
+        guard trialApplies else { return nil }
+        var candidates: [TimeInterval] = []
+        if trialStorageError != nil || (trialDirty && trialSaveRequired) {
+            candidates.append(LicensePolicy.minimumRetryDelay)
+        }
+        guard let trial else { return candidates.min() }
+        if isRegistrationDue {
+            candidates.append(0)
+        } else if !trial.registered {
+            if let registryBlockedUntil, current < registryBlockedUntil {
+                candidates.append(registryBlockedUntil.timeIntervalSince(current))
+            } else if let last = registryLastAttemptAt, registryFailures > 0 {
+                let wait = LicensePolicy.retryDelay(afterFailures: registryFailures)
+                candidates.append(max(0, last.addingTimeInterval(wait).timeIntervalSince(current)))
+            }
+        }
+        if LicensePolicy.trialState(trial, timing: trialTiming, now: current) != .trialEnded {
+            let since = lastTrialSaveAt.map { max(0, current.timeIntervalSince($0)) } ?? 0
+            candidates.append(max(0, LicensePolicy.trialSaveInterval - since))
         }
         return candidates.min()
     }
@@ -506,24 +577,18 @@ public final class LicenseManager {
 
     // MARK: Activation
 
-    /// Activates `key` on this Mac. `expecting` is the route the user took:
-    /// `.trial` from the trial flow (refused locally when the trial was used
-    /// here, without calling Dodo), `nil` from the plain key field.
-    public func activate(key rawKey: String, expecting: LicenseKind? = nil) async -> LicenseMessage {
-        await perform { await self.activateNow(key: rawKey, expecting: expecting) }
+    /// Activates `key` on this Mac. Only the app's paid product is kept.
+    public func activate(key rawKey: String) async -> LicenseMessage {
+        await perform { await self.activateNow(key: rawKey) }
     }
 
-    private func activateNow(key rawKey: String, expecting: LicenseKind?) async -> LicenseMessage {
+    private func activateNow(key rawKey: String) async -> LicenseMessage {
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if expecting == .trial {
-            guard let used = readTrialUsed() else { return .storageUnavailable }
-            if used { return .trialAlreadyUsed }
-        }
         if let blockedUntil, now() < blockedUntil {
             return .rateLimited(seconds: Int(blockedUntil.timeIntervalSince(now()).rounded(.up)))
         }
         // The same paid key on a live activation: keep it, just verify it.
-        if let record, record.kind == .paid, record.licenseKey == key, !record.isRevoked {
+        if let record, record.licenseKey == key, !record.isRevoked {
             callCount += 1
             lastAttemptAt = now()
             switch await client.validate(licenseKey: key, instanceID: record.instanceID) {
@@ -556,41 +621,34 @@ public final class LicenseManager {
         case .activated(let activation):
             guard let instanceID = Self.identifier(activation.instanceID),
                   let productID = Self.identifier(activation.productID) else { return .malformedResponse }
-            guard let kind = products.kind(of: productID) else {
-                // Another app's key or the wrong environment: give the slot back.
+            guard products.isPaid(productID) else {
+                // Another app's key, the wrong environment or a retired
+                // trial product: give the slot back.
                 await release(licenseKey: key, instanceID: instanceID)
                 return .wrongProduct(productName: activation.productName)
-            }
-            if kind == .trial {
-                // Never a second trial on this Mac; unreadable storage counts as used.
-                guard let used = readTrialUsed() else {
-                    await release(licenseKey: key, instanceID: instanceID)
-                    return .storageUnavailable
-                }
-                if used {
-                    await release(licenseKey: key, instanceID: instanceID)
-                    return .trialAlreadyUsed
-                }
             }
             let previous = record
             let anchor = activation.serverDate ?? now()
             let newRecord = LicenseRecord(
-                licenseKey: key, instanceID: instanceID, productID: productID, kind: kind,
+                licenseKey: key, instanceID: instanceID, productID: productID,
                 activatedAt: activation.createdAt, lastSuccessAt: anchor, lastObservedAt: max(anchor, activation.createdAt)
             )
             // Persist first; announce success only once the record is durable.
-            if let failure = persist(newRecord, markingTrial: kind == .trial, previous: previous) {
-                storageError = failure
+            // The trial record is kept as it is.
+            do {
+                try store.saveRecord(newRecord)
+            } catch {
+                storageError = error
                 await release(licenseKey: key, instanceID: instanceID)
                 return .storageFailed
             }
             commitActivation(newRecord)
             if let previous, previous.instanceID != instanceID {
-                // A trial replaced by a purchase, or a different paid key:
-                // free the old activation so it does not count against the limit.
+                // A different paid key: free the old activation so it does
+                // not count against the limit.
                 await release(licenseKey: previous.licenseKey, instanceID: previous.instanceID)
             }
-            return pendingCleanups.isEmpty ? .activated(kind) : .cleanupPending
+            return pendingCleanups.isEmpty ? .activated : .cleanupPending
         }
     }
 
@@ -601,26 +659,6 @@ public final class LicenseManager {
         guard !trimmed.isEmpty, trimmed.rangeOfCharacter(from: .controlCharacters) == nil,
               trimmed.rangeOfCharacter(from: .newlines) == nil else { return nil }
         return trimmed
-    }
-
-    /// Saves a new record and, for a trial, the used marker. Returns the
-    /// failure, having restored the previous record if the marker failed so
-    /// no trial can be taken twice.
-    private func persist(_ newRecord: LicenseRecord, markingTrial: Bool, previous: LicenseRecord?) -> LicenseStoreError? {
-        do {
-            try store.saveRecord(newRecord)
-        } catch {
-            return error
-        }
-        guard markingTrial else { return nil }
-        do {
-            try store.markTrialUsed()
-            trialUsedCache = true
-            return nil
-        } catch {
-            if let previous { try? store.saveRecord(previous) } else { try? store.clearRecord() }
-            return error
-        }
     }
 
     /// Deactivates an activation we must not keep; remembers it (durably)
@@ -653,9 +691,14 @@ public final class LicenseManager {
     // MARK: Checks
 
     /// The launch check: always attempted in the background, subject only to
-    /// an active rate limit.
+    /// an active rate limit. Without a license, an unregistered trial asks
+    /// the registry instead.
     public func checkOnLaunch() async {
-        await perform { await self.checkNow() }
+        await perform {
+            self.noteTrialTime()
+            await self.checkNow()
+            if self.isRegistrationDue { await self.registerTrialNow() }
+        }
     }
 
     /// Runs the daily check if it is due. Returns whether a call was made.
@@ -675,13 +718,18 @@ public final class LicenseManager {
 
     /// Housekeeping the app layer runs on every timer, wake and network event:
     /// records that time passed, retries failed writes and cleanups, then
-    /// runs the check if it is due.
-    public func tick() async {
+    /// runs the check — or the trial registration — if it is due. `wake`
+    /// (wake from sleep, the network back, "Try again") asks the registry
+    /// without waiting out the backoff; a `Retry-After` still holds.
+    public func tick(wake: Bool = false) async {
         await perform {
             self.retryStorage()
+            self.settleTrial()
             self.noteTime()
+            self.noteTrialTime()
             await self.retryCleanupsNow()
             if self.isCheckDue { await self.checkNow() }
+            if self.isRegistrationDue || (wake && self.canRegister) { await self.registerTrialNow() }
         }
     }
 
@@ -777,7 +825,8 @@ public final class LicenseManager {
 
     // MARK: Removal
 
-    /// "Remove this Mac": deactivates, then clears the record (trial_used stays).
+    /// "Remove this Mac": deactivates, then clears the license record. The
+    /// trial record stays, so the Mac goes back to Trial or TrialEnded.
     public func removeThisMac() async -> LicenseMessage {
         await perform {
             guard let record = self.record else { return .removed }
@@ -791,6 +840,9 @@ public final class LicenseManager {
                 self.failedChecks = 0
                 self.blockedUntil = nil
                 self.lastAttemptAt = nil
+                // A trial record that was never written (wiped meanwhile)
+                // starts provisionally and asks the registry for the original start.
+                self.settleTrial()
                 return self.storageError == nil && !self.journalError ? .removed : .storageUnavailable
             case .rateLimited(let retryAfter):
                 self.block(for: retryAfter)
@@ -802,7 +854,215 @@ public final class LicenseManager {
     }
 
     private func block(for seconds: TimeInterval) {
-        let bounded = seconds.isFinite ? min(max(1, seconds), 86_400) : 60
-        blockedUntil = now().addingTimeInterval(bounded)
+        blockedUntil = now().addingTimeInterval(Self.bounded(seconds))
+    }
+
+    private static func bounded(_ seconds: TimeInterval) -> TimeInterval {
+        seconds.isFinite ? min(max(1, seconds), 86_400) : 60
+    }
+
+    // MARK: Trial
+
+    /// Reads the trial record once it has not been read, and starts a
+    /// provisional trial when the trial record is positively absent. Only
+    /// without a license record: while one exists the trial record is not
+    /// even read. Nothing is created over a record that could not be read.
+    private func settleTrial() {
+        guard trialApplies else { return }
+        if trialLoad == .unread { readTrial() }
+        if trialLoad == .absent, trialApplies { startProvisionalTrial() }
+    }
+
+    private func readTrial() {
+        do {
+            if let stored = try trialStore.loadTrial() {
+                trial = stored
+                trialLoad = .present
+                lastTrialSaveAt = now()
+            } else {
+                trial = nil
+                trialLoad = .absent
+            }
+            trialStorageError = nil
+            trialDirty = false
+            trialSaveRequired = false
+            trialGeneration += 1
+        } catch {
+            trialStorageError = error
+        }
+        notify()
+    }
+
+    /// Starting the trial grants access, so the record is saved first and
+    /// the core turns on only once it is durable. A failed save leaves the
+    /// record unread: the next attempt reads before it writes.
+    private func startProvisionalTrial() {
+        let current = now()
+        let fallback = device.hardwareUUID() == nil ? UUID().uuidString.lowercased() : nil
+        let provisional = TrialRecord(startedAt: current, lastSeenAt: current, registered: false, fallbackDeviceID: fallback)
+        do {
+            try trialStore.saveTrial(provisional)
+        } catch {
+            trialStorageError = error
+            trialLoad = .unread
+            notify()
+            return
+        }
+        trial = provisional
+        trialLoad = .present
+        trialStorageError = nil
+        trialDirty = false
+        trialSaveRequired = false
+        trialEndSaved = false
+        trialGeneration += 1
+        lastTrialSaveAt = current
+        registryFailures = 0
+        registryLastAttemptAt = nil
+        notify()
+    }
+
+    /// Saves the trial record as it is in memory. A failure is retried on
+    /// every tick and shown; it never changes the trial's state.
+    private func flushTrial() {
+        guard let trial else { return }
+        do {
+            try trialStore.saveTrial(trial)
+            trialDirty = false
+            trialSaveRequired = false
+            trialStorageError = nil
+            lastTrialSaveAt = now()
+            if LicensePolicy.trialState(trial, timing: trialTiming, now: now()) == .trialEnded { trialEndSaved = true }
+        } catch {
+            trialStorageError = error
+            trialSaveRequired = true
+        }
+    }
+
+    /// Raises `last_seen_at` in memory; saves it hourly, once when the trial
+    /// has ended, whenever a save is owed, and on quit (`force`).
+    private func noteTrialTime(force: Bool = false) {
+        guard trialApplies, var updated = trial else { return }
+        let current = now()
+        if current > updated.lastSeenAt {
+            updated.lastSeenAt = current
+            trial = updated
+            trialDirty = true
+        }
+        let ended = LicensePolicy.trialState(updated, timing: trialTiming, now: current) == .trialEnded
+        let hourly = lastTrialSaveAt.map {
+            current.timeIntervalSince($0) >= LicensePolicy.trialSaveInterval || current < $0
+        } ?? true
+        notify() // memory first
+        if trialDirty, force || trialSaveRequired || trialStorageError != nil || hourly || (ended && !trialEndSaved) {
+            flushTrial()
+            notify()
+        } else if ended, !trialDirty {
+            trialEndSaved = true
+        }
+    }
+
+    /// On quit: the latest `last_seen_at` is saved. Runs on the license
+    /// actor at once, not behind a queued network call.
+    public func saveTrialBeforeQuit() {
+        noteTrialTime(force: true)
+    }
+
+    /// An unregistered trial may ask the registry now, ignoring backoff but
+    /// not a `Retry-After`.
+    private var canRegister: Bool {
+        guard trialApplies, let trial, !trial.registered, !isRegistering else { return false }
+        if let registryBlockedUntil, now() < registryBlockedUntil { return false }
+        return true
+    }
+
+    /// Registration is due: never tried, or the backoff after the last
+    /// failure (1 min doubling to 1 h) has passed.
+    public var isRegistrationDue: Bool {
+        guard canRegister else { return false }
+        guard registryFailures > 0, let last = registryLastAttemptAt else { return true }
+        let current = now()
+        if current < last { return true } // the clock went back since
+        return current >= last.addingTimeInterval(LicensePolicy.retryDelay(afterFailures: registryFailures))
+    }
+
+    /// Asks the registry for this Mac's start. The answer applies only to
+    /// the trial record it was asked for.
+    private func registerTrialNow() async {
+        guard canRegister, var current = trial else { return }
+        let deviceID: String
+        if let hardware = device.hardwareUUID() {
+            deviceID = hardware
+        } else if let fallback = current.fallbackDeviceID {
+            deviceID = fallback
+        } else {
+            // The same random id has to be used next time: saved before it is sent.
+            let fallback = UUID().uuidString.lowercased()
+            current.fallbackDeviceID = fallback
+            trial = current
+            trialDirty = true
+            trialSaveRequired = true
+            flushTrial()
+            guard !trialDirty else { notify(); return }
+            deviceID = fallback
+        }
+        let generation = trialGeneration
+        isRegistering = true
+        defer { isRegistering = false }
+        registryLastAttemptAt = now()
+        registryCallCount += 1
+        let result = await registry.register(device: TrialDevice.hash(app: Self.trialAppID, hardwareID: deviceID))
+        guard generation == trialGeneration, trialApplies, let latest = trial, !latest.registered else {
+            notify()
+            return
+        }
+        switch result {
+        case .registered(let startedAt, let serverNow):
+            applyRegistration(startedAt: startedAt, serverNow: serverNow, to: latest)
+        case .rateLimited(let retryAfter):
+            registryFailures += 1
+            registryBlockedUntil = now().addingTimeInterval(Self.bounded(retryAfter))
+        case .unreachable:
+            registryFailures += 1
+        }
+        notify()
+    }
+
+    /// The registry's start, converted to the local clock
+    /// (`local_now − (registry_now − registry_started_at)`); the earlier of
+    /// that and the provisional start wins. A change that turns the core on
+    /// (an offline-limited trial with time left) is saved first; anything
+    /// else takes effect in memory first and is then saved.
+    private func applyRegistration(startedAt: Date, serverNow: Date, to latest: TrialRecord) {
+        let current = now()
+        let used = max(0, serverNow.timeIntervalSince(startedAt))
+        var updated = latest
+        updated.startedAt = min(latest.startedAt, current.addingTimeInterval(-used))
+        updated.lastSeenAt = max(latest.lastSeenAt, current)
+        updated.registered = true
+        let wasOn = LicensePolicy.trialState(latest, timing: trialTiming, now: current).isFeatureEnabled
+        let isOn = LicensePolicy.trialState(updated, timing: trialTiming, now: current).isFeatureEnabled
+        if isOn, !wasOn {
+            do {
+                try trialStore.saveTrial(updated)
+            } catch {
+                // Not saved, not granted: the registry is asked again after backoff.
+                trialStorageError = error
+                registryFailures += 1
+                return
+            }
+            trial = updated
+            trialDirty = false
+            trialSaveRequired = false
+            trialStorageError = nil
+            lastTrialSaveAt = current
+        } else {
+            trial = updated
+            trialDirty = true
+            trialSaveRequired = true
+            notify() // enforcement first
+            flushTrial()
+        }
+        registryFailures = 0
+        registryBlockedUntil = nil
     }
 }

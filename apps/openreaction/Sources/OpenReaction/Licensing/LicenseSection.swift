@@ -9,28 +9,19 @@ struct LicenseSection: View {
 
     @State private var key = ""
     @State private var showsKeyField = false
-    /// The key field is for a trial key (refused locally after one trial).
-    @State private var keyFieldIsTrial = false
 
     var body: some View {
         Section {
             statusRow
             if let error = license.storageError {
-                Text(LicenseMessage.storageUnavailable.text + " (\(Self.describe(error)))")
-                    .font(Brand.body(12))
-                    .foregroundStyle(Brand.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                note(LicenseMessage.storageUnavailable.text + " (\(Self.describe(error)))")
+            } else if let error = license.trialStorageError {
+                note("OpenReaction can’t read or save its free trial in the Keychain right now. It keeps retrying; unlock the Keychain if it stays locked. (\(Self.describe(error)))")
             } else if license.journalError {
-                Text("OpenReaction couldn’t save its license notes in Preferences. It keeps retrying.")
-                    .font(Brand.body(12))
-                    .foregroundStyle(Brand.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                note("OpenReaction couldn’t save its license notes in Preferences. It keeps retrying.")
             }
             if let message = license.message {
-                Text(message.text)
-                    .font(Brand.body(12))
-                    .foregroundStyle(Brand.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                note(message.text)
                     .accessibilityAddTraits(.updatesFrequently)
             }
             if let pending = license.pendingKey {
@@ -48,21 +39,29 @@ struct LicenseSection: View {
                 .foregroundStyle(Brand.textSecondary)
         }
         .onChange(of: license.pendingKey) { _, pending in
-            if let pending { key = pending.key }
+            if let pending { key = pending }
         }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(Brand.body(12))
+            .foregroundStyle(Brand.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private static func describe(_ error: LicenseStoreError) -> String {
         switch error {
         case .unavailable(let reason): reason
-        case .corrupt: "the stored license is unreadable"
+        case .corrupt: "the stored record is unreadable"
         }
     }
 
+    /// Without a license the key field is always there, next to Buy.
     private var needsKeyField: Bool {
         switch license.state {
-        case .unlicensed, .trialEnded, .revoked: true
-        default: false
+        case .trialUnavailable, .trial, .trialNeedsConnection, .trialEnded: true
+        case .licensed, .grace, .checkRequired, .revoked: false
         }
     }
 
@@ -82,10 +81,11 @@ struct LicenseSection: View {
 
     private var statusText: String {
         switch license.state {
-        case .unlicensed: "Not licensed"
-        case .trial(let days): "Trial: about \(days) day\(days == 1 ? "" : "s") left"
-        case .trialEnded(clockChanged: false): "Your trial has ended"
-        case .trialEnded(clockChanged: true): "Clock changed — connect to the internet to verify your trial"
+        case .trialUnavailable:
+            license.storageError == nil && license.trialStorageError == nil ? "Starting your free trial…" : "Free trial unavailable"
+        case .trial(let days): LicenseController.trialText(daysLeft: days)
+        case .trialNeedsConnection: "Connect to the internet to continue your free trial"
+        case .trialEnded: "Your free trial has ended"
         case .licensed: "Licensed"
         case .grace(let days, let warn):
             warn ? "Connect to the internet within \(days) day\(days == 1 ? "" : "s") to keep using OpenReaction" : "Licensed"
@@ -97,47 +97,30 @@ struct LicenseSection: View {
     @ViewBuilder private var actions: some View {
         HStack(spacing: Brand.Space.s8) {
             switch license.state {
-            case .unlicensed:
-                if !license.trialUsed {
-                    trialButton
+            case .trialUnavailable:
+                if license.storageError != nil || license.trialStorageError != nil {
+                    tryAgainButton
                 }
                 buyButton
                 Spacer()
-                if !license.trialUsed {
-                    Button(keyFieldIsTrial && showsKeyField ? "Hide key field" : "Enter a trial key") {
-                        keyFieldIsTrial = true
-                        showsKeyField.toggle()
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                }
-                enterKeyButton
-            case .trial:
+            case .trial, .trialEnded:
                 buyButton
                 Spacer()
-                enterKeyButton
-                removeButton
-            case .trialEnded(clockChanged: false):
+            case .trialNeedsConnection:
+                tryAgainButton
                 buyButton
                 Spacer()
-                enterKeyButton
-            case .trialEnded(clockChanged: true):
-                Button("Try again") { Task { await license.tryAgain() } }
-                    .buttonStyle(PrimaryButtonStyle())
-                buyButton
-                Spacer()
-                enterKeyButton
             case .licensed, .grace:
                 Spacer()
                 removeButton
             case .checkRequired:
-                Button("Try again") { Task { await license.tryAgain() } }
-                    .buttonStyle(PrimaryButtonStyle())
+                tryAgainButton
                 Spacer()
                 removeButton
             case .revoked:
                 // Only an explicit activation can unlock again; showing the
                 // field changes nothing until a key is submitted.
-                Button("Activate again") { keyFieldIsTrial = false; showsKeyField = true }
+                Button("Activate again") { showsKeyField = true }
                 buyButton
                 if let support = LicensingConfig.supportURL {
                     Link("Contact support", destination: support)
@@ -148,8 +131,13 @@ struct LicenseSection: View {
         .disabled(license.isBusy)
     }
 
+    private var tryAgainButton: some View {
+        Button("Try again") { Task { await license.tryAgain() } }
+            .buttonStyle(PrimaryButtonStyle())
+    }
+
     /// Checkout links exist only once the website ships them; until then the
-    /// buttons say so instead of opening a page that is not there.
+    /// button says so instead of opening a page that is not there.
     private var buyButton: some View {
         Button(LicensingConfig.buyURL == nil ? "Buy for $5 — coming soon" : "Buy for $5") {
             if let url = LicensingConfig.buyURL { openURL(url) }
@@ -157,22 +145,6 @@ struct LicenseSection: View {
         .buttonStyle(PrimaryButtonStyle())
         .disabled(LicensingConfig.buyURL == nil)
         .help("Opens the checkout; you’ll get a license key by email")
-    }
-
-    private var trialButton: some View {
-        Button(LicensingConfig.trialURL == nil ? "Start 3-day trial — coming soon" : "Start 3-day trial") {
-            if let url = LicensingConfig.trialURL { openURL(url) }
-        }
-        .disabled(LicensingConfig.trialURL == nil)
-        .help("Opens the free trial checkout; you’ll get a trial key by email")
-    }
-
-    private var enterKeyButton: some View {
-        Button(showsKeyField && !keyFieldIsTrial ? "Hide key field" : "Enter a license key") {
-            keyFieldIsTrial = false
-            showsKeyField.toggle()
-        }
-        .buttonStyle(SecondaryButtonStyle())
     }
 
     private var removeButton: some View {
@@ -183,7 +155,7 @@ struct LicenseSection: View {
 
     private var keyField: some View {
         HStack(spacing: Brand.Space.s8) {
-            TextField(keyFieldIsTrial ? "Paste your trial key" : "Paste your license key", text: $key)
+            TextField("Paste your license key", text: $key)
                 .textFieldStyle(.roundedBorder)
                 .font(Brand.mono(13))
                 .accessibilityLabel("License key")
@@ -194,12 +166,12 @@ struct LicenseSection: View {
         }
     }
 
-    private func pendingKeyRow(_ pending: LicenseController.PendingKey) -> some View {
+    private func pendingKeyRow(_ pending: String) -> some View {
         HStack(spacing: Brand.Space.s8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(pending.kind == .trial ? "Start the trial on this Mac with the key from your browser?" : "Activate this Mac with the key from your browser?")
+                Text("Activate this Mac with the key from your browser?")
                     .font(Brand.body(14))
-                Text(pending.key)
+                Text(pending)
                     .font(Brand.mono(12))
                     .foregroundStyle(Brand.textSecondary)
                     .lineLimit(1)
@@ -210,13 +182,7 @@ struct LicenseSection: View {
                 .buttonStyle(SecondaryButtonStyle())
             Button("Activate") {
                 license.pendingKey = nil
-                Task {
-                    if pending.kind == .trial {
-                        await license.activateTrial(key: pending.key)
-                    } else {
-                        await license.activate(key: pending.key)
-                    }
-                }
+                Task { await license.activate(key: pending) }
             }
             .buttonStyle(PrimaryButtonStyle())
         }
@@ -227,21 +193,16 @@ struct LicenseSection: View {
 
     private func activateTypedKey() {
         let typed = key
-        let trial = keyFieldIsTrial
         Task {
-            if trial {
-                await license.activateTrial(key: typed)
-            } else {
-                await license.activate(key: typed)
-            }
-            if case .activated = license.message { key = ""; showsKeyField = false }
+            await license.activate(key: typed)
+            if license.message == .activated { key = ""; showsKeyField = false }
         }
     }
 
     private func confirmRemove() {
         let alert = NSAlert()
         alert.messageText = "Remove this Mac from the license?"
-        alert.informativeText = "OpenReaction will stop working here until you activate again. The activation is freed for another Mac."
+        alert.informativeText = "The activation is freed for another Mac. OpenReaction goes back to its free trial here, and stops if the trial has already ended, until you activate again."
         alert.addButton(withTitle: "Remove this Mac")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {

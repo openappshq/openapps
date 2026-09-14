@@ -56,7 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             products: LicensingConfig.products,
             client: DodoLicenseClient(host: LicensingConfig.host),
             store: KeychainLicenseStore(),
-            journal: DefaultsInvalidationJournal()
+            journal: DefaultsInvalidationJournal(),
+            trialStore: KeychainTrialStore(),
+            registry: URLSessionTrialRegistryClient(endpoint: LicensingConfig.trialRegistryURL, environment: LicensingConfig.environment),
+            device: PlatformDeviceIdentity(),
+            trialTiming: Licensing.trialTiming
         ))
         self.license = license
         license.onChange = { [weak controller, weak license] in
@@ -99,10 +103,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// controller's one bound, as a logged failure); the app terminates either
     /// way, since keeping a process the user quit is worse than a logged
     /// unconfirmed delivery.
+    ///
+    /// Official builds also save the trial's latest observed time, bounded
+    /// by `LicenseController.quitSaveBound`, alongside the drain.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let controller, controller.isTapRunning else { return .terminateNow }
+        let drain = controller?.isTapRunning == true ? controller : nil
+        #if OPENAPPS_LICENSING
+        let license = self.license
+        guard drain != nil || license != nil else { return .terminateNow }
+        #else
+        guard drain != nil else { return .terminateNow }
+        #endif
         Task {
-            await controller.prepareToQuit()
+            #if OPENAPPS_LICENSING
+            let saved = Task { await license?.saveBeforeQuit() }
+            #endif
+            await drain?.prepareToQuit()
+            #if OPENAPPS_LICENSING
+            await saved.value
+            #endif
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -129,11 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               !key.isEmpty
         else { return }
         #if OPENAPPS_LICENSING
-        let kind: LicenseKind? = items.first(where: { $0.name == "kind" })?.value == "trial" ? .trial : nil
-        license?.pendingKey = LicenseController.PendingKey(key: key, kind: kind)
+        license?.pendingKey = key
         settings?.show()
-        #else
-        _ = items
         #endif
     }
 

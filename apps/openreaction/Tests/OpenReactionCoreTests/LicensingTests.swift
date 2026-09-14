@@ -3,17 +3,21 @@ import OpenReactionCore
 import Testing
 
 /// The shared test cases from LICENSING.md, numbered as there, against a
-/// fake Dodo client and an injectable clock.
+/// fake Dodo client, a fake trial registry, fake Keychain items and an
+/// injectable clock. Cases 12–27 (the in-app trial) are in
+/// `TrialLicensingTests.swift`.
 @Suite("Licensing")
 @LicenseActor
 struct LicensingTests {
     static let paid = "pdt_openreaction_PAID"
-    static let trial = "pdt_openreaction_TRIAL"
+    /// The retired Dodo trial product: refused like any other product.
+    static let retiredTrial = "pdt_openreaction_TRIAL"
     static let other = "pdt_openklack_PAID"
-    static let products = LicenseProducts(paid: [paid], trial: [trial])
+    static let products = LicenseProducts(paid: [paid])
 
     final class Clock: @unchecked Sendable {
-        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        static let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var now = Clock.start
         func advance(_ seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
         static let day: TimeInterval = 86_400
     }
@@ -61,7 +65,6 @@ struct LicensingTests {
 
     final class MemoryStore: LicenseStore, @unchecked Sendable {
         var record: LicenseRecord?
-        var trialUsed = false
         var pendingCleanups: [PendingCleanup] = []
         var failsWrites = false
         var failsReads = false
@@ -77,14 +80,6 @@ struct LicensingTests {
         func clearRecord() throws(LicenseStoreError) {
             if failsWrites { throw .unavailable("denied") }
             record = nil
-        }
-        func loadTrialUsed() throws(LicenseStoreError) -> Bool {
-            if failsReads { throw .unavailable("locked") }
-            return trialUsed
-        }
-        func markTrialUsed() throws(LicenseStoreError) {
-            if failsWrites { throw .unavailable("denied") }
-            trialUsed = true
         }
         func loadPendingCleanups() throws(LicenseStoreError) -> [PendingCleanup] {
             if failsReads { throw .unavailable("locked") }
@@ -136,52 +131,99 @@ struct LicensingTests {
         }
     }
 
+    /// The trial record as a Keychain item: absent, readable, or failing.
+    final class MemoryTrialStore: TrialStore, @unchecked Sendable {
+        /// By default this Mac's trial ended long ago and is registered, so
+        /// the license cases start from TrialEnded with no registry calls.
+        var record: TrialRecord? = TrialRecord(startedAt: Clock.start.addingTimeInterval(-10 * Clock.day), registered: true)
+        var readError: LicenseStoreError?
+        var failsWrites = false
+        private(set) var saves: [TrialRecord] = []
+        private(set) var loads = 0
+        func loadTrial() throws(LicenseStoreError) -> TrialRecord? {
+            loads += 1
+            if let readError { throw readError }
+            return record
+        }
+        func saveTrial(_ trial: TrialRecord) throws(LicenseStoreError) {
+            if failsWrites { throw .unavailable("denied") }
+            saves.append(trial)
+            record = trial
+        }
+    }
+
+    final class FakeRegistry: TrialRegistryClient, @unchecked Sendable {
+        var devices: [String] = []
+        var result: TrialRegistrationResult = .unreachable
+        /// When set, answers wait here.
+        var gate: Gate?
+        func register(device: String) async -> TrialRegistrationResult {
+            devices.append(device)
+            if let gate { await gate.wait() }
+            return result
+        }
+    }
+
+    final class FakeDevice: DeviceIdentity, @unchecked Sendable {
+        var uuid: String? = "00000000-1111-2222-3333-444444444444"
+        func hardwareUUID() -> String? { uuid }
+    }
+
     let clock = Clock()
     let client = FakeClient()
     let store = MemoryStore()
     let journal = MemoryJournal()
+    let trialStore = MemoryTrialStore()
+    let registry = FakeRegistry()
+    let device = FakeDevice()
 
     /// A manager that has read storage (the app calls `load` on start).
-    private func makeManager() -> LicenseManager {
+    func makeManager() -> LicenseManager {
         let clock = self.clock
-        let manager = LicenseManager(products: Self.products, client: client, store: store, journal: journal, now: { clock.now })
+        let manager = LicenseManager(
+            products: Self.products, client: client, store: store, journal: journal,
+            trialStore: trialStore, registry: registry, device: device, now: { clock.now }
+        )
         manager.load()
         return manager
     }
 
-    private func activation(_ product: String, name: String = "OpenReaction", instance: String = "inst_1") -> Activation {
+    func activation(_ product: String, name: String = "OpenReaction", instance: String = "inst_1") -> Activation {
         Activation(instanceID: instance, productID: product, productName: name, createdAt: clock.now, serverDate: clock.now)
     }
 
     /// A paid record whose last success was `age` seconds ago.
-    private func paidRecord(lastSuccessAge age: TimeInterval) -> LicenseRecord {
+    func paidRecord(lastSuccessAge age: TimeInterval) -> LicenseRecord {
         LicenseRecord(
-            licenseKey: "KEY-PAID", instanceID: "inst_1", productID: Self.paid, kind: .paid,
+            licenseKey: "KEY-PAID", instanceID: "inst_1", productID: Self.paid,
             activatedAt: clock.now.addingTimeInterval(-30 * Clock.day), lastSuccessAt: clock.now.addingTimeInterval(-age)
         )
     }
 
-    private func trialRecord(activatedAge age: TimeInterval) -> LicenseRecord {
-        LicenseRecord(
-            licenseKey: "KEY-TRIAL", instanceID: "inst_t", productID: Self.trial, kind: .trial,
-            activatedAt: clock.now.addingTimeInterval(-age), lastSuccessAt: clock.now.addingTimeInterval(-age)
-        )
+    /// A trial record with `elapsed` seconds used, observed up to now.
+    func trialRecord(elapsed: TimeInterval, registered: Bool = true) -> TrialRecord {
+        TrialRecord(startedAt: clock.now.addingTimeInterval(-elapsed), lastSeenAt: clock.now, registered: registered)
     }
 
     // MARK: Activation
 
-    @Test("1. Paid key activates and is stored")
-    func case1_paidKeyActivates() async {
+    @Test("1. Paid key activates and is stored, from Trial or TrialEnded", arguments: [false, true])
+    func case1_paidKeyActivates(duringTrial: Bool) async {
+        if duringTrial { trialStore.record = trialRecord(elapsed: Clock.day) }
+        let trialBefore = trialStore.record
         client.activation = .activated(activation(Self.paid))
         let manager = makeManager()
+        #expect(manager.state == (duringTrial ? .trial(daysLeft: 2) : .trialEnded))
         let message = await manager.activate(key: " KEY-PAID\n")
-        #expect(message == .activated(.paid))
+        #expect(message == .activated)
         #expect(manager.state == .licensed)
         #expect(manager.isFeatureEnabled)
-        #expect(store.record?.kind == .paid)
+        #expect(store.record?.productID == Self.paid)
         #expect(store.record?.licenseKey == "KEY-PAID")
         #expect(store.record?.instanceID == "inst_1")
         #expect(client.calls == [.activate(key: "KEY-PAID", name: "Mac")])
+        // Buying keeps the trial record as it was, and deactivates nothing.
+        #expect(trialStore.record == trialBefore)
     }
 
     @Test("2. Another app's key is deactivated again and nothing is saved")
@@ -192,8 +234,19 @@ struct LicensingTests {
         #expect(message == .wrongProduct(productName: "OpenKlack"))
         #expect(message.text == "This key is for OpenKlack, not OpenReaction.")
         #expect(store.record == nil)
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(client.calls == [.activate(key: "KEY-X", name: "Mac"), .deactivate(instance: "inst_x")])
+    }
+
+    @Test("2. A key for the retired trial product is refused like another app's key")
+    func retiredTrialProductIsRefused() async {
+        trialStore.record = trialRecord(elapsed: Clock.day)
+        client.activation = .activated(activation(Self.retiredTrial, name: "OpenReaction Trial", instance: "inst_t"))
+        let manager = makeManager()
+        #expect(await manager.activate(key: "KEY-TRIAL") == .wrongProduct(productName: "OpenReaction Trial"))
+        #expect(store.record == nil)
+        #expect(manager.state == .trial(daysLeft: 2))
+        #expect(client.calls == [.activate(key: "KEY-TRIAL", name: "Mac"), .deactivate(instance: "inst_t")])
     }
 
     @Test("3. Activation limit reached")
@@ -203,7 +256,7 @@ struct LicensingTests {
         let message = await manager.activate(key: "KEY-PAID")
         #expect(message == .allMacsActivated)
         #expect(message.text.contains("All 3 Macs"))
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(store.record == nil)
     }
 
@@ -215,7 +268,7 @@ struct LicensingTests {
         client.activation = result
         let manager = makeManager()
         #expect(await manager.activate(key: "KEY") == expected)
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(store.record == nil)
     }
 
@@ -226,7 +279,7 @@ struct LicensingTests {
         let message = await manager.activate(key: "KEY-PAID")
         #expect(message == .unreachable)
         #expect(message.text.hasPrefix("Couldn’t reach the license service"))
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(store.record == nil)
     }
 
@@ -336,53 +389,29 @@ struct LicensingTests {
         #expect(!manager.isFeatureEnabled)
     }
 
-    @Test("P0-4. A clock rolled back during a trial fails closed: the trial counts as ended")
-    func trialClockRollbackFailsClosed() async {
-        // The reviewer's sequence: a 1-day-old trial, time observed, the
-        // clock rolled back 30 days, then 3 days pass offline.
-        store.record = trialRecord(activatedAge: Clock.day)
-        store.trialUsed = true
-        client.validation = .unreachable
-        let manager = makeManager()
-        await manager.tick()
-        #expect(store.record?.lastObservedAt == clock.now)
-        clock.advance(-30 * Clock.day)
-        #expect(manager.state == .trialEnded(clockChanged: true))
-        #expect(!manager.isFeatureEnabled)
-        #expect(manager.nextDeadline == nil)
-        clock.advance(3 * Clock.day)
-        let observed = store.record?.lastObservedAt
-        await manager.tick() // offline: nothing re-anchors, and a tick never lowers the mark
-        #expect(store.record?.lastObservedAt == observed)
-        #expect(manager.state == .trialEnded(clockChanged: true))
-        #expect(manager.state != .trial(daysLeft: 2))
-        // Once the clock is right again, the trial is what it always was.
-        clock.advance(27 * Clock.day + 60)
-        #expect(manager.state == .trial(daysLeft: 2))
-    }
-
     @Test("P0-4. A successful check re-anchors time from the server Date")
     func serverDateReanchorsAfterRollback() async {
         // The clock had jumped ahead ten days (observed), then was corrected:
         // locally that looks like a rollback. Dodo's Date settles it.
-        store.record = trialRecord(activatedAge: 3600)
-        store.trialUsed = true
+        store.record = paidRecord(lastSuccessAge: 3600)
+        client.validation = .unreachable
         let manager = makeManager()
         clock.advance(10 * Clock.day)
         await manager.tick()
         clock.advance(-10 * Clock.day)
-        #expect(manager.state == .trialEnded(clockChanged: true))
+        #expect(manager.state == .checkRequired)
         #expect(manager.isCheckDue)
         client.validation = .valid(serverDate: clock.now)
         await manager.tick()
         #expect(store.record?.lastObservedAt == clock.now) // lowered by ten days: the server said so
-        #expect(manager.state == .trial(daysLeft: 3))
+        #expect(manager.state == .licensed)
         #expect(manager.isFeatureEnabled)
     }
 
     @Test("P0-4. A check with the clock still wrong does not unlock")
     func checkWithWrongClockStaysLocked() async {
-        store.record = trialRecord(activatedAge: Clock.day)
+        store.record = paidRecord(lastSuccessAge: 3600)
+        client.validation = .unreachable
         let manager = makeManager()
         await manager.tick()
         let real = clock.now.addingTimeInterval(3600)
@@ -392,7 +421,7 @@ struct LicensingTests {
         // Re-anchored to the server, but this Mac's clock is still 30 days
         // behind it: nothing local can be trusted yet.
         #expect(store.record?.lastObservedAt == real)
-        #expect(manager.state == .trialEnded(clockChanged: true))
+        #expect(manager.state == .checkRequired)
     }
 
     @Test("P0-4. A paid license with the clock rolled back needs a check")
@@ -411,22 +440,22 @@ struct LicensingTests {
 
     @Test("L3. Time observed by the app is remembered")
     func tickRaisesTheHighWaterMark() async {
-        store.record = trialRecord(activatedAge: Clock.day)
+        store.record = paidRecord(lastSuccessAge: 3600)
         client.validation = .unreachable
         let manager = makeManager()
-        clock.advance(1.5 * Clock.day)
+        clock.advance(0.5 * Clock.day)
         await manager.tick()
         #expect(store.record?.lastObservedAt == clock.now)
         clock.advance(-10 * Clock.day)
-        #expect(manager.state == .trialEnded(clockChanged: true))
+        #expect(manager.state == .checkRequired)
     }
 
     @Test("L3. Deadlines are local and independent of the network schedule")
     func localDeadlines() {
-        store.record = trialRecord(activatedAge: 3 * Clock.day - 2.4 * 3600)
+        trialStore.record = trialRecord(elapsed: 3 * Clock.day - 2.4 * 3600)
         var manager = makeManager()
         #expect(manager.nextDeadline == clock.now.addingTimeInterval(2.4 * 3600))
-        #expect(manager.nextCheckDelay == 0) // never attempted: launch check
+        #expect(manager.nextCheckDelay == LicensePolicy.trialSaveInterval) // no license: only the hourly trial save
         store.record = paidRecord(lastSuccessAge: 3600)
         manager = makeManager()
         // Daily due, then the five-day warning, then the end of grace.
@@ -521,10 +550,9 @@ struct LicensingTests {
 
     // MARK: L1 — late answers never touch a newer record
 
-    @Test("L1. A late trial valid:true cannot overwrite a paid upgrade")
-    func lateTrialValidDoesNotOverwritePaid() async {
-        store.record = trialRecord(activatedAge: Clock.day)
-        store.trialUsed = true
+    @Test("L1. A late valid:true for the old key cannot overwrite a new paid activation")
+    func lateValidDoesNotOverwriteNewActivation() async {
+        store.record = paidRecord(lastSuccessAge: 2 * Clock.day)
         let gate = Gate()
         client.validationGate = gate
         client.validation = .valid(serverDate: nil)
@@ -532,20 +560,19 @@ struct LicensingTests {
         let manager = makeManager()
         let pendingCheck = Task { await manager.check() }
         await Task.yield()
-        let pendingActivate = Task { await manager.activate(key: "KEY-PAID") }
+        let pendingActivate = Task { await manager.activate(key: "KEY-PAID-2") }
         await Task.yield()
         await gate.release()
         await pendingCheck.value
-        #expect(await pendingActivate.value == .activated(.paid))
-        #expect(store.record?.kind == .paid)
+        #expect(await pendingActivate.value == .activated)
         #expect(store.record?.instanceID == "inst_p")
+        #expect(store.record?.licenseKey == "KEY-PAID-2")
         #expect(manager.state == .licensed)
     }
 
     @Test("L1. A late valid:false revokes the old record, not the new paid one")
     func lateInvalidDoesNotRevokeNewRecord() async {
-        store.record = trialRecord(activatedAge: Clock.day)
-        store.trialUsed = true
+        store.record = paidRecord(lastSuccessAge: 2 * Clock.day)
         let gate = Gate()
         client.validationGate = gate
         client.validation = .invalid
@@ -553,7 +580,7 @@ struct LicensingTests {
         let manager = makeManager()
         let pendingCheck = Task { await manager.check() }
         await Task.yield()
-        let pendingActivate = Task { await manager.activate(key: "KEY-PAID") }
+        let pendingActivate = Task { await manager.activate(key: "KEY-PAID-2") }
         await Task.yield()
         await gate.release()
         await pendingCheck.value
@@ -576,93 +603,8 @@ struct LicensingTests {
         await gate.release()
         await pendingCheck.value
         #expect(await pendingRemove.value == .removed)
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(store.record == nil)
-    }
-
-    // MARK: Trial
-
-    @Test("12. Trial key starts a trial and marks the Mac")
-    func case12_trialActivates() async {
-        client.activation = .activated(activation(Self.trial, name: "OpenReaction Trial", instance: "inst_t"))
-        let manager = makeManager()
-        #expect(!manager.trialUsed)
-        let message = await manager.activate(key: "KEY-TRIAL")
-        #expect(message == .activated(.trial))
-        #expect(manager.state == .trial(daysLeft: 3))
-        #expect(manager.isFeatureEnabled)
-        #expect(store.trialUsed)
-        #expect(store.record?.kind == .trial)
-    }
-
-    @Test("13. Trial older than 3 days has ended, offline or not")
-    func case13_trialExpiresLocally() {
-        store.record = trialRecord(activatedAge: 3 * Clock.day + 60)
-        store.trialUsed = true
-        let manager = makeManager()
-        #expect(manager.state == .trialEnded(clockChanged: false))
-        #expect(!manager.isFeatureEnabled)
-        #expect(client.calls.isEmpty)
-    }
-
-    @Test("Trial days left count down")
-    func trialDaysLeft() {
-        store.record = trialRecord(activatedAge: 1.5 * Clock.day)
-        let manager = makeManager()
-        #expect(manager.state == .trial(daysLeft: 2))
-        clock.advance(1.4 * Clock.day)
-        #expect(manager.state == .trial(daysLeft: 1))
-    }
-
-    @Test("14. valid:false ends the trial")
-    func case14_trialRevoked() async {
-        store.record = trialRecord(activatedAge: Clock.day)
-        store.trialUsed = true
-        client.validation = .invalid
-        let manager = makeManager()
-        await manager.check()
-        #expect(manager.state == .trialEnded(clockChanged: false))
-        #expect(!manager.isFeatureEnabled)
-    }
-
-    @Test("15. A second trial is refused without calling Dodo")
-    func case15_secondTrialRefusedLocally() async {
-        store.trialUsed = true
-        client.activation = .activated(activation(Self.trial, instance: "inst_t2"))
-        let manager = makeManager()
-        #expect(manager.trialUsed)
-        // The trial route (Start 3-day trial, or a trial deep link) is refused
-        // locally: Dodo is never called.
-        let message = await manager.activate(key: "KEY-TRIAL-2", expecting: .trial)
-        #expect(message == .trialAlreadyUsed)
-        #expect(message.text == "The trial was already used on this Mac.")
-        #expect(client.calls.isEmpty)
-        #expect(store.record == nil)
-    }
-
-    @Test("A trial key pasted into the plain key field is activated, then released (keys are opaque)")
-    func trialKeyInPlainFieldIsReleased() async {
-        store.trialUsed = true
-        client.activation = .activated(activation(Self.trial, instance: "inst_t2"))
-        let manager = makeManager()
-        let message = await manager.activate(key: "KEY-TRIAL-2")
-        #expect(message == .trialAlreadyUsed)
-        #expect(store.record == nil)
-        #expect(client.calls == [.activate(key: "KEY-TRIAL-2", name: "Mac"), .deactivate(instance: "inst_t2")])
-    }
-
-    @Test("16. Buying during a trial licenses the Mac and frees the trial activation")
-    func case16_paidDuringTrial() async {
-        store.record = trialRecord(activatedAge: Clock.day)
-        store.trialUsed = true
-        client.activation = .activated(activation(Self.paid, instance: "inst_p"))
-        let manager = makeManager()
-        let message = await manager.activate(key: "KEY-PAID")
-        #expect(message == .activated(.paid))
-        #expect(manager.state == .licensed)
-        #expect(store.record?.kind == .paid)
-        #expect(store.trialUsed)
-        #expect(client.calls == [.activate(key: "KEY-PAID", name: "Mac"), .deactivate(instance: "inst_t")])
     }
 
     // MARK: L4 — storage failures
@@ -674,45 +616,36 @@ struct LicensingTests {
         let manager = makeManager()
         let message = await manager.activate(key: "KEY-PAID")
         #expect(message == .storageFailed)
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(store.record == nil)
         #expect(client.calls == [.activate(key: "KEY-PAID", name: "Mac"), .deactivate(instance: "inst_p")])
     }
 
-    @Test("L4. A trial that cannot be saved does not consume the trial or retire anything")
-    func trialStorageFailureKeepsTrialAvailable() async {
-        store.failsWrites = true
-        client.activation = .activated(activation(Self.trial, instance: "inst_t"))
-        let manager = makeManager()
-        #expect(await manager.activate(key: "KEY-TRIAL") == .storageFailed)
-        #expect(!store.trialUsed)
-        #expect(store.record == nil)
-        #expect(client.calls.last == .deactivate(instance: "inst_t"))
-    }
-
     @Test("L4. Buying during a trial keeps the trial if the paid record cannot be saved")
     func paidDuringTrialStorageFailureKeepsTrial() async {
-        store.record = trialRecord(activatedAge: Clock.day)
-        store.trialUsed = true
+        trialStore.record = trialRecord(elapsed: Clock.day)
         store.failsWrites = true
         client.activation = .activated(activation(Self.paid, instance: "inst_p"))
         let manager = makeManager()
         #expect(await manager.activate(key: "KEY-PAID") == .storageFailed)
-        #expect(store.record?.kind == .trial)
+        #expect(store.record == nil)
         #expect(manager.state == .trial(daysLeft: 2))
-        #expect(!client.calls.contains(.deactivate(instance: "inst_t")))
+        #expect(manager.isFeatureEnabled)
     }
 
-    @Test("L4. Unreadable storage is reported, not treated as unlicensed silently")
+    @Test("L4. Unreadable storage is reported, and no trial runs over an unreadable license")
     func unreadableStorageIsReported() async {
         store.failsReads = true
+        trialStore.record = nil // a fresh Mac, as far as the trial is concerned
         let manager = makeManager()
         #expect(manager.storageError == .unavailable("locked"))
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialUnavailable)
+        #expect(!manager.isFeatureEnabled)
         #expect(manager.nextCheckDelay == LicenseManager.cleanupRetryInterval)
-        // A trial cannot be taken while the marker is unreadable.
-        #expect(manager.trialUsed)
-        #expect(await manager.activate(key: "KEY-TRIAL", expecting: .trial) == .storageUnavailable)
+        // The license might be revoked: nothing starts a trial meanwhile.
+        #expect(trialStore.saves.isEmpty)
+        await manager.tick()
+        #expect(registry.devices.isEmpty)
         #expect(client.calls.isEmpty)
         // Storage back: the next tick reads it.
         store.failsReads = false
@@ -740,7 +673,7 @@ struct LicensingTests {
         store.record = paidRecord(lastSuccessAge: 3600)
         client.activation = .activated(activation(Self.paid, instance: "inst_2"))
         let manager = makeManager()
-        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated)
         #expect(store.record?.instanceID == "inst_2")
         #expect(client.calls.contains(.deactivate(instance: "inst_1")))
     }
@@ -765,7 +698,7 @@ struct LicensingTests {
         #expect(store.pendingCleanups == [PendingCleanup(licenseKey: "KEY-X", instanceID: "inst_x")])
         // Restart: unlicensed, but the cleanup is still owed and scheduled.
         let restarted = makeManager()
-        #expect(restarted.state == .unlicensed)
+        #expect(restarted.state == .trialEnded)
         #expect(restarted.pendingCleanups.map(\.instanceID) == ["inst_x"])
         #expect(restarted.nextCheckDelay == LicenseManager.cleanupRetryInterval)
         client.deactivation = .deactivated
@@ -816,18 +749,17 @@ struct LicensingTests {
         #expect(manager.storageError == nil)
     }
 
-    @Test("L12. A replaced trial that cannot be freed is owed after a restart")
-    func replacedTrialCleanupPersists() async {
-        store.record = trialRecord(activatedAge: Clock.day)
-        store.trialUsed = true
+    @Test("L12. A replaced activation that cannot be freed is owed after a restart")
+    func replacedActivationCleanupPersists() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
         client.activation = .activated(activation(Self.paid, instance: "inst_p"))
         client.deactivation = .unreachable
-        #expect(await makeManager().activate(key: "KEY-PAID") == .cleanupPending)
-        #expect(store.record?.kind == .paid)
-        #expect(store.pendingCleanups.map(\.instanceID) == ["inst_t"])
+        #expect(await makeManager().activate(key: "KEY-PAID-2") == .cleanupPending)
+        #expect(store.record?.instanceID == "inst_p")
+        #expect(store.pendingCleanups.map(\.instanceID) == ["inst_1"])
         let restarted = makeManager()
         #expect(restarted.state == .licensed)
-        #expect(restarted.pendingCleanups.map(\.instanceID) == ["inst_t"])
+        #expect(restarted.pendingCleanups.map(\.instanceID) == ["inst_1"])
     }
 
     // MARK: L13 — malformed answers
@@ -840,7 +772,7 @@ struct LicensingTests {
         client.activation = .activated(Activation(instanceID: instance, productID: product, productName: "OpenReaction", createdAt: clock.now))
         let manager = makeManager()
         #expect(await manager.activate(key: "KEY-PAID") == .malformedResponse)
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(store.record == nil)
         #expect(client.calls == [.activate(key: "KEY-PAID", name: "Mac")])
     }
@@ -855,21 +787,8 @@ struct LicensingTests {
 
     // MARK: Removal
 
-    @Test("17. Remove this Mac clears everything but trial_used")
-    func case17_removeThisMac() async {
-        store.record = paidRecord(lastSuccessAge: 3600)
-        store.trialUsed = true
-        client.deactivation = .deactivated
-        let manager = makeManager()
-        #expect(await manager.removeThisMac() == .removed)
-        #expect(manager.state == .unlicensed)
-        #expect(store.record == nil)
-        #expect(store.trialUsed)
-        #expect(client.calls == [.deactivate(instance: "inst_1")])
-    }
-
-    @Test("18. Remove this Mac offline keeps the license")
-    func case18_removeOffline() async {
+    @Test("24. Remove this Mac offline keeps the license")
+    func case24_removeOffline() async {
         store.record = paidRecord(lastSuccessAge: 3600)
         client.deactivation = .unreachable
         let manager = makeManager()
@@ -881,8 +800,8 @@ struct LicensingTests {
 
     // MARK: Rate limit and build flavour
 
-    @Test("19. 429 blocks calls for Retry-After and changes nothing")
-    func case19_rateLimited() async {
+    @Test("25. Dodo 429 blocks calls for Retry-After and changes nothing")
+    func case25_rateLimited() async {
         store.record = paidRecord(lastSuccessAge: 2 * Clock.day)
         client.validation = .rateLimited(retryAfter: 60)
         let manager = makeManager()
@@ -900,12 +819,15 @@ struct LicensingTests {
         #expect(manager.isCheckDue)
     }
 
-    @Test("20. Source builds have no licensing: feature on, no calls")
-    func case20_sourceBuild() {
-        // A build without OPENAPPS_LICENSING never creates a manager.
+    @Test("26. Source builds have no licensing: no trial, feature on, no calls")
+    func case26_sourceBuild() {
+        // A build without OPENAPPS_LICENSING never creates a manager, so no
+        // trial record is read or written and nothing calls out.
         let manager: LicenseManager? = nil
         #expect(LicenseGate.isFeatureEnabled(manager))
         #expect(client.calls.isEmpty)
+        #expect(registry.devices.isEmpty)
+        #expect(trialStore.loads == 0 && trialStore.saves.isEmpty)
     }
 
     // MARK: Policy details
@@ -914,6 +836,15 @@ struct LicensingTests {
     func recordRoundTrip() throws {
         let record = paidRecord(lastSuccessAge: 10)
         let data = try JSONEncoder().encode(record)
+        #expect(try JSONDecoder().decode(LicenseRecord.self, from: data) == record)
+    }
+
+    @Test("A record saved with the old `kind` field still reads")
+    func legacyKindFieldIsIgnored() throws {
+        let record = paidRecord(lastSuccessAge: 10)
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
+        object["kind"] = "paid"
+        let data = try JSONSerialization.data(withJSONObject: object)
         #expect(try JSONDecoder().decode(LicenseRecord.self, from: data) == record)
     }
 
@@ -996,7 +927,7 @@ struct LicensingTests {
         #expect(store.record?.isRevoked == true)
         // A fresh 201 is the only way back.
         client.activation = .activated(activation(Self.paid, instance: "inst_9"))
-        #expect(await manager.activate(key: "KEY-PAID") == .activated(.paid))
+        #expect(await manager.activate(key: "KEY-PAID") == .activated)
         #expect(manager.state == .licensed)
         #expect(store.record?.instanceID == "inst_9")
         #expect(store.record?.isRevoked == false)
@@ -1052,13 +983,13 @@ struct LicensingTests {
         client.activation = .activated(activation(Self.paid, instance: "inst_2"))
         let manager = makeManager()
         #expect(manager.state == .revoked)
-        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated)
         #expect(journal.entries.isEmpty)
         #expect(manager.state == .licensed)
         journal.entries["inst_2"] = JournalEntry(seq: 2)
         #expect(await manager.removeThisMac() == .removed)
         #expect(journal.entries.isEmpty)
-        #expect(makeManager().state == .unlicensed)
+        #expect(makeManager().state == .trialEnded)
     }
 
     @Test("R2. Remove whose Keychain delete fails keeps the activation dead across a restart")
@@ -1074,7 +1005,7 @@ struct LicensingTests {
         #expect(journal.entries["inst_1"] != nil)
         client.deactivation = .deactivated
         #expect(await manager.removeThisMac() == .storageUnavailable)
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(store.record?.isRevoked == false) // the stale record is still there
         #expect(journal.entries["inst_1"] != nil) // and still tombstoned
         client.validation = .unreachable
@@ -1112,7 +1043,7 @@ struct LicensingTests {
         #expect(journal.entries["inst_1"] != nil) // nothing replaced: still dead
         #expect(manager.state == .revoked)
         store.failsWrites = false
-        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated)
         #expect(journal.entries.isEmpty)
         #expect(store.record?.instanceID == "inst_2")
     }
@@ -1419,7 +1350,7 @@ struct LicensingTests {
         client.activation = .activated(activation(Self.paid, instance: "inst_new"))
         let manager = makeManager()
         #expect(manager.state == .checkRequired)
-        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated)
         #expect(manager.state == .licensed)
         #expect(manager.isFeatureEnabled)
         #expect(!manager.journalUnreadable)
@@ -1435,7 +1366,7 @@ struct LicensingTests {
         journal.unreadable = ["inst_new"]
         client.activation = .activated(activation(Self.paid, instance: "inst_new"))
         let manager = makeManager()
-        #expect(await manager.activate(key: "KEY-PAID") == .activated(.paid))
+        #expect(await manager.activate(key: "KEY-PAID") == .activated)
         #expect(manager.state == .checkRequired)
         #expect(manager.isCheckDue)
         #expect(manager.nextCheckDelay == 0)
@@ -1512,7 +1443,7 @@ struct LicensingTests {
         #expect(journal.entries["inst_1"] == JournalEntry(seq: 2))
         store.failsWrites = false
         client.activation = .activated(activation(Self.paid, instance: "inst_2"))
-        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated)
         #expect(journal.entries.isEmpty)
         #expect(store.record?.instanceID == "inst_2")
         await manager.tick()
@@ -1534,7 +1465,7 @@ struct LicensingTests {
         let manager = makeManager()
         store.failsWrites = true
         #expect(await manager.removeThisMac() == .storageUnavailable)
-        #expect(manager.state == .unlicensed)
+        #expect(manager.state == .trialEnded)
         #expect(store.record != nil)
         store.failsWrites = false
         await manager.tick()

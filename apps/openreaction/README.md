@@ -24,9 +24,9 @@ Free & open source · Mac native · No account · No telemetry
 
 ## License
 
-OpenReaction is MIT licensed and **a build from source is unrestricted**: licensing is compiled out, every feature works, and nothing contacts the license service. The license pays for the official build — the signed, notarized download with updates: $5 one-time per app, lifetime updates, 3 Macs, with a 3-day free trial. Details in [LICENSING.md](../../LICENSING.md).
+OpenReaction is MIT licensed and **a build from source is unrestricted**: licensing is compiled out, every feature works, and nothing contacts the license service. The license pays for the official build — the signed, notarized download with updates: $5 one-time per app, lifetime updates, 3 Macs. The official build works for 3 days right after download, no signup. Details in [LICENSING.md](../../LICENSING.md).
 
-> Official builds check your license with Dodo Payments, our payment provider. The license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use OpenReaction are never sent. Builds from source never contact the license service.
+> Official builds include a 3-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use OpenReaction are never sent. Builds from source never contact the license service.
 
 ## Requirements
 
@@ -51,6 +51,8 @@ Official builds opt into licensing; the script generates the compiled-in configu
 ```sh
 OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… scripts/bundle.sh
 ```
+
+The trial registers with `https://openapps.space/api/trial` (`env` follows `OPENAPPS_DODO_ENV`). A test build can use a local `wrangler dev` instead with `OPENAPPS_TRIAL_REGISTRY_BASE_URL=http://127.0.0.1:8787`. To run the whole trial in minutes, start a debug build with `OPENREACTION_DEBUG_TRIAL_DAY_SECONDS=60` (a trial "day" becomes a minute); release builds ignore it.
 
 The signed, notarized download is built by CI from an `openreaction-v*` tag; see [RELEASING.md](RELEASING.md).
 

@@ -1,17 +1,11 @@
 import Foundation
 
-/// Which Dodo product a key belongs to, as far as this app is concerned.
-public enum LicenseKind: String, Codable, Sendable {
-    case paid
-    case trial
-}
-
-/// The one record an activated Mac keeps (see LICENSING.md, "Stored record").
+/// The license record an activated Mac keeps (see LICENSING.md, "Stored
+/// records"). The trial has a record of its own (`TrialRecord`).
 public struct LicenseRecord: Codable, Equatable, Sendable {
     public var licenseKey: String
     public var instanceID: String
     public var productID: String
-    public var kind: LicenseKind
     /// Activation `created_at` (server time).
     public var activatedAt: Date
     /// Time of the last `valid: true` (or the activation), server time when known.
@@ -28,13 +22,12 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
     public var eventSeq: UInt64
 
     public init(
-        licenseKey: String, instanceID: String, productID: String, kind: LicenseKind,
+        licenseKey: String, instanceID: String, productID: String,
         activatedAt: Date, lastSuccessAt: Date, revokedAt: Date? = nil, lastObservedAt: Date? = nil, eventSeq: UInt64 = 1
     ) {
         self.licenseKey = licenseKey
         self.instanceID = instanceID
         self.productID = productID
-        self.kind = kind
         self.activatedAt = activatedAt
         self.lastSuccessAt = lastSuccessAt
         self.revokedAt = revokedAt
@@ -43,13 +36,13 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
     }
 
     /// Records saved before the sequence existed read as 0, so any journal
-    /// entry about them is honored.
+    /// entry about them is honored. A `kind` from before the trial moved
+    /// in-app is ignored: only paid keys are ever stored.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         licenseKey = try container.decode(String.self, forKey: .licenseKey)
         instanceID = try container.decode(String.self, forKey: .instanceID)
         productID = try container.decode(String.self, forKey: .productID)
-        kind = try container.decode(LicenseKind.self, forKey: .kind)
         activatedAt = try container.decode(Date.self, forKey: .activatedAt)
         lastSuccessAt = try container.decode(Date.self, forKey: .lastSuccessAt)
         revokedAt = try container.decodeIfPresent(Date.self, forKey: .revokedAt)
@@ -58,7 +51,7 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case licenseKey, instanceID, productID, kind, activatedAt, lastSuccessAt, revokedAt, lastObservedAt, eventSeq
+        case licenseKey, instanceID, productID, activatedAt, lastSuccessAt, revokedAt, lastObservedAt, eventSeq
     }
 
     public var isRevoked: Bool { revokedAt != nil }
@@ -69,30 +62,33 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
     }
 }
 
-/// The app's product IDs for the current Dodo environment.
+/// The app's paid product IDs for the current Dodo environment. Anything
+/// else — another app's key, the wrong environment, a retired trial
+/// product — is refused.
 public struct LicenseProducts: Equatable, Sendable {
     public var paid: Set<String>
-    public var trial: Set<String>
 
-    public init(paid: Set<String>, trial: Set<String>) {
+    public init(paid: Set<String>) {
         self.paid = paid
-        self.trial = trial
     }
 
-    public func kind(of productID: String) -> LicenseKind? {
-        if paid.contains(productID) { return .paid }
-        if trial.contains(productID) { return .trial }
-        return nil
+    public func isPaid(_ productID: String) -> Bool {
+        paid.contains(productID)
     }
 }
 
 /// What the user sees and whether the core feature runs.
 public enum LicenseState: Equatable, Sendable {
-    case unlicensed
+    /// No license, and no trial can run yet: storage has not been read, the
+    /// trial record cannot be read or saved, or the license record cannot
+    /// be read.
+    case trialUnavailable
+    /// `daysLeft` rounded up; 1 means the final day ("less than a day left").
     case trial(daysLeft: Int)
-    /// `clockChanged`: the clock went back during the trial; the trial is
-    /// treated as over until a successful check re-anchors time.
-    case trialEnded(clockChanged: Bool)
+    /// An unregistered trial past its offline limit: "Connect to the
+    /// internet to continue your free trial".
+    case trialNeedsConnection
+    case trialEnded
     case licensed
     /// Offline for a while; `daysLeft` until a check is required. The
     /// warning shows after five days offline.
@@ -104,7 +100,7 @@ public enum LicenseState: Equatable, Sendable {
     public var isFeatureEnabled: Bool {
         switch self {
         case .trial, .licensed, .grace: true
-        case .unlicensed, .trialEnded, .checkRequired, .revoked: false
+        case .trialUnavailable, .trialNeedsConnection, .trialEnded, .checkRequired, .revoked: false
         }
     }
 }
@@ -114,60 +110,64 @@ public enum LicensePolicy {
     public static let checkInterval: TimeInterval = 24 * 60 * 60
     public static let graceDuration: TimeInterval = 7 * 24 * 60 * 60
     public static let graceWarningAfter: TimeInterval = 5 * 24 * 60 * 60
-    public static let trialDuration: TimeInterval = 3 * 24 * 60 * 60
     /// A local clock this far behind the last success is a rollback.
     public static let clockRollbackTolerance: TimeInterval = 60 * 60
     public static let minimumRetryDelay: TimeInterval = 60
     public static let maximumRetryDelay: TimeInterval = 60 * 60
+    /// A running trial's `last_seen_at` is saved at most this often.
+    public static let trialSaveInterval: TimeInterval = 60 * 60
 
     /// Failed checks retry with backoff this many times, then fall back to
     /// the daily schedule.
     public static let maximumRetries = 8
 
-    /// Derives the state from the stored record and the clock. A clock that
-    /// went backwards fails closed: a trial counts as ended and a paid license
-    /// needs a check, until a successful check re-anchors time.
-    public static func state(record: LicenseRecord?, now: Date) -> LicenseState {
-        guard let record else { return .unlicensed }
-        if record.isRevoked { return record.kind == .trial ? .trialEnded(clockChanged: false) : .revoked }
-        let rolledBack = record.clockRolledBack(now: now)
-        switch record.kind {
-        case .trial:
-            if rolledBack { return .trialEnded(clockChanged: true) }
-            let expiry = record.activatedAt.addingTimeInterval(trialDuration)
-            guard now < expiry else { return .trialEnded(clockChanged: false) }
-            let days = Int(ceil(expiry.timeIntervalSince(now) / 86_400))
-            return .trial(daysLeft: min(3, max(1, days)))
-        case .paid:
-            if rolledBack || now.timeIntervalSince(record.lastSuccessAt) < -clockRollbackTolerance {
-                return .checkRequired
-            }
-            let sinceSuccess = now.timeIntervalSince(record.lastSuccessAt)
-            if sinceSuccess <= checkInterval {
-                return .licensed
-            }
-            if sinceSuccess <= graceDuration {
-                let left = graceDuration - sinceSuccess
-                return .grace(daysLeft: max(1, Int(ceil(left / 86_400))), showWarning: sinceSuccess >= graceWarningAfter)
-            }
+    /// Derives the state of a paid license from its record and the clock. A
+    /// clock that went backwards fails closed: the license needs a check
+    /// until a successful check re-anchors time.
+    public static func state(record: LicenseRecord, now: Date) -> LicenseState {
+        if record.isRevoked { return .revoked }
+        if record.clockRolledBack(now: now) || now.timeIntervalSince(record.lastSuccessAt) < -clockRollbackTolerance {
             return .checkRequired
         }
+        let sinceSuccess = now.timeIntervalSince(record.lastSuccessAt)
+        if sinceSuccess <= checkInterval {
+            return .licensed
+        }
+        if sinceSuccess <= graceDuration {
+            let left = graceDuration - sinceSuccess
+            return .grace(daysLeft: max(1, Int(ceil(left / 86_400))), showWarning: sinceSuccess >= graceWarningAfter)
+        }
+        return .checkRequired
+    }
+
+    /// Derives the trial's state: ended at `duration` of elapsed time, and an
+    /// unregistered trial stops at its offline limit until the registry answers.
+    public static func trialState(_ trial: TrialRecord, timing: TrialTiming, now: Date) -> LicenseState {
+        let elapsed = trial.elapsed(now: now)
+        if elapsed >= timing.duration { return .trialEnded }
+        if !trial.registered, elapsed >= timing.offlineLimit { return .trialNeedsConnection }
+        let days = Int(ceil((timing.duration - elapsed) / timing.day))
+        return .trial(daysLeft: min(3, max(1, days)))
     }
 
     /// The next moment the state changes without any network activity
-    /// (trial expiry, grace warning, grace end, or the daily schedule).
-    public static func nextDeadline(record: LicenseRecord?, now: Date) -> Date? {
-        guard let record, !record.isRevoked, !record.clockRolledBack(now: now) else { return nil }
-        switch record.kind {
-        case .trial:
-            let expiry = record.activatedAt.addingTimeInterval(trialDuration)
-            return expiry > now ? expiry : nil
-        case .paid:
-            let candidates = [checkInterval, graceWarningAfter, graceDuration]
-                .map { record.lastSuccessAt.addingTimeInterval($0) }
-                .filter { $0 > now }
-            return candidates.min()
-        }
+    /// (grace warning, grace end, or the daily schedule).
+    public static func nextDeadline(record: LicenseRecord, now: Date) -> Date? {
+        guard !record.isRevoked, !record.clockRolledBack(now: now) else { return nil }
+        let candidates = [checkInterval, graceWarningAfter, graceDuration]
+            .map { record.lastSuccessAt.addingTimeInterval($0) }
+            .filter { $0 > now }
+        return candidates.min()
+    }
+
+    /// The next moment the trial's state changes on the local clock: a
+    /// day boundary (days left, the offline limit) or the end. Elapsed time
+    /// only moves once the clock is past `last_seen_at`.
+    public static func nextTrialDeadline(_ trial: TrialRecord, timing: TrialTiming, now: Date) -> Date? {
+        let observed = max(now, trial.lastSeenAt)
+        return (1...3).map { trial.startedAt.addingTimeInterval(Double($0) * timing.day) }
+            .filter { $0 > observed }
+            .min()
     }
 
     /// Backoff after `failures` consecutive failed checks: 1 min doubling to 1 h.
@@ -250,11 +250,8 @@ public protocol LicenseStore: Sendable {
     func loadRecord() throws(LicenseStoreError) -> LicenseRecord?
     func saveRecord(_ record: LicenseRecord) throws(LicenseStoreError)
     func clearRecord() throws(LicenseStoreError)
-    /// Set when a trial key is first activated on this Mac; kept after removal.
-    func loadTrialUsed() throws(LicenseStoreError) -> Bool
-    func markTrialUsed() throws(LicenseStoreError)
     /// Activations that still have to be deactivated (foreign keys, replaced
-    /// trials); kept until Dodo confirms.
+    /// keys); kept until Dodo confirms.
     func loadPendingCleanups() throws(LicenseStoreError) -> [PendingCleanup]
     func savePendingCleanups(_ cleanups: [PendingCleanup]) throws(LicenseStoreError)
 }
@@ -326,9 +323,8 @@ public enum LicenseMessage: Equatable, Sendable {
     case unreachable
     case rateLimited(seconds: Int)
     case wrongProduct(productName: String)
-    case trialAlreadyUsed
     case removeFailedOffline
-    case activated(LicenseKind)
+    case activated
     case removed
     /// The record could not be saved; the new activation was given back.
     case storageFailed
@@ -348,10 +344,8 @@ public enum LicenseMessage: Equatable, Sendable {
         case .unreachable: "Couldn’t reach the license service. Check your connection and try again."
         case .rateLimited(let seconds): "Too many attempts. Try again in \(seconds) seconds."
         case .wrongProduct(let productName): "This key is for \(productName), not OpenReaction."
-        case .trialAlreadyUsed: "The trial was already used on this Mac."
         case .removeFailedOffline: "Couldn’t reach the license service to remove this Mac. Try again when you’re online."
-        case .activated(.paid): "OpenReaction is licensed on this Mac."
-        case .activated(.trial): "Your 3-day trial has started."
+        case .activated: "OpenReaction is licensed on this Mac."
         case .removed: "This Mac was removed from the license."
         case .storageFailed: "OpenReaction couldn’t save the license on this Mac (the Keychain refused). The activation was released; unlock the Keychain and try again."
         case .storageUnavailable: "OpenReaction can’t read or update its license in the Keychain right now. It keeps retrying; unlock the Keychain if it stays locked."
@@ -376,12 +370,19 @@ public actor LicenseActor {
 /// deadlines never wait on I/O.
 public struct LicenseSnapshot: Equatable, Sendable {
     public var record: LicenseRecord?
+    /// The license record was read (present or positively absent). Until
+    /// then no trial runs: an unreadable record may hold a license.
+    public var licenseRead: Bool
     /// The activation's journal entry is unreadable and Dodo has not settled it.
     public var isRestricted: Bool
     public var storageError: LicenseStoreError?
     public var journalError: Bool
     public var journalUnreadable: Bool
-    public var trialUsed: Bool
+    /// The trial record as in memory; nil while it is absent or unread.
+    public var trial: TrialRecord?
+    /// The trial record could not be read or saved.
+    public var trialStorageError: LicenseStoreError?
+    public var trialTiming: TrialTiming
     /// When the app layer should call `tick` next (absolute, so a timer
     /// re-armed later from the same snapshot does not drift), if anything
     /// is scheduled.
@@ -390,25 +391,35 @@ public struct LicenseSnapshot: Equatable, Sendable {
     public var hasPendingCleanups: Bool
 
     public init(
-        record: LicenseRecord? = nil, isRestricted: Bool = false, storageError: LicenseStoreError? = nil,
-        journalError: Bool = false, journalUnreadable: Bool = false, trialUsed: Bool = true,
+        record: LicenseRecord? = nil, licenseRead: Bool = false, isRestricted: Bool = false,
+        storageError: LicenseStoreError? = nil, journalError: Bool = false, journalUnreadable: Bool = false,
+        trial: TrialRecord? = nil, trialStorageError: LicenseStoreError? = nil, trialTiming: TrialTiming = .standard,
         nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
     ) {
         self.record = record
+        self.licenseRead = licenseRead
         self.isRestricted = isRestricted
         self.storageError = storageError
         self.journalError = journalError
         self.journalUnreadable = journalUnreadable
-        self.trialUsed = trialUsed
+        self.trial = trial
+        self.trialStorageError = trialStorageError
+        self.trialTiming = trialTiming
         self.nextCheckAt = nextCheckAt
         self.nextDeadline = nextDeadline
         self.hasPendingCleanups = hasPendingCleanups
     }
 
+    /// A license always wins over the trial; without a readable license
+    /// record the trial record decides.
     public func state(now: Date) -> LicenseState {
-        let policy = LicensePolicy.state(record: record, now: now)
-        if isRestricted, policy.isFeatureEnabled { return .checkRequired }
-        return policy
+        if let record {
+            let policy = LicensePolicy.state(record: record, now: now)
+            if isRestricted, policy.isFeatureEnabled { return .checkRequired }
+            return policy
+        }
+        guard licenseRead, let trial else { return .trialUnavailable }
+        return LicensePolicy.trialState(trial, timing: trialTiming, now: now)
     }
 }
 
