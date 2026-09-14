@@ -136,6 +136,8 @@ One Keychain item per app, service `space.openapps.<app>.license`. Never store i
   - on wake from sleep and when the network comes back, if the last check is older than 24 hours.
 - **Activation counts as a successful check.**
 - **One check at a time.** Failed checks retry with backoff from 1 minute up to 1 hour, then fall back to the daily schedule.
+- **Schedule on the local clock.** Keep a local `next_attempt_at`: any answer from Dodo (valid or not) or an activation sets it to now + 24 hours; a failure sets it by the backoff. Never compare server timestamps with the local clock to decide when to check, so a Mac whose clock runs ahead or behind still checks once a day.
+- **Deadlines don't wait on I/O.** Trial expiry, the end of grace and a detected clock rollback switch the core feature off on time, from a timer that only reads the in-memory state. They never wait for a Keychain save, a network call or a cleanup to finish.
 
 ### Offline grace (paid licenses)
 - **Grace:** the core feature stays on while `now − last_success_at` is at most 7 days.
