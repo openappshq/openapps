@@ -1,18 +1,20 @@
-//! The licensed build's plumbing around `core`: the Keychain record, the Dodo HTTP client,
-//! the daily check scheduler, and the commands and events the settings window uses.
+//! The licensed build's plumbing around `core`: the license and trial Keychain records, the Dodo
+//! and trial registry HTTP clients, the scheduler, and the commands and events the settings
+//! window uses.
 //!
 //! Rules: lock first, persist after, and unlock only after the record is saved.
-//! `Service::mutate` orders every Keychain write, so a slower writer can never put an older
-//! record back. `Service::engine` is only ever held for a pure step, never across the network
-//! or the Keychain, so reads for the window and the deep link never wait on I/O. Every gate
-//! decision carries a revision issued under the engine lock, and the audio side applies only
-//! newer ones; a restrictive decision is published before any I/O, a permissive one after the
-//! save it depends on. While the record is unknown, playback stays gated.
+//! `Service::mutate` orders every license Keychain write and `Service::trial_mutate` every trial
+//! write, so a slower writer can never put an older record back. `Service::engine` is only ever
+//! held for a pure step, never across the network or the Keychain, so reads for the window and
+//! the deep link never wait on I/O. Every gate decision carries a revision issued under the
+//! engine lock, and the audio side applies only newer ones; a restrictive decision is published
+//! before any I/O, a permissive one after the save it depends on. While the records are unknown,
+//! playback stays gated.
 
-use super::core::Dodo;
 use super::core::{
-    Activation, DAY, DodoError, Engine, GRACE_WARNING_AFTER, KeyHint, LicenseError, Probe,
-    Products, Refusal, State, Stored, Validation,
+    APP_ID, Activation, DAY, Dodo, DodoError, Engine, GRACE_WARNING_AFTER, LicenseError, Probe,
+    Products, Refusal, Registry, RegistryAnswer, RegistryError, State, Stored, TrialRecord,
+    TrialSlot, Validation, device_hash,
 };
 use crate::engine::Controller;
 use serde::Serialize;
@@ -21,44 +23,50 @@ use std::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use tauri::{Emitter, Manager};
 
 /// The revocation journal's file name in the app's data directory.
 const JOURNAL_FILE: &str = "license-journal.json";
-/// A failed Keychain read is retried with backoff from a minute up to an hour.
+/// A failed Keychain read, or a trial that could not be saved, is retried with backoff from a
+/// minute up to an hour.
 const LOAD_RETRY_MIN: i64 = 60;
 const LOAD_RETRY_MAX: i64 = 3600;
 
 pub const KEYCHAIN_SERVICE: &str = "space.openapps.openklack.license";
 const KEYCHAIN_ACCOUNT: &str = "license";
+pub const TRIAL_KEYCHAIN_SERVICE: &str = "space.openapps.openklack.trial";
+const TRIAL_KEYCHAIN_ACCOUNT: &str = "trial";
 const HOST: &str = env!("OPENKLACK_DODO_HOST");
 const ENVIRONMENT: &str = env!("OPENKLACK_LICENSE_ENV");
 const PAID_PRODUCT_ID: &str = env!("OPENKLACK_DODO_PAID_PRODUCT_ID");
-const TRIAL_PRODUCT_ID: &str = env!("OPENKLACK_DODO_TRIAL_PRODUCT_ID");
 const BUY_URL: &str = env!("OPENKLACK_BUY_URL");
-const TRIAL_URL: &str = env!("OPENKLACK_TRIAL_URL");
 const SUPPORT_URL: &str = env!("OPENKLACK_SUPPORT_URL");
+/// The trial registry's origin; requests go to `/api/trial` under it.
+const REGISTRY_URL: &str = env!("OPENKLACK_TRIAL_REGISTRY_URL");
 /// The scheduler re-evaluates at least this often so clock changes and long sleeps are noticed.
 const MAX_SLEEP: Duration = Duration::from_secs(3600);
+/// While a deadline is pending, the enforcer looks again at least this often.
+const DEADLINE_RECHECK: Duration = Duration::from_secs(60);
 /// While checks fail, the network is probed this often so a check runs as soon as it is back.
 const REACHABILITY_POLL: Duration = Duration::from_secs(300);
 /// Owed deactivations are retried this often.
 const CLEANUP_RETRY: Duration = Duration::from_secs(300);
+/// A rising `last_seen_at` is saved at most this often; the trial's end and quitting save it too.
+const TRIAL_SAVE_INTERVAL: i64 = 3600;
+/// Quitting waits at most this long for a trial write in progress.
+const QUIT_SAVE_WAIT: Duration = Duration::from_secs(2);
 
 /// Comma-separated IDs let a future bundle product join the paid list without code changes.
 pub fn products() -> Products {
-    let list = |ids: &str| {
-        ids.split(',')
+    Products {
+        paid: PAID_PRODUCT_ID
+            .split(',')
             .map(str::trim)
             .filter(|id| !id.is_empty())
             .map(str::to_owned)
-            .collect()
-    };
-    Products {
-        paid: list(PAID_PRODUCT_ID),
-        trial: list(TRIAL_PRODUCT_ID),
+            .collect(),
     }
 }
 
@@ -80,27 +88,71 @@ fn retry_after_seconds(value: &str, server_time: Option<i64>) -> Option<i64> {
     Some((at - server_time.unwrap_or_else(system_now)).clamp(1, DAY))
 }
 
-/// Where the record lives. The real one is the single Keychain item; tests use memory.
+/// Debug builds only: `OPENKLACK_DEBUG_TRIAL_MINUTES` shortens the trial for manual end-to-end
+/// runs. Release builds always use the full length.
+#[cfg(debug_assertions)]
+fn debug_trial_terms() -> Option<super::core::TrialTerms> {
+    let minutes = std::env::var("OPENKLACK_DEBUG_TRIAL_MINUTES")
+        .ok()?
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|minutes| *minutes > 0)?;
+    Some(super::core::TrialTerms::shortened(
+        minutes.saturating_mul(60),
+    ))
+}
+
+/// A random version 4 UUID: the stand-in device id when the hardware UUID can't be read.
+fn random_uuid() -> Result<String, String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|e| e.to_string())?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
+/// Where the records live. The real ones are two Keychain items; tests use memory.
 pub trait Vault: Send + Sync {
     fn load(&self) -> Result<Stored, String>;
     fn save(&self, stored: &Stored) -> Result<(), String>;
+    /// `Ok(None)` only when the Keychain positively reports that the item does not exist.
+    fn load_trial(&self) -> Result<Option<TrialRecord>, String>;
+    fn save_trial(&self, trial: &TrialRecord) -> Result<(), String>;
 }
 
-/// The single Keychain item that holds the record. Never plain preferences.
+/// The license and trial Keychain items. Never plain preferences.
 pub struct Keychain;
+
+/// An item's bytes, or `None` when the Keychain reports it does not exist.
+#[cfg(target_os = "macos")]
+fn read_keychain_item(service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
+    match security_framework::passwords::get_generic_password(service, account) {
+        Ok(bytes) => Ok(Some(bytes)),
+        // errSecItemNotFound: nothing saved yet.
+        Err(error) if error.code() == -25300 => Ok(None),
+        Err(error) => Err(format!("The Keychain could not be read: {error}")),
+    }
+}
 
 #[cfg(target_os = "macos")]
 impl Vault for Keychain {
     fn load(&self) -> Result<Stored, String> {
-        match security_framework::passwords::get_generic_password(
-            KEYCHAIN_SERVICE,
-            KEYCHAIN_ACCOUNT,
-        ) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
+        match read_keychain_item(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)? {
+            Some(bytes) => serde_json::from_slice(&bytes)
                 .map_err(|e| format!("The saved license could not be read: {e}")),
-            // errSecItemNotFound: nothing saved yet.
-            Err(error) if error.code() == -25300 => Ok(Stored::default()),
-            Err(error) => Err(format!("The Keychain could not be read: {error}")),
+            None => Ok(Stored::default()),
         }
     }
 
@@ -113,6 +165,25 @@ impl Vault for Keychain {
         )
         .map_err(|error| format!("The license could not be saved to the Keychain: {error}"))
     }
+
+    fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
+        match read_keychain_item(TRIAL_KEYCHAIN_SERVICE, TRIAL_KEYCHAIN_ACCOUNT)? {
+            Some(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|e| format!("The saved free trial could not be read: {e}")),
+            None => Ok(None),
+        }
+    }
+
+    fn save_trial(&self, trial: &TrialRecord) -> Result<(), String> {
+        let bytes = serde_json::to_vec(trial).map_err(|e| e.to_string())?;
+        security_framework::passwords::set_generic_password(
+            TRIAL_KEYCHAIN_SERVICE,
+            TRIAL_KEYCHAIN_ACCOUNT,
+            &bytes,
+        )
+        .map_err(|error| format!("The free trial could not be saved to the Keychain: {error}"))
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -122,6 +193,14 @@ impl Vault for Keychain {
     }
 
     fn save(&self, _: &Stored) -> Result<(), String> {
+        Err("Licensing is supported on macOS.".into())
+    }
+
+    fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
+        Ok(None)
+    }
+
+    fn save_trial(&self, _: &TrialRecord) -> Result<(), String> {
         Err("Licensing is supported on macOS.".into())
     }
 }
@@ -240,6 +319,64 @@ impl Journal for FileJournal {
     }
 }
 
+fn install_crypto_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}
+
+fn response_header(response: &reqwest::Response, name: &str) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+fn http_date(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|date| date.timestamp())
+}
+
+/// A whole HTTP answer: status, the `Date` header, `Retry-After` in seconds, and the body.
+struct HttpAnswer {
+    status: u16,
+    server_time: Option<i64>,
+    retry_after: Option<i64>,
+    body: Vec<u8>,
+}
+
+/// POSTs JSON and reads the whole answer; `Err` means no answer arrived. The request is built
+/// and awaited inside the async runtime: the client's timeout needs its reactor, and the
+/// licensing threads have none of their own.
+fn post_json(
+    client: &reqwest::Client,
+    url: String,
+    body: serde_json::Value,
+) -> Result<HttpAnswer, String> {
+    tauri::async_runtime::block_on(async move {
+        let response = client.post(url).json(&body).send().await.map_err(|error| {
+            if error.is_timeout() {
+                "timed out".to_string()
+            } else {
+                "no connection".to_string()
+            }
+        })?;
+        let status = response.status().as_u16();
+        let server_time = response_header(&response, "date").and_then(|date| http_date(&date));
+        let retry_after = response_header(&response, "retry-after")
+            .and_then(|value| retry_after_seconds(&value, server_time));
+        let body = response.bytes().await.map_err(|error| error.to_string())?;
+        Ok(HttpAnswer {
+            status,
+            server_time,
+            retry_after,
+            body: body.to_vec(),
+        })
+    })
+}
+
 /// Dodo's public endpoints over HTTPS. Requests carry only the key and the activation ID.
 pub struct HttpDodo {
     client: reqwest::Client,
@@ -247,9 +384,7 @@ pub struct HttpDodo {
 
 impl HttpDodo {
     fn new() -> Result<Self, String> {
-        if rustls::crypto::CryptoProvider::get_default().is_none() {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-        }
+        install_crypto_provider();
         let client = reqwest::Client::builder()
             .https_only(true)
             .connect_timeout(Duration::from_secs(10))
@@ -264,37 +399,10 @@ impl HttpDodo {
         path: &str,
         body: serde_json::Value,
     ) -> Result<(u16, Option<i64>, Option<i64>, serde_json::Value), DodoError> {
-        let request = self
-            .client
-            .post(format!("{HOST}/licenses/{path}"))
-            .json(&body)
-            .send();
-        let response = tauri::async_runtime::block_on(request).map_err(|error| {
-            DodoError::Offline(if error.is_timeout() {
-                "timed out".into()
-            } else {
-                "no connection".into()
-            })
-        })?;
-        let status = response.status().as_u16();
-        let header = |name: &str| {
-            response
-                .headers()
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned)
-        };
-        let server_time = header("date").and_then(|date| {
-            chrono::DateTime::parse_from_rfc2822(&date)
-                .ok()
-                .map(|date| date.timestamp())
-        });
-        let retry_after =
-            header("retry-after").and_then(|value| retry_after_seconds(&value, server_time));
-        let body = tauri::async_runtime::block_on(response.bytes())
-            .map_err(|error| DodoError::Offline(error.to_string()))?;
-        let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
-        Ok((status, server_time, retry_after, json))
+        let answer = post_json(&self.client, format!("{HOST}/licenses/{path}"), body)
+            .map_err(DodoError::Offline)?;
+        let json = serde_json::from_slice(&answer.body).unwrap_or(serde_json::Value::Null);
+        Ok((answer.status, answer.server_time, answer.retry_after, json))
     }
 
     fn error(status: u16, retry_after: Option<i64>) -> DodoError {
@@ -371,19 +479,122 @@ impl Dodo for HttpDodo {
     }
 }
 
-/// The app around the service: the settings window, the audio engine, and the network.
+/// The trial registry, over HTTPS (plain HTTP only for a local development registry, which the
+/// build configuration allows only in test builds). Requests carry only the app id, the device
+/// hash and the environment.
+pub struct HttpRegistry {
+    client: reqwest::Client,
+}
+
+impl HttpRegistry {
+    fn new() -> Result<Self, String> {
+        install_crypto_provider();
+        let client = reqwest::Client::builder()
+            .https_only(REGISTRY_URL.starts_with("https://"))
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| e.to_string())?;
+        Ok(Self { client })
+    }
+}
+
+/// `200 {"started_at": "<ISO 8601>", "now": "<ISO 8601>"}`.
+fn parse_registry_answer(body: &[u8]) -> Option<RegistryAnswer> {
+    let json: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let time = |name: &str| {
+        json[name]
+            .as_str()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|date| date.timestamp())
+    };
+    Some(RegistryAnswer {
+        started_at: time("started_at")?,
+        now: time("now")?,
+    })
+}
+
+impl Registry for HttpRegistry {
+    fn register(&self, device: &str) -> Result<RegistryAnswer, RegistryError> {
+        let HttpAnswer {
+            status,
+            retry_after,
+            body,
+            ..
+        } = post_json(
+            &self.client,
+            format!("{REGISTRY_URL}/api/trial"),
+            serde_json::json!({ "app": APP_ID, "device": device, "env": ENVIRONMENT }),
+        )
+        .map_err(RegistryError::Offline)?;
+        match status {
+            200 => parse_registry_answer(&body)
+                .ok_or_else(|| RegistryError::Unexpected("an answer without its times".into())),
+            429 => Err(RegistryError::RateLimited {
+                retry_after: retry_after.unwrap_or(60),
+            }),
+            other => Err(RegistryError::Unexpected(format!(
+                "unexpected response {other}"
+            ))),
+        }
+    }
+}
+
+/// The app around the service: the settings window, the audio engine, the network and the Mac.
 pub trait Host: Send + Sync {
     fn publish(&self, view: &View);
-    /// Gate keyboard sound playback. Decisions carry a revision issued under the engine lock;
-    /// the host must apply a decision only if its revision is newer than the last one applied,
-    /// atomically with applying it. Everything else in the app keeps working.
-    fn set_blocked(&self, revision: u64, blocked: bool);
-    /// A cheap connectivity probe, used only after network-level failures.
+    /// Gate keyboard sound playback, with the reason the menu bar shows while it is blocked.
+    /// Decisions carry a revision issued under the engine lock; the host must apply a decision
+    /// only if its revision is newer than the last one applied, atomically with applying it.
+    /// Everything else in the app keeps working.
+    fn set_blocked(&self, revision: u64, blocked: bool, reason: &'static str);
+    /// A cheap connectivity probe of Dodo, used only after network-level failures.
     fn reachable(&self) -> bool;
+    /// The same probe for the trial registry.
+    fn registry_reachable(&self) -> bool;
+    /// The Mac's hardware UUID, which never leaves the Mac; `None` if it can't be read.
+    fn hardware_uuid(&self) -> Option<String>;
 }
 
 pub struct TauriHost {
     app: tauri::AppHandle,
+}
+
+/// A TCP handshake with a service's host: no request is made, and a failure costs seconds.
+fn tcp_reachable(origin: &str) -> bool {
+    let Ok(url) = url::Url::parse(origin) else {
+        return false;
+    };
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+        return false;
+    };
+    std::net::ToSocketAddrs::to_socket_addrs(&(host, port))
+        .ok()
+        .and_then(|mut addresses| addresses.next())
+        .is_some_and(|address| {
+            std::net::TcpStream::connect_timeout(&address, Duration::from_secs(3)).is_ok()
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn platform_uuid() -> Option<String> {
+    unsafe extern "C" {
+        fn ok_platform_uuid(buffer: *mut std::ffi::c_char, length: i32) -> i32;
+    }
+    let mut buffer = [0 as std::ffi::c_char; 128];
+    if unsafe { ok_platform_uuid(buffer.as_mut_ptr(), buffer.len() as i32) } == 0 {
+        return None;
+    }
+    let uuid = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }
+        .to_str()
+        .ok()?
+        .trim();
+    (!uuid.is_empty()).then(|| uuid.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_uuid() -> Option<String> {
+    None
 }
 
 impl Host for TauriHost {
@@ -391,21 +602,22 @@ impl Host for TauriHost {
         let _ = self.app.emit("license", view);
     }
 
-    fn set_blocked(&self, revision: u64, blocked: bool) {
+    fn set_blocked(&self, revision: u64, blocked: bool, reason: &'static str) {
         if let Some(controller) = self.app.try_state::<Arc<Controller>>() {
-            controller.set_license_blocked(revision, blocked);
+            controller.set_license_blocked(revision, blocked, reason);
         }
     }
 
     fn reachable(&self) -> bool {
-        // A TCP handshake with the license host: no request is made, and a failure costs seconds.
-        let host = HOST.trim_start_matches("https://");
-        std::net::ToSocketAddrs::to_socket_addrs(&(host, 443))
-            .ok()
-            .and_then(|mut addresses| addresses.next())
-            .is_some_and(|address| {
-                std::net::TcpStream::connect_timeout(&address, Duration::from_secs(3)).is_ok()
-            })
+        tcp_reachable(HOST)
+    }
+
+    fn registry_reachable(&self) -> bool {
+        tcp_reachable(REGISTRY_URL)
+    }
+
+    fn hardware_uuid(&self) -> Option<String> {
+        platform_uuid()
     }
 }
 
@@ -414,26 +626,24 @@ impl Host for TauriHost {
 #[serde(rename_all = "camelCase")]
 pub struct View {
     pub revision: u64,
-    /// False until the Keychain has been read; the window shows a loading state.
+    /// False until the license record has been read; the window shows a loading state.
     pub ready: bool,
     pub environment: &'static str,
     #[serde(flatten)]
     pub state: State,
     pub core_feature: bool,
-    /// The clock was set back: a trial counts as ended and a paid license needs a check.
+    /// The clock was set back: a paid license needs a check.
     pub clock_changed: bool,
     /// License data on disk could not be read; a check with Dodo rebuilds it.
     pub journal_unreadable: bool,
-    pub trial_used: bool,
+    /// The trial record could not be read, or a new trial could not be saved: no trial runs.
+    pub trial_storage_error: bool,
     pub grace_warning: bool,
     pub checking: bool,
     pub last_success_at: Option<i64>,
     pub last_error: Option<String>,
     pub pending_key: Option<String>,
-    /// The deep link said the pending key is a trial key, so a second trial is refused locally.
-    pub pending_trial: bool,
     pub buy_url: &'static str,
-    pub trial_url: &'static str,
     pub support_url: &'static str,
 }
 
@@ -444,7 +654,6 @@ struct Meta {
     checking: bool,
     last_error: Option<String>,
     pending_key: Option<String>,
-    pending_trial: bool,
     last_reachability_poll: Option<i64>,
     /// A recovery check may run once after the network was seen down.
     recovery_armed: bool,
@@ -462,6 +671,44 @@ struct Meta {
     /// The journal could not be read: the saved record is held, playback stays off, and the
     /// next authoritative answer rebuilds the journal.
     journal_unreadable: bool,
+    /// The trial record could not be read, or a provisional one could not be saved: not "no
+    /// trial yet". Retried with backoff.
+    trial_failures: u32,
+    next_trial_attempt_at: Option<i64>,
+    /// A trial write failed; the record is written again every tick until it succeeds.
+    trial_dirty: bool,
+    /// Ask the registry on the next tick whatever the backoff: after wake or Try again.
+    register_now: bool,
+    last_registry_poll: Option<i64>,
+    /// A registration may run once after the registry was seen unreachable.
+    registry_recovery_armed: bool,
+}
+
+impl Meta {
+    /// Storage errors stay visible until storage works again.
+    fn storage_trouble(&self) -> bool {
+        self.storage_dirty || self.journal_unreadable || self.trial_failures > 0 || self.trial_dirty
+    }
+
+    /// The trial record could not be read or a new trial not saved: retry with backoff.
+    fn trial_failed(&mut self, now: i64, error: String) {
+        self.trial_failures += 1;
+        let backoff = LOAD_RETRY_MIN
+            .saturating_mul(1 << self.trial_failures.saturating_sub(1).min(20))
+            .min(LOAD_RETRY_MAX);
+        self.next_trial_attempt_at = Some(now + backoff);
+        if !self.journal_unreadable {
+            self.last_error = Some(error);
+        }
+    }
+
+    fn trial_recovered(&mut self) {
+        let failed = std::mem::take(&mut self.trial_failures) > 0;
+        self.next_trial_attempt_at = None;
+        if failed && !self.storage_trouble() {
+            self.last_error = None;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -480,20 +727,30 @@ impl JournalOp {
 
 pub type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
 
-pub struct Service<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> {
+pub struct Service<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Journal>
+{
     /// Held for pure steps only: never across the network or the Keychain.
     engine: Mutex<Engine>,
     meta: Mutex<Meta>,
-    /// Orders every Keychain write, and the activation and removal sequences around theirs.
+    /// Orders every license Keychain write, and the activation and removal sequences around
+    /// theirs.
     mutate: Mutex<()>,
+    /// Orders every trial Keychain write. Never held across the network; when both are needed,
+    /// taken after `mutate`.
+    trial_mutate: Mutex<()>,
     /// One validation in flight at a time, from the scheduler or the window.
     check: Mutex<()>,
+    /// One registry request in flight at a time.
+    registering: Mutex<()>,
     /// Issued under the engine lock with each gate decision; the host applies only newer ones.
     gate_revision: AtomicU64,
-    /// The record as last saved or loaded. Playback unlocks only if it grants access too, so
-    /// an unsaved extension never unlocks by itself while a durable grant keeps working.
+    /// The license record as last saved or loaded. Playback unlocks only if the saved records
+    /// grant access too, so an unsaved extension never unlocks by itself while a durable grant
+    /// keeps working.
     durable: Mutex<Option<Stored>>,
-    /// Bumped by every change to the record in memory or on disk; a load result older than the
+    /// The trial record as last saved or read.
+    durable_trial: Mutex<TrialSlot>,
+    /// Bumped by every change to the records in memory or on disk; a load result older than the
     /// latest change is discarded.
     generation: AtomicU64,
     /// One Keychain read at a time, automatic or manual.
@@ -502,16 +759,17 @@ pub struct Service<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> {
     /// The deadline enforcer's own wake-up, so a stalled write never delays a restriction.
     deadline_wake: (Mutex<bool>, Condvar),
     dodo: D,
+    registry: R,
     vault: V,
     host: H,
     journal: J,
     clock: Clock,
 }
 
-pub type Live = Service<HttpDodo, Keychain, TauriHost, FileJournal>;
+pub type Live = Service<HttpDodo, HttpRegistry, Keychain, TauriHost, FileJournal>;
 
 impl Live {
-    /// Registers the service, gates playback until the record is known, and starts the thread
+    /// Registers the service, gates playback until the records are known, and starts the thread
     /// that reads the Keychain. Launch is never delayed.
     pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         let journal = FileJournal::new(
@@ -522,11 +780,16 @@ impl Live {
         );
         let service = Arc::new(Service::new(
             HttpDodo::new()?,
+            HttpRegistry::new()?,
             Keychain,
             TauriHost { app: app.clone() },
             journal,
             Box::new(system_now),
         ));
+        #[cfg(debug_assertions)]
+        if let Some(terms) = debug_trial_terms() {
+            service.engine.lock().unwrap().terms = terms;
+        }
         app.manage(service.clone());
         service.apply();
         let scheduler = service.clone();
@@ -542,20 +805,28 @@ impl Live {
     }
 }
 
-impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
-    pub fn new(dodo: D, vault: V, host: H, journal: J, clock: Clock) -> Self {
+impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Journal>
+    Service<D, R, V, H, J>
+{
+    pub fn new(dodo: D, registry: R, vault: V, host: H, journal: J, clock: Clock) -> Self {
+        let mut engine = Engine::new(Stored::default(), products());
+        engine.trial = TrialSlot::Unread;
         Self {
-            engine: Mutex::new(Engine::new(Stored::default(), products())),
+            engine: Mutex::new(engine),
             meta: Mutex::new(Meta::default()),
             mutate: Mutex::new(()),
+            trial_mutate: Mutex::new(()),
             check: Mutex::new(()),
+            registering: Mutex::new(()),
             gate_revision: AtomicU64::new(0),
             durable: Mutex::new(None),
+            durable_trial: Mutex::new(TrialSlot::Unread),
             generation: AtomicU64::new(0),
             load: Mutex::new(()),
             wake: (Mutex::new(false), Condvar::new()),
             deadline_wake: (Mutex::new(false), Condvar::new()),
             dodo,
+            registry,
             vault,
             host,
             journal,
@@ -565,17 +836,30 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
 
     /// The deadline enforcer: only ever reads the engine, and publishes restrictions the moment
     /// a trial ends, grace runs out or the clock is found to have changed. It never touches the
-    /// ordering lock, the Keychain, the network or cleanup, so a stalled write cannot delay it.
+    /// ordering locks, the Keychain, the network or cleanup, so a stalled write cannot delay it.
     pub fn run_deadlines(&self) {
         loop {
             self.enforce();
             let now = self.now();
-            let wait = self
-                .engine
-                .lock()
-                .unwrap()
-                .next_transition_at(now)
-                .map(|at| Duration::from_secs((at - now).max(0) as u64))
+            let next = {
+                let engine = self.engine.lock().unwrap();
+                // The saved trial record gates too: an unsaved registration still stops at the
+                // saved record's offline limit.
+                let durable = match (&engine.stored.license, &*self.durable_trial.lock().unwrap()) {
+                    (None, TrialSlot::Present(trial)) => {
+                        Engine::trial_transition_at(trial, &engine.terms, now)
+                    }
+                    _ => None,
+                };
+                [engine.next_transition_at(now), durable]
+                    .into_iter()
+                    .flatten()
+                    .min()
+            };
+            // A pending deadline is rechecked every minute, so a clock set forward during the
+            // wait is noticed on time.
+            let wait = next
+                .map(|at| Duration::from_secs((at - now).max(0) as u64).min(DEADLINE_RECHECK))
                 .unwrap_or(MAX_SLEEP)
                 .clamp(Duration::from_secs(1), MAX_SLEEP);
             let (flag, condvar) = &self.deadline_wake;
@@ -667,7 +951,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         }
         if done {
             self.publish(|meta| {
-                if !meta.storage_dirty {
+                if !meta.storage_trouble() {
                     meta.last_error = None;
                 }
             });
@@ -684,7 +968,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         (self.clock)()
     }
 
-    /// Reads the record, runs the launch check, then keeps the daily schedule.
+    /// Reads the records, runs the launch check and registration, then keeps the schedule.
     fn run(&self) {
         self.load();
         loop {
@@ -694,8 +978,9 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
     }
 
     /// Reads the Keychain and the journal. Unreadable storage is a storage error, never "no
-    /// license": the Mac stays gated, the error is shown, and the read is retried with backoff.
-    /// Loads are single-flight, and a result is discarded if the record changed meanwhile.
+    /// license" or "no trial yet": the Mac stays gated, the error is shown, and the read is
+    /// retried with backoff. Loads are single-flight, and a result is discarded if the records
+    /// changed meanwhile. With no license and no trial record, the trial starts here.
     pub fn load(&self) {
         let Ok(_loading) = self.load.try_lock() else {
             return;
@@ -731,6 +1016,9 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
                 return;
             }
         };
+        // An unreadable trial record does not hold up a license: it only keeps a trial from
+        // running, and is read again with backoff.
+        let trial = self.vault.load_trial();
         let stale_entry = stale
             .then(|| {
                 stored
@@ -741,12 +1029,19 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             .flatten();
         {
             let ordered = self.mutate.lock().unwrap();
+            let trial_ordered = self.trial_mutate.lock().unwrap();
             if self.generation.load(Ordering::SeqCst) != started {
-                // Something changed the record while this read was in flight: it is old news.
+                // Something changed the records while this read was in flight: it is old news.
                 return;
             }
+            let slot = match &trial {
+                Ok(Some(record)) => TrialSlot::Present(record.clone()),
+                Ok(None) => TrialSlot::Absent,
+                Err(_) => TrialSlot::Unread,
+            };
             let mut engine = self.engine.lock().unwrap();
             engine.stored = stored.clone();
+            engine.trial = slot.clone();
             if let Some(seq) = journal_seq
                 && let Some(record) = engine.stored.license.as_mut()
             {
@@ -756,6 +1051,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             }
             drop(engine);
             *self.durable.lock().unwrap() = Some(stored);
+            *self.durable_trial.lock().unwrap() = slot;
             self.generation.fetch_add(1, Ordering::SeqCst);
             let mut meta = self.meta.lock().unwrap();
             meta.ready = true;
@@ -764,20 +1060,264 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             meta.journal_unreadable = journal_error.is_some();
             meta.last_error = journal_error;
             meta.storage_dirty = journal_seq.is_some();
+            match trial {
+                Ok(_) => meta.trial_recovered(),
+                Err(error) => meta.trial_failed(now, error),
+            }
             drop(meta);
+            drop(trial_ordered);
             drop(ordered);
         }
         if let Some((hash, seq)) = stale_entry {
             self.journal_clear(hash, seq);
         }
+        self.ensure_trial(true);
         self.publish(|_| {});
         self.apply();
-        // The contract's launch check: in the background, whatever the last success time.
+        // Reading is done: a manual retry must not wait for the requests below.
+        drop(_loading);
+        // The contract's launch check and registration: in the background, whatever the last
+        // success time or backoff.
         let _ = self.check_once(true);
+        self.register_once(true);
+    }
+
+    /// Starts the trial when there is no license and the trial record is positively absent. The
+    /// provisional record is saved first and only then takes effect; a failed save is a storage
+    /// error retried with backoff, and no unsaved trial ever runs.
+    fn ensure_trial(&self, forced: bool) {
+        let ordered = self.mutate.lock().unwrap();
+        self.ensure_trial_ordered(&ordered, forced);
+    }
+
+    /// `ensure_trial` for a caller that already holds the license ordering lock, which keeps an
+    /// activation from landing between the "no license" check and the trial's save.
+    fn ensure_trial_ordered(&self, _license_ordered: &MutexGuard<'_, ()>, forced: bool) {
+        let ordered = self.trial_mutate.lock().unwrap();
+        let now = self.now();
+        {
+            let meta = self.meta.lock().unwrap();
+            if !meta.ready || (!forced && meta.next_trial_attempt_at.is_some_and(|at| at > now)) {
+                return;
+            }
+        }
+        let provisional = self.engine.lock().unwrap().provisional_trial(now);
+        let Some(mut trial) = provisional else {
+            return;
+        };
+        if self.host.hardware_uuid().is_none() {
+            // Saved with the record, so every later request hashes the same stand-in.
+            trial.device_id = random_uuid().ok();
+        }
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        match self.vault.save_trial(&trial) {
+            Ok(()) => {
+                // Only holders of the trial ordering lock change the trial slot, so it is still
+                // absent.
+                self.engine.lock().unwrap().commit_trial(trial.clone());
+                *self.durable_trial.lock().unwrap() = TrialSlot::Present(trial);
+                self.generation.fetch_add(1, Ordering::SeqCst);
+                self.publish(Meta::trial_recovered);
+            }
+            Err(error) => {
+                self.publish(|meta| {
+                    meta.trial_failed(
+                        now,
+                        format!("Your free trial could not be started. {error}"),
+                    )
+                });
+            }
+        }
+        drop(ordered);
+    }
+
+    /// Reads the trial record again after a failed read.
+    fn reload_trial(&self) {
+        let Ok(_loading) = self.load.try_lock() else {
+            return;
+        };
+        let now = self.now();
+        let trial = self.vault.load_trial();
+        let _ordered = self.trial_mutate.lock().unwrap();
+        // Nothing writes the trial record while it is unread, so this read is current unless
+        // another read already landed.
+        if self.engine.lock().unwrap().trial != TrialSlot::Unread {
+            return;
+        }
+        match trial {
+            Ok(record) => {
+                let slot = record.map_or(TrialSlot::Absent, TrialSlot::Present);
+                self.engine.lock().unwrap().trial = slot.clone();
+                *self.durable_trial.lock().unwrap() = slot;
+                self.generation.fetch_add(1, Ordering::SeqCst);
+                self.publish(Meta::trial_recovered);
+            }
+            Err(error) => {
+                self.publish(|meta| meta.trial_failed(now, error));
+            }
+        }
+    }
+
+    /// Settings → License → Try again: re-reads an unreadable trial record, or starts a trial
+    /// that could not be saved, without waiting for the backoff.
+    fn retry_trial(&self) {
+        if self.engine.lock().unwrap().trial == TrialSlot::Unread {
+            self.reload_trial();
+        }
+        self.ensure_trial(true);
+    }
+
+    /// Writes the trial record. Requires the trial ordering lock, so writes land in the order the
+    /// changes were made and a slower writer can never restore an older record. A failure is
+    /// retried every tick and never blocks the core feature or the trial deadline.
+    fn persist_trial(&self, _ordered: &MutexGuard<'_, ()>) -> bool {
+        let slot = self.engine.lock().unwrap().trial.clone();
+        let TrialSlot::Present(trial) = slot else {
+            return true;
+        };
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        match self.vault.save_trial(&trial) {
+            Ok(()) => {
+                *self.durable_trial.lock().unwrap() = TrialSlot::Present(trial);
+                let was_dirty = std::mem::take(&mut self.meta.lock().unwrap().trial_dirty);
+                if was_dirty {
+                    self.publish(|meta| {
+                        if !meta.storage_trouble() {
+                            meta.last_error = None;
+                        }
+                    });
+                }
+                true
+            }
+            Err(error) => {
+                self.publish(|meta| {
+                    meta.trial_dirty = true;
+                    meta.last_error = Some(format!("Your free trial could not be saved. {error}"));
+                });
+                false
+            }
+        }
+    }
+
+    /// Whether the trial record in memory should be written now: a failed write, a change other
+    /// than `last_seen_at`, the trial's end, or `last_seen_at` an hour past the saved one.
+    fn trial_save_due(&self) -> bool {
+        if self.meta.lock().unwrap().trial_dirty {
+            return true;
+        }
+        let engine = self.engine.lock().unwrap();
+        let TrialSlot::Present(trial) = &engine.trial else {
+            return false;
+        };
+        let durable = self.durable_trial.lock().unwrap();
+        let TrialSlot::Present(saved) = &*durable else {
+            return true;
+        };
+        let ended = |record: &TrialRecord| {
+            Engine::trial_state(record, &engine.terms, record.last_seen_at) == State::TrialEnded
+        };
+        trial.started_at != saved.started_at
+            || trial.registered != saved.registered
+            || trial.device_id != saved.device_id
+            || trial.last_seen_at - saved.last_seen_at >= TRIAL_SAVE_INTERVAL
+            || (ended(trial) && !ended(saved))
+    }
+
+    /// On quit: raises `last_seen_at` once more and saves the trial record if it changed. Waits
+    /// only briefly for a trial write in progress, so quitting is never held up.
+    pub fn flush(&self) {
+        let now = self.now();
+        self.engine.lock().unwrap().observe(now);
+        let deadline = Instant::now() + QUIT_SAVE_WAIT;
+        let ordered = loop {
+            if let Ok(ordered) = self.trial_mutate.try_lock() {
+                break ordered;
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let changed = {
+            let engine = self.engine.lock().unwrap();
+            matches!(&engine.trial, TrialSlot::Present(_))
+                && engine.trial != *self.durable_trial.lock().unwrap()
+        };
+        if changed {
+            self.persist_trial(&ordered);
+        }
+    }
+
+    /// The device hash sent to the registry: from the hardware UUID, or from a random stand-in
+    /// that is saved in the trial record before it is ever sent.
+    fn device(&self) -> Option<String> {
+        if let Some(uuid) = self.host.hardware_uuid() {
+            return Some(device_hash(APP_ID, &uuid));
+        }
+        let ordered = self.trial_mutate.lock().unwrap();
+        let saved = |slot: &TrialSlot| match slot {
+            TrialSlot::Present(trial) => trial.device_id.clone(),
+            _ => None,
+        };
+        let durable = saved(&self.durable_trial.lock().unwrap());
+        if let Some(id) = durable {
+            return Some(device_hash(APP_ID, &id));
+        }
+        let id = random_uuid().ok()?;
+        {
+            let mut engine = self.engine.lock().unwrap();
+            let TrialSlot::Present(trial) = &mut engine.trial else {
+                return None;
+            };
+            trial.device_id.get_or_insert(id);
+        }
+        if !self.persist_trial(&ordered) {
+            return None;
+        }
+        let durable = saved(&self.durable_trial.lock().unwrap());
+        durable.map(|id| device_hash(APP_ID, &id))
+    }
+
+    /// Asks the trial registry once, if an unregistered trial wants it. The request holds no
+    /// lock. The answer's earlier start restricts at once; `registered` unlocks only once saved.
+    pub fn register_once(&self, forced: bool) {
+        let Ok(_running) = self.registering.try_lock() else {
+            return;
+        };
+        let now = self.now();
+        if !self.engine.lock().unwrap().begin_registration(now, forced) {
+            return;
+        }
+        let Some(device) = self.device() else {
+            // No device id could be saved: back off and try again.
+            let failed = Err(RegistryError::Unexpected("no device id".into()));
+            let _ = self.engine.lock().unwrap().finish_registration(failed, now);
+            return;
+        };
+        let answer = self.registry.register(&device);
+        let (changed, network_down) = {
+            let mut engine = self.engine.lock().unwrap();
+            let changed = engine.finish_registration(answer, self.now());
+            (
+                matches!(changed, Ok(true)),
+                engine.registration.network_down,
+            )
+        };
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.gate(false);
+        if network_down {
+            self.meta.lock().unwrap().registry_recovery_armed = true;
+        }
+        if changed {
+            let ordered = self.trial_mutate.lock().unwrap();
+            self.persist_trial(&ordered);
+        }
+        self.apply();
     }
 
     /// One pass of the scheduler. Deadlines are enforced first and without waiting on any
-    /// write; then due or recovered checks, stale slots, and the permissive re-evaluation.
+    /// write; then retries of unreadable storage, observations, due or recovered checks and
+    /// registrations, stale slots, and the permissive re-evaluation.
     pub fn tick(&self) {
         self.gate(false);
         let now = self.now();
@@ -791,11 +1331,28 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         if !self.meta.lock().unwrap().ready {
             return;
         }
-        // The high-water mark keeps a rolled-back clock from being trusted.
-        if self.engine.lock().unwrap().observe(now) {
+        let retry_trial = self
+            .meta
+            .lock()
+            .unwrap()
+            .next_trial_attempt_at
+            .is_none_or(|at| at <= now);
+        if retry_trial {
+            if self.engine.lock().unwrap().trial == TrialSlot::Unread {
+                self.reload_trial();
+            }
+            self.ensure_trial(false);
+        }
+        // The high-water marks: a rolled-back clock is not trusted and gives no trial time back.
+        let observed = self.engine.lock().unwrap().observe(now);
+        if observed.license {
             self.generation.fetch_add(1, Ordering::SeqCst);
             let ordered = self.mutate.lock().unwrap();
             self.persist(&ordered);
+        }
+        if self.trial_save_due() {
+            let ordered = self.trial_mutate.lock().unwrap();
+            self.persist_trial(&ordered);
         }
         let (due, network_down) = {
             let engine = self.engine.lock().unwrap();
@@ -803,8 +1360,23 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         };
         if due {
             let _ = self.check_once(false);
-        } else if network_down && self.network_recovered(now) {
+        } else if network_down && self.network_recovered(now, false) {
             let _ = self.check_once(true);
+        }
+        let register_now = std::mem::take(&mut self.meta.lock().unwrap().register_now);
+        let (registration_due, registry_down) = {
+            let engine = self.engine.lock().unwrap();
+            (
+                engine
+                    .next_registration_at(now)
+                    .is_some_and(|due| due <= now),
+                engine.registration.network_down,
+            )
+        };
+        if registration_due || register_now {
+            self.register_once(register_now);
+        } else if registry_down && self.network_recovered(now, true) {
+            self.register_once(true);
         }
         self.release_cleanups(now);
         if self.meta.lock().unwrap().storage_dirty {
@@ -816,29 +1388,42 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
     }
 
     /// After a network-level failure, a cheap probe every few minutes notices the network
-    /// coming back and allows one check ahead of the backoff. It re-arms only after the probe
+    /// coming back and allows one attempt ahead of the backoff. It re-arms only after the probe
     /// has seen the network down, so a reachable host that keeps failing stays on the backoff.
-    fn network_recovered(&self, now: i64) -> bool {
+    /// `registry` selects the trial registry's probe instead of Dodo's.
+    fn network_recovered(&self, now: i64, registry: bool) -> bool {
         let due = {
             let mut meta = self.meta.lock().unwrap();
-            let due = meta
-                .last_reachability_poll
-                .is_none_or(|last| now - last >= REACHABILITY_POLL.as_secs() as i64);
+            let last = if registry {
+                &mut meta.last_registry_poll
+            } else {
+                &mut meta.last_reachability_poll
+            };
+            let due = last.is_none_or(|last| now - last >= REACHABILITY_POLL.as_secs() as i64);
             if due {
-                meta.last_reachability_poll = Some(now);
+                *last = Some(now);
             }
             due
         };
         if !due {
             return false;
         }
-        let reachable = self.host.reachable();
+        let reachable = if registry {
+            self.host.registry_reachable()
+        } else {
+            self.host.reachable()
+        };
         let mut meta = self.meta.lock().unwrap();
+        let armed = if registry {
+            &mut meta.registry_recovery_armed
+        } else {
+            &mut meta.recovery_armed
+        };
         if !reachable {
-            meta.recovery_armed = true;
+            *armed = true;
             return false;
         }
-        std::mem::take(&mut meta.recovery_armed)
+        std::mem::take(armed)
     }
 
     fn sleep(&self) {
@@ -854,15 +1439,18 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
     /// How long the scheduler may sleep before something is due.
     fn next_wait(&self) -> Duration {
         let now = self.now();
-        let (next_check, next_transition, probing) = {
+        let (next_check, next_transition, next_registration, probing) = {
             let engine = self.engine.lock().unwrap();
             (
                 engine.next_check_at(now),
                 engine.next_transition_at(now),
-                engine.schedule.network_down || !engine.stored.pending_cleanups.is_empty(),
+                engine.next_registration_at(now),
+                engine.schedule.network_down
+                    || engine.registration.network_down
+                    || !engine.stored.pending_cleanups.is_empty(),
             )
         };
-        let mut wait = [next_check, next_transition]
+        let mut wait = [next_check, next_transition, next_registration]
             .into_iter()
             .flatten()
             .map(|due| Duration::from_secs((due - now).max(0) as u64))
@@ -870,10 +1458,13 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             .unwrap_or(MAX_SLEEP);
         {
             let meta = self.meta.lock().unwrap();
-            if probing || meta.storage_dirty || !meta.journal_retry.is_empty() {
+            if probing || meta.storage_dirty || meta.trial_dirty || !meta.journal_retry.is_empty() {
                 wait = wait.min(REACHABILITY_POLL.min(CLEANUP_RETRY));
             }
             if let Some(at) = meta.next_load_at.filter(|_| !meta.ready) {
+                wait = wait.min(Duration::from_secs((at - now).max(0) as u64));
+            }
+            if let Some(at) = meta.next_trial_attempt_at {
                 wait = wait.min(Duration::from_secs((at - now).max(0) as u64));
             }
         }
@@ -885,6 +1476,14 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         let (flag, condvar) = &self.wake;
         *flag.lock().unwrap() = true;
         condvar.notify_all();
+    }
+
+    /// The Mac woke from sleep: deadlines are re-evaluated, `last_seen_at` rises on the next
+    /// tick, and an unregistered trial asks the registry again whatever the backoff.
+    pub fn woke(&self) {
+        self.meta.lock().unwrap().register_now = true;
+        self.poke_deadlines();
+        self.poke();
     }
 
     /// Runs one validation. The network call holds no lock; the answer is applied to the
@@ -932,8 +1531,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         }
         self.publish(|meta| {
             meta.checking = false;
-            // Storage errors stay visible until storage works again.
-            let storage_trouble = meta.storage_dirty || meta.journal_unreadable;
+            let storage_trouble = meta.storage_trouble();
             match &result {
                 Err(error) if !storage_trouble => meta.last_error = Some(error.message()),
                 Ok(_) if !storage_trouble => meta.last_error = None,
@@ -986,8 +1584,8 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             .apply_release(probe, answer, self.now());
     }
 
-    /// Writes the current record. Requires the ordering lock, so writes land in the order the
-    /// changes were made and a slower writer can never restore an older record.
+    /// Writes the current license record. Requires the ordering lock, so writes land in the
+    /// order the changes were made and a slower writer can never restore an older record.
     fn persist(&self, _ordered: &MutexGuard<'_, ()>) {
         let stored = self.engine.lock().unwrap().stored.clone();
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -1018,7 +1616,11 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
                 }
                 let was_dirty = std::mem::take(&mut self.meta.lock().unwrap().storage_dirty);
                 if was_dirty {
-                    self.publish(|meta| meta.last_error = None);
+                    self.publish(|meta| {
+                        if !meta.storage_trouble() {
+                            meta.last_error = None;
+                        }
+                    });
                 }
             }
             Err(error) => {
@@ -1035,7 +1637,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
     }
 
     /// Decides the gate under the engine lock and stamps it with the next revision.
-    fn decide(&self) -> (u64, bool) {
+    fn decide(&self) -> (u64, bool, &'static str) {
         let engine = self.engine.lock().unwrap();
         let now = self.now();
         let (ready, journal_unreadable) = {
@@ -1044,23 +1646,30 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         };
         // Both what is in memory and what is saved must grant access: a restriction in memory
         // counts at once, an extension only once it is durable.
-        let durable = self
-            .durable
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|stored| Engine::stored_core_feature(stored, now));
-        let blocked = !ready || journal_unreadable || !durable || !engine.core_feature(now);
+        let durable = {
+            let stored = self.durable.lock().unwrap();
+            let trial = self.durable_trial.lock().unwrap();
+            stored.as_ref().is_some_and(|stored| {
+                Engine::stored_core_feature(stored, &trial, &engine.terms, now)
+            })
+        };
+        let state = engine.state(now);
+        let blocked = !ready || journal_unreadable || !durable || !state.core_feature();
+        let reason = match state {
+            State::TrialEnded => "Free trial ended",
+            State::TrialOffline => "Connect to continue your free trial",
+            _ => "License needed",
+        };
         let revision = self.gate_revision.fetch_add(1, Ordering::SeqCst) + 1;
-        (revision, blocked)
+        (revision, blocked, reason)
     }
 
     /// Publishes the gate: a restriction always, a permission only when the caller says the
     /// record it depends on is saved.
     fn gate(&self, allow_unlock: bool) {
-        let (revision, blocked) = self.decide();
+        let (revision, blocked, reason) = self.decide();
         if blocked || allow_unlock {
-            self.host.set_blocked(revision, blocked);
+            self.host.set_blocked(revision, blocked, reason);
         }
     }
 
@@ -1083,7 +1692,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             core_feature: state.core_feature(),
             clock_changed: engine.clock_changed(now),
             journal_unreadable: meta.journal_unreadable,
-            trial_used: engine.stored.trial_used,
+            trial_storage_error: meta.trial_failures > 0,
             grace_warning: matches!(state, State::Grace { .. })
                 && engine
                     .offline_for(now)
@@ -1092,9 +1701,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
             last_success_at: engine.stored.license.as_ref().map(|r| r.last_success_at),
             last_error: meta.last_error.clone(),
             pending_key: meta.pending_key.clone(),
-            pending_trial: meta.pending_trial,
             buy_url: BUY_URL,
-            trial_url: TRIAL_URL,
             support_url: SUPPORT_URL,
         }
     }
@@ -1112,17 +1719,18 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
 
     /// Activates a key. The record is saved before it takes effect; if it cannot be saved, the
     /// new slot is given back and the previous activation stays.
-    pub fn activate(&self, key: &str, hint: KeyHint) -> Result<View, String> {
+    pub fn activate(&self, key: &str) -> Result<View, String> {
         let outcome = {
             let ordered = self.mutate.lock().unwrap();
-            self.activate_ordered(&ordered, key, hint)
+            self.activate_ordered(&ordered, key)
         };
         let outcome = outcome.map_err(|error| error.message());
         self.publish(|meta| {
-            meta.last_error = None;
+            if !meta.storage_trouble() {
+                meta.last_error = None;
+            }
             if outcome.is_ok() {
                 meta.pending_key = None;
-                meta.pending_trial = false;
             }
         });
         self.apply();
@@ -1134,13 +1742,9 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         &self,
         ordered: &MutexGuard<'_, ()>,
         key: &str,
-        hint: KeyHint,
     ) -> Result<State, LicenseError> {
         let now = self.now();
-        self.engine
-            .lock()
-            .unwrap()
-            .activation_allowed(key, hint, now)?;
+        self.engine.lock().unwrap().activation_allowed(key, now)?;
         let activation = match self.dodo.activate(key.trim(), super::core::ACTIVATION_NAME) {
             Ok(activation) => activation,
             Err(DodoError::RateLimited { retry_after }) => {
@@ -1192,7 +1796,8 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
         Ok(state)
     }
 
-    /// Settings → License → Remove this Mac. Playback stops before the cleared record is saved.
+    /// Settings → License → Remove this Mac. Playback stops before the cleared record is saved;
+    /// the Mac then returns to its trial, whose record is never touched.
     pub fn remove(&self) -> Result<View, String> {
         let outcome = {
             let ordered = self.mutate.lock().unwrap();
@@ -1226,70 +1831,63 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host, J: Journal> Service<D, V, H, J> {
                     self.meta.lock().unwrap().clear_after_save.push((hash, seq));
                 }
                 self.persist(&ordered);
+                // A Mac whose trial record was wiped starts one, and the registry decides how
+                // much of it is left.
+                self.ensure_trial_ordered(&ordered, true);
                 result
             })
         };
         let outcome = outcome.map_err(|error| error.message());
-        self.publish(|meta| meta.last_error = None);
+        self.publish(|meta| {
+            if !meta.storage_trouble() {
+                meta.last_error = None;
+            }
+            meta.register_now = true;
+        });
         self.apply();
         self.poke();
         outcome.map(|_| self.view())
     }
 
-    /// `openklack://activate?key=…[&kind=trial]` only pre-fills the key; the user confirms
-    /// before activating. Unknown parameters are ignored.
+    /// `openklack://activate?key=…` only pre-fills the key; the user confirms before
+    /// activating. Other parameters are ignored.
     pub fn opened(&self, urls: &[url::Url]) {
-        let link = urls.iter().find_map(parse_activation_link);
-        if let Some((key, trial)) = link {
-            self.publish(|meta| {
-                meta.pending_key = Some(key);
-                meta.pending_trial = trial;
-            });
+        if let Some(key) = urls.iter().find_map(parse_activation_link) {
+            self.publish(|meta| meta.pending_key = Some(key));
         }
-    }
-
-    pub fn trial_used(&self) -> bool {
-        self.engine.lock().unwrap().stored.trial_used
     }
 
     pub fn dismiss_key(&self) -> View {
-        self.publish(|meta| {
-            meta.pending_key = None;
-            meta.pending_trial = false;
-        })
+        self.publish(|meta| meta.pending_key = None)
     }
 }
 
-/// The key and whether the link marks it as a trial key, for `openklack://activate` links.
-fn parse_activation_link(url: &url::Url) -> Option<(String, bool)> {
+/// The key from an `openklack://activate` link.
+fn parse_activation_link(url: &url::Url) -> Option<String> {
     if url.scheme() != "openklack" || url.host_str() != Some("activate") {
         return None;
     }
-    let mut key = None;
-    let mut trial = false;
-    for (name, value) in url.query_pairs() {
-        match &*name {
-            "key" => {
-                let value = value.trim();
-                if !value.is_empty()
-                    && value.len() <= 200
-                    && value.bytes().all(|b| b.is_ascii_graphic())
-                {
-                    key = Some(value.to_string());
-                }
-            }
-            "kind" => trial = value.eq_ignore_ascii_case("trial"),
-            _ => {}
-        }
-    }
-    key.map(|key| (key, trial))
+    url.query_pairs().find_map(|(name, value)| {
+        let value = value.trim();
+        (name == "key"
+            && !value.is_empty()
+            && value.len() <= 200
+            && value.bytes().all(|b| b.is_ascii_graphic()))
+        .then(|| value.to_string())
+    })
 }
 
-/// Called from the audio engine when the Mac wakes: checks again if the last one is a day old.
+/// Called from the audio engine when the Mac wakes.
 pub fn wake(app: &tauri::AppHandle) {
     if let Some(service) = app.try_state::<Arc<Live>>() {
-        service.poke_deadlines();
-        service.poke();
+        service.woke();
+    }
+}
+
+/// Called as the app exits: saves the trial's `last_seen_at`.
+pub fn quit(app: &tauri::AppHandle) {
+    if let Some(service) = app.try_state::<Arc<Live>>() {
+        service.flush();
     }
 }
 
@@ -1309,21 +1907,11 @@ pub fn license_status(state: tauri::State<'_, Arc<Live>>) -> View {
 pub async fn activate_license(
     state: tauri::State<'_, Arc<Live>>,
     key: String,
-    expect_trial: bool,
 ) -> Result<View, String> {
     let service = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        service.activate(
-            &key,
-            if expect_trial {
-                KeyHint::Trial
-            } else {
-                KeyHint::Any
-            },
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || service.activate(&key))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1346,13 +1934,16 @@ pub async fn check_license_now(state: tauri::State<'_, Arc<Live>>) -> Result<Vie
     .map_err(|e| e.to_string())?
 }
 
-/// Try again after the saved license could not be read.
+/// Try again after storage could not be read or saved, or while the trial waits for the
+/// registry.
 #[tauri::command]
 pub async fn reload_license(state: tauri::State<'_, Arc<Live>>) -> Result<View, String> {
     let service = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         if service.view().ready {
+            service.retry_trial();
             let _ = service.check_once(true);
+            service.register_once(true);
             service.poke();
         } else {
             service.load();
@@ -1368,12 +1959,11 @@ pub fn dismiss_license_key(state: tauri::State<'_, Arc<Live>>) -> View {
     state.dismiss_key()
 }
 
-/// Opens one of the configured checkout or support links in the default browser.
+/// Opens the configured checkout or support link in the default browser.
 #[tauri::command]
 pub fn open_license_link(link: String) -> Result<(), String> {
     let url = match link.as_str() {
         "buy" => BUY_URL,
-        "trial" => TRIAL_URL,
         "support" => SUPPORT_URL,
         _ => return Err("Unknown link.".into()),
     };
@@ -1392,21 +1982,11 @@ pub fn open_license_link(link: String) -> Result<(), String> {
     }
 }
 
-/// Whether a trial can still start on this Mac: refused locally without calling Dodo otherwise.
-#[tauri::command]
-pub fn start_license_trial(state: tauri::State<'_, Arc<Live>>) -> Result<View, String> {
-    if state.trial_used() {
-        return Err(LicenseError::TrialUsed.message());
-    }
-    open_license_link("trial".into())?;
-    Ok(state.view())
-}
-
 #[cfg(test)]
 mod tests {
-    //! The service with a scripted Dodo, an in-memory vault and a fake app, driven by threads so
-    //! the lock ordering and gate ordering themselves are under test.
-    use super::super::core::{Kind, Record};
+    //! The service with a scripted Dodo and trial registry, an in-memory vault and a fake app,
+    //! driven by threads so the lock ordering and gate ordering themselves are under test.
+    use super::super::core::{Record, TRIAL_LENGTH};
     use super::*;
     use std::{
         sync::{
@@ -1419,6 +1999,7 @@ mod tests {
     const NOW: i64 = 1_800_000_000;
     const HOUR: i64 = 3600;
     const TIMEOUT: Duration = Duration::from_secs(5);
+    const HARDWARE_UUID: &str = "00000000-1111-2222-3333-444444444444";
 
     struct FakeDodo {
         product_id: String,
@@ -1519,6 +2100,41 @@ mod tests {
         }
     }
 
+    /// A scripted trial registry: queued answers, then `sticky`; with neither it is unreachable.
+    #[derive(Default)]
+    struct FakeRegistry {
+        answers: Mutex<Vec<Result<RegistryAnswer, RegistryError>>>,
+        sticky: Mutex<Option<RegistryAnswer>>,
+        devices: Mutex<Vec<String>>,
+        pause: Pause,
+    }
+
+    impl FakeRegistry {
+        /// From now on the registry answers with this start, on its own clock.
+        fn started(&self, started_at: i64, now: i64) {
+            *self.sticky.lock().unwrap() = Some(RegistryAnswer { started_at, now });
+        }
+        fn answer(&self, answer: Result<RegistryAnswer, RegistryError>) {
+            self.answers.lock().unwrap().push(answer);
+        }
+        fn calls(&self) -> usize {
+            self.devices.lock().unwrap().len()
+        }
+    }
+
+    impl Registry for FakeRegistry {
+        fn register(&self, device: &str) -> Result<RegistryAnswer, RegistryError> {
+            self.pause.enter();
+            self.devices.lock().unwrap().push(device.into());
+            let mut queue = self.answers.lock().unwrap();
+            if !queue.is_empty() {
+                return queue.remove(0);
+            }
+            (*self.sticky.lock().unwrap())
+                .ok_or_else(|| RegistryError::Offline("unreachable".into()))
+        }
+    }
+
     /// An in-memory Keychain whose reads and writes can be paused so slow I/O can be raced.
     #[derive(Default)]
     struct FakeVault {
@@ -1528,6 +2144,12 @@ mod tests {
         load_error: Mutex<Option<String>>,
         read_pause: Pause,
         write_pause: Pause,
+        /// The trial item; `None` is positively absent.
+        trial: Mutex<Option<TrialRecord>>,
+        trial_writes: Mutex<Vec<TrialRecord>>,
+        trial_save_error: Mutex<Option<String>>,
+        trial_load_error: Mutex<Option<String>>,
+        trial_write_pause: Pause,
     }
 
     impl FakeVault {
@@ -1535,7 +2157,14 @@ mod tests {
         fn reopen(&self) -> FakeVault {
             let vault = FakeVault::default();
             *vault.stored.lock().unwrap() = self.stored.lock().unwrap().clone();
+            *vault.trial.lock().unwrap() = self.trial.lock().unwrap().clone();
             vault
+        }
+        fn saved_trial(&self) -> Option<TrialRecord> {
+            self.trial.lock().unwrap().clone()
+        }
+        fn trial_writes(&self) -> Vec<TrialRecord> {
+            self.trial_writes.lock().unwrap().clone()
         }
     }
 
@@ -1556,13 +2185,31 @@ mod tests {
             self.writes.lock().unwrap().push(stored.clone());
             Ok(())
         }
+        fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
+            if let Some(error) = self.trial_load_error.lock().unwrap().clone() {
+                return Err(error);
+            }
+            Ok(self.trial.lock().unwrap().clone())
+        }
+        fn save_trial(&self, trial: &TrialRecord) -> Result<(), String> {
+            self.trial_write_pause.enter();
+            if let Some(error) = self.trial_save_error.lock().unwrap().clone() {
+                return Err(error);
+            }
+            *self.trial.lock().unwrap() = Some(trial.clone());
+            self.trial_writes.lock().unwrap().push(trial.clone());
+            Ok(())
+        }
     }
 
     /// The audio side: applies only newer gate revisions, atomically, like the controller.
     #[derive(Default)]
     struct FakeHost {
         gate: Mutex<(u64, bool)>,
+        reason: Mutex<&'static str>,
         reachable: AtomicBool,
+        registry_reachable: AtomicBool,
+        no_hardware_uuid: AtomicBool,
         unlock_pause: Pause,
     }
 
@@ -1570,21 +2217,31 @@ mod tests {
         fn blocked(&self) -> bool {
             self.gate.lock().unwrap().1
         }
+        fn reason(&self) -> &'static str {
+            *self.reason.lock().unwrap()
+        }
     }
 
     impl Host for FakeHost {
         fn publish(&self, _: &View) {}
-        fn set_blocked(&self, revision: u64, blocked: bool) {
+        fn set_blocked(&self, revision: u64, blocked: bool, reason: &'static str) {
             if !blocked {
                 self.unlock_pause.enter();
             }
             let mut gate = self.gate.lock().unwrap();
             if revision > gate.0 {
                 *gate = (revision, blocked);
+                *self.reason.lock().unwrap() = reason;
             }
         }
         fn reachable(&self) -> bool {
             self.reachable.load(Ordering::SeqCst)
+        }
+        fn registry_reachable(&self) -> bool {
+            self.registry_reachable.load(Ordering::SeqCst)
+        }
+        fn hardware_uuid(&self) -> Option<String> {
+            (!self.no_hardware_uuid.load(Ordering::SeqCst)).then(|| HARDWARE_UUID.into())
         }
     }
 
@@ -1621,14 +2278,13 @@ mod tests {
         }
     }
 
-    type TestService = Service<FakeDodo, FakeVault, FakeHost, Arc<FakeJournal>>;
+    type TestService = Service<FakeDodo, FakeRegistry, FakeVault, FakeHost, Arc<FakeJournal>>;
 
     fn paid_record(key: &str, last_success_ago: i64) -> Record {
         Record {
             license_key: key.into(),
             instance_id: format!("lki_{key}"),
             product_id: PAID_PRODUCT_ID.split(',').next().unwrap().into(),
-            kind: Kind::Paid,
             activated_at: NOW - 30 * DAY,
             last_success_at: NOW - last_success_ago,
             last_success_local: NOW - last_success_ago,
@@ -1638,24 +2294,27 @@ mod tests {
         }
     }
 
-    fn trial_record(activated_ago: i64) -> Record {
-        Record {
-            license_key: "KEY-TRIAL".into(),
-            instance_id: "lki_KEY-TRIAL".into(),
-            product_id: TRIAL_PRODUCT_ID.split(',').next().unwrap().into(),
-            kind: Kind::Trial,
-            activated_at: NOW - activated_ago,
-            last_success_at: NOW - activated_ago,
-            last_success_local: NOW - activated_ago,
-            last_observed_at: NOW - activated_ago,
-            revoked: false,
-            event_seq: 1,
+    /// A trial record `elapsed` seconds in, last seen at `NOW`.
+    fn trial_record(elapsed: i64, registered: bool) -> TrialRecord {
+        TrialRecord {
+            started_at: NOW - elapsed,
+            last_seen_at: NOW,
+            registered,
+            device_id: None,
         }
     }
 
+    /// A service over a vault holding `stored` and no trial record.
     fn service(stored: Stored, clock: Arc<AtomicI64>) -> Arc<TestService> {
         let vault = FakeVault::default();
         *vault.stored.lock().unwrap() = stored;
+        service_with(vault, Arc::new(FakeJournal::default()), clock)
+    }
+
+    /// A service over a vault holding no license and this trial record.
+    fn trial_service(trial: TrialRecord, clock: Arc<AtomicI64>) -> Arc<TestService> {
+        let vault = FakeVault::default();
+        *vault.trial.lock().unwrap() = Some(trial);
         service_with(vault, Arc::new(FakeJournal::default()), clock)
     }
 
@@ -1667,22 +2326,15 @@ mod tests {
     ) -> Arc<TestService> {
         let service = Arc::new(Service::new(
             FakeDodo::paid(),
+            FakeRegistry::default(),
             vault,
             FakeHost::default(),
             journal,
             Box::new(move || clock.load(Ordering::SeqCst)),
         ));
-        // As `Live::start` does: gated until the record is read.
+        // As `Live::start` does: gated until the records are read.
         service.apply();
         service
-    }
-
-    fn with_trial() -> Stored {
-        Stored {
-            license: Some(trial_record(DAY)),
-            trial_used: true,
-            ..Stored::default()
-        }
     }
 
     fn with_paid(last_success_ago: i64) -> Stored {
@@ -1703,18 +2355,528 @@ mod tests {
             .expect("the service deadlocked")
     }
 
+    fn wait_until_blocked(service: &TestService) {
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        while !service.host.blocked() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the enforcer never blocked playback"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn case_12_a_fresh_mac_saves_a_provisional_trial_plays_and_then_registers() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(Stored::default(), clock.clone());
+        assert!(service.host.blocked());
+        service.registry.started(NOW, NOW);
+        service.registry.pause.arm();
+        let loading = {
+            let service = service.clone();
+            thread::spawn(move || service.load())
+        };
+        service.registry.pause.wait_entered();
+        // Before the registry answers: the provisional record is saved and sounds are on.
+        assert_eq!(
+            service.vault.trial_writes(),
+            vec![TrialRecord::provisional(NOW)]
+        );
+        assert_eq!(service.view().state, State::Trial { days_left: 3 });
+        assert!(!service.host.blocked());
+        service.registry.pause.open();
+        loading.join().unwrap();
+        let saved = service.vault.saved_trial().unwrap();
+        assert!(saved.registered);
+        assert_eq!(saved.started_at, NOW);
+        assert_eq!(service.view().state, State::Trial { days_left: 3 });
+        assert!(!service.host.blocked());
+        assert_eq!(
+            *service.registry.devices.lock().unwrap(),
+            vec![device_hash(APP_ID, HARDWARE_UUID)]
+        );
+        assert!(service.dodo.calls().is_empty(), "no license, no Dodo calls");
+        assert!(
+            service.vault.writes.lock().unwrap().is_empty(),
+            "no license record is written"
+        );
+        // A registered trial never contacts the registry again, not even after a wake.
+        clock.store(NOW + 2 * HOUR, Ordering::SeqCst);
+        service.woke();
+        service.tick();
+        service.tick();
+        assert_eq!(service.registry.calls(), 1);
+    }
+
+    #[test]
+    fn case_13_a_registered_trial_past_three_days_launches_ended_without_network_calls() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = trial_service(trial_record(TRIAL_LENGTH + 60, true), clock.clone());
+        service.load();
+        assert_eq!(service.view().state, State::TrialEnded);
+        assert!(!service.view().core_feature);
+        assert!(service.host.blocked());
+        assert_eq!(service.host.reason(), "Free trial ended");
+        // Online or offline makes no difference: nothing is asked.
+        service.host.reachable.store(true, Ordering::SeqCst);
+        service
+            .host
+            .registry_reachable
+            .store(true, Ordering::SeqCst);
+        clock.store(NOW + HOUR, Ordering::SeqCst);
+        service.woke();
+        service.tick();
+        assert!(service.dodo.calls().is_empty());
+        assert_eq!(service.registry.calls(), 0);
+        assert_eq!(service.view().state, State::TrialEnded);
+    }
+
+    #[test]
+    fn case_14_a_clock_set_back_after_a_relaunch_keeps_the_trial_time_used() {
+        let clock = Arc::new(AtomicI64::new(NOW - 5 * DAY));
+        let service = trial_service(trial_record(2 * DAY, true), clock.clone());
+        service.load();
+        assert_eq!(service.view().state, State::Trial { days_left: 1 });
+        assert!(!service.host.blocked());
+        clock.store(NOW - 5 * DAY + HOUR, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.view().state, State::Trial { days_left: 1 });
+        assert_eq!(
+            service.vault.saved_trial().unwrap().last_seen_at,
+            NOW,
+            "last_seen_at is never lowered"
+        );
+        let restarted = service_with(
+            service.vault.reopen(),
+            Arc::new(FakeJournal::default()),
+            clock,
+        );
+        restarted.load();
+        assert_eq!(restarted.view().state, State::Trial { days_left: 1 });
+        assert_eq!(restarted.registry.calls(), 0);
+    }
+
+    #[test]
+    fn case_15_the_trial_ends_on_time_while_a_save_is_stuck() {
+        // Two days, 23 hours and 59 minutes in. A `last_seen_at` write starts before the end and
+        // hangs; the deadline enforcer runs on its own thread and blocks playback on time.
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let mut trial = trial_record(TRIAL_LENGTH - 60, true);
+        trial.last_seen_at = NOW - 2 * HOUR;
+        let service = trial_service(trial, clock.clone());
+        service.load();
+        assert_eq!(service.view().state, State::Trial { days_left: 0 });
+        assert!(!service.host.blocked());
+        let _enforcer = {
+            let service = service.clone();
+            thread::spawn(move || service.run_deadlines())
+        };
+        clock.store(NOW + 1, Ordering::SeqCst);
+        service.vault.trial_write_pause.arm();
+        let worker = {
+            let service = service.clone();
+            thread::spawn(move || service.tick())
+        };
+        service.vault.trial_write_pause.wait_entered();
+        clock.store(NOW + 120, Ordering::SeqCst);
+        assert!(!service.view().core_feature);
+        service.poke_deadlines();
+        wait_until_blocked(&service);
+        assert!(
+            !worker.is_finished(),
+            "the scheduler is still stuck in the write"
+        );
+        assert_eq!(service.registry.calls(), 0, "no network call either");
+        assert!(service.dodo.calls().is_empty());
+        service.vault.trial_write_pause.open();
+        worker.join().unwrap();
+        assert!(service.host.blocked());
+        assert_eq!(service.view().state, State::TrialEnded);
+    }
+
+    #[test]
+    fn case_16_a_trial_that_cannot_be_saved_does_not_run_and_is_retried() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(Stored::default(), clock.clone());
+        *service.vault.trial_save_error.lock().unwrap() = Some("keychain locked".into());
+        service.registry.started(NOW, NOW);
+        service.load();
+        let view = service.view();
+        assert!(view.ready);
+        assert_eq!(view.state, State::Unlicensed);
+        assert!(view.trial_storage_error);
+        assert!(!view.core_feature);
+        assert!(view.last_error.unwrap().contains("keychain locked"));
+        assert!(service.host.blocked());
+        assert_eq!(service.vault.saved_trial(), None);
+        assert_eq!(service.registry.calls(), 0, "no trial is running");
+        // Retried with backoff, not every tick.
+        assert_eq!(service.next_wait(), Duration::from_secs(60));
+        clock.store(NOW + 10, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.view().state, State::Unlicensed);
+        assert!(service.host.blocked());
+        *service.vault.trial_save_error.lock().unwrap() = None;
+        clock.store(NOW + 60, Ordering::SeqCst);
+        service.tick();
+        let view = service.view();
+        assert_eq!(view.state, State::Trial { days_left: 3 });
+        assert!(!view.trial_storage_error);
+        assert_eq!(view.last_error, None);
+        assert!(!service.host.blocked());
+        assert_eq!(
+            service.vault.trial_writes()[0],
+            TrialRecord::provisional(NOW + 60)
+        );
+        assert_eq!(service.registry.calls(), 1);
+    }
+
+    #[test]
+    fn case_17_an_unreadable_trial_record_is_a_storage_error_and_never_replaced() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let original = trial_record(DAY, true);
+        let service = trial_service(original.clone(), clock.clone());
+        *service.vault.trial_load_error.lock().unwrap() = Some("keychain denied".into());
+        service.load();
+        let view = service.view();
+        assert!(view.ready);
+        assert_eq!(view.state, State::Unlicensed);
+        assert!(view.trial_storage_error);
+        assert!(view.last_error.unwrap().contains("keychain denied"));
+        assert!(service.host.blocked());
+        assert_eq!(service.registry.calls(), 0);
+        clock.store(NOW + 10, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.view().state, State::Unlicensed);
+        assert!(
+            service.vault.trial_writes().is_empty(),
+            "no new trial is created"
+        );
+        assert_eq!(service.vault.saved_trial(), Some(original.clone()));
+        // Readable again after the backoff: the existing trial continues.
+        *service.vault.trial_load_error.lock().unwrap() = None;
+        clock.store(NOW + 60, Ordering::SeqCst);
+        service.tick();
+        let view = service.view();
+        assert_eq!(view.state, State::Trial { days_left: 2 });
+        assert!(!view.trial_storage_error);
+        assert_eq!(view.last_error, None);
+        assert!(!service.host.blocked());
+        assert!(service.vault.trial_writes().is_empty());
+        assert_eq!(service.registry.calls(), 0);
+        // A license does not depend on the trial record.
+        let licensed = self::service(with_paid(HOUR), clock);
+        *licensed.vault.trial_load_error.lock().unwrap() = Some("keychain denied".into());
+        licensed.load();
+        assert_eq!(licensed.view().state, State::Licensed);
+        assert!(licensed.view().trial_storage_error);
+        assert!(!licensed.host.blocked());
+        assert!(licensed.vault.trial_writes().is_empty());
+    }
+
+    #[test]
+    fn case_18_a_wiped_keychain_gets_the_registry_start_back_and_the_trial_ends() {
+        let service = service(Stored::default(), Arc::new(AtomicI64::new(NOW)));
+        service.registry.started(NOW - 4 * DAY, NOW);
+        service.load();
+        assert_eq!(service.view().state, State::TrialEnded);
+        assert!(service.host.blocked());
+        assert_eq!(service.host.reason(), "Free trial ended");
+        let writes = service.vault.trial_writes();
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0], TrialRecord::provisional(NOW));
+        assert!(writes[1].registered);
+        assert_eq!(writes[1].started_at, NOW - 4 * DAY);
+    }
+
+    #[test]
+    fn case_19_a_wiped_keychain_one_day_in_resumes_with_two_days_left() {
+        let service = service(Stored::default(), Arc::new(AtomicI64::new(NOW)));
+        service.registry.started(NOW - DAY, NOW);
+        service.load();
+        assert_eq!(service.view().state, State::Trial { days_left: 2 });
+        assert!(!service.host.blocked());
+        let saved = service.vault.saved_trial().unwrap();
+        assert!(saved.registered);
+        assert_eq!(saved.started_at, NOW - DAY);
+    }
+
+    #[test]
+    fn case_20_an_unreachable_registry_stops_the_trial_at_24_hours_until_it_answers() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(Stored::default(), clock.clone());
+        service.load();
+        assert_eq!(service.view().state, State::Trial { days_left: 3 });
+        assert!(!service.host.blocked());
+        assert_eq!(service.registry.calls(), 1);
+        clock.store(NOW + 23 * HOUR, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.view().state, State::Trial { days_left: 3 });
+        assert!(!service.host.blocked());
+        assert_eq!(service.registry.calls(), 2);
+        // The deadline enforcer switches it off at 24 hours, without waiting for the scheduler.
+        clock.store(NOW + DAY, Ordering::SeqCst);
+        service.enforce();
+        assert!(service.host.blocked());
+        assert_eq!(service.host.reason(), "Connect to continue your free trial");
+        service.tick();
+        assert_eq!(service.view().state, State::TrialOffline);
+        assert!(service.host.blocked());
+        // The registry answers: 25 hours were used, so two days (rounded up) are left.
+        service.registry.started(NOW, NOW + 25 * HOUR);
+        clock.store(NOW + 25 * HOUR, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.view().state, State::Trial { days_left: 2 });
+        assert!(!service.host.blocked());
+        assert!(service.vault.saved_trial().unwrap().registered);
+    }
+
+    #[test]
+    fn case_22_removing_this_mac_after_the_trial_ended_returns_to_trial_ended() {
+        let service = service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
+        let ended = trial_record(TRIAL_LENGTH + DAY, true);
+        *service.vault.trial.lock().unwrap() = Some(ended.clone());
+        service.load();
+        assert_eq!(service.view().state, State::Licensed);
+        assert!(!service.host.blocked());
+        let view = service.remove().expect("removed");
+        assert_eq!(view.state, State::TrialEnded);
+        assert!(service.host.blocked());
+        assert_eq!(service.host.reason(), "Free trial ended");
+        assert_eq!(service.vault.load().unwrap().license, None);
+        assert_eq!(service.vault.saved_trial(), Some(ended));
+        assert!(service.vault.trial_writes().is_empty());
+        assert_eq!(service.registry.calls(), 0);
+        assert!(
+            service
+                .dodo
+                .calls()
+                .contains(&"deactivate KEY-PAID lki_KEY-PAID".to_string())
+        );
+    }
+
+    #[test]
+    fn case_23_removing_this_mac_with_a_day_of_trial_left_resumes_the_trial() {
+        let service = service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
+        *service.vault.trial.lock().unwrap() = Some(trial_record(2 * DAY, true));
+        service.load();
+        let view = service.remove().expect("removed");
+        assert_eq!(view.state, State::Trial { days_left: 1 });
+        assert!(!service.host.blocked());
+        assert_eq!(service.registry.calls(), 0);
+    }
+
+    #[test]
+    fn removing_a_license_without_a_trial_record_asks_the_registry_how_much_is_left() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_paid(HOUR), clock.clone());
+        service.registry.started(NOW - 10 * DAY, NOW);
+        service.load();
+        assert_eq!(service.view().state, State::Licensed);
+        assert_eq!(
+            service.vault.saved_trial(),
+            None,
+            "a license starts no trial"
+        );
+        assert_eq!(service.registry.calls(), 0);
+        service.remove().expect("removed");
+        clock.store(NOW + 1, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.registry.calls(), 1);
+        assert_eq!(service.view().state, State::TrialEnded);
+        assert!(service.host.blocked());
+    }
+
+    #[test]
+    fn last_seen_is_saved_hourly_when_the_trial_ends_and_on_quit() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = trial_service(trial_record(HOUR, true), clock.clone());
+        service.load();
+        let saves = || service.vault.trial_writes();
+        clock.store(NOW + 10 * 60, Ordering::SeqCst);
+        service.tick();
+        assert!(saves().is_empty());
+        clock.store(NOW + HOUR, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(saves().len(), 1);
+        assert_eq!(saves()[0].last_seen_at, NOW + HOUR);
+        clock.store(NOW + HOUR + 10 * 60, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(saves().len(), 1, "at most once an hour");
+        clock.store(NOW + HOUR + 20 * 60, Ordering::SeqCst);
+        service.flush();
+        assert_eq!(saves().len(), 2, "saved on quit");
+        assert_eq!(saves()[1].last_seen_at, NOW + HOUR + 20 * 60);
+        service.flush();
+        assert_eq!(saves().len(), 2, "nothing new to save");
+        // A failed save never stops the trial and is retried.
+        *service.vault.trial_save_error.lock().unwrap() = Some("denied".into());
+        clock.store(NOW + 3 * HOUR, Ordering::SeqCst);
+        service.tick();
+        assert!(!service.host.blocked());
+        assert!(service.view().last_error.unwrap().contains("denied"));
+        assert!(service.next_wait() <= REACHABILITY_POLL);
+        *service.vault.trial_save_error.lock().unwrap() = None;
+        clock.store(NOW + 3 * HOUR + 10, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(saves().len(), 3);
+        assert_eq!(service.view().last_error, None);
+        // The end of the trial is saved at once, so a clock set back after it can't undo it.
+        let ending = trial_service(trial_record(TRIAL_LENGTH - 60, true), clock.clone());
+        clock.store(NOW, Ordering::SeqCst);
+        ending.load();
+        clock.store(NOW + 60, Ordering::SeqCst);
+        ending.tick();
+        assert_eq!(ending.vault.trial_writes().len(), 1);
+        let restarted = service_with(
+            ending.vault.reopen(),
+            Arc::new(FakeJournal::default()),
+            Arc::new(AtomicI64::new(NOW - DAY)),
+        );
+        restarted.load();
+        assert_eq!(restarted.view().state, State::TrialEnded);
+    }
+
+    #[test]
+    fn wake_and_network_recovery_ask_the_registry_again() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(Stored::default(), clock.clone());
+        service.load();
+        assert_eq!(service.registry.calls(), 1);
+        // Backoff is a minute away and the probe says the registry is unreachable.
+        clock.store(NOW + 10, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.registry.calls(), 1);
+        // Wake asks again at once.
+        clock.store(NOW + 20, Ordering::SeqCst);
+        service.woke();
+        service.tick();
+        assert_eq!(service.registry.calls(), 2);
+        // Many failures later the backoff is an hour; the registry coming back is noticed within
+        // minutes.
+        for _ in 0..6 {
+            service.register_once(true);
+        }
+        assert_eq!(service.registry.calls(), 8);
+        assert_eq!(
+            service
+                .engine
+                .lock()
+                .unwrap()
+                .next_registration_at(NOW + 20),
+            Some(NOW + 20 + HOUR)
+        );
+        clock.store(NOW + 400, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.registry.calls(), 8);
+        service
+            .host
+            .registry_reachable
+            .store(true, Ordering::SeqCst);
+        service.registry.started(NOW, NOW + 700);
+        clock.store(NOW + 700, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.registry.calls(), 9);
+        assert!(service.vault.saved_trial().unwrap().registered);
+        assert_eq!(
+            service.dodo.calls(),
+            Vec::<String>::new(),
+            "Dodo's probe is not involved"
+        );
+    }
+
+    #[test]
+    fn a_registry_rate_limit_holds_the_scheduler_and_changes_nothing() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(Stored::default(), clock.clone());
+        service
+            .registry
+            .answer(Err(RegistryError::RateLimited { retry_after: 120 }));
+        service.load();
+        assert_eq!(service.registry.calls(), 1);
+        clock.store(NOW + 119, Ordering::SeqCst);
+        service.woke();
+        service.tick();
+        service.register_once(true);
+        assert_eq!(service.registry.calls(), 1, "held, even when forced");
+        assert_eq!(service.next_wait(), Duration::from_secs(1));
+        assert_eq!(service.view().state, State::Trial { days_left: 3 });
+        clock.store(NOW + 120, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.registry.calls(), 2);
+    }
+
+    #[test]
+    fn without_a_hardware_uuid_the_registry_gets_a_saved_random_stand_in() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(Stored::default(), clock.clone());
+        service.host.no_hardware_uuid.store(true, Ordering::SeqCst);
+        service.registry.started(NOW, NOW);
+        service.load();
+        let id = service
+            .vault
+            .saved_trial()
+            .unwrap()
+            .device_id
+            .expect("a stand-in is saved");
+        assert_eq!(id.len(), 36);
+        assert_eq!(&id[14..15], "4", "a version 4 UUID");
+        assert_eq!(
+            service.vault.trial_writes()[0].device_id.as_deref(),
+            Some(id.as_str()),
+            "saved with the provisional record, before anything is sent"
+        );
+        assert_eq!(
+            *service.registry.devices.lock().unwrap(),
+            vec![device_hash(APP_ID, &id)]
+        );
+        // An existing record without one gets a stand-in saved before its first request.
+        let older = trial_service(trial_record(HOUR, false), clock);
+        older.host.no_hardware_uuid.store(true, Ordering::SeqCst);
+        older.load();
+        let writes = older.vault.trial_writes();
+        let id = writes[0].device_id.clone().expect("saved first");
+        assert!(!writes[0].registered);
+        assert_eq!(
+            *older.registry.devices.lock().unwrap(),
+            vec![device_hash(APP_ID, &id)]
+        );
+        assert_ne!(id, service.vault.saved_trial().unwrap().device_id.unwrap());
+    }
+
+    #[test]
+    fn registry_answers_are_read_from_iso_dates() {
+        assert_eq!(
+            parse_registry_answer(
+                br#"{"started_at":"2026-09-10T12:00:00.000Z","now":"2026-09-15T17:30:00+05:30"}"#
+            ),
+            Some(RegistryAnswer {
+                started_at: 1_789_041_600,
+                now: 1_789_473_600,
+            })
+        );
+        assert_eq!(
+            parse_registry_answer(br#"{"started_at":"2026-09-10T12:00:00Z"}"#),
+            None
+        );
+        assert_eq!(
+            parse_registry_answer(br#"{"started_at":1789041600,"now":1789473600}"#),
+            None
+        );
+        assert_eq!(parse_registry_answer(b"<html>"), None);
+    }
+
     #[test]
     fn a_check_with_nothing_due_releases_the_engine() {
         // The scheduler decides a check is due, an activation lands first, and the scheduler's
         // `begin_check` finds nothing due. The service must stay usable.
-        let service = service(with_trial(), Arc::new(AtomicI64::new(NOW)));
+        let service = trial_service(trial_record(DAY, true), Arc::new(AtomicI64::new(NOW)));
         within_timeout({
             let service = service.clone();
             move || {
                 service.load();
-                service
-                    .activate("KEY-PAID", KeyHint::Any)
-                    .expect("activation");
+                service.activate("KEY-PAID").expect("activation");
                 assert_eq!(service.check_once(false), Ok(State::Licensed));
                 assert_eq!(service.view().state, State::Licensed);
                 assert_eq!(service.state(), State::Licensed);
@@ -1726,14 +2888,18 @@ mod tests {
             service.vault.load().unwrap().license.unwrap().license_key,
             "KEY-PAID"
         );
+        assert!(
+            service.vault.saved_trial().is_some(),
+            "the trial record is kept"
+        );
     }
 
     #[test]
     fn a_slow_writer_cannot_restore_a_replaced_record() {
-        // A scheduler write of trial A pauses mid-save while paid B activates. Every write is
-        // ordered, so B waits for A's write and lands last.
+        // A scheduler write of license A pauses mid-save while license B activates. Every write
+        // is ordered, so B waits for A's write and lands last.
         let clock = Arc::new(AtomicI64::new(NOW));
-        let service = service(with_trial(), clock.clone());
+        let service = service(with_paid(0), clock.clone());
         service.load();
         service.vault.writes.lock().unwrap().clear();
         service.vault.write_pause.arm();
@@ -1745,11 +2911,7 @@ mod tests {
         service.vault.write_pause.wait_entered();
         let activator = {
             let service = service.clone();
-            thread::spawn(move || {
-                service
-                    .activate("KEY-PAID", KeyHint::Any)
-                    .map(|view| view.state)
-            })
+            thread::spawn(move || service.activate("KEY-PAID-2").map(|view| view.state))
         };
         thread::sleep(Duration::from_millis(100));
         assert!(
@@ -1760,20 +2922,20 @@ mod tests {
         ticker.join().unwrap();
         assert_eq!(activator.join().unwrap(), Ok(State::Licensed));
         let writes = service.vault.writes.lock().unwrap();
-        assert_eq!(writes[0].license.as_ref().unwrap().license_key, "KEY-TRIAL");
+        assert_eq!(writes[0].license.as_ref().unwrap().license_key, "KEY-PAID");
         assert_eq!(
             writes.last().unwrap().license.as_ref().unwrap().license_key,
-            "KEY-PAID"
+            "KEY-PAID-2"
         );
         assert_eq!(
             service.vault.load().unwrap().license.unwrap().license_key,
-            "KEY-PAID"
+            "KEY-PAID-2"
         );
         assert!(
             service
                 .dodo
                 .calls()
-                .contains(&"deactivate KEY-TRIAL lki_KEY-TRIAL".to_string())
+                .contains(&"deactivate KEY-PAID lki_KEY-PAID".to_string())
         );
     }
 
@@ -1789,7 +2951,11 @@ mod tests {
         assert!(service.vault.load().unwrap().license.unwrap().revoked);
         service.remove().expect("removed");
         assert!(service.vault.load().unwrap().license.is_none());
-        assert_eq!(service.check_once(true), Ok(State::Unlicensed));
+        assert_eq!(
+            service.check_once(true),
+            Ok(State::Trial { days_left: 3 }),
+            "nothing to check; a trial started over the absent record"
+        );
         assert!(service.vault.load().unwrap().license.is_none());
     }
 
@@ -1846,23 +3012,24 @@ mod tests {
     }
 
     #[test]
-    fn an_expired_trial_stops_sound_before_its_observation_is_saved() {
+    fn an_ended_trial_stops_sound_before_its_end_is_saved() {
         let clock = Arc::new(AtomicI64::new(NOW));
-        let service = service(with_trial(), clock.clone());
+        let service = trial_service(trial_record(TRIAL_LENGTH - 60, true), clock.clone());
         service.load();
         assert!(!service.host.blocked());
-        clock.store(NOW + 3 * DAY, Ordering::SeqCst);
-        service.vault.write_pause.arm();
+        clock.store(NOW + 60, Ordering::SeqCst);
+        service.vault.trial_write_pause.arm();
         let worker = {
             let service = service.clone();
             thread::spawn(move || service.tick())
         };
-        service.vault.write_pause.wait_entered();
+        service.vault.trial_write_pause.wait_entered();
         assert_eq!(service.view().state, State::TrialEnded);
         assert!(service.host.blocked(), "blocked before the save completes");
-        service.vault.write_pause.open();
+        service.vault.trial_write_pause.open();
         worker.join().unwrap();
         assert!(service.host.blocked());
+        assert_eq!(service.vault.saved_trial().unwrap().last_seen_at, NOW + 60);
     }
 
     #[test]
@@ -1870,6 +3037,7 @@ mod tests {
         // An old permissive decision, delayed on its way to the audio engine, arrives after
         // Remove this Mac has blocked playback. Its revision is older, so it is ignored.
         let service = service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
+        *service.vault.trial.lock().unwrap() = Some(trial_record(TRIAL_LENGTH + DAY, true));
         service.load();
         assert!(!service.host.blocked());
         service.host.unlock_pause.arm();
@@ -1882,7 +3050,7 @@ mod tests {
         assert!(service.host.blocked());
         service.host.unlock_pause.open();
         old.join().unwrap();
-        assert_eq!(service.view().state, State::Unlicensed);
+        assert_eq!(service.view().state, State::TrialEnded);
         assert!(service.host.blocked(), "the stale unlock was ignored");
         // A stale unlock cannot undo a revocation either.
         let revoked = self::service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
@@ -1919,6 +3087,39 @@ mod tests {
         service.vault.write_pause.open();
         worker.join().unwrap();
         assert!(!service.host.blocked());
+    }
+
+    #[test]
+    fn a_registration_unlocks_only_once_it_is_saved() {
+        // Past the offline limit, the registry's answer is a grant: saved first, then unlocked.
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = trial_service(trial_record(DAY + HOUR, false), clock);
+        service.registry.started(NOW - DAY - HOUR, NOW);
+        service.vault.trial_write_pause.arm();
+        let worker = {
+            let service = service.clone();
+            thread::spawn(move || service.load())
+        };
+        service.vault.trial_write_pause.wait_entered();
+        assert_eq!(service.view().state, State::Trial { days_left: 2 });
+        assert!(service.host.blocked(), "not yet saved");
+        service.vault.trial_write_pause.open();
+        worker.join().unwrap();
+        assert!(!service.host.blocked());
+        // If that save fails, the Mac stays off and the write is retried.
+        let failing = trial_service(
+            trial_record(DAY + HOUR, false),
+            Arc::new(AtomicI64::new(NOW)),
+        );
+        failing.registry.started(NOW - DAY - HOUR, NOW);
+        *failing.vault.trial_save_error.lock().unwrap() = Some("denied".into());
+        failing.load();
+        assert_eq!(failing.view().state, State::Trial { days_left: 2 });
+        assert!(failing.host.blocked());
+        *failing.vault.trial_save_error.lock().unwrap() = None;
+        failing.tick();
+        assert!(!failing.host.blocked());
+        assert!(failing.vault.saved_trial().unwrap().registered);
     }
 
     #[test]
@@ -1959,6 +3160,11 @@ mod tests {
         service.tick();
         assert_eq!(service.dodo.calls().len(), 3, "the backoff retry ran");
         assert_eq!(service.engine.lock().unwrap().schedule.failures, 0);
+        assert_eq!(
+            service.registry.calls(),
+            0,
+            "a licensed Mac never registers"
+        );
     }
 
     #[test]
@@ -1981,15 +3187,15 @@ mod tests {
     }
 
     #[test]
-    fn a_record_that_cannot_be_saved_leaves_the_old_activation_and_frees_the_slot() {
-        let service = service(with_trial(), Arc::new(AtomicI64::new(NOW)));
+    fn a_record_that_cannot_be_saved_leaves_the_trial_and_frees_the_slot() {
+        let service = trial_service(trial_record(DAY, true), Arc::new(AtomicI64::new(NOW)));
         service.load();
         *service.vault.save_error.lock().unwrap() = Some("keychain locked".into());
-        let error = service.activate("KEY-PAID", KeyHint::Any).unwrap_err();
+        let error = service.activate("KEY-PAID").unwrap_err();
         assert!(error.contains("keychain locked"), "{error}");
         assert_eq!(service.state(), State::Trial { days_left: 2 });
         assert_eq!(
-            service.dodo.calls()[1..],
+            service.dodo.calls(),
             [
                 "activate KEY-PAID Mac".to_string(),
                 "deactivate KEY-PAID lki_KEY-PAID".to_string()
@@ -2015,13 +3221,15 @@ mod tests {
         }
         let clock = Arc::new(AtomicI64::new(NOW));
         let clock_copy = clock.clone();
-        let limited: Service<LimitedDodo, FakeVault, FakeHost, Arc<FakeJournal>> = Service::new(
-            LimitedDodo(FakeDodo::paid()),
-            FakeVault::default(),
-            FakeHost::default(),
-            Arc::new(FakeJournal::default()),
-            Box::new(move || clock_copy.load(Ordering::SeqCst)),
-        );
+        let limited: Service<LimitedDodo, FakeRegistry, FakeVault, FakeHost, Arc<FakeJournal>> =
+            Service::new(
+                LimitedDodo(FakeDodo::paid()),
+                FakeRegistry::default(),
+                FakeVault::default(),
+                FakeHost::default(),
+                Arc::new(FakeJournal::default()),
+                Box::new(move || clock_copy.load(Ordering::SeqCst)),
+            );
         limited.load();
         {
             let mut engine = limited.engine.lock().unwrap();
@@ -2084,48 +3292,6 @@ mod tests {
         service.tick();
         assert!(service.vault.load().unwrap().license.unwrap().revoked);
         assert_eq!(service.view().last_error, None);
-    }
-
-    #[test]
-    fn an_expiry_reaches_the_gate_while_an_earlier_write_is_still_pending() {
-        // A trial with ten seconds left; an observation write starts before the deadline and
-        // hangs. The deadline enforcer runs on its own thread and blocks playback on time.
-        let clock = Arc::new(AtomicI64::new(NOW));
-        let mut stored = with_trial();
-        stored.license.as_mut().unwrap().activated_at = NOW - 3 * DAY + 10;
-        let service = service(stored, clock.clone());
-        service.load();
-        assert!(!service.host.blocked());
-        let enforcer = {
-            let service = service.clone();
-            thread::spawn(move || service.run_deadlines())
-        };
-        clock.store(NOW + 1, Ordering::SeqCst);
-        service.vault.write_pause.arm();
-        let worker = {
-            let service = service.clone();
-            thread::spawn(move || service.tick())
-        };
-        service.vault.write_pause.wait_entered();
-        clock.store(NOW + 100 * DAY, Ordering::SeqCst);
-        assert!(!service.view().core_feature);
-        service.poke_deadlines();
-        let deadline = std::time::Instant::now() + TIMEOUT;
-        while !service.host.blocked() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the enforcer never blocked playback"
-            );
-            thread::sleep(Duration::from_millis(1));
-        }
-        assert!(
-            !worker.is_finished(),
-            "the scheduler is still stuck in the write"
-        );
-        service.vault.write_pause.open();
-        worker.join().unwrap();
-        assert!(service.host.blocked());
-        drop(enforcer);
     }
 
     #[test]
@@ -2194,6 +3360,10 @@ mod tests {
         assert!(view.last_error.unwrap().contains("keychain denied"));
         assert!(service.host.blocked());
         assert!(service.dodo.calls().is_empty(), "nothing to check yet");
+        assert!(
+            service.vault.trial_writes().is_empty(),
+            "no trial over an unreadable license record"
+        );
         // Retried with backoff, not every tick.
         clock.store(NOW + 10, Ordering::SeqCst);
         service.tick();
@@ -2262,7 +3432,7 @@ mod tests {
         service.load();
         let hash = instance_hash("lki_KEY-PAID");
         service.journal.revoke(&hash, 2).unwrap();
-        service.activate("KEY-PAID-2", KeyHint::Any).unwrap();
+        service.activate("KEY-PAID-2").unwrap();
         assert!(service.journal.entry(&hash).unwrap().is_none());
         let hash2 = instance_hash("lki_KEY-PAID-2");
         service.journal.revoke(&hash2, 2).unwrap();
@@ -2328,13 +3498,15 @@ mod tests {
         let inner = Arc::new(FakeJournal::default());
         let vault = FakeVault::default();
         *vault.stored.lock().unwrap() = with_paid(0);
-        let service: Service<FakeDodo, FakeVault, FakeHost, FailingJournal> = Service::new(
-            FakeDodo::paid(),
-            vault,
-            FakeHost::default(),
-            FailingJournal(inner.clone(), AtomicBool::new(true)),
-            Box::new(|| NOW),
-        );
+        let service: Service<FakeDodo, FakeRegistry, FakeVault, FakeHost, FailingJournal> =
+            Service::new(
+                FakeDodo::paid(),
+                FakeRegistry::default(),
+                vault,
+                FakeHost::default(),
+                FailingJournal(inner.clone(), AtomicBool::new(true)),
+                Box::new(|| NOW),
+            );
         service.load();
         *service.vault.save_error.lock().unwrap() = Some("denied".into());
         service.dodo.answer(Ok(Validation {
@@ -2442,11 +3614,12 @@ mod tests {
 
     fn corrupt_journal_service(
         path: &std::path::Path,
-    ) -> Service<FakeDodo, FakeVault, FakeHost, FileJournal> {
+    ) -> Service<FakeDodo, FakeRegistry, FakeVault, FakeHost, FileJournal> {
         let vault = FakeVault::default();
         *vault.stored.lock().unwrap() = with_paid(HOUR);
         let service = Service::new(
             FakeDodo::paid(),
+            FakeRegistry::default(),
             vault,
             FakeHost::default(),
             FileJournal::new(path.to_path_buf()),
@@ -2567,14 +3740,16 @@ mod tests {
                 }
             }
         }
+        type RetryService = Service<FakeDodo, FakeRegistry, FakeVault, FakeHost, Arc<RetryJournal>>;
         let vault = FakeVault::default();
         *vault.stored.lock().unwrap() = with_paid(HOUR);
         let journal = Arc::new(RetryJournal {
             inner: Arc::new(FakeJournal::default()),
             fail_clear: AtomicBool::new(true),
         });
-        let service = Service::new(
+        let service: RetryService = Service::new(
             FakeDodo::paid(),
+            FakeRegistry::default(),
             vault,
             FakeHost::default(),
             journal.clone(),
@@ -2598,8 +3773,9 @@ mod tests {
         service.tick();
         assert_eq!(journal.entry(&hash).unwrap(), Some(3));
         assert!(service.host.blocked());
-        let restart = Service::new(
+        let restart: RetryService = Service::new(
             FakeDodo::paid(),
+            FakeRegistry::default(),
             service.vault.reopen(),
             FakeHost::default(),
             journal.clone(),
@@ -2616,22 +3792,10 @@ mod tests {
         {
             let mut meta = service.meta.lock().unwrap();
             meta.journal_retry.clear();
-            Service::<FakeDodo, FakeVault, FakeHost, Arc<RetryJournal>>::queue_journal_op(
-                &mut meta,
-                "h".into(),
-                JournalOp::Revoke(5),
-            );
-            Service::<FakeDodo, FakeVault, FakeHost, Arc<RetryJournal>>::queue_journal_op(
-                &mut meta,
-                "h".into(),
-                JournalOp::Clear(4),
-            );
+            RetryService::queue_journal_op(&mut meta, "h".into(), JournalOp::Revoke(5));
+            RetryService::queue_journal_op(&mut meta, "h".into(), JournalOp::Clear(4));
             assert_eq!(meta.journal_retry.get("h"), Some(&JournalOp::Revoke(5)));
-            Service::<FakeDodo, FakeVault, FakeHost, Arc<RetryJournal>>::queue_journal_op(
-                &mut meta,
-                "h".into(),
-                JournalOp::Clear(6),
-            );
+            RetryService::queue_journal_op(&mut meta, "h".into(), JournalOp::Clear(6));
             assert_eq!(meta.journal_retry.get("h"), Some(&JournalOp::Clear(6)));
         }
     }
@@ -2651,20 +3815,28 @@ mod tests {
             fn save(&self, stored: &Stored) -> Result<(), String> {
                 self.inner.save(stored)
             }
+            fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
+                self.inner.load_trial()
+            }
+            fn save_trial(&self, trial: &TrialRecord) -> Result<(), String> {
+                self.inner.save_trial(trial)
+            }
         }
         let vault = SnapshotVault {
             inner: FakeVault::default(),
             pause: Pause::default(),
         };
-        *vault.inner.stored.lock().unwrap() = with_trial();
-        let service: Arc<Service<FakeDodo, SnapshotVault, FakeHost, Arc<FakeJournal>>> =
-            Arc::new(Service::new(
-                FakeDodo::paid(),
-                vault,
-                FakeHost::default(),
-                Arc::new(FakeJournal::default()),
-                Box::new(|| NOW),
-            ));
+        *vault.inner.trial.lock().unwrap() = Some(trial_record(DAY, true));
+        let service: Arc<
+            Service<FakeDodo, FakeRegistry, SnapshotVault, FakeHost, Arc<FakeJournal>>,
+        > = Arc::new(Service::new(
+            FakeDodo::paid(),
+            FakeRegistry::default(),
+            vault,
+            FakeHost::default(),
+            Arc::new(FakeJournal::default()),
+            Box::new(|| NOW),
+        ));
         service.apply();
         service.vault.pause.arm();
         let old_load = {
@@ -2686,7 +3858,7 @@ mod tests {
             thread::spawn(move || service.load())
         };
         service.vault.pause.wait_entered();
-        service.activate("KEY-PAID", KeyHint::Any).unwrap();
+        service.activate("KEY-PAID").unwrap();
         assert_eq!(
             service
                 .vault
@@ -2729,28 +3901,65 @@ mod tests {
     }
 
     #[test]
-    fn activation_links_carry_the_key_and_an_optional_trial_marker() {
+    fn activation_links_carry_only_the_key() {
         let parse = |link: &str| parse_activation_link(&url::Url::parse(link).unwrap());
         assert_eq!(
             parse("openklack://activate?key=ABCD-1234"),
-            Some(("ABCD-1234".into(), false))
+            Some("ABCD-1234".into())
         );
         assert_eq!(
             parse("openklack://activate?key=%20ABCD-1234%20&kind=trial&utm=x"),
-            Some(("ABCD-1234".into(), true))
+            Some("ABCD-1234".into())
         );
         assert_eq!(parse("openklack://activate?kind=trial"), None);
         assert_eq!(parse("openklack://activate?key=bad%20key"), None);
         assert_eq!(parse("openklack://settings?key=ABCD"), None);
         assert_eq!(parse("https://activate/?key=ABCD"), None);
-        let service = service(Stored::default(), Arc::new(AtomicI64::new(NOW)));
+        let service = service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
         service.opened(&[url::Url::parse("openklack://activate?key=K1&kind=trial").unwrap()]);
-        let view = service.view();
-        assert_eq!(view.pending_key.as_deref(), Some("K1"));
-        assert!(view.pending_trial);
-        let view = service.dismiss_key();
-        assert_eq!(view.pending_key, None);
-        assert!(!view.pending_trial);
+        assert_eq!(service.view().pending_key.as_deref(), Some("K1"));
+        assert_eq!(service.dismiss_key().pending_key, None);
+    }
+
+    /// Needs a registry on `OPENKLACK_TRIAL_REGISTRY_URL` that answers `200`, then `429` with
+    /// `Retry-After: 120`, then `500`; run with `--ignored` against a local stub.
+    #[test]
+    #[ignore = "needs a local trial registry stub"]
+    fn the_http_registry_speaks_the_contract() {
+        let registry = HttpRegistry::new().unwrap();
+        let device = device_hash(APP_ID, HARDWARE_UUID);
+        let answer = registry.register(&device).expect("200");
+        assert_eq!(answer.started_at, 1_789_041_600);
+        assert!(answer.now > answer.started_at);
+        assert_eq!(
+            registry.register(&device),
+            Err(RegistryError::RateLimited { retry_after: 120 })
+        );
+        assert!(matches!(
+            registry.register(&device),
+            Err(RegistryError::Unexpected(_))
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_hardware_uuid_is_read_from_iokit() {
+        let output = std::process::Command::new("ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .expect("ioreg runs on macOS");
+        let listing = String::from_utf8_lossy(&output.stdout);
+        let expected = listing
+            .lines()
+            .find(|line| line.contains("\"IOPlatformUUID\""))
+            .and_then(|line| line.rsplit('"').nth(1))
+            .expect("ioreg lists the platform UUID");
+        assert_eq!(platform_uuid().as_deref(), Some(expected));
+        assert_ne!(
+            device_hash(APP_ID, expected),
+            expected,
+            "only the hash is ever sent"
+        );
     }
 
     #[test]
@@ -2764,5 +3973,18 @@ mod tests {
             .to_rfc2822();
         assert_eq!(retry_after_seconds(&date, Some(NOW)), Some(90));
         assert_eq!(retry_after_seconds(&date, Some(NOW + 500)), Some(1));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_debug_build_can_shorten_the_trial() {
+        // SAFETY: no other test reads or writes this variable.
+        unsafe { std::env::set_var("OPENKLACK_DEBUG_TRIAL_MINUTES", "10") };
+        let terms = debug_trial_terms().unwrap();
+        assert_eq!(terms.length, 600);
+        unsafe { std::env::set_var("OPENKLACK_DEBUG_TRIAL_MINUTES", "soon") };
+        assert_eq!(debug_trial_terms(), None);
+        unsafe { std::env::remove_var("OPENKLACK_DEBUG_TRIAL_MINUTES") };
+        assert_eq!(debug_trial_terms(), None);
     }
 }

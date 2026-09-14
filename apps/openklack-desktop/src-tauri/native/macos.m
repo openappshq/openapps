@@ -270,3 +270,17 @@ void ok_start(OKCallback receive) {
     dispatch_source_set_event_handler(permissionTimer, ^{ ensureTap(); });
     dispatch_resume(permissionTimer);
 }
+
+#include <IOKit/IOKitLib.h>
+
+// The Mac's hardware UUID, copied into `buffer`. Returns 0 when it can't be read.
+int ok_platform_uuid(char *buffer, int length) {
+    io_service_t platform = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"));
+    if (!platform) return 0;
+    CFTypeRef uuid = IORegistryEntryCreateCFProperty(platform, CFSTR("IOPlatformUUID"), kCFAllocatorDefault, 0);
+    IOObjectRelease(platform);
+    if (!uuid) return 0;
+    Boolean copied = CFGetTypeID(uuid) == CFStringGetTypeID() && CFStringGetCString((CFStringRef)uuid, buffer, length, kCFStringEncodingUTF8);
+    CFRelease(uuid);
+    return copied ? 1 : 0;
+}

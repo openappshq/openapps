@@ -535,8 +535,6 @@ pub fn run() {
             #[cfg(feature = "licensing")]
             licensing::runtime::open_license_link,
             #[cfg(feature = "licensing")]
-            licensing::runtime::start_license_trial,
-            #[cfg(feature = "licensing")]
             licensing::runtime::reload_license
         ])
         .setup(|app| {
@@ -643,6 +641,9 @@ pub fn run() {
                     let _ = show_settings(app);
                 }
             }
+            // The trial's `last_seen_at` is saved on quit.
+            #[cfg(feature = "licensing")]
+            tauri::RunEvent::Exit => licensing::runtime::quit(app),
             _ => {}
         });
 }

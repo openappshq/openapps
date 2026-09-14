@@ -353,6 +353,9 @@ pub struct Runtime {
     pub output_sample_rate: u32,
     /// Official builds without a valid license stop keyboard sounds and nothing else.
     pub license_blocked: bool,
+    /// Why licensing blocks playback, such as the trial having ended; shown as the pause reason.
+    #[serde(skip)]
+    pub license_reason: &'static str,
     /// The revision of the gate decision in effect; older decisions are ignored.
     #[serde(skip)]
     pub license_gate_revision: u64,
@@ -372,7 +375,11 @@ impl Runtime {
         } else if !self.input_permission {
             Some("Input Monitoring permission needed")
         } else if self.license_blocked {
-            Some("License needed")
+            Some(if self.license_reason.is_empty() {
+                "License needed"
+            } else {
+                self.license_reason
+            })
         } else if self.suspended {
             Some("Mac is resting")
         } else if self.secure_input {

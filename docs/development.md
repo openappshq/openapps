@@ -209,32 +209,35 @@ See the [Tauri DMG bundler](https://github.com/tauri-apps/tauri/blob/dev/crates/
 ### Licensed builds
 
 Licensing follows the shared [licensing contract](../LICENSING.md) and is compiled in only with the `licensing` cargo feature.
-The default build from source has no License section, makes no license network calls, and plays sounds without restriction; `cargo test` covers the shared test cases in `src-tauri/src/licensing/core.rs` in both flavours.
+The default build from source has no License section, no trial, makes no license or registry network calls, and plays sounds without restriction; `cargo test` covers the shared test cases in `src-tauri/src/licensing/core.rs` and `runtime.rs` in both flavours, against a fake Dodo client, a fake trial registry, an in-memory Keychain and an injectable clock.
 A licensed build reads its configuration from the environment at build time and fails with a list of what is missing:
 
-| Variable                                   | Value                                                                     |
-| ------------------------------------------ | ------------------------------------------------------------------------- |
-| `OPENKLACK_LICENSE_ENV`                    | `test` for development builds against Dodo test mode, `live` for releases |
-| `OPENKLACK_DODO_PAID_PRODUCT_ID`           | The `OpenKlack` product ID for that environment                           |
-| `OPENKLACK_DODO_TRIAL_PRODUCT_ID`          | The `OpenKlack Trial` product ID for that environment                     |
-| `OPENKLACK_BUY_URL`, `OPENKLACK_TRIAL_URL` | The https checkout links opened by Buy for $5 and Start 3-day trial       |
-| `OPENKLACK_SUPPORT_URL`                    | Optional; Contact support link, defaults to the OpenKlack page            |
+| Variable                         | Value                                                                                                                                           |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENKLACK_LICENSE_ENV`          | `test` for development builds against Dodo test mode, `live` for releases; also the trial registry's `env`                                      |
+| `OPENKLACK_DODO_PAID_PRODUCT_ID` | The `OpenKlack` product ID for that environment                                                                                                 |
+| `OPENKLACK_BUY_URL`              | The https checkout link opened by Buy for $5                                                                                                    |
+| `OPENKLACK_TRIAL_REGISTRY_URL`   | Optional; the trial registry's origin, defaults to `https://openapps.space`. A `test` build may point at a local registry such as `http://127.0.0.1:8787` |
+| `OPENKLACK_SUPPORT_URL`          | Optional; Contact support link, defaults to the OpenKlack page                                                                                  |
 
 ```sh
-OPENKLACK_LICENSE_ENV=test OPENKLACK_DODO_PAID_PRODUCT_ID=pdt_… OPENKLACK_DODO_TRIAL_PRODUCT_ID=pdt_… \
-OPENKLACK_BUY_URL=https://… OPENKLACK_TRIAL_URL=https://… \
+OPENKLACK_LICENSE_ENV=test OPENKLACK_DODO_PAID_PRODUCT_ID=pdt_… OPENKLACK_BUY_URL=https://… \
+OPENKLACK_TRIAL_REGISTRY_URL=http://127.0.0.1:8787 OPENKLACK_DEBUG_TRIAL_MINUTES=10 \
 pnpm --filter @openapps/openklack-desktop tauri dev --features licensing
 ```
 
-The Dodo products are not created yet, so no real IDs exist; the workflow's checks job uses placeholders to compile and test the licensed flavour, and the release job requires `OPENKLACK_DODO_PAID_PRODUCT_ID`, `OPENKLACK_DODO_TRIAL_PRODUCT_ID`, `OPENKLACK_BUY_URL` and `OPENKLACK_TRIAL_URL` as variables in the `openklack-release` environment before it builds with `OPENKLACK_LICENSE_ENV=live`.
-The license record lives in the Keychain item `space.openapps.openklack.license`; a development build signed with a different identity than an installed copy asks for Keychain access on first launch.
-Keyboard sounds stay off until that record has been read; if the Keychain record or `pending_cleanups` can't be read, Settings shows a storage error with Try again and the read is retried with backoff — it is never treated as "no license", and entries that couldn't be read are never overwritten.
+The Dodo product is not created yet, so no real ID exists; the workflow's checks job uses placeholders to compile and test the licensed flavour, and the release job requires `OPENKLACK_DODO_PAID_PRODUCT_ID` and `OPENKLACK_BUY_URL` as variables in the `openklack-release` environment before it builds with `OPENKLACK_LICENSE_ENV=live` (a live build refuses a registry origin that isn't https).
+The license record lives in the Keychain item `space.openapps.openklack.license` and the trial record in `space.openapps.openklack.trial`; a development build signed with a different identity than an installed copy asks for Keychain access on first launch.
+Keyboard sounds stay off until the license record has been read; if the license record, the trial record or `pending_cleanups` can't be read, Settings shows a storage error with Try again and the read is retried with backoff — it is never treated as "no license" or "no trial yet", and entries that couldn't be read are never overwritten.
+
+The trial starts on its own at first launch with no license record: a provisional trial record (`started_at`, `last_seen_at`, `registered: false`) is saved to the Keychain first, and only then do sounds turn on; if that save fails, no trial runs and the save is retried. The app then posts `{app: "openklack", device, env}` to `<registry>/api/trial`, where `device` is the SHA-256 of `openapps-trial-v1:openklack:<IOPlatformUUID>` (or of a random UUID saved in the trial record when the hardware UUID can't be read). It retries with backoff from a minute up to an hour, honouring `Retry-After`, and again on wake or when the registry becomes reachable; the answer's start, converted to local time, replaces the provisional one if it is earlier, and a registered trial never calls again. An unregistered trial stops after 24 hours of elapsed time until the registry answers. Elapsed time is `max(now, last_seen_at) − started_at`: `last_seen_at` rises every tick and on wake, and is saved at most hourly, when the trial ends and on quit, so setting the clock back gives no time back. When the trial ends, the menu bar status says "Free trial ended"; nothing opens on its own. Remove this Mac returns to the trial record's state and never touches the record.
+Debug builds (`tauri dev`, `tauri build --debug`) read `OPENKLACK_DEBUG_TRIAL_MINUTES` to shorten the trial for manual end-to-end runs; release builds ignore it.
 The service follows the contract's write order: losing access takes effect in memory first and is then saved (a failed save is retried every tick and shown as a storage error), while gaining or extending access is saved first and takes effect only once that save has landed — playback is on only when both the record in memory and the last saved record grant it. Keychain reads are single-flight, and a read that started before the record changed is discarded.
 A revocation is also noted in a small non-secret journal outside the Keychain (`license-journal.json` in the app's data directory), keyed by a SHA-256 hash of the activation ID and holding only the record's event sequence after the change (never a clock), written before the Keychain save; on load, an entry whose sequence is ahead of the saved record forces Revoked whatever the record says, while one the record has caught up with is stale and dropped. Journal notes carry that sequence, so a delayed clear can never erase a newer revocation and a queued retry is superseded by a newer note for the same activation. A journal that can't be read is a storage error that keeps sounds off while the saved record is held and checked with Dodo right away; the answer rebuilds the journal (the corrupt file is copied aside first, then replaced atomically) and, if it is `valid: true`, saves the grant and unlocks. Removing or replacing an activation writes the same note as a tombstone, and an entry is cleared only once the revoked, cleared or replaced record has been saved, or on `valid: true` for that activation; a journal write that fails keeps access off in memory, shows a storage error and is retried every tick. It never contains the license key.
-Every gate decision carries a revision, and the audio engine ignores older ones, so a delayed unlock can never follow a block; a separate deadline thread that only reads the engine ends trials and grace on time even while a Keychain write or network call is stuck.
-Daily checks are scheduled on the local clock, a day after the last answer from Dodo or sooner with backoff.
-Time is anchored to Dodo's `Date` header at the last successful check; a clock set back more than an hour before the latest moment seen ends a trial and asks a paid license to check again until Dodo answers.
-`openklack://activate?key=…` (registered in `Info.plist`) opens Settings with the key pre-filled; the user confirms before anything is sent. The trial thanks page adds `&kind=trial`, which lets the app refuse a second trial without calling Dodo; other parameters are ignored. Source builds only open Settings.
+Every gate decision carries a revision, and the audio engine ignores older ones, so a delayed unlock can never follow a block; a separate deadline thread that only reads the engine ends trials (at three days, or at the offline limit) and grace on time even while a Keychain write or network call is stuck.
+Only a Mac with a license record calls Dodo; daily checks are scheduled on the local clock, a day after the last answer from Dodo or sooner with backoff.
+A paid license's time is anchored to Dodo's `Date` header at the last successful check; a clock set back more than an hour before the latest moment seen asks it to check again until Dodo answers.
+`openklack://activate?key=…` (registered in `Info.plist`) opens Settings with the key pre-filled; the user confirms before anything is sent. Other parameters are ignored. Source builds only open Settings.
 
 Public distribution requires Developer ID signing and notarization.
 The [desktop workflow](../.github/workflows/openklack.yml) runs checks on an Apple Silicon Mac runner and can produce a signed release candidate through manual dispatch.

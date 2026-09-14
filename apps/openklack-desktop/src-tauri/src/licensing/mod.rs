@@ -15,10 +15,11 @@ pub mod runtime;
 mod source_build {
     use crate::model::{Preferences, Runtime};
 
-    /// Shared case 20: a source build launches with no License UI, no network calls, and sounds on.
+    /// Shared case 26: a source build launches with no License UI, no trial, no registry or
+    /// license calls (the runtime is not compiled in), and sounds on.
     #[test]
     #[allow(clippy::assertions_on_constants)]
-    fn case_20_a_source_build_has_no_licensing_and_sounds_stay_on() {
+    fn case_26_a_source_build_has_no_licensing_and_sounds_stay_on() {
         assert!(!super::ENABLED, "the settings UI hides the License section");
         let runtime = Runtime {
             input_permission: true,

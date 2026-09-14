@@ -15,10 +15,10 @@ Build requirements, signing, releases and the licensed build flavour are in the 
 
 OpenKlack is [MIT licensed](../../LICENSE). A build from source has licensing compiled out: every feature works, there is no License section in Settings, and nothing contacts the license service.
 
-The official download is the signed, notarized build with updates, sold for $5 through Dodo Payments with a free 3-day trial. It is built with the `licensing` cargo feature, following the shared [licensing contract](../../LICENSING.md). Without a valid license only keyboard sound playback stops; the menu bar, Settings, License and Quit always work.
+The official download is the signed, notarized build with updates, sold for $5 through Dodo Payments. It works right after download for a free 3-day trial with no signup, then keyboard sounds stop until you buy. It is built with the `licensing` cargo feature, following the shared [licensing contract](../../LICENSING.md). Without a license or trial only keyboard sound playback stops; the menu bar, Settings, License and Quit always work.
 
 ## Privacy
 
-> Official builds check your license with Dodo Payments, our payment provider. The license key and an activation ID are sent when you activate and once a day after that. Your Mac's name, what you type, and how you use the app are never sent. Builds from source never contact the license service.
+> Official builds include a 3-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac's hardware ID (it can't be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac's name, what you type, and how you use the app are never sent. Builds from source never contact the license service.
 
-The license record is kept in the macOS Keychain (`space.openapps.openklack.license`), never in plain preferences. Typed text is never stored or sent anywhere, licensed or not.
+The license and trial records are kept in the macOS Keychain (`space.openapps.openklack.license` and `space.openapps.openklack.trial`), never in plain preferences. Typed text is never stored or sent anywhere, licensed or not.

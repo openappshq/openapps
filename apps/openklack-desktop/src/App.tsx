@@ -173,7 +173,7 @@ export default function App() {
                     Resume temporarily
                   </Button>
                 )}
-                {snapshot.pauseReason === "License needed" && page !== "general" && (
+                {snapshot.runtime.licenseBlocked && page !== "general" && (
                   <Button variant="ghost" onPress={() => setPage("general")}>
                     Open License
                   </Button>
