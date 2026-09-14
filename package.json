@@ -12,7 +12,8 @@
     "desktop": "pnpm --filter @openklack/desktop dev",
     "desktop:build": "pnpm --filter @openklack/desktop build",
     "desktop:test": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
-    "theme": "node scripts/generate-theme.mjs"
+    "theme": "node scripts/generate-theme.mjs",
+    "desktop:icons": "node scripts/generate-desktop-icons.mjs"
   },
   "devDependencies": {
     "@types/howler": "^2.2.13",

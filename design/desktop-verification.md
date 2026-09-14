@@ -182,3 +182,12 @@ Previewing NovelKeys Cream left the active Brown PBT preset and Space override i
 The saved Portable QA preset retained its exact stored volume; the interface rounds only the displayed percentage.
 Search-field and macOS select styling were corrected after native visual inspection.
 The standard test suite and type-aware lint passed; the development-signed release bundle built successfully.
+
+## Installed application and icon
+
+The application is installed at `/Applications/OpenKlack.app`, with the new blue app icon generated from the Figma export.
+Its signature and icon bytes were verified after installation, and the running process uses the installed path.
+The debug, QA, and temporary installation-check bundles were archived under the ignored `target/app-backups/2026-09-14` directory.
+Obsolete build, installer-volume, and temporary app registrations were removed.
+Spotlight now returns only `/Applications/OpenKlack.app` for OpenKlack application bundles.
+The installed application retains the saved presets, per-key assignments, and Input Monitoring permission.

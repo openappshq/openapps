@@ -24,3 +24,6 @@ Make identity changes in Figma, export again, and update the provenance manifest
 
 `openklack/menu-template@2x.png` is a native 36 × 36 Figma export of node `2:112`, used as an 18-point macOS template image.
 `openklack/github-cover.png` is the 1440 × 640 cover authored in Figma at node `3:769` for the repository README.
+
+The macOS application icon resources are generated from `openklack/app-icon-1120.png` with `pnpm desktop:icons`.
+The generator uses the Tauri icon command and retains the five resources used by the Mac build.

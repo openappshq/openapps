@@ -108,6 +108,22 @@ APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openklack/desktop 
 codesign --verify --deep --strict apps/desktop/src-tauri/target/debug/bundle/macos/OpenKlack.app
 ```
 
+Regenerate the packaged macOS icon from the exact Figma export after changing the brand asset:
+
+```sh
+pnpm desktop:icons
+```
+
+The monochrome menu-bar template and the app icon are separate assets.
+Changing only the template does not change the icon in Finder or Apps.
+
+After building, quit OpenKlack and move the generated `OpenKlack.app` into `/Applications` using Finder.
+If replacing an existing installation, keep that copy until the new bundle has passed its signature check.
+Launch `/Applications/OpenKlack.app` for everyday use.
+Running debug, QA, and release bundles directly from the project lets macOS index each as a separate app.
+Archive unused bundles as ZIP files and unregister those bundle paths with `lsregister -u` to remove duplicate launcher entries.
+App bundles do not contain your saved sound preferences; those remain in Application Support.
+
 For a local release app and DMG without requiring Finder automation:
 
 ```sh
