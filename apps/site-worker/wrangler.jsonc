@@ -3,9 +3,9 @@
   "name": "openapps-site",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-14",
-  // The site is served only on its own domain; preview versions still get workers.dev URLs.
+  // Served only on its own domain. No workers.dev or preview URLs: nothing unmerged is ever uploaded.
   "workers_dev": false,
-  "preview_urls": true,
+  "preview_urls": false,
   "routes": [{ "pattern": "openapps.space", "custom_domain": true }],
   "assets": {
     // Built by `pnpm build` at the repository root.

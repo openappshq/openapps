@@ -41,11 +41,12 @@ rm -rf .wrangler/state   # forget every local trial
 
 | Event | Job | Result |
 | --- | --- | --- |
-| Every PR and push | `checks` | Worker typecheck and tests. Site lint, test and build already run in `openklack.yml` |
-| PR from a branch of this repository | `preview` | Builds with the `website-test` variables, migrates the preview database and uploads a preview version at `pr-<number>-openapps-site.<subdomain>.workers.dev`. Production is untouched |
+| Every PR and push | `checks` | Worker typecheck and tests, with no credentials. Site lint, test and build already run in `openklack.yml` |
 | Push to `main`, or a manual run on `main` | `deploy` | Builds with the `website-live` variables, applies D1 migrations to the live database, then `wrangler deploy` |
 
-The committed `wrangler.jsonc` holds a placeholder `database_id`. CI writes the real ID from the environment's `TRIAL_REGISTRY_D1_ID` variable (`apps/site-worker/scripts/set-database-id.mjs`), so account-specific IDs stay out of the repository. A preview version binds the preview database, so previews never write to the live registry.
+**Credential boundary.** The Cloudflare token exists only as a secret of the `website-live` environment, which only `main` may use. Pull requests never receive it, never run remote migrations and never upload a version: code reaches Cloudflare only after it's merged. There are no PR previews, and the Worker has `preview_urls: false`. Review previews locally with `pnpm build && pnpm site:dev`. If hosted previews are wanted later, they need their own Cloudflare account (or a token that can't reach the live Worker, database or domain), a separate environment with required reviewers, and a trigger that deploys only merged code, never a PR's workflow.
+
+The committed `wrangler.jsonc` holds a placeholder `database_id`. The deploy job writes the real ID from `website-live`'s `TRIAL_REGISTRY_D1_ID` variable (`apps/site-worker/scripts/set-database-id.mjs`), so account-specific IDs stay out of the repository.
 
 Migrations run before the deploy, so they must stay backwards compatible with the Worker version that is still live: add, don't rename or drop.
 
@@ -55,21 +56,19 @@ Migrations run before the deploy, so they must stay backwards compatible with th
 
 In the production account (the OpenApps account, with the user added as a member):
 
-1. Create both databases and note the IDs:
+1. Create the database and note its ID:
    ```sh
    pnpm --dir apps/site-worker exec wrangler d1 create trial-registry
-   pnpm --dir apps/site-worker exec wrangler d1 create trial-registry-preview
    ```
    Choose a location hint near most buyers, or leave it automatic.
-2. Workers → your subdomain: make sure a `workers.dev` subdomain exists. Preview URLs need it, even though the production Worker isn't served there (`workers_dev: false`).
-3. Create an API token (My Profile → API Tokens → Custom token) with:
+2. Create an API token for the deploy job only (My Profile → API Tokens → Custom token), limited to this account and zone, with:
    - Account → Workers Scripts → Edit
    - Account → D1 → Edit
    - Account → Account Settings → Read
    - Zone → Workers Routes → Edit, for `openapps.space`
    - Zone → DNS → Edit, for `openapps.space` (the Worker's custom domain creates its DNS record)
    - Zone → Zone → Read, for `openapps.space`
-4. Note the account ID (Workers & Pages → Overview, right-hand column).
+3. Note the account ID (Workers & Pages → Overview, right-hand column).
 
 ### GitHub
 
@@ -78,11 +77,10 @@ Repository → Settings → Environments:
 | Environment | Deployment branches | Secrets | Variables |
 | --- | --- | --- | --- |
 | `website-live` | `main` only | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `TRIAL_REGISTRY_D1_ID` (live database), `VITE_DODO_CHECKOUT_ORIGIN` (empty or `https://checkout.dodopayments.com`), `VITE_OPENKLACK_DODO_PAID_PRODUCT_ID`, `VITE_OPENREACTION_DODO_PAID_PRODUCT_ID` (live products), `VITE_OPENKLACK_MAC_DOWNLOAD_URL`, `VITE_OPENREACTION_MAC_DOWNLOAD_URL` |
-| `website-test` | All branches | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `TRIAL_REGISTRY_D1_ID` (preview database), `VITE_DODO_CHECKOUT_ORIGIN=https://test.checkout.dodopayments.com`, test-mode product IDs, download URLs |
 
-Variables left unset show "Coming soon", and so does every app until `officialBuilds` is set in `apps/website/src/shared/licensing.ts`. Preview checkouts still return to `https://openapps.space/<app>/thanks/`, since the site origin is fixed.
+Put the Cloudflare secrets only in `website-live`, never as repository-level secrets, so no PR job can read them.
 
-A preview can only be uploaded after the first deploy has created the Worker. The environment secrets reach any workflow change on a branch of this repository, so add required reviewers to `website-test` if that's a concern.
+Buying fails closed. An app's Buy button is live only when `officialBuilds` marks it on sale in `apps/website/src/shared/licensing.ts`, its paid product ID is set, **and** its `VITE_<APP>_MAC_DOWNLOAD_URL` is an https URL. Otherwise Buy shows "Coming soon", and the download page says the Mac release is coming soon.
 
 ## DNS cutover
 
