@@ -9,10 +9,18 @@ struct LicenseSection: View {
 
     @State private var key = ""
     @State private var showsKeyField = false
+    /// The key field is for a trial key (refused locally after one trial).
+    @State private var keyFieldIsTrial = false
 
     var body: some View {
         Section {
             statusRow
+            if let error = license.manager.storageError {
+                Text(LicenseMessage.storageUnavailable.text + " (\(Self.describe(error)))")
+                    .font(Brand.body(12))
+                    .foregroundStyle(Brand.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let message = license.message {
                 Text(message.text)
                     .font(Brand.body(12))
@@ -35,7 +43,14 @@ struct LicenseSection: View {
                 .foregroundStyle(Brand.textSecondary)
         }
         .onChange(of: license.pendingKey) { _, pending in
-            if let pending { key = pending }
+            if let pending { key = pending.key }
+        }
+    }
+
+    private static func describe(_ error: LicenseStoreError) -> String {
+        switch error {
+        case .unavailable(let reason): reason
+        case .corrupt: "the stored license is unreadable"
         }
     }
 
@@ -78,11 +93,17 @@ struct LicenseSection: View {
             switch license.state {
             case .unlicensed:
                 if !license.trialUsed {
-                    Button("Start 3-day trial") { openURL(LicensingConfig.trialURL) }
-                        .help("Opens the free trial checkout; you’ll get a trial key by email")
+                    trialButton
                 }
                 buyButton
                 Spacer()
+                if !license.trialUsed {
+                    Button(keyFieldIsTrial && showsKeyField ? "Hide key field" : "Enter a trial key") {
+                        keyFieldIsTrial = true
+                        showsKeyField.toggle()
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                }
                 enterKeyButton
             case .trial:
                 buyButton
@@ -102,24 +123,42 @@ struct LicenseSection: View {
                 Spacer()
                 removeButton
             case .revoked:
-                Button("Activate again") { license.forgetRevokedRecord(); showsKeyField = true }
+                Button("Activate again") { license.forgetRevokedRecord(); keyFieldIsTrial = false; showsKeyField = true }
                 buyButton
-                Link("Contact support", destination: LicensingConfig.supportURL)
+                if let support = LicensingConfig.supportURL {
+                    Link("Contact support", destination: support)
+                }
                 Spacer()
             }
         }
         .disabled(license.isBusy)
     }
 
+    /// Checkout links exist only once the website ships them; until then the
+    /// buttons say so instead of opening a page that is not there.
     private var buyButton: some View {
-        Button("Buy for $5") { openURL(LicensingConfig.buyURL) }
-            .buttonStyle(PrimaryButtonStyle())
-            .help("Opens the checkout; you’ll get a license key by email")
+        Button(LicensingConfig.buyURL == nil ? "Buy for $5 — coming soon" : "Buy for $5") {
+            if let url = LicensingConfig.buyURL { openURL(url) }
+        }
+        .buttonStyle(PrimaryButtonStyle())
+        .disabled(LicensingConfig.buyURL == nil)
+        .help("Opens the checkout; you’ll get a license key by email")
+    }
+
+    private var trialButton: some View {
+        Button(LicensingConfig.trialURL == nil ? "Start 3-day trial — coming soon" : "Start 3-day trial") {
+            if let url = LicensingConfig.trialURL { openURL(url) }
+        }
+        .disabled(LicensingConfig.trialURL == nil)
+        .help("Opens the free trial checkout; you’ll get a trial key by email")
     }
 
     private var enterKeyButton: some View {
-        Button(showsKeyField ? "Hide key field" : "Enter a key") { showsKeyField.toggle() }
-            .buttonStyle(SecondaryButtonStyle())
+        Button(showsKeyField && !keyFieldIsTrial ? "Hide key field" : "Enter a license key") {
+            keyFieldIsTrial = false
+            showsKeyField.toggle()
+        }
+        .buttonStyle(SecondaryButtonStyle())
     }
 
     private var removeButton: some View {
@@ -130,7 +169,7 @@ struct LicenseSection: View {
 
     private var keyField: some View {
         HStack(spacing: Brand.Space.s8) {
-            TextField("Paste your license key", text: $key)
+            TextField(keyFieldIsTrial ? "Paste your trial key" : "Paste your license key", text: $key)
                 .textFieldStyle(.roundedBorder)
                 .font(Brand.mono(13))
                 .accessibilityLabel("License key")
@@ -141,12 +180,12 @@ struct LicenseSection: View {
         }
     }
 
-    private func pendingKeyRow(_ pending: String) -> some View {
+    private func pendingKeyRow(_ pending: LicenseController.PendingKey) -> some View {
         HStack(spacing: Brand.Space.s8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Activate this Mac with the key from your browser?")
+                Text(pending.kind == .trial ? "Start the trial on this Mac with the key from your browser?" : "Activate this Mac with the key from your browser?")
                     .font(Brand.body(14))
-                Text(pending)
+                Text(pending.key)
                     .font(Brand.mono(12))
                     .foregroundStyle(Brand.textSecondary)
                     .lineLimit(1)
@@ -157,7 +196,13 @@ struct LicenseSection: View {
                 .buttonStyle(SecondaryButtonStyle())
             Button("Activate") {
                 license.pendingKey = nil
-                Task { await license.activate(key: pending) }
+                Task {
+                    if pending.kind == .trial {
+                        await license.activateTrial(key: pending.key)
+                    } else {
+                        await license.activate(key: pending.key)
+                    }
+                }
             }
             .buttonStyle(PrimaryButtonStyle())
         }
@@ -168,8 +213,13 @@ struct LicenseSection: View {
 
     private func activateTypedKey() {
         let typed = key
+        let trial = keyFieldIsTrial
         Task {
-            await license.activate(key: typed)
+            if trial {
+                await license.activateTrial(key: typed)
+            } else {
+                await license.activate(key: typed)
+            }
             if case .activated = license.message { key = ""; showsKeyField = false }
         }
     }

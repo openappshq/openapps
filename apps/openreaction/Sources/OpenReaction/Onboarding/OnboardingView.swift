@@ -395,10 +395,25 @@ private struct TryItStep: View {
                 Text(error).font(Brand.body(13)).foregroundStyle(Brand.textSecondary)
             }
             TroubleshootingList(model: model, kind: nil, topics: [.afterUpdate])
+        } else if !controller.isLicensedForFeature {
+            problemCard(
+                title: "Try it after you start the trial or activate a license.",
+                detail: "Permissions are set. OpenReaction keeps the picker off until this Mac has a trial or a license; you can do that in Settings → License. Everything else keeps working meanwhile.",
+                actionTitle: "Open License settings",
+                action: { model.onOpenSettings?() }
+            )
+            HStack {
+                Spacer(minLength: 0)
+                Button("Continue without trying", action: model.finishPractice)
+                    .buttonStyle(LinkButtonStyle())
+            }
         } else if !controller.isTapRunning {
             HStack(spacing: Brand.Space.s8) {
                 ProgressView().controlSize(.small)
                 Text("Starting OpenReaction…").font(Brand.body(14)).foregroundStyle(Brand.textSecondary)
+                Spacer(minLength: 0)
+                Button("Skip", action: model.finishPractice)
+                    .buttonStyle(LinkButtonStyle())
             }
         } else {
             practice

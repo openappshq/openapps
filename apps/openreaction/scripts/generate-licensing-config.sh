@@ -14,22 +14,45 @@ out="${1:?output path}"
 env_name="${OPENAPPS_DODO_ENV:-}"
 paid="${OPENAPPS_DODO_PAID_PRODUCT_ID:-}"
 trial="${OPENAPPS_DODO_TRIAL_PRODUCT_ID:-}"
-buy_url="${OPENAPPS_BUY_URL:-https://openapps.space/openreaction/#buy}"
-trial_url="${OPENAPPS_TRIAL_URL:-https://openapps.space/openreaction/#trial}"
-support_url="${OPENAPPS_SUPPORT_URL:-mailto:support@openapps.space}"
+buy_url="${OPENAPPS_BUY_URL:-}"
+trial_url="${OPENAPPS_TRIAL_URL:-}"
+support_url="${OPENAPPS_SUPPORT_URL:-}"
 
 case "$env_name" in
     test) host="https://test.dodopayments.com" ;;
     live) host="https://live.dodopayments.com" ;;
     *) echo "error: OPENAPPS_DODO_ENV must be 'test' or 'live' (got '${env_name}')" >&2; exit 1 ;;
 esac
+# Product IDs: Dodo's `pdt_` form, and paid ≠ trial (equal IDs would make
+# every trial key look paid).
 for var in OPENAPPS_DODO_PAID_PRODUCT_ID OPENAPPS_DODO_TRIAL_PRODUCT_ID; do
     value="${!var:-}"
-    if [[ -z "$value" || "$value" == *PLACEHOLDER* || "$value" == *TODO* ]]; then
-        echo "error: $var is missing or a placeholder; create the Dodo products first (LICENSING.md)" >&2
+    if [[ ! "$value" =~ ^pdt_[A-Za-z0-9_-]{4,}$ ]] || [[ "$value" == *PLACEHOLDER* || "$value" == *TODO* ]]; then
+        echo "error: $var must be a real Dodo product id (pdt_…); create the products first (LICENSING.md)" >&2
         exit 1
     fi
 done
+if [[ "$paid" == "$trial" ]]; then
+    echo "error: paid and trial product ids must differ" >&2
+    exit 1
+fi
+
+# URLs are optional (the app shows "coming soon" without them) but must be
+# https:// or mailto: and contain nothing that could break a Swift literal.
+swift_optional_url() {
+    local value="$1" name="$2"
+    if [[ -z "$value" ]]; then echo "nil"; return; fi
+    local https_pattern='^https://[A-Za-z0-9._~:/?#@!$&*+,;=%()-]+$'
+    local mailto_pattern='^mailto:[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$'
+    if [[ ! "$value" =~ $https_pattern && ! "$value" =~ $mailto_pattern ]]; then
+        echo "error: $name must be an https:// or mailto: URL without quotes, spaces or backslashes (got '$value')" >&2
+        exit 1
+    fi
+    echo "URL(string: \"${value}\")"
+}
+buy_literal="$(swift_optional_url "$buy_url" OPENAPPS_BUY_URL)"
+trial_literal="$(swift_optional_url "$trial_url" OPENAPPS_TRIAL_URL)"
+support_literal="$(swift_optional_url "$support_url" OPENAPPS_SUPPORT_URL)"
 
 mkdir -p "$(dirname "$out")"
 cat > "$out" <<SWIFT
@@ -46,9 +69,10 @@ enum LicensingConfig {
         paid: ["${paid}"],
         trial: ["${trial}"]
     )
-    static let buyURL = URL(string: "${buy_url}")!
-    static let trialURL = URL(string: "${trial_url}")!
-    static let supportURL = URL(string: "${support_url}")!
+    /// nil until the checkout pages exist; the app shows "coming soon".
+    static let buyURL: URL? = ${buy_literal}
+    static let trialURL: URL? = ${trial_literal}
+    static let supportURL: URL? = ${support_literal}
 }
 #endif
 SWIFT

@@ -41,6 +41,9 @@ final class OnboardingModel {
     }
 
     @ObservationIgnored var onRequest: ((PermissionKind) -> Void)?
+    /// Opens Settings (License), for the practice step when the license
+    /// keeps the picker off.
+    @ObservationIgnored var onOpenSettings: (() -> Void)?
     @ObservationIgnored var onStepChange: ((OnboardingStep) -> Void)?
     @ObservationIgnored var onClose: (() -> Void)?
     @ObservationIgnored private var advanceTask: Task<Void, Never>?

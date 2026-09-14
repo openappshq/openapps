@@ -166,6 +166,8 @@ public enum ActivationResult: Equatable, Sendable {
     case rateLimited(retryAfter: TimeInterval)
     /// 5xx, timeout, no network.
     case unreachable
+    /// A 2xx answer missing something the contract requires (id, product, created_at).
+    case malformed
 }
 
 public struct Activation: Equatable, Sendable {

@@ -172,6 +172,7 @@ public final class LicenseManager {
             block(for: retryAfter)
             return .rateLimited(seconds: Int(retryAfter.rounded(.up)))
         case .unreachable: return .unreachable
+        case .malformed: return .malformedResponse
         case .activated(let activation):
             guard let kind = products.kind(of: activation.productID) else {
                 // Another app's key or the wrong environment: give the slot back.

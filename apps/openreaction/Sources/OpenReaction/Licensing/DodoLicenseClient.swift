@@ -25,7 +25,7 @@ struct DodoLicenseClient: LicenseClient {
         case .success(let http, let data):
             switch http.statusCode {
             case 200, 201:
-                guard let activation = Self.parseActivation(data, serverDate: Self.date(of: http)) else { return .unreachable }
+                guard let activation = Self.parseActivation(data, serverDate: Self.date(of: http)) else { return .malformed }
                 return .activated(activation)
             case 404: return .keyNotFound
             case 403: return .keyDisabledOrExpired
@@ -94,7 +94,8 @@ struct DodoLicenseClient: LicenseClient {
               let product = object["product"] as? [String: Any],
               let productID = product["product_id"] as? String else { return nil }
         let name = product["name"] as? String ?? productID
-        let createdAt = (object["created_at"] as? String).flatMap(Self.parseISO8601) ?? serverDate ?? Date()
+        // The contract needs the activation time; an answer without it is not usable.
+        guard let createdAt = (object["created_at"] as? String).flatMap(Self.parseISO8601) else { return nil }
         return Activation(instanceID: id, productID: productID, productName: name, createdAt: createdAt, serverDate: serverDate)
     }
 
@@ -107,21 +108,30 @@ struct DodoLicenseClient: LicenseClient {
 
     /// The response `Date` header (RFC 7231), if present.
     private static func date(of response: HTTPURLResponse) -> Date? {
-        guard let value = response.value(forHTTPHeaderField: "Date") else { return nil }
+        response.value(forHTTPHeaderField: "Date").flatMap(httpDate)
+    }
+
+    /// Retry-After as seconds or an HTTP date, bounded to 1 s … 1 day; 60 s
+    /// when absent or unusable.
+    private static func retryAfter(_ response: HTTPURLResponse) -> TimeInterval {
+        guard let value = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespaces) else { return 60 }
+        let seconds: TimeInterval
+        if let number = TimeInterval(value), number.isFinite {
+            seconds = number
+        } else if let date = httpDate(value) {
+            seconds = date.timeIntervalSinceNow
+        } else {
+            return 60
+        }
+        return min(max(1, seconds), 86_400)
+    }
+
+    private static func httpDate(_ value: String) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
         return formatter.date(from: value)
-    }
-
-    private static func retryAfter(_ response: HTTPURLResponse) -> TimeInterval {
-        guard let value = response.value(forHTTPHeaderField: "Retry-After") else { return 60 }
-        if let seconds = TimeInterval(value.trimmingCharacters(in: .whitespaces)) { return max(1, seconds) }
-        if let date = date(of: HTTPURLResponse(url: response.url!, statusCode: 200, httpVersion: nil, headerFields: ["Date": value])!) {
-            return max(1, date.timeIntervalSinceNow)
-        }
-        return 60
     }
 }
 #endif

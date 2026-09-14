@@ -14,12 +14,21 @@ final class LicenseController {
     private(set) var state: LicenseState
     private(set) var isBusy = false
     private(set) var message: LicenseMessage?
-    /// A key arrived by deep link and waits for the user's confirmation.
-    var pendingKey: String?
+    /// A key from a deep link, waiting for the user's confirmation. `kind`
+    /// is `.trial` when the link came from the trial checkout.
+    struct PendingKey: Equatable {
+        let key: String
+        let kind: LicenseKind?
+    }
+
+    var pendingKey: PendingKey?
     /// Runs whenever the state may have changed (feature on/off, status line).
     @ObservationIgnored var onChange: (() -> Void)?
 
-    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var checkTimer: Timer?
+    /// Fires at the next local entitlement change (trial expiry, grace
+    /// warning or end), independent of the network schedule.
+    @ObservationIgnored private var deadlineTimer: Timer?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     @ObservationIgnored private var networkWasSatisfied = true
@@ -35,13 +44,21 @@ final class LicenseController {
 
     func start() {
         // Launch check in the background; never delays launch or the picker.
-        Task { await runCheckIfDue() }
-        scheduleTimer()
+        Task {
+            await manager.checkOnLaunch()
+            refresh()
+        }
+        scheduleTimers()
 
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.wakeOrNetwork() }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .NSSystemClockDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
         })
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
@@ -67,13 +84,14 @@ final class LicenseController {
         refresh()
     }
 
-    /// The "Start 3-day trial" path: refuses locally when the trial was used.
-    func startTrial(key: String) async {
-        if manager.refusesTrialLocally {
-            message = .trialAlreadyUsed
-            return
-        }
-        await activate(key: key)
+    /// The trial route (trial key field or a trial deep link): refused
+    /// locally, without calling Dodo, when the trial was already used here.
+    func activateTrial(key: String) async {
+        guard !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+        message = await manager.activate(key: key, expecting: .trial)
+        refresh()
     }
 
     func removeThisMac() async {
@@ -104,33 +122,51 @@ final class LicenseController {
     // MARK: - Scheduling
 
     private func wakeOrNetwork() {
+        // Local deadlines first: a trial that ended while asleep is off now.
+        refresh()
         Task { await runCheckIfDue() }
     }
 
     private func runCheckIfDue() async {
         await manager.checkIfDue()
+        await manager.retryPendingCleanups()
         refresh()
     }
 
-    private func scheduleTimer() {
-        timer?.invalidate()
-        timer = nil
-        guard let delay = manager.nextCheckDelay else { return }
-        let timer = Timer(timeInterval: max(1, delay), repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
+    private func scheduleTimers() {
+        checkTimer?.invalidate()
+        checkTimer = nil
+        if let delay = manager.nextCheckDelay {
+            checkTimer = makeTimer(after: delay) { [weak self] in
                 guard let self else { return }
                 Task { await self.runCheckIfDue() }
             }
         }
-        timer.tolerance = min(60, max(1, delay * 0.05))
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        deadlineTimer?.invalidate()
+        deadlineTimer = nil
+        if let deadline = manager.nextDeadline {
+            deadlineTimer = makeTimer(after: deadline.timeIntervalSinceNow + 1) { [weak self] in
+                self?.refresh()
+            }
+        }
     }
 
+    private func makeTimer(after delay: TimeInterval, _ action: @escaping @MainActor () -> Void) -> Timer {
+        let timer = Timer(timeInterval: max(1, delay), repeats: false) { _ in
+            MainActor.assumeIsolated { action() }
+        }
+        timer.tolerance = min(60, max(1, delay * 0.05))
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
+    }
+
+    /// Re-evaluates the state from the clock, records that time has passed,
+    /// and re-arms both timers. Cheap; called on every timer and event.
     private func refresh() {
+        manager.noteTime()
         let previous = state
         state = manager.state
-        scheduleTimer()
+        scheduleTimers()
         if previous != state { onChange?() }
     }
 
@@ -140,7 +176,7 @@ final class LicenseController {
     var statusLine: String? {
         switch state {
         case .licensed: nil
-        case .unlicensed: "Not licensed — start a trial or buy in Settings"
+        case .unlicensed: manager.storageError == nil ? "Not licensed — start a trial or buy in Settings" : "Can’t read the license from the Keychain"
         case .trial(let days): "Trial: about \(days) day\(days == 1 ? "" : "s") left"
         case .trialEnded: "Trial ended — buy in Settings"
         case .grace(let days, let warn): warn ? "Connect to the internet within \(days) day\(days == 1 ? "" : "s") to keep using OpenReaction" : nil

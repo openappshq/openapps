@@ -6,31 +6,36 @@ import Security
 /// The license record as a generic-password Keychain item, plus the
 /// trial-used flag as a second item that survives removing the record.
 /// Service `space.openapps.openreaction.license`, this device only.
+///
+/// Every SecItem status is checked: "not found" is an absent item, anything
+/// else is reported, so a locked or denied Keychain never looks like a
+/// successful save or a missing license.
 struct KeychainLicenseStore: LicenseStore {
     static let service = "space.openapps.openreaction.license"
     private static let recordAccount = "record"
     private static let trialAccount = "trial_used"
 
-    func loadRecord() -> LicenseRecord? {
-        guard let data = Self.read(account: Self.recordAccount) else { return nil }
-        return try? JSONDecoder().decode(LicenseRecord.self, from: data)
+    func loadRecord() throws(LicenseStoreError) -> LicenseRecord? {
+        guard let data = try Self.read(account: Self.recordAccount) else { return nil }
+        guard let record = try? JSONDecoder().decode(LicenseRecord.self, from: data) else { throw .corrupt }
+        return record
     }
 
-    func saveRecord(_ record: LicenseRecord) {
-        guard let data = try? JSONEncoder().encode(record) else { return }
-        Self.write(data, account: Self.recordAccount)
+    func saveRecord(_ record: LicenseRecord) throws(LicenseStoreError) {
+        guard let data = try? JSONEncoder().encode(record) else { throw .corrupt }
+        try Self.write(data, account: Self.recordAccount)
     }
 
-    func clearRecord() {
-        Self.delete(account: Self.recordAccount)
+    func clearRecord() throws(LicenseStoreError) {
+        try Self.delete(account: Self.recordAccount)
     }
 
-    var trialUsed: Bool {
-        Self.read(account: Self.trialAccount) != nil
+    func loadTrialUsed() throws(LicenseStoreError) -> Bool {
+        try Self.read(account: Self.trialAccount) != nil
     }
 
-    func markTrialUsed() {
-        Self.write(Data("1".utf8), account: Self.trialAccount)
+    func markTrialUsed() throws(LicenseStoreError) {
+        try Self.write(Data("1".utf8), account: Self.trialAccount)
     }
 
     // MARK: - SecItem
@@ -43,30 +48,49 @@ struct KeychainLicenseStore: LicenseStore {
         ]
     }
 
-    private static func read(account: String) -> Data? {
+    private static func read(account: String) throws(LicenseStoreError) -> Data? {
         var query = query(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data else { throw .corrupt }
+            return data
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw .unavailable(describe(status))
+        }
     }
 
-    private static func write(_ data: Data, account: String) {
+    private static func write(_ data: Data, account: String) throws(LicenseStoreError) {
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        let status = SecItemUpdate(query(account: account) as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
+        let updated = SecItemUpdate(query(account: account) as CFDictionary, attributes as CFDictionary)
+        switch updated {
+        case errSecSuccess:
+            return
+        case errSecItemNotFound:
             var item = query(account: account)
             item.merge(attributes) { _, new in new }
-            SecItemAdd(item as CFDictionary, nil)
+            let added = SecItemAdd(item as CFDictionary, nil)
+            guard added == errSecSuccess else { throw .unavailable(describe(added)) }
+        default:
+            throw .unavailable(describe(updated))
         }
     }
 
-    private static func delete(account: String) {
-        SecItemDelete(query(account: account) as CFDictionary)
+    private static func delete(account: String) throws(LicenseStoreError) {
+        let status = SecItemDelete(query(account: account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw .unavailable(describe(status)) }
+    }
+
+    private static func describe(_ status: OSStatus) -> String {
+        (SecCopyErrorMessageString(status, nil) as String?) ?? "Keychain error \(status)"
     }
 }
 #endif
