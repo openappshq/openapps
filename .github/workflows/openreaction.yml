@@ -116,7 +116,10 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       publish: ${{ steps.version.outputs.publish }}
       commit: ${{ steps.version.outputs.commit }}
-      artifact: OpenReaction-${{ steps.version.outputs.version }}-signed
+      # The digest of the DMG as verified here, and the id of the artifact it
+      # was uploaded as: the publish job trusts these, not what it downloads.
+      sha256: ${{ steps.verify.outputs.sha256 }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
     env:
       KEYCHAIN_NAME: openreaction-release.keychain-db
     steps:
@@ -174,6 +177,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          PUBLISH: ${{ steps.version.outputs.publish }}
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
           OPENAPPS_DODO_TRIAL_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_TRIAL_PRODUCT_ID }}
           OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
@@ -184,6 +189,10 @@ jobs:
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openreaction-release environment."; missing=1; fi
           done
+          # Only publication reads the tag ruleset, but a missing token should fail before a 30-minute build, not after.
+          if [ "$PUBLISH" = true ] && [ -z "$RULESET_READ_TOKEN" ]; then
+            echo "::error::Secret RULESET_READ_TOKEN is not set in the openreaction-release environment; publishing needs it to verify the tag ruleset."; missing=1
+          fi
           if [ -z "$OPENAPPS_DODO_PAID_PRODUCT_ID" ]; then
             echo "::error::Variable OPENAPPS_DODO_PAID_PRODUCT_ID is not set in the openreaction-release environment."; missing=1
           fi
@@ -224,9 +233,10 @@ jobs:
           security import "$P12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
-          if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -Fq "$APPLE_SIGNING_IDENTITY"; then
+          identities="$(security find-identity -v -p codesigning "$KEYCHAIN")"
+          if ! grep -Fq "$APPLE_SIGNING_IDENTITY" <<< "$identities"; then
             echo "::error::APPLE_CERTIFICATE does not contain the identity named by APPLE_SIGNING_IDENTITY."
-            security find-identity -v -p codesigning "$KEYCHAIN"
+            printf '%s\n' "$identities"
             exit 1
           fi
       - name: Build the signed universal release
@@ -260,7 +270,8 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/$KEYCHAIN_NAME"
           security list-keychains -d user -s login.keychain-db
-          if security find-identity -v -p codesigning | grep -q 'Developer ID Application:'; then
+          identities="$(security find-identity -v -p codesigning)"
+          if grep -q 'Developer ID Application:' <<< "$identities"; then
             echo "::error::A Developer ID identity is still available after cleanup."; exit 1
           fi
       - name: Notarize and staple the DMG
@@ -271,13 +282,16 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: scripts/notarize.sh "dist/OpenReaction-$VERSION.dmg"
       - name: Verify the download
+        id: verify
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           scripts/verify-release.sh --notarized "dist/OpenReaction-$VERSION.dmg"
           cd dist
           shasum -a 256 "OpenReaction-$VERSION.dmg" | tee "OpenReaction-$VERSION.dmg.sha256"
+          echo "sha256=$(cut -d' ' -f1 "OpenReaction-$VERSION.dmg.sha256")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
+        id: upload
         with:
           name: OpenReaction-${{ steps.version.outputs.version }}-signed
           path: |
@@ -294,16 +308,19 @@ jobs:
 
   # Publishes the verified DMG. The only job with a token that can write to
   # the repository; it runs no build, only scripts/publish-release.sh, which
-  # requires the openreaction-v* tag ruleset to be active and refuses unless
-  # the tag names exactly the commit the DMG was built from.
+  # requires the openreaction-v* tag ruleset to be active with no bypass
+  # actors and refuses unless the tag names exactly the commit the DMG was
+  # built from and the DMG has exactly the digest the release job verified.
   publish:
     if: needs.release.outputs.publish == 'true'
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: openreaction-release
+    # One publication at a time across all versions, so the newest-version
+    # check and the final publish of two releases can never interleave.
     concurrency:
-      group: openreaction-publish-${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openreaction-v{0}', inputs.version) || github.ref_name }}
+      group: openreaction-publish
       cancel-in-progress: false
     permissions:
       contents: write
@@ -313,15 +330,19 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.release.outputs.artifact }}
+          # By id, not by name: exactly the artifact the release job uploaded.
+          artifact-ids: ${{ needs.release.outputs.artifact_id }}
           path: apps/openreaction/dist
+          merge-multiple: true
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
           TAG: ${{ needs.release.outputs.tag }}
           BUILT_COMMIT: ${{ needs.release.outputs.commit }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
           CREATE_TAG: ${{ github.event_name == 'workflow_dispatch' }}
           ALLOW_OLDER: ${{ inputs.allow_older == true }}
         run: scripts/publish-release.sh

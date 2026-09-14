@@ -53,6 +53,15 @@ Creating tags stays allowed; once a release tag exists it can only ever be
 left alone. A wrong release is fixed by a new patch version, never by
 re-tagging.
 
+GitHub shows a ruleset's bypass actors only to callers allowed to
+administer the repository; to anyone else the ruleset looks as if nobody
+were exempt. The workflow's own token is not such a caller, so the publish
+job reads rulesets with a dedicated **`RULESET_READ_TOKEN`**: a
+[fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
+for this repository only, with the single permission **Administration:
+Read-only**, no other access, created by a repository admin. A ruleset whose
+bypass actors are not visible fails the check, and so does a missing token.
+
 **Environment.** Create the environment **`openreaction-release`**
 (Settings → Environments) and add, on that environment, the following.
 Restrict its deployment branches and tags to `main` and `openreaction-v*` so
@@ -71,6 +80,7 @@ approve both.
 | `APPLE_ID` | The Apple ID used for notarization |
 | `APPLE_PASSWORD` | Its app-specific password |
 | `APPLE_TEAM_ID` | The ten-character Team ID |
+| `RULESET_READ_TOKEN` | Fine-grained token, this repository, Administration: Read-only; used only to read the tag ruleset before publishing |
 
 **Variables** (public configuration, per [LICENSING.md](../../LICENSING.md)):
 
@@ -115,15 +125,22 @@ casing.
    and staples the DMG, verifies the result and uploads
    `OpenReaction-1.0.0.dmg` plus its `.sha256` as a workflow artifact.
    `publish` (the only job that can write to the repository) downloads that
-   artifact, re-checks the SHA-256, confirms the tag ruleset is active,
-   confirms `openreaction-v1.0.0` names exactly the commit that was built,
-   creates a *draft* release, uploads the files, confirms the tag once more,
-   and only then publishes. Release notes are generated from the commits.
-   Expect 20–40 minutes; notarization is most of it.
+   exact artifact by id, checks the DMG against the SHA-256 the release job
+   reported as a job output (a checksum file that travelled with the
+   download is never trusted), confirms the tag ruleset is active with no
+   bypass actors, confirms `openreaction-v1.0.0` names exactly the commit
+   that was built, creates a *draft* release, uploads the files, confirms
+   the tag once more, and only then publishes. Release notes are generated
+   from the commits. Expect 20–40 minutes; notarization is most of it.
 5. Open the release, check the notes, and download the DMG for the clean-Mac
    check below before linking it from the website.
 
-Runs for the same version queue behind each other rather than racing, and a
+Builds for the same version and publications of any version are
+serialised by GitHub concurrency groups, so two runs never publish at the
+same time. GitHub keeps at most one run waiting per group and cancels an
+older waiting run when a newer one arrives, so if several releases are
+started in quick succession only the running one and the latest waiting one
+survive; start the next release once the previous run has finished. A
 version lower than the newest published release is refused unless the
 manual run sets `allow_older` (a deliberate back-port).
 
@@ -151,8 +168,14 @@ locally against the downloaded artifact:
 ```sh
 GH_REPO=openappshq/openapps TAG=openreaction-v1.0.0 VERSION=1.0.0 \
 BUILT_COMMIT=$(git rev-parse openreaction-v1.0.0^{commit}) DIST=path/to/artifact \
+EXPECTED_SHA256=$(shasum -a 256 path/to/artifact/OpenReaction-1.0.0.dmg | cut -d' ' -f1) \
+RULESET_READ_TOKEN=$(gh auth token) \
 scripts/publish-release.sh --dry-run
 ```
+
+(`EXPECTED_SHA256` is normally the release job's output; computing it from
+the file only makes sense for a rehearsal. `gh auth token` works for an
+admin's own login, which sees the ruleset's bypass actors.)
 
 ## Verifying the download on a clean Mac
 
