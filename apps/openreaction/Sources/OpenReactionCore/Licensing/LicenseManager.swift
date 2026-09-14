@@ -38,15 +38,26 @@ public final class LicenseManager {
     /// The cleanups on disk could not be read; nothing may overwrite them
     /// until they were merged in.
     private var cleanupsUnread = false
-    /// A journal entry that could not be persisted yet; retried on ticks.
-    private var pendingJournalRecord: (instanceID: String, entry: JournalEntry)?
-    /// Journal entries whose removal could not be persisted yet; retried on ticks.
-    private var pendingJournalClears: Set<String> = []
-    /// Activations known to have a journal entry (written here or found on load).
-    private var journaledInstances: Set<String> = []
-    /// The instance whose record is being deleted; its journal entry goes
-    /// once the deletion is durable, or once a new record durably replaces it.
-    private var removingInstanceID: String?
+    /// A journal write the journal has not accepted yet, one per activation:
+    /// a newer operation supersedes an older one. Retried on ticks.
+    private enum JournalOp: Equatable {
+        case record(seq: UInt64)
+        case clear(upTo: UInt64)
+
+        var seq: UInt64 {
+            switch self {
+            case .record(let seq), .clear(let seq): seq
+            }
+        }
+    }
+    private var pendingJournalOps: [String: JournalOp] = [:]
+    /// Activations known to have a journal entry (written here or found on
+    /// load), with the highest sequence known to be in it.
+    private var journaledSeq: [String: UInt64] = [:]
+    /// The instance whose record is being deleted, with its tombstone's
+    /// sequence; the entry goes once the deletion is durable, or once a new
+    /// record durably replaces it.
+    private var removingInstance: (instanceID: String, seq: UInt64)?
     /// The journal could not be written; surfaced like a storage problem.
     public private(set) var journalError = false
     /// The journal could not be read: the core stays off until it can be,
@@ -97,14 +108,14 @@ public final class LicenseManager {
                     journalUnreadable = false
                     if let entry = try journal.entry(instanceID: current.instanceID) {
                         if entry.seq > current.eventSeq {
-                            journaledInstances.insert(current.instanceID)
+                            journaledSeq[current.instanceID] = entry.seq
                             if entry == .legacy { journalRecord(current.instanceID, entry: entry) } // rewrite in the current form
                             current.revokedAt = current.revokedAt ?? now()
                             current.eventSeq = entry.seq
                             loaded = current
                             pendingDurableWrite = .some(current)
                         } else {
-                            clearJournal(current.instanceID)
+                            clearJournal(current.instanceID, upTo: current.eventSeq)
                         }
                     }
                 } catch {
@@ -136,15 +147,15 @@ public final class LicenseManager {
     /// Whether memory holds something the store or journal has not accepted
     /// yet, or the store holds cleanups memory has not seen.
     private var owesDurableWrite: Bool {
-        pendingDurableWrite != nil || cleanupsDirty || cleanupsUnread || pendingJournalRecord != nil || !pendingJournalClears.isEmpty
+        pendingDurableWrite != nil || cleanupsDirty || cleanupsUnread || !pendingJournalOps.isEmpty
     }
 
     // MARK: State
 
     public var state: LicenseState {
         let policy = LicensePolicy.state(record: record, now: now())
-        // The journal may say this activation is dead; until it can be read
-        // nothing local is trusted.
+        // The journal may say this activation is dead; until it can be read,
+        // or Dodo answers, nothing local is trusted.
         if journalUnreadable, record != nil, policy.isFeatureEnabled { return .checkRequired }
         return policy
     }
@@ -175,6 +186,8 @@ public final class LicenseManager {
         let current = now()
         if let blockedUntil, current < blockedUntil { return false }
         guard let lastAttemptAt else { return true }
+        // Only Dodo can settle what an unreadable journal may say.
+        if journalUnreadable, failedChecks == 0 { return true }
         if current < lastAttemptAt.addingTimeInterval(-LicensePolicy.clockRollbackTolerance) { return true }
         return current >= lastAttemptAt.addingTimeInterval(scheduledWait)
     }
@@ -243,11 +256,13 @@ public final class LicenseManager {
             pendingDurableWrite = nil
             // Durable now: a revoked record carries its own revocation, and a
             // deleted one is gone.
-            // The saved record has caught up with any entry about it.
-            if let pending, journaledInstances.contains(pending.instanceID) { clearJournal(pending.instanceID) }
-            if pending == nil, let removed = removingInstanceID {
-                removingInstanceID = nil
-                clearJournal(removed)
+            // The saved record has caught up with any entry up to its sequence.
+            if let pending, let known = journaledSeq[pending.instanceID], known <= pending.eventSeq {
+                clearJournal(pending.instanceID, upTo: pending.eventSeq)
+            }
+            if pending == nil, let removed = removingInstance {
+                removingInstance = nil
+                clearJournal(removed.instanceID, upTo: removed.seq)
             }
             if !cleanupsDirty, !cleanupsUnread, !journalUnreadable { storageError = nil }
         } catch {
@@ -258,31 +273,42 @@ public final class LicenseManager {
     /// Journals a dead activation before anything else is touched. A failed
     /// write keeps the in-memory lock, is retried on ticks and reported.
     private func journalRecord(_ instanceID: String, entry: JournalEntry) {
-        journaledInstances.insert(instanceID)
-        if journal.record(instanceID: instanceID, entry: entry) {
-            pendingJournalRecord = nil
-            journalError = !pendingJournalClears.isEmpty
-        } else {
-            pendingJournalRecord = (instanceID, entry)
-            journalError = true
-        }
+        journaledSeq[instanceID] = max(journaledSeq[instanceID] ?? 0, entry.seq)
+        apply(.record(seq: entry.seq), to: instanceID)
     }
 
-    /// Removes a journal entry; retried on ticks until it is really gone.
-    private func clearJournal(_ instanceID: String) {
-        if journal.clear(instanceID: instanceID) {
-            pendingJournalClears.remove(instanceID)
-            journaledInstances.remove(instanceID)
-            journalError = pendingJournalRecord != nil || !pendingJournalClears.isEmpty
-        } else {
-            pendingJournalClears.insert(instanceID)
+    /// Removes a journal entry up to `seq`; retried on ticks until it is
+    /// really gone. A newer entry for the activation is never touched.
+    private func clearJournal(_ instanceID: String, upTo seq: UInt64) {
+        apply(.clear(upTo: seq), to: instanceID)
+    }
+
+    /// Runs one journal operation now; if the journal refuses it, keeps it
+    /// for the next tick — unless a newer operation for that activation is
+    /// already waiting, which supersedes it.
+    private func apply(_ op: JournalOp, to instanceID: String) {
+        if let waiting = pendingJournalOps[instanceID], waiting.seq > op.seq {
             journalError = true
+            return
         }
+        let done: Bool
+        switch op {
+        case .record(let seq): done = journal.record(instanceID: instanceID, entry: JournalEntry(seq: seq))
+        case .clear(let upTo): done = journal.clear(instanceID: instanceID, upTo: upTo)
+        }
+        if done {
+            pendingJournalOps[instanceID] = nil
+            if case .clear(let upTo) = op, let known = journaledSeq[instanceID], known <= upTo {
+                journaledSeq[instanceID] = nil // gone; a newer entry would have survived
+            }
+        } else {
+            pendingJournalOps[instanceID] = op
+        }
+        journalError = !pendingJournalOps.isEmpty
     }
 
     private func retryJournal() {
-        if let pending = pendingJournalRecord { journalRecord(pending.instanceID, entry: pending.entry) }
-        for instanceID in pendingJournalClears { clearJournal(instanceID) }
+        for (instanceID, op) in pendingJournalOps { apply(op, to: instanceID) }
     }
 
     /// Writes the cleanups, first merging in whatever the store holds if it
@@ -328,7 +354,7 @@ public final class LicenseManager {
         activationGeneration += 1
         if let previous = record {
             journalRecord(previous.instanceID, entry: JournalEntry(seq: previous.eventSeq + 1))
-            removingInstanceID = previous.instanceID
+            removingInstance = (previous.instanceID, previous.eventSeq + 1)
         }
         write(nil)
     }
@@ -338,12 +364,13 @@ public final class LicenseManager {
     /// durably replaced, so their journal entries go.
     private func commitActivation(_ newRecord: LicenseRecord) {
         activationGeneration += 1
-        if let previous = record, previous.instanceID != newRecord.instanceID, journaledInstances.contains(previous.instanceID) {
-            clearJournal(previous.instanceID)
+        // The replaced activation is dead for good: any entry about it goes.
+        if let previous = record, previous.instanceID != newRecord.instanceID, journaledSeq[previous.instanceID] != nil {
+            clearJournal(previous.instanceID, upTo: .max)
         }
-        if let removing = removingInstanceID, removing != newRecord.instanceID {
-            removingInstanceID = nil
-            clearJournal(removing)
+        if let removing = removingInstance, removing.instanceID != newRecord.instanceID {
+            removingInstance = nil
+            clearJournal(removing.instanceID, upTo: .max)
         }
         record = newRecord
         pendingDurableWrite = nil
@@ -360,6 +387,11 @@ public final class LicenseManager {
         var revoked = current
         revoked.revokedAt = now()
         revoked.eventSeq = current.eventSeq + 1
+        if journalUnreadable {
+            // Dodo's answer supersedes whatever the unreadable entry said.
+            clearJournal(current.instanceID, upTo: .max)
+            journalUnreadable = pendingJournalOps[current.instanceID] != nil
+        }
         journalRecord(current.instanceID, entry: JournalEntry(seq: revoked.eventSeq))
         write(revoked)
         failedChecks = 0
@@ -583,6 +615,13 @@ public final class LicenseManager {
         // which goes once this record is durable (`flushRecord`). If the
         // save fails, a restart stays locked until the next successful check.
         updated.eventSeq = current.eventSeq + 1
+        if journalUnreadable {
+            // Dodo settled what the unreadable entry might have said: rebuild
+            // the journal without it.
+            journaledSeq[current.instanceID] = .max
+            clearJournal(current.instanceID, upTo: .max)
+            journalUnreadable = pendingJournalOps[current.instanceID] != nil
+        }
         write(updated)
         failedChecks = 0
         blockedUntil = nil

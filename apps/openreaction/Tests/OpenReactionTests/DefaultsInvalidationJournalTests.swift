@@ -34,7 +34,11 @@ struct DefaultsInvalidationJournalTests {
         #expect(fixture.journal.record(instanceID: "inst_1", entry: JournalEntry(seq: 7)))
         #expect(try fixture.journal.entry(instanceID: "inst_1") == JournalEntry(seq: 7))
         #expect(try fixture.journal.entry(instanceID: "inst_2") == nil)
-        #expect(fixture.journal.clear(instanceID: "inst_1"))
+        #expect(fixture.journal.clear(instanceID: "inst_1", upTo: 6)) // older clear: the entry survives
+        #expect(try fixture.journal.entry(instanceID: "inst_1") == JournalEntry(seq: 7))
+        #expect(fixture.journal.record(instanceID: "inst_1", entry: JournalEntry(seq: 5))) // older record: never downgraded
+        #expect(try fixture.journal.entry(instanceID: "inst_1") == JournalEntry(seq: 7))
+        #expect(fixture.journal.clear(instanceID: "inst_1", upTo: 7))
         #expect(try fixture.journal.entry(instanceID: "inst_1") == nil)
         // The key is a hash: the instance id is not in the store.
         let key = fixture.key(for: "inst_1")
@@ -61,6 +65,9 @@ struct DefaultsInvalidationJournalTests {
         fixture.defaults.set(["seq": -3], forKey: key)
         #expect(throws: LicenseStoreError.corrupt) { try fixture.journal.entry(instanceID: "inst_1") }
         #expect(fixture.defaults.object(forKey: key) != nil) // reading never rewrote it
+        // Only an authoritative clear removes it.
+        #expect(fixture.journal.clear(instanceID: "inst_1", upTo: .max))
+        #expect(try fixture.journal.entry(instanceID: "inst_1") == nil)
     }
 }
 #endif

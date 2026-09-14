@@ -31,17 +31,23 @@ struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
         return JournalEntry(seq: number.uint64Value)
     }
 
-    func record(instanceID: String, entry: JournalEntry) -> Bool {
+    func record(instanceID: String, entry new: JournalEntry) -> Bool {
         let key = Self.key(instanceID)
-        defaults.set(["seq": NSNumber(value: entry.seq)], forKey: key)
+        // A newer revocation is never downgraded by an older one; a
+        // time-based entry is always rewritten in the current form.
+        if defaults.object(forKey: key) as? [String: Any] != nil,
+           let existing = try? entry(instanceID: instanceID), existing.seq >= new.seq { return true }
+        defaults.set(["seq": NSNumber(value: new.seq)], forKey: key)
         // Flushed before the Keychain is even tried, and read back: only a
         // value that is on disk counts as protection.
         guard defaults.synchronize(), let stored = defaults.object(forKey: key) as? [String: Any] else { return false }
-        return (stored["seq"] as? NSNumber)?.uint64Value == entry.seq
+        return (stored["seq"] as? NSNumber)?.uint64Value == new.seq
     }
 
-    func clear(instanceID: String) -> Bool {
+    func clear(instanceID: String, upTo seq: UInt64) -> Bool {
         let key = Self.key(instanceID)
+        // A newer entry survives an older clear; an unreadable one goes.
+        if let existing = try? entry(instanceID: instanceID), existing.seq > seq { return true }
         defaults.removeObject(forKey: key)
         return defaults.synchronize() && defaults.object(forKey: key) == nil
     }

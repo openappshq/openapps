@@ -271,11 +271,16 @@ public protocol InvalidationJournal: Sendable {
     /// nil when there is no entry; throws when the journal cannot be read
     /// or the entry is unreadable.
     func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry?
-    /// Written synchronously, before the record is touched. False if the
-    /// entry could not be persisted.
+    /// Written synchronously, before the record is touched, unless the
+    /// journal already holds a newer entry (a later revocation is never
+    /// downgraded). True when the journal now durably holds an entry with
+    /// at least this sequence.
     func record(instanceID: String, entry: JournalEntry) -> Bool
-    /// False if the removal could not be persisted.
-    func clear(instanceID: String) -> Bool
+    /// Removes the entry only if its sequence is at most `seq` — a newer
+    /// revocation survives an older clear. An entry that cannot be read is
+    /// removed too: only an authoritative answer asks for a clear. True when
+    /// the journal now durably holds no entry with a sequence up to `seq`.
+    func clear(instanceID: String, upTo seq: UInt64) -> Bool
 }
 
 /// What the journal keeps per dead activation.
