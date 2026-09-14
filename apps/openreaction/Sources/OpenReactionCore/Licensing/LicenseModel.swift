@@ -22,10 +22,14 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
     /// The latest moment this Mac has observed (server time when a check
     /// succeeds, else local), so a clock rolled back is detected.
     public var lastObservedAt: Date
+    /// Incremented on every authoritative change (activation, `valid: true`,
+    /// revocation, removal). The invalidation journal refers to it, so
+    /// staleness is decided by order, never by comparing clocks.
+    public var eventSeq: UInt64
 
     public init(
         licenseKey: String, instanceID: String, productID: String, kind: LicenseKind,
-        activatedAt: Date, lastSuccessAt: Date, revokedAt: Date? = nil, lastObservedAt: Date? = nil
+        activatedAt: Date, lastSuccessAt: Date, revokedAt: Date? = nil, lastObservedAt: Date? = nil, eventSeq: UInt64 = 1
     ) {
         self.licenseKey = licenseKey
         self.instanceID = instanceID
@@ -35,6 +39,26 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
         self.lastSuccessAt = lastSuccessAt
         self.revokedAt = revokedAt
         self.lastObservedAt = lastObservedAt ?? max(activatedAt, lastSuccessAt)
+        self.eventSeq = eventSeq
+    }
+
+    /// Records saved before the sequence existed read as 0, so any journal
+    /// entry about them is honored.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        licenseKey = try container.decode(String.self, forKey: .licenseKey)
+        instanceID = try container.decode(String.self, forKey: .instanceID)
+        productID = try container.decode(String.self, forKey: .productID)
+        kind = try container.decode(LicenseKind.self, forKey: .kind)
+        activatedAt = try container.decode(Date.self, forKey: .activatedAt)
+        lastSuccessAt = try container.decode(Date.self, forKey: .lastSuccessAt)
+        revokedAt = try container.decodeIfPresent(Date.self, forKey: .revokedAt)
+        lastObservedAt = try container.decodeIfPresent(Date.self, forKey: .lastObservedAt) ?? max(activatedAt, lastSuccessAt)
+        eventSeq = try container.decodeIfPresent(UInt64.self, forKey: .eventSeq) ?? 0
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case licenseKey, instanceID, productID, kind, activatedAt, lastSuccessAt, revokedAt, lastObservedAt, eventSeq
     }
 
     public var isRevoked: Bool { revokedAt != nil }
@@ -239,14 +263,34 @@ public protocol LicenseStore: Sendable {
 /// by the user), kept outside the Keychain so it survives a restart even when
 /// the Keychain refused to save or delete the record. Keyed by activation
 /// (the instance id, hashed by the implementation); never holds the license
-/// key. Both writes report whether they were made durable.
+/// key, and never a time: the entry carries the record's `eventSeq` of the
+/// revocation, so on load it is honored only while the saved record has not
+/// caught up. Both writes report whether they were made durable; a read
+/// that fails is a storage error, not an empty journal.
 public protocol InvalidationJournal: Sendable {
-    func revokedAt(instanceID: String) -> Date?
+    /// nil when there is no entry; throws when the journal cannot be read
+    /// or the entry is unreadable.
+    func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry?
     /// Written synchronously, before the record is touched. False if the
     /// entry could not be persisted.
-    func record(instanceID: String, revokedAt: Date) -> Bool
+    func record(instanceID: String, entry: JournalEntry) -> Bool
     /// False if the removal could not be persisted.
     func clear(instanceID: String) -> Bool
+}
+
+/// What the journal keeps per dead activation.
+public struct JournalEntry: Codable, Equatable, Sendable {
+    /// The record's `eventSeq` at the revocation or removal.
+    public var seq: UInt64
+
+    public init(seq: UInt64) {
+        self.seq = seq
+    }
+
+    /// Entries written before the sequence existed (a revocation time): they
+    /// are honored once against a record that has not caught up, and then
+    /// rewritten in the current form.
+    public static let legacy = JournalEntry(seq: 1)
 }
 
 /// An activation this Mac owes a deactivation for.

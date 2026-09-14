@@ -4,11 +4,12 @@ import Foundation
 import OpenReactionCore
 
 /// The invalidation journal as plain preferences: nothing secret is in it.
-/// Each entry is `revoked.<SHA-256 of the instance id>` → the time Dodo
-/// answered `valid: false`. It exists so a revocation the Keychain refused
-/// to store still holds after a restart; it is cleared once the revoked
-/// record is durable, on `valid: true` for that activation, or when the
-/// activation is replaced or removed.
+/// Each entry is `revoked.<SHA-256 of the instance id>` → `{seq}`, the
+/// record's event sequence at the revocation or removal; entries from
+/// before the sequence existed hold a time and read as `.legacy`. It exists
+/// so a revocation the Keychain refused to store still holds after a
+/// restart; the manager clears it once the record has durably caught up.
+/// An entry that is neither form is corrupt: reported, never overwritten.
 struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
     static let suiteName = "space.openapps.openreaction.license"
     /// UserDefaults is thread-safe; the manager only ever calls from the main actor.
@@ -18,17 +19,25 @@ struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
         self.defaults = defaults ?? .standard
     }
 
-    func revokedAt(instanceID: String) -> Date? {
-        guard let seconds = defaults.object(forKey: Self.key(instanceID)) as? Double else { return nil }
-        return Date(timeIntervalSince1970: seconds)
+    func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry? {
+        guard let value = defaults.object(forKey: Self.key(instanceID)) else { return nil }
+        if let dictionary = value as? [String: Any] { return try Self.decode(dictionary) }
+        if value is NSNumber { return .legacy } // a revocation time from before the sequence existed
+        throw .corrupt
     }
 
-    func record(instanceID: String, revokedAt: Date) -> Bool {
+    private static func decode(_ dictionary: [String: Any]) throws(LicenseStoreError) -> JournalEntry {
+        guard let number = dictionary["seq"] as? NSNumber, number.int64Value >= 0 else { throw .corrupt }
+        return JournalEntry(seq: number.uint64Value)
+    }
+
+    func record(instanceID: String, entry: JournalEntry) -> Bool {
         let key = Self.key(instanceID)
-        defaults.set(revokedAt.timeIntervalSince1970, forKey: key)
+        defaults.set(["seq": NSNumber(value: entry.seq)], forKey: key)
         // Flushed before the Keychain is even tried, and read back: only a
         // value that is on disk counts as protection.
-        return defaults.synchronize() && defaults.object(forKey: key) as? Double == revokedAt.timeIntervalSince1970
+        guard defaults.synchronize(), let stored = defaults.object(forKey: key) as? [String: Any] else { return false }
+        return (stored["seq"] as? NSNumber)?.uint64Value == entry.seq
     }
 
     func clear(instanceID: String) -> Bool {

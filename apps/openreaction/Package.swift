@@ -33,7 +33,8 @@ let package = Package(
         // Drives the real tap callback with constructed, unposted CGEvents.
         .testTarget(
             name: "OpenReactionTests",
-            dependencies: ["OpenReaction", "OpenReactionCore"]
+            dependencies: ["OpenReaction", "OpenReactionCore"],
+            swiftSettings: licensing ? [.define("OPENAPPS_LICENSING")] : []
         ),
     ],
     swiftLanguageModes: [.v6]

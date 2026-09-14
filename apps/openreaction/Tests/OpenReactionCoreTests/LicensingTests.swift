@@ -98,12 +98,16 @@ struct LicensingTests {
     }
 
     final class MemoryJournal: InvalidationJournal, @unchecked Sendable {
-        var entries: [String: Date] = [:]
+        var entries: [String: JournalEntry] = [:]
         var failsWrites = false
-        func revokedAt(instanceID: String) -> Date? { entries[instanceID] }
-        func record(instanceID: String, revokedAt: Date) -> Bool {
+        var readError: LicenseStoreError?
+        func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry? {
+            if let readError { throw readError }
+            return entries[instanceID]
+        }
+        func record(instanceID: String, entry: JournalEntry) -> Bool {
             guard !failsWrites else { return false }
-            entries[instanceID] = revokedAt
+            entries[instanceID] = entry
             return true
         }
         func clear(instanceID: String) -> Bool {
@@ -984,7 +988,7 @@ struct LicensingTests {
         await manager.check()
         #expect(manager.state == .revoked)
         #expect(store.record?.isRevoked == false)
-        #expect(journal.entries["inst_1"] == clock.now)
+        #expect(journal.entries["inst_1"] == JournalEntry(seq: 2)) // the record was at 1
         // Quit before the retry; relaunch offline over the same stores.
         client.validation = .unreachable
         let restarted = makeManager()
@@ -1006,7 +1010,7 @@ struct LicensingTests {
     @Test("T2. A journaled revocation is cleared by valid:true for that activation")
     func journalClearedByValidTrue() async {
         store.record = paidRecord(lastSuccessAge: 3600)
-        journal.entries["inst_1"] = clock.now.addingTimeInterval(-60)
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
         store.failsWrites = true
         let manager = makeManager()
         #expect(manager.state == .revoked)
@@ -1021,14 +1025,14 @@ struct LicensingTests {
     @Test("T2. A journaled revocation is cleared by a new activation or removal")
     func journalClearedByNewActivationAndRemoval() async {
         store.record = paidRecord(lastSuccessAge: 3600)
-        journal.entries["inst_1"] = clock.now
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
         client.activation = .activated(activation(Self.paid, instance: "inst_2"))
         let manager = makeManager()
         #expect(manager.state == .revoked)
         #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
         #expect(journal.entries.isEmpty)
         #expect(manager.state == .licensed)
-        journal.entries["inst_2"] = clock.now
+        journal.entries["inst_2"] = JournalEntry(seq: 2)
         #expect(await manager.removeThisMac() == .removed)
         #expect(journal.entries.isEmpty)
         #expect(makeManager().state == .unlicensed)
@@ -1077,7 +1081,7 @@ struct LicensingTests {
     @Test("R2. Replacement by a new activation clears the old tombstone only once the new record is stored")
     func replacementClearsTombstoneAfterDurableReplace() async {
         store.record = paidRecord(lastSuccessAge: 3600)
-        journal.entries["inst_1"] = clock.now
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
         client.activation = .activated(activation(Self.paid, instance: "inst_2"))
         store.failsWrites = true
         let manager = makeManager()
@@ -1114,7 +1118,7 @@ struct LicensingTests {
     @Test("R3. A journal clear that fails is retried, and never blocks the grant meanwhile")
     func journalClearFailureIsRetried() async {
         store.record = paidRecord(lastSuccessAge: 3600)
-        journal.entries["inst_1"] = clock.now.addingTimeInterval(-60)
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
         journal.failsWrites = true
         let manager = makeManager()
         #expect(manager.state == .revoked)
@@ -1124,35 +1128,164 @@ struct LicensingTests {
         await manager.check()
         #expect(manager.state == .licensed)
         #expect(manager.journalError)
-        #expect(journal.entries["inst_1"] != nil) // stale, but older than the grant
+        #expect(journal.entries["inst_1"] != nil) // stale: the saved record is past it
         // A restart with the stale entry: the newer grant wins and the entry goes.
         journal.failsWrites = false
         let restarted = makeManager()
         #expect(restarted.state == .licensed)
         #expect(journal.entries.isEmpty)
         // And in the first process the retry clears it too.
-        journal.entries["inst_1"] = clock.now.addingTimeInterval(-60)
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
         await manager.tick()
         #expect(journal.entries.isEmpty)
         #expect(!manager.journalError)
     }
 
-    @Test("R3. A stale journal entry never overrides a newer authoritative grant")
+    @Test("R3. A stale journal entry never overrides a record that has caught up")
     func staleJournalEntryIsIgnored() async {
-        store.record = paidRecord(lastSuccessAge: 3600)
-        journal.entries["inst_1"] = clock.now.addingTimeInterval(-2 * 3600) // before last_success_at
+        store.record = paidRecord(lastSuccessAge: 3600) // eventSeq 1
+        journal.entries["inst_1"] = JournalEntry(seq: 1)
         let manager = makeManager()
         #expect(manager.state == .licensed)
         #expect(journal.entries.isEmpty)
-        // A newer entry does win.
-        journal.entries["inst_1"] = clock.now.addingTimeInterval(-60)
+        // An entry the record has not reached does win.
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
         #expect(makeManager().state == .revoked)
+    }
+
+    // MARK: F1 — staleness by event sequence, never by clocks
+
+    @Test("F1. A server clock 60 s ahead cannot make a genuine revocation look stale")
+    func serverAheadKeepsRevocation() async {
+        var record = paidRecord(lastSuccessAge: 0)
+        record.lastSuccessAt = clock.now.addingTimeInterval(60) // server Date ran ahead of this Mac
+        record.lastObservedAt = record.lastSuccessAt
+        store.record = record
+        client.validation = .invalid
+        let manager = makeManager()
+        store.failsWrites = true
+        await manager.check()
+        #expect(manager.state == .revoked)
+        #expect(journal.entries["inst_1"] == JournalEntry(seq: 2))
+        #expect(store.record?.isRevoked == false)
+        client.validation = .unreachable
+        let restarted = makeManager()
+        #expect(restarted.state == .revoked)
+        await restarted.checkOnLaunch()
+        #expect(!restarted.isFeatureEnabled)
+    }
+
+    @Test("F1. A server clock 60 s behind cannot lock a paid Mac after a newer valid:true")
+    func serverBehindDoesNotLockAGrant() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_1"] = JournalEntry(seq: 2) // a genuine, recent revocation
+        store.failsWrites = true // ... whose record could not be saved
+        let manager = makeManager()
+        #expect(manager.state == .revoked)
+        // Dodo says valid again, with a Date 60 s behind this Mac; the record
+        // saves now, the journal clear fails.
+        store.failsWrites = false
+        journal.failsWrites = true
+        client.validation = .valid(serverDate: clock.now.addingTimeInterval(-60))
+        await manager.check()
+        #expect(manager.state == .licensed)
+        #expect(store.record?.eventSeq == 3)
+        #expect(journal.entries["inst_1"] == JournalEntry(seq: 2))
+        // Offline restart: the saved record is past the entry, so it is stale.
+        client.validation = .unreachable
+        let restarted = makeManager()
+        #expect(restarted.state == .licensed)
+        await restarted.checkOnLaunch()
+        #expect(restarted.isFeatureEnabled)
+    }
+
+    @Test("F1. valid:true whose save fails leaves the restart locked until the next successful check")
+    func grantSaveFailureStaysLocked() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
+        store.failsWrites = true
+        let manager = makeManager()
+        #expect(manager.state == .revoked)
+        client.validation = .valid(serverDate: clock.now)
+        await manager.check()
+        #expect(manager.state == .licensed) // Dodo just said so
+        #expect(journal.entries["inst_1"] == JournalEntry(seq: 2)) // not cleared: nothing durable moved past it
+        client.validation = .unreachable
+        let restarted = makeManager()
+        #expect(restarted.state == .revoked) // fail closed
+        store.failsWrites = false
+        client.validation = .valid(serverDate: clock.now)
+        await restarted.check()
+        #expect(restarted.state == .licensed)
+        #expect(journal.entries.isEmpty)
+        #expect(makeManager().state == .licensed)
+    }
+
+    @Test("F1. Old records and time-based entries migrate: honored once, then caught up")
+    func legacyEntryMigrates() async {
+        var old = paidRecord(lastSuccessAge: 3600)
+        old.eventSeq = 0 // saved before the sequence existed
+        store.record = old
+        journal.entries["inst_1"] = .legacy
+        let manager = makeManager()
+        #expect(manager.state == .revoked)
+        #expect(store.record?.eventSeq == 1)
+        #expect(store.record?.isRevoked == true)
+        #expect(journal.entries.isEmpty) // durable: caught up
+        // A time-based entry against a record that already carries the
+        // sequence is stale: the record has moved past it.
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_1"] = .legacy
+        #expect(makeManager().state == .licensed)
+        #expect(journal.entries.isEmpty)
+    }
+
+    @Test("F1. A journal that cannot be read keeps the core off and is left alone")
+    func unreadableJournalFailsClosed() async {
+        store.record = paidRecord(lastSuccessAge: 60)
+        journal.entries["inst_1"] = JournalEntry(seq: 2)
+        journal.readError = .corrupt
+        client.validation = .valid(serverDate: clock.now)
+        let manager = makeManager()
+        #expect(manager.state == .checkRequired)
+        #expect(!manager.isFeatureEnabled)
+        #expect(manager.journalUnreadable)
+        #expect(manager.storageError == .corrupt)
+        #expect(manager.nextCheckDelay != nil)
+        await manager.check()
+        #expect(!manager.isFeatureEnabled) // a grant does not make the journal readable
+        #expect(journal.entries["inst_1"] == JournalEntry(seq: 2)) // never overwritten
+        // Readable again: the entry decides.
+        journal.readError = nil
+        await manager.tick()
+        #expect(!manager.journalUnreadable)
+        #expect(manager.state == .licensed) // the saved grant (seq 2) caught up with the entry
+        #expect(journal.entries.isEmpty)
+    }
+
+    @Test("F4. A new activation after a failed delete clears the old tombstone too")
+    func replacementAfterFailedDeleteClearsOldTombstone() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        client.deactivation = .deactivated
+        let manager = makeManager()
+        store.failsWrites = true
+        #expect(await manager.removeThisMac() == .storageUnavailable)
+        #expect(journal.entries["inst_1"] == JournalEntry(seq: 2))
+        store.failsWrites = false
+        client.activation = .activated(activation(Self.paid, instance: "inst_2"))
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(journal.entries.isEmpty)
+        #expect(store.record?.instanceID == "inst_2")
+        await manager.tick()
+        #expect(store.record?.instanceID == "inst_2") // the owed delete never hits the new record
+        #expect(manager.state == .licensed)
+        #expect(manager.storageError == nil)
     }
 
     @Test("T2. The journal never wins over a different activation")
     func journalIsPerActivation() {
         store.record = paidRecord(lastSuccessAge: 3600)
-        journal.entries["inst_other"] = clock.now
+        journal.entries["inst_other"] = JournalEntry(seq: 5)
         #expect(makeManager().state == .licensed)
     }
 

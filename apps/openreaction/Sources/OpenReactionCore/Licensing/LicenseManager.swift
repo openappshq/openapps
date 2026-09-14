@@ -39,14 +39,19 @@ public final class LicenseManager {
     /// until they were merged in.
     private var cleanupsUnread = false
     /// A journal entry that could not be persisted yet; retried on ticks.
-    private var pendingJournalRecord: (instanceID: String, revokedAt: Date)?
+    private var pendingJournalRecord: (instanceID: String, entry: JournalEntry)?
     /// Journal entries whose removal could not be persisted yet; retried on ticks.
     private var pendingJournalClears: Set<String> = []
+    /// Activations known to have a journal entry (written here or found on load).
+    private var journaledInstances: Set<String> = []
     /// The instance whose record is being deleted; its journal entry goes
-    /// once the deletion is durable.
+    /// once the deletion is durable, or once a new record durably replaces it.
     private var removingInstanceID: String?
     /// The journal could not be written; surfaced like a storage problem.
     public private(set) var journalError = false
+    /// The journal could not be read: the core stays off until it can be,
+    /// and nothing overwrites it meanwhile.
+    public private(set) var journalUnreadable = false
     /// Storage could not be read or written; retried on every tick.
     public private(set) var storageError: LicenseStoreError?
     /// Consecutive failed checks, for backoff.
@@ -78,20 +83,33 @@ public final class LicenseManager {
     }
 
     /// Reads what the store has. A journal entry for the stored activation
-    /// wins over the record unless the record shows a newer authoritative
-    /// grant: then the entry is stale and goes away. A winning entry revokes
-    /// the record in memory and owes its save.
+    /// wins over the record while the saved record has not caught up with it
+    /// (`entry.seq > record.eventSeq`): the record is revoked in memory, at
+    /// that sequence, and its save owed. An entry the record has caught up
+    /// with is stale and goes away. A journal that cannot be read keeps the
+    /// core off and is left alone.
     private func reloadFromStore() {
         var failure: LicenseStoreError?
         do {
             var loaded = try store.loadRecord()
-            if var current = loaded, !current.isRevoked, let revokedAt = journal.revokedAt(instanceID: current.instanceID) {
-                if revokedAt > current.lastSuccessAt {
-                    current.revokedAt = revokedAt
-                    loaded = current
-                    pendingDurableWrite = .some(current)
-                } else {
-                    clearJournal(current.instanceID)
+            if var current = loaded {
+                do {
+                    journalUnreadable = false
+                    if let entry = try journal.entry(instanceID: current.instanceID) {
+                        if entry.seq > current.eventSeq {
+                            journaledInstances.insert(current.instanceID)
+                            if entry == .legacy { journalRecord(current.instanceID, entry: entry) } // rewrite in the current form
+                            current.revokedAt = current.revokedAt ?? now()
+                            current.eventSeq = entry.seq
+                            loaded = current
+                            pendingDurableWrite = .some(current)
+                        } else {
+                            clearJournal(current.instanceID)
+                        }
+                    }
+                } catch {
+                    journalUnreadable = true
+                    failure = error
                 }
             }
             record = loaded
@@ -124,7 +142,11 @@ public final class LicenseManager {
     // MARK: State
 
     public var state: LicenseState {
-        LicensePolicy.state(record: record, now: now())
+        let policy = LicensePolicy.state(record: record, now: now())
+        // The journal may say this activation is dead; until it can be read
+        // nothing local is trusted.
+        if journalUnreadable, record != nil, policy.isFeatureEnabled { return .checkRequired }
+        return policy
     }
 
     public var isFeatureEnabled: Bool { state.isFeatureEnabled }
@@ -221,12 +243,13 @@ public final class LicenseManager {
             pendingDurableWrite = nil
             // Durable now: a revoked record carries its own revocation, and a
             // deleted one is gone.
-            if let pending, pending.isRevoked { clearJournal(pending.instanceID) }
+            // The saved record has caught up with any entry about it.
+            if let pending, journaledInstances.contains(pending.instanceID) { clearJournal(pending.instanceID) }
             if pending == nil, let removed = removingInstanceID {
                 removingInstanceID = nil
                 clearJournal(removed)
             }
-            if !cleanupsDirty, !cleanupsUnread { storageError = nil }
+            if !cleanupsDirty, !cleanupsUnread, !journalUnreadable { storageError = nil }
         } catch {
             storageError = error
         }
@@ -234,12 +257,13 @@ public final class LicenseManager {
 
     /// Journals a dead activation before anything else is touched. A failed
     /// write keeps the in-memory lock, is retried on ticks and reported.
-    private func journalRecord(_ instanceID: String, revokedAt: Date) {
-        if journal.record(instanceID: instanceID, revokedAt: revokedAt) {
+    private func journalRecord(_ instanceID: String, entry: JournalEntry) {
+        journaledInstances.insert(instanceID)
+        if journal.record(instanceID: instanceID, entry: entry) {
             pendingJournalRecord = nil
             journalError = !pendingJournalClears.isEmpty
         } else {
-            pendingJournalRecord = (instanceID, revokedAt)
+            pendingJournalRecord = (instanceID, entry)
             journalError = true
         }
     }
@@ -248,6 +272,7 @@ public final class LicenseManager {
     private func clearJournal(_ instanceID: String) {
         if journal.clear(instanceID: instanceID) {
             pendingJournalClears.remove(instanceID)
+            journaledInstances.remove(instanceID)
             journalError = pendingJournalRecord != nil || !pendingJournalClears.isEmpty
         } else {
             pendingJournalClears.insert(instanceID)
@@ -256,7 +281,7 @@ public final class LicenseManager {
     }
 
     private func retryJournal() {
-        if let pending = pendingJournalRecord { journalRecord(pending.instanceID, revokedAt: pending.revokedAt) }
+        if let pending = pendingJournalRecord { journalRecord(pending.instanceID, entry: pending.entry) }
         for instanceID in pendingJournalClears { clearJournal(instanceID) }
     }
 
@@ -278,7 +303,7 @@ public final class LicenseManager {
         do {
             try store.savePendingCleanups(pendingCleanups)
             cleanupsDirty = false
-            if pendingDurableWrite == nil { storageError = nil }
+            if pendingDurableWrite == nil, !journalUnreadable { storageError = nil }
         } catch {
             storageError = error
         }
@@ -289,7 +314,7 @@ public final class LicenseManager {
     private func retryStorage() {
         retryJournal()
         guard pendingDurableWrite != nil || cleanupsDirty else {
-            if storageError != nil { reloadFromStore() }
+            if storageError != nil || journalUnreadable { reloadFromStore() }
             return
         }
         flushRecord()
@@ -302,18 +327,24 @@ public final class LicenseManager {
     private func removeActivation() {
         activationGeneration += 1
         if let previous = record {
-            journalRecord(previous.instanceID, revokedAt: now())
+            journalRecord(previous.instanceID, entry: JournalEntry(seq: previous.eventSeq + 1))
             removingInstanceID = previous.instanceID
         }
         write(nil)
     }
 
     /// A new activation whose record the store already holds: the previous
-    /// activation's record is durably replaced, so its journal entry goes.
+    /// activation's record — and one whose deletion was still owed — is
+    /// durably replaced, so their journal entries go.
     private func commitActivation(_ newRecord: LicenseRecord) {
         activationGeneration += 1
-        if let previous = record, previous.instanceID != newRecord.instanceID { clearJournal(previous.instanceID) }
-        removingInstanceID = nil
+        if let previous = record, previous.instanceID != newRecord.instanceID, journaledInstances.contains(previous.instanceID) {
+            clearJournal(previous.instanceID)
+        }
+        if let removing = removingInstanceID, removing != newRecord.instanceID {
+            removingInstanceID = nil
+            clearJournal(removing)
+        }
         record = newRecord
         pendingDurableWrite = nil
         if !cleanupsDirty, !cleanupsUnread { storageError = nil }
@@ -327,9 +358,9 @@ public final class LicenseManager {
     /// the revoked record still finds it revoked.
     private func invalidate(_ current: LicenseRecord) {
         var revoked = current
-        let revokedAt = now()
-        revoked.revokedAt = revokedAt
-        journalRecord(current.instanceID, revokedAt: revokedAt)
+        revoked.revokedAt = now()
+        revoked.eventSeq = current.eventSeq + 1
+        journalRecord(current.instanceID, entry: JournalEntry(seq: revoked.eventSeq))
         write(revoked)
         failedChecks = 0
         blockedUntil = nil
@@ -548,7 +579,10 @@ public final class LicenseManager {
         updated.lastSuccessAt = successAt
         updated.revokedAt = nil
         updated.lastObservedAt = serverDate.map { max($0, current.activatedAt) } ?? max(current.lastObservedAt, now())
-        clearJournal(current.instanceID)
+        // An authoritative grant: the record moves past any journal entry,
+        // which goes once this record is durable (`flushRecord`). If the
+        // save fails, a restart stays locked until the next successful check.
+        updated.eventSeq = current.eventSeq + 1
         write(updated)
         failedChecks = 0
         blockedUntil = nil
