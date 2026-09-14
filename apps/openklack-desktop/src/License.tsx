@@ -13,6 +13,7 @@ export type LicenseView = {
     | "trial"
     | "trialEnded"
     | "trialOffline"
+    | "clockBehind"
     | "licensed"
     | "grace"
     | "checkRequired"
@@ -130,7 +131,13 @@ export function License({
       </section>
     );
 
-  const trialStates: LicenseView["state"][] = ["unlicensed", "trial", "trialEnded", "trialOffline"];
+  const trialStates: LicenseView["state"][] = [
+    "unlicensed",
+    "trial",
+    "trialEnded",
+    "trialOffline",
+    "clockBehind",
+  ];
   const inTrial = trialStates.includes(view.state);
   const canEnterKey = inTrial || view.state === "revoked";
   const status: Record<LicenseView["state"], string> = {
@@ -140,6 +147,8 @@ export function License({
     trial: `Free trial: ${trialLeft(view.daysLeft)}`,
     trialEnded: "Your free trial has ended",
     trialOffline: "Connect to the internet to continue your free trial",
+    clockBehind:
+      "Your Mac’s clock is behind. Set the correct date and time to keep using your free trial",
     licensed: "Licensed",
     grace: view.graceWarning
       ? `Connect to the internet within ${view.daysLeft ?? 0} ${view.daysLeft === 1 ? "day" : "days"} to keep using OpenKlack.`
@@ -193,6 +202,7 @@ export function License({
         </p>
       )}
       {(view.state === "trialOffline" ||
+        view.state === "clockBehind" ||
         view.state === "checkRequired" ||
         (view.state === "unlicensed" && view.trialStorageError)) && (
         <div className="actions">{retry}</div>

@@ -89,19 +89,43 @@ fn trial_registry(environment: &str) -> String {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "https://openapps.space".into());
     let origin = origin.trim().trim_end_matches('/').to_string();
-    if origin.contains(|c: char| c.is_whitespace() || matches!(c, '?' | '#')) {
-        panic!("{NAME} must be an origin such as https://openapps.space, not `{origin}`.");
+    let not_an_origin =
+        || panic!("{NAME} must be an origin such as https://openapps.space, not `{origin}`.");
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        not_an_origin()
+    };
+    // Only `host` or `host:port`: no path, query, fragment or credentials.
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@', '\\']) {
+        not_an_origin();
     }
-    let local = origin.strip_prefix("http://").is_some_and(|rest| {
-        let (address, port) = rest.split_once(':').unwrap_or((rest, "0"));
-        matches!(address, "127.0.0.1" | "localhost")
-            && !port.is_empty()
-            && port.bytes().all(|b| b.is_ascii_digit())
-    });
-    let secure = origin.len() > "https://".len() && origin.starts_with("https://");
-    match (secure, local, environment) {
-        (true, _, _) | (false, true, "test") => origin,
-        (false, true, _) => panic!("A live build must reach {NAME} over https://."),
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    let valid_host = !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-']);
+    let valid_port =
+        port.is_none_or(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()));
+    if !valid_host || !valid_port {
+        not_an_origin();
+    }
+    let host = host.to_ascii_lowercase();
+    let local = host == "localhost"
+        || host.ends_with(".localhost")
+        || host == "0.0.0.0"
+        || host.starts_with("127.")
+        || !host.contains('.');
+    match (environment, scheme, local) {
+        ("live", "https", false) => origin,
+        ("live", _, _) => panic!(
+            "A live build must reach {NAME} at a public https:// origin such as https://openapps.space, not `{origin}`."
+        ),
+        (_, "https", _) => origin,
+        (_, "http", true) => origin,
         _ => panic!(
             "{NAME} must be https://…, or http://127.0.0.1:<port> for a test build, not `{origin}`."
         ),

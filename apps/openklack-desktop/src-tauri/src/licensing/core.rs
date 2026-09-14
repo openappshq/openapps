@@ -1,6 +1,7 @@
 //! The licensing rules from LICENSING.md, with no clock, network or Keychain of their own.
-//! Time is Unix seconds passed in by the caller; Dodo and the trial registry are traits so tests
-//! script every answer.
+//! Time is passed in by the caller as a `Moment`: the wall clock in Unix seconds, plus a
+//! monotonic clock that keeps counting through sleep. Dodo and the trial registry are traits so
+//! tests script every answer.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,23 @@ pub const APP_NAME: &str = "OpenKlack";
 /// The app id the trial registry knows this app by; it also salts the device hash.
 pub const APP_ID: &str = "openklack";
 const DEVICE_HASH_VERSION: &str = "openapps-trial-v1";
+/// The `kind` the trial-key era wrote for a trial key's record.
+const LEGACY_TRIAL_KIND: &str = "trial";
+
+/// A point in time: the wall clock, and a monotonic clock (seconds, arbitrary origin) that keeps
+/// counting through sleep and ignores changes to the wall clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Moment {
+    pub wall: i64,
+    pub mono: i64,
+}
+
+impl From<i64> for Moment {
+    /// A moment whose monotonic clock moves with the wall clock.
+    fn from(wall: i64) -> Self {
+        Self { wall, mono: wall }
+    }
+}
 
 /// The Keychain record for one activation of this Mac.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -28,6 +46,10 @@ pub struct Record {
     pub license_key: String,
     pub instance_id: String,
     pub product_id: String,
+    /// Written only by the trial-key era: `trial` marks a retired trial key's record, which is
+    /// never a license.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// Activation `created_at`, server time.
     pub activated_at: i64,
     /// Time of the last `valid: true` or activation, from the response `Date` header.
@@ -67,7 +89,7 @@ pub struct TrialRecord {
     /// Trial start on the local clock: the registry's start converted to local time, or the
     /// local clock at a provisional start.
     pub started_at: i64,
-    /// The highest local clock value observed while the record exists; only ever raised.
+    /// The latest moment the trial has reached; only ever raised. `elapsed` is measured to it.
     pub last_seen_at: i64,
     /// The trial registry has answered for this Mac.
     pub registered: bool,
@@ -77,19 +99,19 @@ pub struct TrialRecord {
 }
 
 impl TrialRecord {
-    /// A provisional trial starting now.
-    pub fn provisional(now: i64) -> Self {
+    /// A provisional trial starting at `started_at`, seen at `now`.
+    pub fn provisional(started_at: i64, now: i64) -> Self {
         Self {
-            started_at: now,
+            started_at: started_at.min(now),
             last_seen_at: now,
             registered: false,
             device_id: None,
         }
     }
 
-    /// `max(now, last_seen_at) − started_at`: setting the clock back never gives time back.
-    pub fn elapsed(&self, now: i64) -> i64 {
-        (now.max(self.last_seen_at) - self.started_at).max(0)
+    /// Time used once the trial has reached `seen`; never less than what `last_seen_at` records.
+    pub fn elapsed_at(&self, seen: i64) -> i64 {
+        (seen.max(self.last_seen_at) - self.started_at).max(0)
     }
 }
 
@@ -130,6 +152,14 @@ impl TrialTerms {
     }
 }
 
+/// The trial's position at the last tick: `last_seen_at` then, and the monotonic clock then.
+/// Not saved: each run measures from its own launch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrialAnchor {
+    pub seen: i64,
+    pub mono: i64,
+}
+
 /// Lowercase hex SHA-256 of `openapps-trial-v1:<app id>:<hardware id>`. The app id salts it, so
 /// one Mac's hashes for two apps don't match, and the hardware id never leaves the Mac.
 pub fn device_hash(app_id: &str, hardware_id: &str) -> String {
@@ -147,6 +177,12 @@ pub struct Products {
 impl Products {
     fn is_paid(&self, product_id: &str) -> bool {
         self.paid.iter().any(|id| id == product_id)
+    }
+
+    /// Whether a stored record is a license: not a retired trial key, and for this app's paid
+    /// product in this environment.
+    pub fn licenses(&self, record: &Record) -> bool {
+        record.kind.as_deref() != Some(LEGACY_TRIAL_KIND) && self.is_paid(&record.product_id)
     }
 }
 
@@ -229,6 +265,9 @@ pub enum State {
     TrialEnded,
     /// An unregistered trial reached the offline limit; the registry's answer decides.
     TrialOffline,
+    /// At launch or wake the clock was more than an hour behind the trial's latest moment: off
+    /// until the clock is corrected. No time is added meanwhile.
+    ClockBehind,
     Licensed,
     Grace {
         days_offline: u32,
@@ -413,6 +452,13 @@ pub struct Engine {
     pub schedule: Schedule,
     pub registration: Registration,
     pub terms: TrialTerms,
+    /// Where the running trial was at the last tick, so elapsed time follows the monotonic clock.
+    pub trial_anchor: Option<TrialAnchor>,
+    /// Set when launch or wake found the clock behind the trial; cleared once it is corrected.
+    pub clock_behind: bool,
+    /// A registry answer that arrived while the clock was behind, with the monotonic time it
+    /// arrived at. Applied once the clock is corrected.
+    pub pending_registration: Option<(RegistryAnswer, i64)>,
 }
 
 impl Engine {
@@ -425,7 +471,23 @@ impl Engine {
             schedule: Schedule::default(),
             registration: Registration::default(),
             terms: TrialTerms::default(),
+            trial_anchor: None,
+            clock_behind: false,
+            pending_registration: None,
         }
+    }
+
+    /// The stored record, if it is a license. A retired trial key's record or another product's
+    /// is kept (for cleanup and the journal) but never grants paid access.
+    pub fn license(&self) -> Option<&Record> {
+        Self::license_in(&self.stored, &self.products)
+    }
+
+    fn license_in<'a>(stored: &'a Stored, products: &Products) -> Option<&'a Record> {
+        stored
+            .license
+            .as_ref()
+            .filter(|record| products.licenses(record))
     }
 
     fn local_anchor(record: &Record) -> i64 {
@@ -448,31 +510,104 @@ impl Engine {
     }
 
     /// Whether a paid license needs a check because the clock was set back.
-    pub fn clock_changed(&self, now: i64) -> bool {
-        self.stored
-            .license
-            .as_ref()
+    pub fn clock_changed(&self, at: impl Into<Moment>) -> bool {
+        let now = at.into().wall;
+        self.license()
             .is_some_and(|record| !record.revoked && !Self::clock_trusted(record, now))
     }
 
-    pub fn state(&self, now: i64) -> State {
-        Self::state_of(&self.stored, &self.trial, &self.schedule, &self.terms, now)
+    /// The moment the trial has reached: `last_seen_at` plus the monotonic time since the last
+    /// tick, and never before the wall clock. While the clock is behind, no time is added.
+    fn trial_seen(&self, trial: &TrialRecord, at: Moment) -> i64 {
+        let mut seen = trial.last_seen_at.max(at.wall);
+        if !self.clock_behind
+            && let Some(anchor) = self.trial_anchor
+        {
+            seen = seen.max(anchor.seen + (at.mono - anchor.mono).max(0));
+        }
+        seen
     }
 
-    /// Whether saved records grant access at `now`: the runtime evaluates the last saved records
-    /// this way, so an unsaved extension never unlocks by itself.
-    pub fn stored_core_feature(
+    /// Whether the trial is held because launch or wake found the clock behind it.
+    pub fn trial_clock_behind(&self, at: impl Into<Moment>) -> bool {
+        let at = at.into();
+        self.clock_behind
+            && self.license().is_none()
+            && matches!(&self.trial, TrialSlot::Present(trial)
+                if at.wall < trial.last_seen_at - CLOCK_ROLLBACK_TOLERANCE)
+    }
+
+    /// Launch or wake: with no license, a clock more than an hour behind the trial holds it until
+    /// the clock is corrected.
+    pub fn check_clock(&mut self, at: impl Into<Moment>) {
+        let at = at.into();
+        if self.license().is_none()
+            && let TrialSlot::Present(trial) = &self.trial
+            && at.wall < self.trial_seen(trial, at) - CLOCK_ROLLBACK_TOLERANCE
+        {
+            self.clock_behind = true;
+        }
+    }
+
+    /// Starts measuring the trial's elapsed time on the monotonic clock from `at`.
+    pub fn anchor_trial(&mut self, at: impl Into<Moment>) {
+        let at = at.into();
+        if let TrialSlot::Present(trial) = &self.trial {
+            self.trial_anchor = Some(TrialAnchor {
+                seen: trial.last_seen_at,
+                mono: at.mono,
+            });
+        }
+    }
+
+    pub fn state(&self, at: impl Into<Moment>) -> State {
+        let at = at.into();
+        if let Some(record) = self.license() {
+            return Self::paid_state(record, &self.schedule, at.wall);
+        }
+        match &self.trial {
+            TrialSlot::Present(trial) => self.trial_state_now(trial, at),
+            TrialSlot::Unread | TrialSlot::Absent => State::Unlicensed,
+        }
+    }
+
+    fn trial_state_now(&self, trial: &TrialRecord, at: Moment) -> State {
+        let ended = Self::trial_state(trial, &self.terms, trial.last_seen_at) == State::TrialEnded;
+        if !ended && self.trial_clock_behind(at) {
+            State::ClockBehind
+        } else {
+            Self::trial_state(trial, &self.terms, self.trial_seen(trial, at))
+        }
+    }
+
+    /// The state the saved records allow at `at`, measured with this engine's clock so an
+    /// unsaved extension never unlocks by itself.
+    pub fn durable_state(
+        &self,
         stored: &Stored,
         trial: &TrialSlot,
-        terms: &TrialTerms,
-        now: i64,
-    ) -> bool {
-        Self::state_of(stored, trial, &Schedule::default(), terms, now).core_feature()
+        at: impl Into<Moment>,
+    ) -> State {
+        let at = at.into();
+        if let Some(record) = Self::license_in(stored, &self.products) {
+            return Self::paid_state(record, &Schedule::default(), at.wall);
+        }
+        let TrialSlot::Present(saved) = trial else {
+            return State::Unlicensed;
+        };
+        let seen = match &self.trial {
+            TrialSlot::Present(current) => self.trial_seen(current, at),
+            _ => at.wall,
+        };
+        if self.trial_clock_behind(at) {
+            return State::ClockBehind;
+        }
+        Self::trial_state(saved, &self.terms, seen)
     }
 
-    /// The trial's state from its record alone.
-    pub fn trial_state(trial: &TrialRecord, terms: &TrialTerms, now: i64) -> State {
-        let elapsed = trial.elapsed(now);
+    /// The trial's state once it has reached `seen`.
+    pub fn trial_state(trial: &TrialRecord, terms: &TrialTerms, seen: i64) -> State {
+        let elapsed = trial.elapsed_at(seen);
         if elapsed >= terms.length {
             State::TrialEnded
         } else if !trial.registered && elapsed >= terms.offline_limit {
@@ -489,20 +624,7 @@ impl Engine {
         }
     }
 
-    fn state_of(
-        stored: &Stored,
-        trial: &TrialSlot,
-        schedule: &Schedule,
-        terms: &TrialTerms,
-        now: i64,
-    ) -> State {
-        // A license always wins over the trial.
-        let Some(record) = &stored.license else {
-            return match trial {
-                TrialSlot::Present(trial) => Self::trial_state(trial, terms, now),
-                TrialSlot::Unread | TrialSlot::Absent => State::Unlicensed,
-            };
-        };
+    fn paid_state(record: &Record, schedule: &Schedule, now: i64) -> State {
         if record.revoked {
             return State::Revoked;
         }
@@ -520,35 +642,89 @@ impl Engine {
     }
 
     /// How long a paid license has gone without a successful check, by the trusted clock.
-    pub fn offline_for(&self, now: i64) -> Option<i64> {
-        self.stored
-            .license
-            .as_ref()
+    pub fn offline_for(&self, at: impl Into<Moment>) -> Option<i64> {
+        let now = at.into().wall;
+        self.license()
             .map(|record| Self::anchored_now(record, now) - record.last_success_at)
     }
 
-    /// Notes that `now` has been reached: raises the license's latest moment and the trial's
-    /// `last_seen_at`. Returns which records changed.
-    pub fn observe(&mut self, now: i64) -> Observed {
-        let license = match self.stored.license.as_mut() {
-            Some(record) if Self::anchored_now(record, now) > record.last_observed_at => {
-                record.last_observed_at = Self::anchored_now(record, now);
-                true
+    /// Notes that `at` has been reached: raises the license's latest moment and the trial's
+    /// `last_seen_at` (by the monotonic time since the last tick, and to the wall clock). A
+    /// corrected clock ends the hold from launch or wake without adding the time it lasted.
+    /// Returns which records changed.
+    pub fn observe(&mut self, at: impl Into<Moment>) -> Observed {
+        let at = at.into();
+        let license = self.license().is_some()
+            && match self.stored.license.as_mut() {
+                Some(record) if Self::anchored_now(record, at.wall) > record.last_observed_at => {
+                    record.last_observed_at = Self::anchored_now(record, at.wall);
+                    true
+                }
+                _ => false,
+            };
+        if self.trial_clock_behind(at) {
+            return Observed {
+                license,
+                trial: false,
+            };
+        }
+        let seen = match &self.trial {
+            TrialSlot::Present(trial) => self.trial_seen(trial, at),
+            _ => {
+                return Observed {
+                    license,
+                    trial: false,
+                };
             }
-            _ => false,
         };
-        let trial = match &mut self.trial {
-            TrialSlot::Present(trial) if now > trial.last_seen_at => {
-                trial.last_seen_at = now;
-                true
+        self.clock_behind = false;
+        let TrialSlot::Present(trial) = &mut self.trial else {
+            unreachable!("checked above");
+        };
+        let raised = seen > trial.last_seen_at;
+        trial.last_seen_at = trial.last_seen_at.max(seen);
+        self.trial_anchor = Some(TrialAnchor {
+            seen: trial.last_seen_at,
+            mono: at.mono,
+        });
+        // The clock is trustworthy again: a registry answer held meanwhile is applied now.
+        let registered = match self.pending_registration.take() {
+            Some((answer, received_mono)) => {
+                self.apply_registration(answer, at.wall, (at.mono - received_mono).max(0))
             }
-            _ => false,
+            None => false,
         };
-        Observed { license, trial }
+        Observed {
+            license,
+            trial: raised || registered,
+        }
     }
 
-    pub fn is_held(&self, now: i64) -> bool {
-        self.held(now).is_err()
+    /// Converts the registry's start to local time and keeps the earlier start. `since_answer`
+    /// is the monotonic time since the answer arrived, which the registry's clock has moved on
+    /// by too.
+    fn apply_registration(&mut self, answer: RegistryAnswer, wall: i64, since_answer: i64) -> bool {
+        let TrialSlot::Present(trial) = &mut self.trial else {
+            return false;
+        };
+        if trial.registered {
+            return false;
+        }
+        let registry_now = answer.now.saturating_add(since_answer);
+        let registry_start = wall.saturating_sub(registry_now.saturating_sub(answer.started_at));
+        trial.started_at = trial.started_at.min(registry_start);
+        trial.registered = true;
+        true
+    }
+
+    /// Whether trial writes are frozen: the clock is behind, so nothing about the trial may be
+    /// saved or changed until it is corrected.
+    pub fn trial_frozen(&self, at: impl Into<Moment>) -> bool {
+        self.trial_clock_behind(at)
+    }
+
+    pub fn is_held(&self, at: impl Into<Moment>) -> bool {
+        self.held(at.into().wall).is_err()
     }
 
     fn held(&self, now: i64) -> Result<(), LicenseError> {
@@ -561,8 +737,9 @@ impl Engine {
     }
 
     /// When the scheduler should run the next check, or `None` while there is nothing to check.
-    pub fn next_check_at(&self, now: i64) -> Option<i64> {
-        let record = self.stored.license.as_ref()?;
+    pub fn next_check_at(&self, at: impl Into<Moment>) -> Option<i64> {
+        let now = at.into().wall;
+        let record = self.license()?;
         // The schedule lives on the local clock; before any attempt this run, a day after the
         // last answer's local moment.
         let mut due = if !Self::clock_trusted(record, now) && self.schedule.failures == 0 {
@@ -580,64 +757,92 @@ impl Engine {
         Some(due)
     }
 
-    pub fn check_due(&self, now: i64) -> bool {
+    pub fn check_due(&self, at: impl Into<Moment>) -> bool {
+        let now = at.into().wall;
         self.next_check_at(now).is_some_and(|due| due <= now)
     }
 
-    /// The next moment the state changes by time alone: the trial's end or offline limit, the
-    /// grace warning, or the end of grace. Independent of any network schedule.
-    pub fn next_transition_at(&self, now: i64) -> Option<i64> {
-        let candidates = match (&self.stored.license, &self.trial) {
-            (Some(record), _) if record.revoked => vec![],
+    /// The next wall-clock moment the state changes by time alone: the trial's end or offline
+    /// limit, the grace warning, or the end of grace. Independent of any network schedule.
+    pub fn next_transition_at(&self, at: impl Into<Moment>) -> Option<i64> {
+        let at = at.into();
+        match (self.license(), &self.trial) {
+            (Some(record), _) if record.revoked => None,
             (Some(record), _) => {
                 let anchor = Self::local_anchor(record);
-                vec![anchor + GRACE_WARNING_AFTER, anchor + GRACE_PERIOD]
+                [anchor + GRACE_WARNING_AFTER, anchor + GRACE_PERIOD]
+                    .into_iter()
+                    .filter(|moment| *moment > at.wall)
+                    .min()
             }
-            (None, TrialSlot::Present(trial)) => {
-                return Self::trial_transition_at(trial, &self.terms, now);
-            }
-            (None, _) => vec![],
-        };
-        candidates.into_iter().filter(|at| *at > now).min()
+            (None, TrialSlot::Present(trial)) => self.trial_transition_at(trial, at),
+            (None, _) => None,
+        }
     }
 
-    /// The next moment a trial record's state changes by time alone: its end, or the offline
-    /// limit while unregistered. `elapsed` reaches a limit once the clock passes `started_at`
-    /// plus that limit.
-    pub fn trial_transition_at(trial: &TrialRecord, terms: &TrialTerms, now: i64) -> Option<i64> {
-        let mut limits = vec![trial.started_at + terms.length];
-        if !trial.registered {
-            limits.push(trial.started_at + terms.offline_limit);
+    /// The next wall-clock moment a trial record's state changes, measured with this engine's
+    /// clock: its end, or its offline limit while unregistered. Also used for the saved record.
+    pub fn trial_transition_at(&self, trial: &TrialRecord, at: impl Into<Moment>) -> Option<i64> {
+        let at = at.into();
+        if self.trial_clock_behind(at) {
+            return None;
         }
-        limits.into_iter().filter(|at| *at > now).min()
+        let seen = match &self.trial {
+            TrialSlot::Present(current) => self.trial_seen(current, at),
+            _ => at.wall,
+        };
+        let elapsed = trial.elapsed_at(seen);
+        let mut limits = vec![self.terms.length];
+        if !trial.registered {
+            limits.push(self.terms.offline_limit);
+        }
+        limits
+            .into_iter()
+            .filter(|limit| *limit > elapsed)
+            .map(|limit| at.wall + (limit - elapsed))
+            .min()
     }
 
     /// A provisional trial to save, when there is no license and the trial record is positively
-    /// absent. Nothing changes until the caller has saved it and calls `commit_trial`.
-    pub fn provisional_trial(&self, now: i64) -> Option<TrialRecord> {
-        (self.stored.license.is_none() && self.trial == TrialSlot::Absent)
-            .then(|| TrialRecord::provisional(now))
+    /// absent. A retired trial key's record keeps its own start, so it gains no time. Nothing
+    /// changes until the caller has saved it and calls `commit_trial`.
+    pub fn provisional_trial(&self, at: impl Into<Moment>) -> Option<TrialRecord> {
+        let now = at.into().wall;
+        if self.license().is_some() || self.trial != TrialSlot::Absent {
+            return None;
+        }
+        let started_at = self
+            .stored
+            .license
+            .as_ref()
+            .map_or(now, |legacy| legacy.activated_at);
+        Some(TrialRecord::provisional(started_at, now))
     }
 
-    /// Puts a saved trial record into effect.
-    pub fn commit_trial(&mut self, trial: TrialRecord) {
+    /// Puts a saved trial record into effect, measuring from `at`.
+    pub fn commit_trial(&mut self, trial: TrialRecord, at: impl Into<Moment>) {
         self.trial = TrialSlot::Present(trial);
+        self.anchor_trial(at);
     }
 
     /// Whether the registry should still be asked: an unregistered trial with time left, and no
     /// license in the way. A registered trial never contacts the registry again.
-    pub fn registration_wanted(&self, now: i64) -> bool {
-        self.stored.license.is_none()
+    pub fn registration_wanted(&self, at: impl Into<Moment>) -> bool {
+        let at = at.into();
+        self.license().is_none()
+            && self.pending_registration.is_none()
             && matches!(&self.trial, TrialSlot::Present(trial)
-                if !trial.registered && trial.elapsed(now) < self.terms.length)
+                if !trial.registered
+                    && trial.elapsed_at(self.trial_seen(trial, at)) < self.terms.length)
     }
 
     /// When the registry may be asked next, or `None` while there is nothing to ask.
-    pub fn next_registration_at(&self, now: i64) -> Option<i64> {
-        if !self.registration_wanted(now) {
+    pub fn next_registration_at(&self, at: impl Into<Moment>) -> Option<i64> {
+        let at = at.into();
+        if !self.registration_wanted(at) {
             return None;
         }
-        let due = self.registration.next_attempt_at.unwrap_or(now);
+        let due = self.registration.next_attempt_at.unwrap_or(at.wall);
         Some(match self.registration.hold_until {
             Some(hold_until) => due.max(hold_until),
             None => due,
@@ -646,38 +851,36 @@ impl Engine {
 
     /// Whether to ask the registry now. `forced` (launch, wake, network back, Try again) skips
     /// the backoff but never a rate limit.
-    pub fn begin_registration(&self, now: i64, forced: bool) -> bool {
-        self.registration_wanted(now)
-            && !self.registration.held(now)
+    pub fn begin_registration(&self, at: impl Into<Moment>, forced: bool) -> bool {
+        let at = at.into();
+        self.registration_wanted(at)
+            && !self.registration.held(at.wall)
             && (forced
                 || self
                     .registration
                     .next_attempt_at
-                    .is_none_or(|due| due <= now))
+                    .is_none_or(|due| due <= at.wall))
     }
 
     /// Applies the registry's answer. On success the registry's start is converted to local time
-    /// and the earlier of it and the provisional start is kept. Returns whether the trial record
-    /// changed and needs saving.
+    /// and the earlier of it and the provisional start is kept; while the clock is behind, the
+    /// raw answer is held and applied by `observe` once the clock is corrected. Returns whether
+    /// the trial record changed and needs saving.
     pub fn finish_registration(
         &mut self,
         answer: Result<RegistryAnswer, RegistryError>,
-        now: i64,
+        at: impl Into<Moment>,
     ) -> Result<bool, RegistryError> {
+        let at = at.into();
+        let now = at.wall;
         match answer {
             Ok(answer) => {
                 self.registration = Registration::default();
-                let TrialSlot::Present(trial) = &mut self.trial else {
-                    return Ok(false);
-                };
-                if trial.registered {
+                if self.trial_frozen(at) {
+                    self.pending_registration = Some((answer, at.mono));
                     return Ok(false);
                 }
-                let registry_start =
-                    now.saturating_sub(answer.now.saturating_sub(answer.started_at));
-                trial.started_at = trial.started_at.min(registry_start);
-                trial.registered = true;
-                Ok(true)
+                Ok(self.apply_registration(answer, now, 0))
             }
             Err(RegistryError::RateLimited { retry_after }) => {
                 self.registration.hold_until = Some(now + retry_after.clamp(1, MAX_HOLD));
@@ -692,16 +895,16 @@ impl Engine {
     }
 
     /// Whether an activation call may be made now.
-    pub fn activation_allowed(&self, key: &str, now: i64) -> Result<(), LicenseError> {
+    pub fn activation_allowed(&self, key: &str, at: impl Into<Moment>) -> Result<(), LicenseError> {
         if key.trim().is_empty() {
             return Err(LicenseError::EmptyKey);
         }
-        self.held(now)
+        self.held(at.into().wall)
     }
 
     /// `429`: nothing is called again until `Retry-After` has passed.
-    pub fn note_rate_limit(&mut self, now: i64, retry_after: i64) {
-        self.schedule.hold(now, retry_after);
+    pub fn note_rate_limit(&mut self, at: impl Into<Moment>, retry_after: i64) {
+        self.schedule.hold(at.into().wall, retry_after);
     }
 
     /// Applies the product check to a fresh activation. Nothing is stored yet: the caller
@@ -711,8 +914,9 @@ impl Engine {
         &self,
         key: &str,
         activation: Activation,
-        now: i64,
+        at: impl Into<Moment>,
     ) -> Result<Activated, Refusal> {
+        let now = at.into().wall;
         let probe = Probe {
             license_key: key.trim().to_string(),
             instance_id: activation.id,
@@ -726,6 +930,7 @@ impl Engine {
                 },
             });
         }
+        // Whatever the stored record was, a license or a retired trial key, its slot goes back.
         let replaced = self
             .stored
             .license
@@ -740,6 +945,7 @@ impl Engine {
             license_key: probe.license_key.clone(),
             instance_id: probe.instance_id.clone(),
             product_id: activation.product_id,
+            kind: None,
             activated_at: activation.created_at,
             last_success_at: activation.server_time.unwrap_or(now),
             last_success_local: now,
@@ -756,21 +962,30 @@ impl Engine {
 
     /// Puts a saved activation into effect. Returns the activation it replaced, whose slot the
     /// caller frees with `apply_release`.
-    pub fn commit_activation(&mut self, activated: Activated, now: i64) -> Option<Probe> {
+    pub fn commit_activation(
+        &mut self,
+        activated: Activated,
+        at: impl Into<Moment>,
+    ) -> Option<Probe> {
         self.stored = activated.next;
-        self.schedule.answered(now);
+        self.schedule.answered(at.into().wall);
         activated.replaced
     }
 
     /// Records the outcome of deactivating an activation this Mac no longer uses. A failure is
     /// remembered in `Stored::pending_cleanups` and retried through `take_cleanups`, so a slot is
     /// never lost.
-    pub fn apply_release(&mut self, probe: Probe, answer: Result<(), DodoError>, now: i64) {
+    pub fn apply_release(
+        &mut self,
+        probe: Probe,
+        answer: Result<(), DodoError>,
+        at: impl Into<Moment>,
+    ) {
         match answer {
             Ok(()) | Err(DodoError::KeyNotFound) | Err(DodoError::KeyDisabled) => {}
             Err(error) => {
                 if let DodoError::RateLimited { retry_after } = error {
-                    self.schedule.hold(now, retry_after);
+                    self.schedule.hold(at.into().wall, retry_after);
                 }
                 self.remember_cleanup(probe);
             }
@@ -785,17 +1000,23 @@ impl Engine {
 
     /// Deactivations to retry now; empty while a rate limit holds. Each answer goes back through
     /// `apply_release`.
-    pub fn take_cleanups(&mut self, now: i64) -> Vec<Probe> {
-        if self.held(now).is_err() {
+    pub fn take_cleanups(&mut self, at: impl Into<Moment>) -> Vec<Probe> {
+        if self.held(at.into().wall).is_err() {
             return Vec::new();
         }
         std::mem::take(&mut self.stored.pending_cleanups)
     }
 
-    /// Starts a validation. `Ok(None)` when there is nothing to check, or the check is not due and
-    /// not forced. The answer goes to `finish_check`, which ignores it if the record changed.
-    pub fn begin_check(&self, now: i64, forced: bool) -> Result<Option<Probe>, LicenseError> {
-        let Some(record) = self.stored.license.as_ref() else {
+    /// Starts a validation of the license. `Ok(None)` when there is no license, or the check is
+    /// not due and not forced. The answer goes to `finish_check`, which ignores it if the record
+    /// changed.
+    pub fn begin_check(
+        &self,
+        at: impl Into<Moment>,
+        forced: bool,
+    ) -> Result<Option<Probe>, LicenseError> {
+        let now = at.into().wall;
+        let Some(record) = self.license() else {
             return Ok(None);
         };
         if !forced && !self.check_due(now) {
@@ -814,15 +1035,17 @@ impl Engine {
         &mut self,
         probe: &Probe,
         answer: Result<Validation, DodoError>,
-        now: i64,
+        at: impl Into<Moment>,
     ) -> Result<State, LicenseError> {
+        let at = at.into();
+        let now = at.wall;
         let current = self
             .stored
             .license
             .as_mut()
             .filter(|record| record.instance_id == probe.instance_id);
         let Some(record) = current else {
-            return Ok(self.state(now));
+            return Ok(self.state(at));
         };
         match answer {
             Ok(validation) => {
@@ -840,7 +1063,7 @@ impl Engine {
                 }
                 record.event_seq += 1;
                 self.schedule.answered(now);
-                Ok(self.state(now))
+                Ok(self.state(at))
             }
             Err(DodoError::RateLimited { retry_after }) => {
                 self.schedule.hold(now, retry_after);
@@ -855,11 +1078,11 @@ impl Engine {
     }
 
     /// Settings → License → Remove this Mac: the activation to deactivate, or why not now.
-    pub fn begin_remove(&self, now: i64) -> Result<Probe, LicenseError> {
+    pub fn begin_remove(&self, at: impl Into<Moment>) -> Result<Probe, LicenseError> {
         let Some(record) = &self.stored.license else {
             return Err(LicenseError::NothingToRemove);
         };
-        if self.held(now).is_err() {
+        if self.held(at.into().wall).is_err() {
             return Err(LicenseError::RemoveOffline);
         }
         Ok(Probe {
@@ -874,8 +1097,9 @@ impl Engine {
         &mut self,
         probe: &Probe,
         answer: Result<(), DodoError>,
-        now: i64,
+        at: impl Into<Moment>,
     ) -> Result<State, LicenseError> {
+        let at = at.into();
         let matches = self
             .stored
             .license
@@ -888,10 +1112,10 @@ impl Engine {
                     self.stored.license = None;
                     self.schedule = Schedule::default();
                 }
-                Ok(self.state(now))
+                Ok(self.state(at))
             }
             Err(DodoError::RateLimited { retry_after }) => {
-                self.schedule.hold(now, retry_after);
+                self.schedule.hold(at.wall, retry_after);
                 Err(LicenseError::RemoveOffline)
             }
             Err(_) => Err(LicenseError::RemoveOffline),
@@ -917,8 +1141,8 @@ pub struct Refusal {
 /// Tests drive these; the runtime interleaves the same steps with its locks and the Keychain.
 #[cfg(test)]
 impl Engine {
-    pub fn core_feature(&self, now: i64) -> bool {
-        self.state(now).core_feature()
+    pub fn core_feature(&self, at: impl Into<Moment>) -> bool {
+        self.state(at).core_feature()
     }
 
     pub fn activate(
@@ -1197,6 +1421,7 @@ pub(crate) mod tests {
                     license_key: "KEY-PAID".into(),
                     instance_id: "lki_paid".into(),
                     product_id: P.into(),
+                    kind: None,
                     activated_at: NOW - 30 * DAY,
                     last_success_at: NOW - last_success_ago,
                     last_success_local: NOW - last_success_ago,
@@ -1432,24 +1657,165 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn case_14_setting_the_clock_back_never_adds_trial_time() {
+    fn case_14_a_clock_set_back_at_launch_holds_the_trial_until_corrected() {
         let mut engine = in_trial(2 * DAY);
         let rolled_back = NOW - 5 * DAY;
-        assert_eq!(engine.state(rolled_back), State::Trial { days_left: 1 });
+        engine.anchor_trial(rolled_back);
+        engine.check_clock(rolled_back);
+        assert_eq!(engine.state(rolled_back), State::ClockBehind);
+        assert!(!engine.core_feature(rolled_back));
+        assert!(engine.trial_frozen(rolled_back));
         assert_eq!(
-            engine.observe(rolled_back),
+            engine.observe(rolled_back + HOUR),
             Observed::default(),
-            "last_seen_at is only ever raised"
+            "nothing changes while the clock is behind"
         );
+        assert_eq!(engine.next_transition_at(rolled_back), None);
+        // Within the hour counts as corrected, and the hold added no time.
+        assert_eq!(engine.state(NOW - HOUR / 2), State::Trial { days_left: 1 });
+        assert!(!engine.observe(NOW).trial);
+        assert!(!engine.clock_behind);
+        assert_eq!(engine.state(NOW), State::Trial { days_left: 1 });
+        // Setting the clock back while the app runs is no hold: the time used stays used.
         assert_eq!(engine.state(rolled_back), State::Trial { days_left: 1 });
-        // Elapsed stays at two days until the clock passes the latest moment seen.
+        // A license is never held by the trial's clock.
+        let mut licensed = with_trial(licensed(HOUR), 2 * DAY, true);
+        licensed.check_clock(rolled_back);
+        assert!(!licensed.clock_behind);
+    }
+
+    #[test]
+    fn case_28_elapsed_follows_monotonic_time_while_the_wall_clock_is_frozen_or_set_back() {
+        let frozen = |mono: i64| Moment { wall: NOW, mono };
+        let mut engine = in_trial(DAY);
+        engine.anchor_trial(frozen(0));
+        assert_eq!(engine.state(frozen(DAY)), State::Trial { days_left: 1 });
+        assert!(engine.observe(frozen(DAY)).trial);
+        assert_eq!(engine.next_transition_at(frozen(DAY)), Some(NOW + DAY));
+        assert_eq!(engine.state(frozen(2 * DAY)), State::TrialEnded);
         assert_eq!(
-            engine.state(rolled_back + 3 * DAY),
-            State::Trial { days_left: 1 }
+            engine.state(Moment {
+                wall: NOW - 5 * DAY,
+                mono: 2 * DAY
+            }),
+            State::TrialEnded
         );
-        assert_eq!(engine.state(NOW + DAY), State::TrialEnded);
-        assert!(engine.observe(NOW + HOUR).trial);
-        assert_eq!(engine.state(rolled_back), State::Trial { days_left: 0 });
+        // Observed twice at the same moment, the time counts once.
+        let mut engine = in_trial(DAY);
+        engine.anchor_trial(frozen(0));
+        engine.observe(frozen(HOUR));
+        engine.observe(frozen(HOUR));
+        let TrialSlot::Present(trial) = &engine.trial else {
+            panic!()
+        };
+        assert_eq!(trial.last_seen_at, NOW + HOUR);
+        // A wall clock ahead of the monotonic projection still counts.
+        engine.observe(Moment {
+            wall: NOW + 3 * HOUR,
+            mono: 2 * HOUR,
+        });
+        let TrialSlot::Present(trial) = &engine.trial else {
+            panic!()
+        };
+        assert_eq!(trial.last_seen_at, NOW + 3 * HOUR);
+    }
+
+    #[test]
+    fn case_31_records_from_the_old_trial_keys_are_not_licenses() {
+        // The review's repro: a trial key activated four days ago, last checked a day ago.
+        let json = format!(
+            r#"{{"license":{{"license_key":"KEY-TRIAL","instance_id":"lki_trial","product_id":"pdt_openklack_trial","kind":"trial","activated_at":{},"last_success_at":{},"last_success_local":{},"last_observed_at":{},"event_seq":1}}}}"#,
+            NOW - 4 * DAY,
+            NOW - DAY,
+            NOW - DAY,
+            NOW - DAY
+        );
+        let stored: Stored = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            stored.license.as_ref().unwrap().kind.as_deref(),
+            Some("trial")
+        );
+        let mut engine = Engine::new(stored.clone(), products());
+        assert_eq!(engine.license(), None);
+        assert_eq!(engine.state(NOW), State::Unlicensed, "not Licensed");
+        assert!(!engine.core_feature(NOW));
+        assert!(
+            !engine
+                .durable_state(&stored, &TrialSlot::Absent, NOW)
+                .core_feature(),
+            "nor through the saved-record gate"
+        );
+        assert_eq!(
+            engine.begin_check(NOW, true),
+            Ok(None),
+            "never checked, so no paid grace"
+        );
+        assert_eq!(engine.next_check_at(NOW), None);
+        // The trial rules apply from its own activation: already over, with nothing to gain.
+        let trial = engine.provisional_trial(NOW).unwrap();
+        assert_eq!(trial.started_at, NOW - 4 * DAY);
+        engine.commit_trial(trial.clone(), NOW);
+        assert_eq!(engine.state(NOW), State::TrialEnded);
+        assert!(
+            !engine
+                .durable_state(&stored, &TrialSlot::Present(trial), NOW)
+                .core_feature()
+        );
+        assert!(!engine.begin_registration(NOW, true));
+        // Its slot can still be given back.
+        assert_eq!(engine.begin_remove(NOW).unwrap().instance_id, "lki_trial");
+        // No `kind`, but a product that isn't this app's paid one: the same.
+        let other = Stored {
+            license: Some(Record {
+                product_id: X.into(),
+                kind: None,
+                ..stored.license.clone().unwrap()
+            }),
+            ..Stored::default()
+        };
+        let engine = Engine::new(other, products());
+        assert_eq!(engine.license(), None);
+        assert_eq!(engine.state(NOW), State::Unlicensed);
+        // A record the trial-key era marked paid, for the paid product, is still a license.
+        let paid: Stored = serde_json::from_str(&format!(
+            r#"{{"license":{{"license_key":"K","instance_id":"i","product_id":"{P}","kind":"paid","activated_at":{NOW},"last_success_at":{NOW},"last_success_local":{NOW},"last_observed_at":{NOW},"event_seq":1}}}}"#
+        ))
+        .unwrap();
+        let engine = Engine::new(paid, products());
+        assert!(engine.license().is_some());
+        assert_eq!(engine.state(NOW), State::Licensed);
+    }
+
+    #[test]
+    fn a_registry_answer_is_held_while_the_clock_is_behind() {
+        let mut engine = with_trial(unlicensed(), HOUR, false);
+        let before = engine.trial.clone();
+        let behind = Moment {
+            wall: NOW - 2 * DAY,
+            mono: 0,
+        };
+        engine.anchor_trial(behind);
+        engine.check_clock(behind);
+        let answer = RegistryAnswer {
+            started_at: NOW - 10 * DAY,
+            now: NOW,
+        };
+        assert_eq!(engine.finish_registration(Ok(answer), behind), Ok(false));
+        assert_eq!(engine.trial, before, "nothing applied");
+        assert!(engine.pending_registration.is_some());
+        assert!(!engine.begin_registration(behind, true), "not asked again");
+        let fixed = Moment {
+            wall: NOW,
+            mono: HOUR,
+        };
+        assert!(engine.observe(fixed).trial);
+        let TrialSlot::Present(trial) = &engine.trial else {
+            panic!()
+        };
+        assert!(trial.registered);
+        assert_eq!(trial.started_at, NOW - 10 * DAY - HOUR);
+        assert_eq!(trial.last_seen_at, NOW);
+        assert_eq!(engine.state(fixed), State::TrialEnded);
     }
 
     #[test]
@@ -1688,9 +2054,9 @@ pub(crate) mod tests {
         assert_eq!(engine.state(NOW), State::Unlicensed);
         assert!(!engine.core_feature(NOW), "not until the record is saved");
         let trial = engine.provisional_trial(NOW).unwrap();
-        assert_eq!(trial, TrialRecord::provisional(NOW));
+        assert_eq!(trial, TrialRecord::provisional(NOW, NOW));
         assert!(!trial.registered);
-        engine.commit_trial(trial);
+        engine.commit_trial(trial, NOW);
         assert_eq!(engine.state(NOW), State::Trial { days_left: 3 });
         assert_eq!(engine.provisional_trial(NOW), None);
         assert_eq!(licensed(HOUR).provisional_trial(NOW), None);
@@ -2221,6 +2587,7 @@ pub(crate) mod tests {
                 license_key: "KEY".into(),
                 instance_id: "lki".into(),
                 product_id: P.into(),
+                kind: None,
                 activated_at: NOW,
                 last_success_at: NOW,
                 last_success_local: NOW,

@@ -12,8 +12,8 @@
 //! playback stays gated.
 
 use super::core::{
-    APP_ID, Activation, DAY, Dodo, DodoError, Engine, GRACE_WARNING_AFTER, LicenseError, Probe,
-    Products, Refusal, Registry, RegistryAnswer, RegistryError, State, Stored, TrialRecord,
+    APP_ID, Activation, DAY, Dodo, DodoError, Engine, GRACE_WARNING_AFTER, LicenseError, Moment,
+    Probe, Products, Refusal, Registry, RegistryAnswer, RegistryError, State, Stored, TrialRecord,
     TrialSlot, Validation, device_hash,
 };
 use crate::engine::Controller;
@@ -22,8 +22,9 @@ use std::{
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
+        mpsc,
     },
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
 use tauri::{Emitter, Manager};
 
@@ -47,7 +48,7 @@ const SUPPORT_URL: &str = env!("OPENKLACK_SUPPORT_URL");
 const REGISTRY_URL: &str = env!("OPENKLACK_TRIAL_REGISTRY_URL");
 /// The scheduler re-evaluates at least this often so clock changes and long sleeps are noticed.
 const MAX_SLEEP: Duration = Duration::from_secs(3600);
-/// While a deadline is pending, the enforcer looks again at least this often.
+/// While a deadline is pending or the clock is behind, the clock is looked at this often.
 const DEADLINE_RECHECK: Duration = Duration::from_secs(60);
 /// While checks fail, the network is probed this often so a check runs as soon as it is back.
 const REACHABILITY_POLL: Duration = Duration::from_secs(300);
@@ -55,7 +56,7 @@ const REACHABILITY_POLL: Duration = Duration::from_secs(300);
 const CLEANUP_RETRY: Duration = Duration::from_secs(300);
 /// A rising `last_seen_at` is saved at most this often; the trial's end and quitting save it too.
 const TRIAL_SAVE_INTERVAL: i64 = 3600;
-/// Quitting waits at most this long for a trial write in progress.
+/// Quitting waits at most this long for the trial record to be saved.
 const QUIT_SAVE_WAIT: Duration = Duration::from_secs(2);
 
 /// Comma-separated IDs let a future bundle product join the paid list without code changes.
@@ -74,6 +75,37 @@ fn system_now() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs() as i64)
+}
+
+/// Seconds on a monotonic clock that keeps counting while the Mac sleeps.
+#[cfg(target_os = "macos")]
+fn monotonic_now() -> i64 {
+    #[repr(C)]
+    struct Timebase {
+        numer: u32,
+        denom: u32,
+    }
+    unsafe extern "C" {
+        fn mach_continuous_time() -> u64;
+        fn mach_timebase_info(info: *mut Timebase) -> i32;
+    }
+    let mut timebase = Timebase { numer: 1, denom: 1 };
+    // SAFETY: both are plain libSystem calls; the struct matches `mach_timebase_info_data_t`.
+    let ticks = unsafe {
+        mach_timebase_info(&mut timebase);
+        mach_continuous_time()
+    };
+    let nanos = ticks as u128 * timebase.numer as u128 / timebase.denom.max(1) as u128;
+    (nanos / 1_000_000_000) as i64
+}
+
+#[cfg(not(target_os = "macos"))]
+fn monotonic_now() -> i64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs() as i64
 }
 
 /// `Retry-After` as seconds: a delay, or an HTTP date relative to the server's clock.
@@ -621,7 +653,8 @@ impl Host for TauriHost {
     }
 }
 
-/// What the settings window shows. Mirrors the state table in LICENSING.md.
+/// What the settings window shows. Mirrors the state table in LICENSING.md, and the same gate
+/// that decides playback.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct View {
@@ -629,8 +662,11 @@ pub struct View {
     /// False until the license record has been read; the window shows a loading state.
     pub ready: bool,
     pub environment: &'static str,
+    /// What playback is actually allowed: when the records in memory would grant access that
+    /// isn't saved yet, the saved records' state.
     #[serde(flatten)]
     pub state: State,
+    /// Whether keyboard sounds play right now.
     pub core_feature: bool,
     /// The clock was set back: a paid license needs a check.
     pub clock_changed: bool,
@@ -763,7 +799,10 @@ pub struct Service<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H
     vault: V,
     host: H,
     journal: J,
+    /// The wall clock, in Unix seconds.
     clock: Clock,
+    /// A monotonic clock in seconds that keeps counting through sleep.
+    monotonic: Clock,
 }
 
 pub type Live = Service<HttpDodo, HttpRegistry, Keychain, TauriHost, FileJournal>;
@@ -785,6 +824,7 @@ impl Live {
             TauriHost { app: app.clone() },
             journal,
             Box::new(system_now),
+            Box::new(monotonic_now),
         ));
         #[cfg(debug_assertions)]
         if let Some(terms) = debug_trial_terms() {
@@ -805,10 +845,40 @@ impl Live {
     }
 }
 
+impl<D, R, V, H, J> Service<D, R, V, H, J>
+where
+    D: Dodo + Send + Sync + 'static,
+    R: Registry + Send + Sync + 'static,
+    V: Vault + 'static,
+    H: Host + 'static,
+    J: Journal + 'static,
+{
+    /// Saves the trial record on quit from a helper thread and waits at most `timeout` for it,
+    /// so a stuck Keychain never holds up quitting. Returns whether the save finished in time.
+    pub fn flush_within(self: Arc<Self>, timeout: Duration) -> bool {
+        let (done, finished) = mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("openklack-license-quit".into())
+            .spawn(move || {
+                self.flush();
+                let _ = done.send(());
+            });
+        spawned.is_ok() && finished.recv_timeout(timeout).is_ok()
+    }
+}
+
 impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Journal>
     Service<D, R, V, H, J>
 {
-    pub fn new(dodo: D, registry: R, vault: V, host: H, journal: J, clock: Clock) -> Self {
+    pub fn new(
+        dodo: D,
+        registry: R,
+        vault: V,
+        host: H,
+        journal: J,
+        clock: Clock,
+        monotonic: Clock,
+    ) -> Self {
         let mut engine = Engine::new(Stored::default(), products());
         engine.trial = TrialSlot::Unread;
         Self {
@@ -831,12 +901,14 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             host,
             journal,
             clock,
+            monotonic,
         }
     }
 
-    /// The deadline enforcer: only ever reads the engine, and publishes restrictions the moment
-    /// a trial ends, grace runs out or the clock is found to have changed. It never touches the
-    /// ordering locks, the Keychain, the network or cleanup, so a stalled write cannot delay it.
+    /// The deadline enforcer: only ever reads the engine and the saved records, and publishes
+    /// restrictions the moment a trial ends, grace runs out or the clock is found to have
+    /// changed. It never touches the ordering locks, the Keychain, the network or cleanup, so a
+    /// stalled write cannot delay it.
     pub fn run_deadlines(&self) {
         loop {
             self.enforce();
@@ -845,10 +917,8 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 let engine = self.engine.lock().unwrap();
                 // The saved trial record gates too: an unsaved registration still stops at the
                 // saved record's offline limit.
-                let durable = match (&engine.stored.license, &*self.durable_trial.lock().unwrap()) {
-                    (None, TrialSlot::Present(trial)) => {
-                        Engine::trial_transition_at(trial, &engine.terms, now)
-                    }
+                let durable = match (engine.license(), &*self.durable_trial.lock().unwrap()) {
+                    (None, TrialSlot::Present(saved)) => engine.trial_transition_at(saved, now),
                     _ => None,
                 };
                 [engine.next_transition_at(now), durable]
@@ -856,10 +926,10 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                     .flatten()
                     .min()
             };
-            // A pending deadline is rechecked every minute, so a clock set forward during the
+            // A pending deadline is rechecked every minute, so a wall clock moved during the
             // wait is noticed on time.
             let wait = next
-                .map(|at| Duration::from_secs((at - now).max(0) as u64).min(DEADLINE_RECHECK))
+                .map(|at| Duration::from_secs((at - now.wall).max(0) as u64).min(DEADLINE_RECHECK))
                 .unwrap_or(MAX_SLEEP)
                 .clamp(Duration::from_secs(1), MAX_SLEEP);
             let (flag, condvar) = &self.deadline_wake;
@@ -964,8 +1034,11 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         condvar.notify_all();
     }
 
-    fn now(&self) -> i64 {
-        (self.clock)()
+    fn now(&self) -> Moment {
+        Moment {
+            wall: (self.clock)(),
+            mono: (self.monotonic)(),
+        }
     }
 
     /// Reads the records, runs the launch check and registration, then keeps the schedule.
@@ -982,7 +1055,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     /// retried with backoff. Loads are single-flight, and a result is discarded if the records
     /// changed meanwhile. With no license and no trial record, the trial starts here.
     pub fn load(&self) {
-        let Ok(_loading) = self.load.try_lock() else {
+        let Ok(loading) = self.load.try_lock() else {
             return;
         };
         let started = self.generation.load(Ordering::SeqCst);
@@ -1010,7 +1083,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                     let backoff = LOAD_RETRY_MIN
                         .saturating_mul(1 << meta.load_failures.saturating_sub(1).min(20))
                         .min(LOAD_RETRY_MAX);
-                    meta.next_load_at = Some(now + backoff);
+                    meta.next_load_at = Some(now.wall + backoff);
                     meta.last_error = Some(error);
                 });
                 return;
@@ -1049,6 +1122,10 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 record.revoked = true;
                 record.event_seq = seq;
             }
+            // Launch: elapsed time follows the monotonic clock from here, unless the clock is
+            // behind the trial.
+            engine.anchor_trial(now);
+            engine.check_clock(now);
             drop(engine);
             *self.durable.lock().unwrap() = Some(stored);
             *self.durable_trial.lock().unwrap() = slot;
@@ -1062,7 +1139,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             meta.storage_dirty = journal_seq.is_some();
             match trial {
                 Ok(_) => meta.trial_recovered(),
-                Err(error) => meta.trial_failed(now, error),
+                Err(error) => meta.trial_failed(now.wall, error),
             }
             drop(meta);
             drop(trial_ordered);
@@ -1075,7 +1152,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         self.publish(|_| {});
         self.apply();
         // Reading is done: a manual retry must not wait for the requests below.
-        drop(_loading);
+        drop(loading);
         // The contract's launch check and registration: in the background, whatever the last
         // success time or backoff.
         let _ = self.check_once(true);
@@ -1093,11 +1170,13 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     /// `ensure_trial` for a caller that already holds the license ordering lock, which keeps an
     /// activation from landing between the "no license" check and the trial's save.
     fn ensure_trial_ordered(&self, _license_ordered: &MutexGuard<'_, ()>, forced: bool) {
-        let ordered = self.trial_mutate.lock().unwrap();
+        let _ordered = self.trial_mutate.lock().unwrap();
         let now = self.now();
         {
             let meta = self.meta.lock().unwrap();
-            if !meta.ready || (!forced && meta.next_trial_attempt_at.is_some_and(|at| at > now)) {
+            if !meta.ready
+                || (!forced && meta.next_trial_attempt_at.is_some_and(|at| at > now.wall))
+            {
                 return;
             }
         }
@@ -1114,7 +1193,10 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             Ok(()) => {
                 // Only holders of the trial ordering lock change the trial slot, so it is still
                 // absent.
-                self.engine.lock().unwrap().commit_trial(trial.clone());
+                self.engine
+                    .lock()
+                    .unwrap()
+                    .commit_trial(trial.clone(), self.now());
                 *self.durable_trial.lock().unwrap() = TrialSlot::Present(trial);
                 self.generation.fetch_add(1, Ordering::SeqCst);
                 self.publish(Meta::trial_recovered);
@@ -1122,13 +1204,12 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             Err(error) => {
                 self.publish(|meta| {
                     meta.trial_failed(
-                        now,
+                        now.wall,
                         format!("Your free trial could not be started. {error}"),
                     )
                 });
             }
         }
-        drop(ordered);
     }
 
     /// Reads the trial record again after a failed read.
@@ -1147,31 +1228,48 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         match trial {
             Ok(record) => {
                 let slot = record.map_or(TrialSlot::Absent, TrialSlot::Present);
-                self.engine.lock().unwrap().trial = slot.clone();
+                {
+                    let mut engine = self.engine.lock().unwrap();
+                    engine.trial = slot.clone();
+                    engine.anchor_trial(now);
+                    engine.check_clock(now);
+                }
                 *self.durable_trial.lock().unwrap() = slot;
                 self.generation.fetch_add(1, Ordering::SeqCst);
                 self.publish(Meta::trial_recovered);
             }
             Err(error) => {
-                self.publish(|meta| meta.trial_failed(now, error));
+                self.publish(|meta| meta.trial_failed(now.wall, error));
             }
         }
     }
 
-    /// Settings → License → Try again: re-reads an unreadable trial record, or starts a trial
-    /// that could not be saved, without waiting for the backoff.
+    /// Settings → License → Try again: re-reads an unreadable trial record, starts a trial that
+    /// could not be saved, and writes a trial record whose save failed, without waiting for the
+    /// backoff.
     fn retry_trial(&self) {
         if self.engine.lock().unwrap().trial == TrialSlot::Unread {
             self.reload_trial();
         }
         self.ensure_trial(true);
+        if self.trial_save_due() {
+            let ordered = self.trial_mutate.lock().unwrap();
+            self.persist_trial(&ordered);
+        }
     }
 
     /// Writes the trial record. Requires the trial ordering lock, so writes land in the order the
     /// changes were made and a slower writer can never restore an older record. A failure is
     /// retried every tick and never blocks the core feature or the trial deadline.
     fn persist_trial(&self, _ordered: &MutexGuard<'_, ()>) -> bool {
-        let slot = self.engine.lock().unwrap().trial.clone();
+        let (slot, frozen) = {
+            let engine = self.engine.lock().unwrap();
+            (engine.trial.clone(), engine.trial_frozen(self.now()))
+        };
+        if frozen {
+            // Nothing about the trial is saved while the clock is behind.
+            return false;
+        }
         let TrialSlot::Present(trial) = slot else {
             return true;
         };
@@ -1202,10 +1300,14 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     /// Whether the trial record in memory should be written now: a failed write, a change other
     /// than `last_seen_at`, the trial's end, or `last_seen_at` an hour past the saved one.
     fn trial_save_due(&self) -> bool {
-        if self.meta.lock().unwrap().trial_dirty {
+        let dirty = self.meta.lock().unwrap().trial_dirty;
+        let engine = self.engine.lock().unwrap();
+        if engine.trial_frozen(self.now()) {
+            return false;
+        }
+        if dirty {
             return true;
         }
-        let engine = self.engine.lock().unwrap();
         let TrialSlot::Present(trial) = &engine.trial else {
             return false;
         };
@@ -1223,21 +1325,12 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             || (ended(trial) && !ended(saved))
     }
 
-    /// On quit: raises `last_seen_at` once more and saves the trial record if it changed. Waits
-    /// only briefly for a trial write in progress, so quitting is never held up.
+    /// On quit: raises `last_seen_at` once more and saves the trial record if it changed. Called
+    /// through `flush_within`, which bounds the whole save.
     pub fn flush(&self) {
         let now = self.now();
         self.engine.lock().unwrap().observe(now);
-        let deadline = Instant::now() + QUIT_SAVE_WAIT;
-        let ordered = loop {
-            if let Ok(ordered) = self.trial_mutate.try_lock() {
-                break ordered;
-            }
-            if Instant::now() >= deadline {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        let ordered = self.trial_mutate.lock().unwrap();
         let changed = {
             let engine = self.engine.lock().unwrap();
             matches!(&engine.trial, TrialSlot::Present(_))
@@ -1249,7 +1342,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     }
 
     /// The device hash sent to the registry: from the hardware UUID, or from a random stand-in
-    /// that is saved in the trial record before it is ever sent.
+    /// that is saved in the trial record before any request uses it.
     fn device(&self) -> Option<String> {
         if let Some(uuid) = self.host.hardware_uuid() {
             return Some(device_hash(APP_ID, &uuid));
@@ -1323,7 +1416,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         let now = self.now();
         let reload = {
             let meta = self.meta.lock().unwrap();
-            !meta.ready && meta.next_load_at.is_none_or(|at| at <= now)
+            !meta.ready && meta.next_load_at.is_none_or(|at| at <= now.wall)
         };
         if reload {
             self.load();
@@ -1336,7 +1429,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             .lock()
             .unwrap()
             .next_trial_attempt_at
-            .is_none_or(|at| at <= now);
+            .is_none_or(|at| at <= now.wall);
         if retry_trial {
             if self.engine.lock().unwrap().trial == TrialSlot::Unread {
                 self.reload_trial();
@@ -1360,7 +1453,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         };
         if due {
             let _ = self.check_once(false);
-        } else if network_down && self.network_recovered(now, false) {
+        } else if network_down && self.network_recovered(now.wall, false) {
             let _ = self.check_once(true);
         }
         let register_now = std::mem::take(&mut self.meta.lock().unwrap().register_now);
@@ -1369,16 +1462,16 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             (
                 engine
                     .next_registration_at(now)
-                    .is_some_and(|due| due <= now),
+                    .is_some_and(|due| due <= now.wall),
                 engine.registration.network_down,
             )
         };
         if registration_due || register_now {
             self.register_once(register_now);
-        } else if registry_down && self.network_recovered(now, true) {
+        } else if registry_down && self.network_recovered(now.wall, true) {
             self.register_once(true);
         }
-        self.release_cleanups(now);
+        self.release_cleanups(now.wall);
         if self.meta.lock().unwrap().storage_dirty {
             let ordered = self.mutate.lock().unwrap();
             self.persist(&ordered);
@@ -1439,7 +1532,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     /// How long the scheduler may sleep before something is due.
     fn next_wait(&self) -> Duration {
         let now = self.now();
-        let (next_check, next_transition, next_registration, probing) = {
+        let (next_check, next_transition, next_registration, probing, clock_behind) = {
             let engine = self.engine.lock().unwrap();
             (
                 engine.next_check_at(now),
@@ -1448,24 +1541,29 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 engine.schedule.network_down
                     || engine.registration.network_down
                     || !engine.stored.pending_cleanups.is_empty(),
+                engine.clock_behind,
             )
         };
         let mut wait = [next_check, next_transition, next_registration]
             .into_iter()
             .flatten()
-            .map(|due| Duration::from_secs((due - now).max(0) as u64))
+            .map(|due| Duration::from_secs((due - now.wall).max(0) as u64))
             .min()
             .unwrap_or(MAX_SLEEP);
+        if clock_behind {
+            // Sound comes back soon after the clock is corrected.
+            wait = wait.min(DEADLINE_RECHECK);
+        }
         {
             let meta = self.meta.lock().unwrap();
             if probing || meta.storage_dirty || meta.trial_dirty || !meta.journal_retry.is_empty() {
                 wait = wait.min(REACHABILITY_POLL.min(CLEANUP_RETRY));
             }
             if let Some(at) = meta.next_load_at.filter(|_| !meta.ready) {
-                wait = wait.min(Duration::from_secs((at - now).max(0) as u64));
+                wait = wait.min(Duration::from_secs((at - now.wall).max(0) as u64));
             }
             if let Some(at) = meta.next_trial_attempt_at {
-                wait = wait.min(Duration::from_secs((at - now).max(0) as u64));
+                wait = wait.min(Duration::from_secs((at - now.wall).max(0) as u64));
             }
         }
         wait.clamp(Duration::from_secs(1), MAX_SLEEP)
@@ -1478,9 +1576,18 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         condvar.notify_all();
     }
 
-    /// The Mac woke from sleep: deadlines are re-evaluated, `last_seen_at` rises on the next
-    /// tick, and an unregistered trial asks the registry again whatever the backoff.
+    /// The Mac woke from sleep: `last_seen_at` rises by the time slept, a clock found behind the
+    /// trial holds it, deadlines are re-evaluated, and an unregistered trial asks the registry
+    /// again whatever the backoff.
     pub fn woke(&self) {
+        {
+            let now = self.now();
+            let mut engine = self.engine.lock().unwrap();
+            engine.observe(now);
+            engine.check_clock(now);
+        }
+        // The restriction is published before any I/O.
+        self.gate(false);
         self.meta.lock().unwrap().register_now = true;
         self.poke_deadlines();
         self.poke();
@@ -1636,6 +1743,37 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         self.engine.lock().unwrap().state(self.now())
     }
 
+    /// The gate from records in memory and on disk, under the engine lock: the state to show and
+    /// whether playback is allowed. A restriction in memory counts at once, an extension only
+    /// once it is saved; when the saved records allow less, their state is what shows.
+    fn effective(
+        engine: &Engine,
+        ready: bool,
+        journal_unreadable: bool,
+        durable: State,
+        at: Moment,
+    ) -> (State, bool) {
+        let memory = engine.state(at);
+        let shown = if memory.core_feature() && !durable.core_feature() {
+            durable
+        } else {
+            memory
+        };
+        let playable =
+            ready && !journal_unreadable && memory.core_feature() && durable.core_feature();
+        (shown, playable)
+    }
+
+    /// The saved records' state, measured with the engine's clock.
+    fn durable_state(&self, engine: &Engine, at: Moment) -> State {
+        let stored = self.durable.lock().unwrap();
+        let trial = self.durable_trial.lock().unwrap();
+        match stored.as_ref() {
+            Some(stored) => engine.durable_state(stored, &trial, at),
+            None => State::Unlicensed,
+        }
+    }
+
     /// Decides the gate under the engine lock and stamps it with the next revision.
     fn decide(&self) -> (u64, bool, &'static str) {
         let engine = self.engine.lock().unwrap();
@@ -1644,24 +1782,16 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             let meta = self.meta.lock().unwrap();
             (meta.ready, meta.journal_unreadable)
         };
-        // Both what is in memory and what is saved must grant access: a restriction in memory
-        // counts at once, an extension only once it is durable.
-        let durable = {
-            let stored = self.durable.lock().unwrap();
-            let trial = self.durable_trial.lock().unwrap();
-            stored.as_ref().is_some_and(|stored| {
-                Engine::stored_core_feature(stored, &trial, &engine.terms, now)
-            })
-        };
-        let state = engine.state(now);
-        let blocked = !ready || journal_unreadable || !durable || !state.core_feature();
-        let reason = match state {
+        let durable = self.durable_state(&engine, now);
+        let (shown, playable) = Self::effective(&engine, ready, journal_unreadable, durable, now);
+        let reason = match shown {
             State::TrialEnded => "Free trial ended",
             State::TrialOffline => "Connect to continue your free trial",
+            State::ClockBehind => "Mac clock is behind",
             _ => "License needed",
         };
         let revision = self.gate_revision.fetch_add(1, Ordering::SeqCst) + 1;
-        (revision, blocked, reason)
+        (revision, !playable, reason)
     }
 
     /// Publishes the gate: a restriction always, a permission only when the caller says the
@@ -1683,13 +1813,15 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         let now = self.now();
         let engine = self.engine.lock().unwrap();
         let meta = self.meta.lock().unwrap();
-        let state = engine.state(now);
+        let durable = self.durable_state(&engine, now);
+        let (state, playable) =
+            Self::effective(&engine, meta.ready, meta.journal_unreadable, durable, now);
         View {
             revision: meta.revision,
             ready: meta.ready,
             environment: ENVIRONMENT,
             state,
-            core_feature: state.core_feature(),
+            core_feature: playable,
             clock_changed: engine.clock_changed(now),
             journal_unreadable: meta.journal_unreadable,
             trial_storage_error: meta.trial_failures > 0,
@@ -1698,7 +1830,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                     .offline_for(now)
                     .is_some_and(|age| age >= GRACE_WARNING_AFTER),
             checking: meta.checking,
-            last_success_at: engine.stored.license.as_ref().map(|r| r.last_success_at),
+            last_success_at: engine.license().map(|r| r.last_success_at),
             last_error: meta.last_error.clone(),
             pending_key: meta.pending_key.clone(),
             buy_url: BUY_URL,
@@ -1884,10 +2016,10 @@ pub fn wake(app: &tauri::AppHandle) {
     }
 }
 
-/// Called as the app exits: saves the trial's `last_seen_at`.
+/// Called as the app exits: saves the trial's `last_seen_at`, waiting at most two seconds.
 pub fn quit(app: &tauri::AppHandle) {
     if let Some(service) = app.try_state::<Arc<Live>>() {
-        service.flush();
+        let _ = service.inner().clone().flush_within(QUIT_SAVE_WAIT);
     }
 }
 
@@ -1935,7 +2067,7 @@ pub async fn check_license_now(state: tauri::State<'_, Arc<Live>>) -> Result<Vie
 }
 
 /// Try again after storage could not be read or saved, or while the trial waits for the
-/// registry.
+/// registry or a corrected clock.
 #[tauri::command]
 pub async fn reload_license(state: tauri::State<'_, Arc<Live>>) -> Result<View, String> {
     let service = state.inner().clone();
@@ -1944,6 +2076,7 @@ pub async fn reload_license(state: tauri::State<'_, Arc<Live>>) -> Result<View, 
             service.retry_trial();
             let _ = service.check_once(true);
             service.register_once(true);
+            service.apply();
             service.poke();
         } else {
             service.load();
@@ -2285,6 +2418,7 @@ mod tests {
             license_key: key.into(),
             instance_id: format!("lki_{key}"),
             product_id: PAID_PRODUCT_ID.split(',').next().unwrap().into(),
+            kind: None,
             activated_at: NOW - 30 * DAY,
             last_success_at: NOW - last_success_ago,
             last_success_local: NOW - last_success_ago,
@@ -2324,6 +2458,16 @@ mod tests {
         journal: Arc<FakeJournal>,
         clock: Arc<AtomicI64>,
     ) -> Arc<TestService> {
+        monotonic_service(vault, journal, clock, Arc::new(AtomicI64::new(0)))
+    }
+
+    /// A service whose monotonic clock the test moves by hand.
+    fn monotonic_service(
+        vault: FakeVault,
+        journal: Arc<FakeJournal>,
+        clock: Arc<AtomicI64>,
+        mono: Arc<AtomicI64>,
+    ) -> Arc<TestService> {
         let service = Arc::new(Service::new(
             FakeDodo::paid(),
             FakeRegistry::default(),
@@ -2331,6 +2475,7 @@ mod tests {
             FakeHost::default(),
             journal,
             Box::new(move || clock.load(Ordering::SeqCst)),
+            Box::new(move || mono.load(Ordering::SeqCst)),
         ));
         // As `Live::start` does: gated until the records are read.
         service.apply();
@@ -2381,7 +2526,7 @@ mod tests {
         // Before the registry answers: the provisional record is saved and sounds are on.
         assert_eq!(
             service.vault.trial_writes(),
-            vec![TrialRecord::provisional(NOW)]
+            vec![TrialRecord::provisional(NOW, NOW)]
         );
         assert_eq!(service.view().state, State::Trial { days_left: 3 });
         assert!(!service.host.blocked());
@@ -2433,28 +2578,32 @@ mod tests {
     }
 
     #[test]
-    fn case_14_a_clock_set_back_after_a_relaunch_keeps_the_trial_time_used() {
+    fn case_14_a_relaunch_with_the_clock_set_back_waits_for_the_clock_and_saves_nothing() {
         let clock = Arc::new(AtomicI64::new(NOW - 5 * DAY));
-        let service = trial_service(trial_record(2 * DAY, true), clock.clone());
+        let original = trial_record(2 * DAY, true);
+        let service = trial_service(original.clone(), clock.clone());
         service.load();
-        assert_eq!(service.view().state, State::Trial { days_left: 1 });
-        assert!(!service.host.blocked());
+        let view = service.view();
+        assert_eq!(view.state, State::ClockBehind);
+        assert!(!view.core_feature);
+        assert!(service.host.blocked());
+        assert_eq!(service.host.reason(), "Mac clock is behind");
         clock.store(NOW - 5 * DAY + HOUR, Ordering::SeqCst);
         service.tick();
+        service.flush();
+        assert_eq!(service.view().state, State::ClockBehind);
+        assert!(service.vault.trial_writes().is_empty(), "nothing is saved");
+        assert_eq!(service.vault.saved_trial(), Some(original));
+        assert!(
+            service.next_wait() <= DEADLINE_RECHECK,
+            "the clock is watched"
+        );
+        // Corrected: the trial continues with the time it had used.
+        clock.store(NOW, Ordering::SeqCst);
+        service.tick();
         assert_eq!(service.view().state, State::Trial { days_left: 1 });
-        assert_eq!(
-            service.vault.saved_trial().unwrap().last_seen_at,
-            NOW,
-            "last_seen_at is never lowered"
-        );
-        let restarted = service_with(
-            service.vault.reopen(),
-            Arc::new(FakeJournal::default()),
-            clock,
-        );
-        restarted.load();
-        assert_eq!(restarted.view().state, State::Trial { days_left: 1 });
-        assert_eq!(restarted.registry.calls(), 0);
+        assert!(!service.host.blocked());
+        assert_eq!(service.registry.calls(), 0);
     }
 
     #[test]
@@ -2527,7 +2676,7 @@ mod tests {
         assert!(!service.host.blocked());
         assert_eq!(
             service.vault.trial_writes()[0],
-            TrialRecord::provisional(NOW + 60)
+            TrialRecord::provisional(NOW + 60, NOW + 60)
         );
         assert_eq!(service.registry.calls(), 1);
     }
@@ -2585,7 +2734,7 @@ mod tests {
         assert_eq!(service.host.reason(), "Free trial ended");
         let writes = service.vault.trial_writes();
         assert_eq!(writes.len(), 2);
-        assert_eq!(writes[0], TrialRecord::provisional(NOW));
+        assert_eq!(writes[0], TrialRecord::provisional(NOW, NOW));
         assert!(writes[1].registered);
         assert_eq!(writes[1].started_at, NOW - 4 * DAY);
     }
@@ -2760,11 +2909,10 @@ mod tests {
         }
         assert_eq!(service.registry.calls(), 8);
         assert_eq!(
-            service
-                .engine
-                .lock()
-                .unwrap()
-                .next_registration_at(NOW + 20),
+            service.engine.lock().unwrap().next_registration_at(Moment {
+                wall: NOW + 20,
+                mono: 0
+            }),
             Some(NOW + 20 + HOUR)
         );
         clock.store(NOW + 400, Ordering::SeqCst);
@@ -2865,6 +3013,451 @@ mod tests {
             None
         );
         assert_eq!(parse_registry_answer(b"<html>"), None);
+    }
+
+    #[test]
+    fn case_28_elapsed_time_follows_the_monotonic_clock_while_the_wall_clock_is_frozen_or_set_back()
+    {
+        for wall_later in [NOW, NOW - 5 * DAY] {
+            let clock = Arc::new(AtomicI64::new(NOW));
+            let mono = Arc::new(AtomicI64::new(0));
+            let vault = FakeVault::default();
+            *vault.trial.lock().unwrap() = Some(trial_record(DAY, true));
+            let service = monotonic_service(
+                vault,
+                Arc::new(FakeJournal::default()),
+                clock.clone(),
+                mono.clone(),
+            );
+            service.load();
+            assert_eq!(service.view().state, State::Trial { days_left: 2 });
+            clock.store(wall_later, Ordering::SeqCst);
+            mono.store(2 * DAY - 60, Ordering::SeqCst);
+            service.tick();
+            assert_eq!(service.view().state, State::Trial { days_left: 0 });
+            assert!(!service.host.blocked());
+            assert_eq!(
+                service.vault.saved_trial().unwrap().last_seen_at,
+                NOW + 2 * DAY - 60,
+                "elapsed advanced by the monotonic time"
+            );
+            // The deadline switches the core off on monotonic time, from memory.
+            mono.store(2 * DAY, Ordering::SeqCst);
+            service.enforce();
+            assert!(service.host.blocked(), "wall clock at {wall_later}");
+            assert_eq!(service.view().state, State::TrialEnded);
+            assert_eq!(
+                service.engine.lock().unwrap().next_transition_at(Moment {
+                    wall: wall_later,
+                    mono: 2 * DAY
+                }),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn case_29_a_registration_whose_save_hangs_turns_the_core_off_at_24_hours_until_saved() {
+        // Hour 23, the registry answers, the save hangs. Also with the wall clock rolled back
+        // two hours while two hours of monotonic time pass.
+        for (wall_later, mono_later) in [(NOW + HOUR, HOUR), (NOW - HOUR, 2 * HOUR)] {
+            let clock = Arc::new(AtomicI64::new(NOW));
+            let mono = Arc::new(AtomicI64::new(0));
+            let vault = FakeVault::default();
+            *vault.trial.lock().unwrap() = Some(trial_record(23 * HOUR, false));
+            let service = monotonic_service(
+                vault,
+                Arc::new(FakeJournal::default()),
+                clock.clone(),
+                mono.clone(),
+            );
+            service.registry.started(NOW - 23 * HOUR, NOW);
+            service.vault.trial_write_pause.arm();
+            let _enforcer = {
+                let service = service.clone();
+                thread::spawn(move || service.run_deadlines())
+            };
+            let loading = {
+                let service = service.clone();
+                thread::spawn(move || service.load())
+            };
+            service.vault.trial_write_pause.wait_entered();
+            assert!(!service.host.blocked(), "still inside the offline limit");
+            clock.store(wall_later, Ordering::SeqCst);
+            mono.store(mono_later, Ordering::SeqCst);
+            service.poke_deadlines();
+            wait_until_blocked(&service);
+            let view = service.view();
+            assert_eq!(view.state, State::TrialOffline);
+            assert!(!view.core_feature);
+            service.vault.trial_write_pause.open();
+            loading.join().unwrap();
+            assert!(!service.host.blocked(), "back on once saved");
+            assert!(service.vault.saved_trial().unwrap().registered);
+            assert!(service.view().core_feature);
+        }
+    }
+
+    #[test]
+    fn case_30_no_registry_request_until_the_fallback_device_id_is_saved() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = trial_service(trial_record(HOUR, false), clock.clone());
+        service.host.no_hardware_uuid.store(true, Ordering::SeqCst);
+        *service.vault.trial_save_error.lock().unwrap() = Some("keychain locked".into());
+        service.registry.started(NOW - HOUR, NOW);
+        service.load();
+        assert_eq!(service.registry.calls(), 0);
+        assert_eq!(service.vault.saved_trial().unwrap().device_id, None);
+        for step in [30, 60, 90] {
+            clock.store(NOW + step, Ordering::SeqCst);
+            service.woke();
+            service.tick();
+            assert_eq!(service.registry.calls(), 0, "no request with an unsaved id");
+        }
+        *service.vault.trial_save_error.lock().unwrap() = None;
+        clock.store(NOW + 400, Ordering::SeqCst);
+        service.woke();
+        service.tick();
+        let saved = service.vault.saved_trial().unwrap();
+        let id = saved.device_id.expect("saved before the request");
+        assert_eq!(
+            *service.registry.devices.lock().unwrap(),
+            vec![device_hash(APP_ID, &id)]
+        );
+    }
+
+    fn legacy_trial_key(activated_ago: i64, kind: Option<&str>, product_id: &str) -> Stored {
+        Stored {
+            license: Some(Record {
+                license_key: "KEY-TRIAL".into(),
+                instance_id: "lki_KEY-TRIAL".into(),
+                product_id: product_id.into(),
+                kind: kind.map(str::to_owned),
+                activated_at: NOW - activated_ago,
+                last_success_at: NOW - DAY,
+                last_success_local: NOW - DAY,
+                last_observed_at: NOW - DAY,
+                revoked: false,
+                event_seq: 1,
+            }),
+            ..Stored::default()
+        }
+    }
+
+    #[test]
+    fn case_31_a_record_from_the_old_trial_keys_is_not_a_license() {
+        let service = service(
+            legacy_trial_key(4 * DAY, Some("trial"), "pdt_placeholder_openklack_trial"),
+            Arc::new(AtomicI64::new(NOW)),
+        );
+        service
+            .dodo
+            .answer(Err(DodoError::Offline("offline".into())));
+        service.load();
+        assert_eq!(service.view().state, State::TrialEnded);
+        assert!(!service.view().core_feature);
+        assert!(service.host.blocked(), "no paid grace for a trial key");
+        assert!(
+            service.dodo.calls().is_empty(),
+            "never checked as a license"
+        );
+        let trial = service.vault.saved_trial().unwrap();
+        assert_eq!(
+            trial.started_at,
+            NOW - 4 * DAY,
+            "its own start: no new time"
+        );
+        assert_eq!(service.registry.calls(), 0, "nothing left to register");
+        assert!(
+            service.vault.load().unwrap().license.is_some(),
+            "kept, not deleted"
+        );
+        // A paid key still activates, and gives the trial key's slot back.
+        assert_eq!(
+            service.activate("KEY-PAID").map(|view| view.state),
+            Ok(State::Licensed)
+        );
+        assert!(
+            service
+                .dodo
+                .calls()
+                .contains(&"deactivate KEY-TRIAL lki_KEY-TRIAL".to_string())
+        );
+        // A record for a product that isn't this app's paid one, a day in: trial rules, with
+        // the registry deciding.
+        let fresh = self::service(
+            legacy_trial_key(DAY, None, "pdt_other"),
+            Arc::new(AtomicI64::new(NOW)),
+        );
+        fresh.registry.started(NOW - DAY, NOW);
+        fresh.load();
+        assert_eq!(fresh.view().state, State::Trial { days_left: 2 });
+        assert!(!fresh.host.blocked());
+        assert!(fresh.dodo.calls().is_empty());
+    }
+
+    #[test]
+    fn a_registry_answer_while_the_clock_is_behind_is_held_and_nothing_is_saved() {
+        let clock = Arc::new(AtomicI64::new(NOW - 2 * DAY));
+        let mono = Arc::new(AtomicI64::new(0));
+        let vault = FakeVault::default();
+        let original = trial_record(HOUR, false);
+        *vault.trial.lock().unwrap() = Some(original.clone());
+        let service = monotonic_service(
+            vault,
+            Arc::new(FakeJournal::default()),
+            clock.clone(),
+            mono.clone(),
+        );
+        // The registry remembers a start ten days ago: applied with a wrong clock it would be
+        // converted wrongly and saved.
+        service.registry.started(NOW - 10 * DAY, NOW);
+        service.load();
+        assert_eq!(service.view().state, State::ClockBehind);
+        assert_eq!(service.registry.calls(), 1, "the answer arrives meanwhile");
+        mono.store(HOUR, Ordering::SeqCst);
+        service.tick();
+        service.flush();
+        assert!(
+            service.vault.trial_writes().is_empty(),
+            "every trial write is frozen"
+        );
+        assert_eq!(service.vault.saved_trial(), Some(original));
+        assert!(
+            service
+                .engine
+                .lock()
+                .unwrap()
+                .pending_registration
+                .is_some()
+        );
+        assert_eq!(service.registry.calls(), 1, "held, not asked again");
+        // Corrected: the held answer is converted with the right clock and saved.
+        clock.store(NOW, Ordering::SeqCst);
+        mono.store(2 * HOUR, Ordering::SeqCst);
+        service.tick();
+        let saved = service.vault.saved_trial().unwrap();
+        assert!(saved.registered);
+        assert_eq!(saved.started_at, NOW - 10 * DAY - 2 * HOUR);
+        assert_eq!(saved.last_seen_at, NOW, "no time added while behind");
+        assert_eq!(service.view().state, State::TrialEnded);
+    }
+
+    #[test]
+    fn a_registration_counts_elapsed_time_once() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let mono = Arc::new(AtomicI64::new(0));
+        let service = monotonic_service(
+            FakeVault::default(),
+            Arc::new(FakeJournal::default()),
+            clock.clone(),
+            mono.clone(),
+        );
+        service.load();
+        assert_eq!(service.registry.calls(), 1);
+        service.registry.started(NOW, NOW + HOUR);
+        clock.store(NOW + HOUR, Ordering::SeqCst);
+        mono.store(HOUR, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.registry.calls(), 2);
+        let trial = service.vault.saved_trial().unwrap();
+        assert!(trial.registered);
+        assert_eq!(trial.started_at, NOW);
+        let engine = service.engine.lock().unwrap();
+        let TrialSlot::Present(current) = &engine.trial else {
+            panic!("a trial is running")
+        };
+        assert_eq!(current.last_seen_at, NOW + HOUR, "an hour, not two");
+        assert_eq!(
+            engine.state(Moment {
+                wall: NOW + HOUR,
+                mono: HOUR
+            }),
+            State::Trial { days_left: 3 }
+        );
+    }
+
+    #[test]
+    fn a_wake_with_the_clock_behind_holds_the_trial_before_any_io() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let mono = Arc::new(AtomicI64::new(0));
+        let vault = FakeVault::default();
+        *vault.trial.lock().unwrap() = Some(trial_record(DAY, true));
+        let service = monotonic_service(
+            vault,
+            Arc::new(FakeJournal::default()),
+            clock.clone(),
+            mono.clone(),
+        );
+        service.load();
+        assert!(!service.host.blocked());
+        // Slept an hour, and the clock came back two days early.
+        clock.store(NOW - 2 * DAY, Ordering::SeqCst);
+        mono.store(HOUR, Ordering::SeqCst);
+        service.woke();
+        assert!(service.host.blocked(), "restricted by the wake itself");
+        assert_eq!(service.view().state, State::ClockBehind);
+        assert_eq!(service.host.reason(), "Mac clock is behind");
+        // Hours pass while the clock is behind: none of them count.
+        mono.store(5 * HOUR, Ordering::SeqCst);
+        service.tick();
+        assert!(service.vault.trial_writes().is_empty());
+        clock.store(NOW + HOUR, Ordering::SeqCst);
+        mono.store(6 * HOUR, Ordering::SeqCst);
+        service.tick();
+        assert!(!service.host.blocked());
+        let engine = service.engine.lock().unwrap();
+        let TrialSlot::Present(trial) = &engine.trial else {
+            panic!("a trial is running")
+        };
+        assert_eq!(
+            trial.last_seen_at,
+            NOW + HOUR,
+            "the hour slept counts, the hold does not"
+        );
+    }
+
+    #[test]
+    fn quitting_never_waits_on_a_stuck_keychain_save() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = trial_service(trial_record(HOUR, true), clock.clone());
+        service.load();
+        clock.store(NOW + 600, Ordering::SeqCst);
+        service.vault.trial_write_pause.arm();
+        let started = std::time::Instant::now();
+        assert!(!service.clone().flush_within(Duration::from_millis(200)));
+        assert!(started.elapsed() < TIMEOUT, "quitting went on");
+        service.vault.trial_write_pause.wait_entered();
+        service.vault.trial_write_pause.open();
+        clock.store(NOW + 1200, Ordering::SeqCst);
+        assert!(service.clone().flush_within(TIMEOUT));
+        assert_eq!(
+            service.vault.saved_trial().unwrap().last_seen_at,
+            NOW + 1200
+        );
+    }
+
+    /// A small deterministic generator, so the random walk below is reproducible.
+    struct Walk(u64);
+
+    impl Walk {
+        fn next(&mut self, bound: i64) -> i64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((self.0 >> 33) % bound.max(1) as u64) as i64
+        }
+    }
+
+    #[test]
+    fn trial_time_holds_up_under_random_clocks_sleeps_save_failures_and_relaunches() {
+        for seed in 1..=6 {
+            let mut walk = Walk(seed);
+            let clock = Arc::new(AtomicI64::new(NOW));
+            let mut mono = Arc::new(AtomicI64::new(0));
+            let vault = FakeVault::default();
+            *vault.trial.lock().unwrap() = Some(trial_record(0, true));
+            let mut service = monotonic_service(
+                vault,
+                Arc::new(FakeJournal::default()),
+                clock.clone(),
+                mono.clone(),
+            );
+            service.load();
+            // Upper bound on the trial's moment: the latest wall time seen plus all monotonic
+            // time since launch. Counting time twice would break it.
+            let mut wall_max = NOW;
+            let mut mono_total = 0;
+            let mut last_elapsed = 0;
+            for _ in 0..300 {
+                let before = service.vault.trial_writes().len();
+                let mut frozen_before = service.view().state == State::ClockBehind;
+                match walk.next(7) {
+                    0 => clock.store(
+                        clock.load(Ordering::SeqCst) + walk.next(6 * DAY) - 3 * DAY,
+                        Ordering::SeqCst,
+                    ),
+                    1 | 2 => {
+                        let step = walk.next(6 * HOUR);
+                        mono.fetch_add(step, Ordering::SeqCst);
+                        clock.fetch_add(walk.next(step + 1), Ordering::SeqCst);
+                        mono_total += step;
+                    }
+                    3 => {
+                        let slept = walk.next(2 * DAY);
+                        mono.fetch_add(slept, Ordering::SeqCst);
+                        clock.fetch_add(slept, Ordering::SeqCst);
+                        mono_total += slept;
+                        service.woke();
+                    }
+                    4 => {
+                        *service.vault.trial_save_error.lock().unwrap() =
+                            (walk.next(2) == 0).then(|| "denied".to_string());
+                    }
+                    5 => {
+                        service.flush();
+                        mono = Arc::new(AtomicI64::new(walk.next(DAY)));
+                        service = monotonic_service(
+                            service.vault.reopen(),
+                            Arc::new(FakeJournal::default()),
+                            clock.clone(),
+                            mono.clone(),
+                        );
+                        service.load();
+                        let saved = service.vault.saved_trial().unwrap();
+                        wall_max = saved.last_seen_at;
+                        mono_total = 0;
+                        last_elapsed = saved.last_seen_at - saved.started_at;
+                        // A fresh vault handle counts its own writes.
+                        frozen_before = false;
+                    }
+                    _ => {}
+                }
+                service.tick();
+                wall_max = wall_max.max(clock.load(Ordering::SeqCst));
+                let view = service.view();
+                let (seen, started) = {
+                    let engine = service.engine.lock().unwrap();
+                    let TrialSlot::Present(trial) = &engine.trial else {
+                        panic!("seed {seed}: the trial record is always present")
+                    };
+                    (trial.last_seen_at, trial.started_at)
+                };
+                let elapsed = seen - started;
+                assert!(elapsed >= last_elapsed, "seed {seed}: elapsed went back");
+                assert!(
+                    seen <= wall_max + mono_total,
+                    "seed {seed}: time counted twice"
+                );
+                assert_eq!(
+                    service.host.blocked(),
+                    !view.core_feature,
+                    "seed {seed}: the window and playback disagree"
+                );
+                if view.core_feature {
+                    assert!(
+                        elapsed < TRIAL_LENGTH,
+                        "seed {seed}: sound past the trial end"
+                    );
+                }
+                if frozen_before && view.state == State::ClockBehind {
+                    assert_eq!(
+                        service.vault.trial_writes().len(),
+                        before,
+                        "seed {seed}: a write while the clock is behind"
+                    );
+                }
+                let writes = service.vault.trial_writes();
+                for pair in writes.windows(2) {
+                    assert!(
+                        pair[1].last_seen_at >= pair[0].last_seen_at,
+                        "seed {seed}: a saved last_seen_at went back"
+                    );
+                }
+                last_elapsed = elapsed;
+            }
+        }
     }
 
     #[test]
@@ -3082,7 +3675,10 @@ mod tests {
             thread::spawn(move || service.load())
         };
         service.vault.write_pause.wait_entered();
-        assert_eq!(service.view().state, State::Licensed);
+        // The window shows what playback allows: the saved record still needs a check.
+        assert_eq!(service.view().state, State::CheckRequired);
+        assert!(!service.view().core_feature);
+        assert_eq!(service.engine.lock().unwrap().state(NOW), State::Licensed);
         assert!(service.host.blocked(), "not yet saved");
         service.vault.write_pause.open();
         worker.join().unwrap();
@@ -3101,11 +3697,12 @@ mod tests {
             thread::spawn(move || service.load())
         };
         service.vault.trial_write_pause.wait_entered();
-        assert_eq!(service.view().state, State::Trial { days_left: 2 });
+        assert_eq!(service.view().state, State::TrialOffline);
         assert!(service.host.blocked(), "not yet saved");
         service.vault.trial_write_pause.open();
         worker.join().unwrap();
         assert!(!service.host.blocked());
+        assert_eq!(service.view().state, State::Trial { days_left: 2 });
         // If that save fails, the Mac stays off and the write is retried.
         let failing = trial_service(
             trial_record(DAY + HOUR, false),
@@ -3114,7 +3711,11 @@ mod tests {
         failing.registry.started(NOW - DAY - HOUR, NOW);
         *failing.vault.trial_save_error.lock().unwrap() = Some("denied".into());
         failing.load();
-        assert_eq!(failing.view().state, State::Trial { days_left: 2 });
+        // The window agrees with playback: the saved record is still at its offline limit.
+        let view = failing.view();
+        assert_eq!(view.state, State::TrialOffline);
+        assert!(!view.core_feature);
+        assert!(view.last_error.unwrap().contains("denied"));
         assert!(failing.host.blocked());
         *failing.vault.trial_save_error.lock().unwrap() = None;
         failing.tick();
@@ -3229,6 +3830,7 @@ mod tests {
                 FakeHost::default(),
                 Arc::new(FakeJournal::default()),
                 Box::new(move || clock_copy.load(Ordering::SeqCst)),
+                Box::new(|| 0),
             );
         limited.load();
         {
@@ -3506,6 +4108,7 @@ mod tests {
                 FakeHost::default(),
                 FailingJournal(inner.clone(), AtomicBool::new(true)),
                 Box::new(|| NOW),
+                Box::new(|| 0),
             );
         service.load();
         *service.vault.save_error.lock().unwrap() = Some("denied".into());
@@ -3624,6 +4227,7 @@ mod tests {
             FakeHost::default(),
             FileJournal::new(path.to_path_buf()),
             Box::new(|| NOW),
+            Box::new(|| 0),
         );
         service.apply();
         service
@@ -3754,6 +4358,7 @@ mod tests {
             FakeHost::default(),
             journal.clone(),
             Box::new(|| NOW),
+            Box::new(|| 0),
         );
         service.apply();
         // `valid: true` is saved, but its journal clear is queued for retry.
@@ -3780,6 +4385,7 @@ mod tests {
             FakeHost::default(),
             journal.clone(),
             Box::new(|| NOW),
+            Box::new(|| 0),
         );
         restart.apply();
         restart
@@ -3836,6 +4442,7 @@ mod tests {
             FakeHost::default(),
             Arc::new(FakeJournal::default()),
             Box::new(|| NOW),
+            Box::new(|| 0),
         ));
         service.apply();
         service.vault.pause.arm();
@@ -3960,6 +4567,15 @@ mod tests {
             expected,
             "only the hash is ever sent"
         );
+    }
+
+    #[test]
+    fn the_monotonic_clock_moves_forward() {
+        let first = monotonic_now();
+        thread::sleep(Duration::from_millis(1100));
+        let second = monotonic_now();
+        assert!(second > first, "{first} then {second}");
+        assert!(second - first < 5);
     }
 
     #[test]
