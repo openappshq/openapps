@@ -15,12 +15,12 @@ struct LicenseSection: View {
     var body: some View {
         Section {
             statusRow
-            if let error = license.manager.storageError {
+            if let error = license.storageError {
                 Text(LicenseMessage.storageUnavailable.text + " (\(Self.describe(error)))")
                     .font(Brand.body(12))
                     .foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if license.manager.journalError {
+            } else if license.journalError {
                 Text("OpenReaction couldn’t save its license notes in Preferences. It keeps retrying.")
                     .font(Brand.body(12))
                     .foregroundStyle(Brand.textSecondary)

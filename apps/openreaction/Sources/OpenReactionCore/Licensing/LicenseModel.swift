@@ -362,11 +362,58 @@ public enum LicenseMessage: Equatable, Sendable {
     }
 }
 
+/// Where licensing runs: its own serial executor, never the main actor, so
+/// a Keychain or preferences call that stalls cannot stall the UI, the
+/// deadline timers or the tap's shutdown.
+@globalActor
+public actor LicenseActor {
+    public static let shared = LicenseActor()
+}
+
+/// Everything the app layer needs to know, captured by the manager right
+/// after its memory changes and before it touches storage. The entitlement
+/// is derived from the snapshot with the current clock (`state(now:)`), so
+/// deadlines never wait on I/O.
+public struct LicenseSnapshot: Equatable, Sendable {
+    public var record: LicenseRecord?
+    /// The activation's journal entry is unreadable and Dodo has not settled it.
+    public var isRestricted: Bool
+    public var storageError: LicenseStoreError?
+    public var journalError: Bool
+    public var journalUnreadable: Bool
+    public var trialUsed: Bool
+    public var nextCheckDelay: TimeInterval?
+    public var nextDeadline: Date?
+    public var hasPendingCleanups: Bool
+
+    public init(
+        record: LicenseRecord? = nil, isRestricted: Bool = false, storageError: LicenseStoreError? = nil,
+        journalError: Bool = false, journalUnreadable: Bool = false, trialUsed: Bool = true,
+        nextCheckDelay: TimeInterval? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
+    ) {
+        self.record = record
+        self.isRestricted = isRestricted
+        self.storageError = storageError
+        self.journalError = journalError
+        self.journalUnreadable = journalUnreadable
+        self.trialUsed = trialUsed
+        self.nextCheckDelay = nextCheckDelay
+        self.nextDeadline = nextDeadline
+        self.hasPendingCleanups = hasPendingCleanups
+    }
+
+    public func state(now: Date) -> LicenseState {
+        let policy = LicensePolicy.state(record: record, now: now)
+        if isRestricted, policy.isFeatureEnabled { return .checkRequired }
+        return policy
+    }
+}
+
 /// The one place the app asks whether the core feature may run. A build with
 /// licensing compiled out has no manager: everything is on and nothing is
 /// ever called.
 public enum LicenseGate {
-    @MainActor
+    @LicenseActor
     public static func isFeatureEnabled(_ manager: LicenseManager?) -> Bool {
         manager?.isFeatureEnabled ?? true
     }

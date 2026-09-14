@@ -85,6 +85,7 @@ final class KeyboardTap: @unchecked Sendable {
         thread.start()
         ready.wait()
         runLoop = threadRunLoop
+        runner.tapStarted()
         CGEvent.tapEnable(tap: port, enable: true)
         return true
     }

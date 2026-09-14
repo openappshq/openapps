@@ -5,7 +5,7 @@ import Testing
 /// The shared test cases from LICENSING.md, numbered as there, against a
 /// fake Dodo client and an injectable clock.
 @Suite("Licensing")
-@MainActor
+@LicenseActor
 struct LicensingTests {
     static let paid = "pdt_openreaction_PAID"
     static let trial = "pdt_openreaction_TRIAL"
@@ -141,8 +141,12 @@ struct LicensingTests {
     let store = MemoryStore()
     let journal = MemoryJournal()
 
+    /// A manager that has read storage (the app calls `load` on start).
     private func makeManager() -> LicenseManager {
-        LicenseManager(products: Self.products, client: client, store: store, journal: journal, now: { self.clock.now })
+        let clock = self.clock
+        let manager = LicenseManager(products: Self.products, client: client, store: store, journal: journal, now: { clock.now })
+        manager.load()
+        return manager
     }
 
     private func activation(_ product: String, name: String = "OpenReaction", instance: String = "inst_1") -> Activation {
@@ -1390,7 +1394,7 @@ struct LicensingTests {
         store.failsWrites = true
         client.validation = .valid(serverDate: clock.now)
         await manager.check()
-        #expect(manager.state == .licensed)
+        #expect(manager.state == .checkRequired) // the rebuild is not durable: still restricted
         #expect(manager.journalError)
         client.validation = .invalid
         await manager.check()
@@ -1483,7 +1487,7 @@ struct LicensingTests {
         journal.failsWrites = true
         client.validation = .valid(serverDate: clock.now)
         await manager.check()
-        #expect(manager.state == .licensed)
+        #expect(manager.state == .checkRequired) // restricted until the rebuild is durable
         #expect(journal.unreadable.contains("inst_1")) // replacement not durable: still there
         #expect(manager.journalUnreadable)
         #expect(makeManager().state == .checkRequired)
@@ -1492,6 +1496,7 @@ struct LicensingTests {
         #expect(!journal.unreadable.contains("inst_1"))
         #expect(journal.entries["inst_1"] == nil)
         #expect(!manager.journalUnreadable)
+        #expect(manager.state == .licensed) // lifted by the durable rebuild, no new check needed
         #expect(makeManager().state == .licensed)
     }
 

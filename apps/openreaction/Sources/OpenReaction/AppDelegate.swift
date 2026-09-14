@@ -63,6 +63,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let controller, let license else { return }
             controller.setLicense(allowsFeature: license.isFeatureEnabled, statusLine: license.statusLine)
         }
+        // From the manager's thread, before storage: the gate stops
+        // authorizing at once; the tap's stop and the UI follow on main.
+        license.lockFeature = controller.featureLock()
         controller.setLicense(allowsFeature: license.isFeatureEnabled, statusLine: license.statusLine)
         let settings = SettingsWindowController(controller: controller, loginItem: loginItem, license: license) { [weak onboarding] in
             onboarding?.show()

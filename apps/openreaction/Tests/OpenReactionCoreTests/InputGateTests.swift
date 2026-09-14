@@ -956,6 +956,23 @@ struct InputGateTests {
         #expect(!harness.gate.isHolding)
     }
 
+    @Test func aQueuedReplacementIsRefusedOnceShutdownBegan() {
+        // The license lock pulls `beginShutdown` from the manager's thread the
+        // moment valid:false is known; a replacement already authorized and
+        // queued on the insertion queue must not post after that.
+        var harness = harnessWithToken()
+        let id = startReplacement(&harness)
+        harness.run(harness.gate.verifyResult(transaction: id, .keystrokes(text: "🎉")))
+        harness.run(harness.gate.beginShutdown())
+        let commit = harness.gate.commit(transaction: id, secureInput: false)
+        #expect(!commit.proceed)
+        #expect(harness.run(harness.gate.beginShutdown()).isEmpty) // idempotent: the first stands
+        harness.settle()
+        #expect(!harness.gate.isHolding)
+        #expect(harness.gate.shutdownOutcome == .delivered)
+        #expect(harness.log.contains(.transactionEnded(transaction: id, recordUse: false)))
+    }
+
     @Test func nothingStartsWhileShuttingDown() {
         var harness = makeHarness()
         harness.run(harness.gate.beginShutdown())

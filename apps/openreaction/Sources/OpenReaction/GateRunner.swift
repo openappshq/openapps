@@ -219,6 +219,11 @@ final class GateRunner: @unchecked Sendable {
         state.withLock { state in dispatch(state.gate.replayExecuted(transaction: id), state: &state) }
     }
 
+    /// The tap was installed: whatever was left from before is over.
+    func tapStarted() {
+        state.withLock { state in dispatch(state.gate.tapStarted(), state: &state) }
+    }
+
     /// The tap stopped or the app paused; no events flow until it restarts.
     func tapStopped() {
         state.withLock { state in

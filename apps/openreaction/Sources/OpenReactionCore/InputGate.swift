@@ -916,6 +916,7 @@ public struct InputGate: Sendable {
     /// become false, then calls `tapStopped` and uninstalls the tap. No timer
     /// ends the wait; only `tapInterrupted` does, best effort.
     public mutating func beginShutdown() -> [GateEffect] {
+        if isShuttingDown { return [] } // already on its way; the outcome stands
         isShuttingDown = true
         shutdownOutcome = nil
         trackingActive = false
@@ -942,6 +943,12 @@ public struct InputGate: Sendable {
         var effects: [GateEffect] = []
         if transaction != nil { effects += giveUp() }
         return effects + closeGate()
+    }
+
+    /// The tap was (re)installed: a shutdown that was begun while no tap ran
+    /// is over, and nothing is known about the host.
+    public mutating func tapStarted() -> [GateEffect] {
+        tapStopped()
     }
 
     public private(set) var isShuttingDown = false

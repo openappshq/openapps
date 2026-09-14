@@ -192,6 +192,15 @@ final class AppController {
         }
     }
 
+    /// A lock the license layer can pull from any thread, synchronously:
+    /// the gate stops authorizing at once (commits queued on the insertion
+    /// queue are refused from here on) and everything it holds drains
+    /// through the normal stop, which `setLicense` then completes on main.
+    func featureLock() -> @Sendable () -> Void {
+        let runner = self.runner
+        return { runner?.beginShutdown() } // a tap installed later resets this
+    }
+
     /// Called before the process exits, so held input reaches the host.
     /// Returns how the drain ended; only `.delivered` is a confirmed delivery.
     @discardableResult

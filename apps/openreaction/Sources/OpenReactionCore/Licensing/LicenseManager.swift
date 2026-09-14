@@ -18,7 +18,7 @@ import Foundation
 /// until the record is durably saved as revoked, deleted or replaced. Nothing
 /// ever re-enables an invalidated activation except a successful check of
 /// that same activation or a successful new activation.
-@MainActor
+@LicenseActor
 public final class LicenseManager {
     public static let activationName = "Mac"
     /// How often pending cleanups and durable writes are retried.
@@ -28,7 +28,7 @@ public final class LicenseManager {
     private let client: any LicenseClient
     private let store: any LicenseStore
     private let journal: any InvalidationJournal
-    private let now: () -> Date
+    private let now: @Sendable () -> Date
 
     public private(set) var record: LicenseRecord?
     /// The record as it should be on disk while the last write has failed.
@@ -92,16 +92,31 @@ public final class LicenseManager {
     /// Identity of the current activation; answers about an older one are dropped.
     private var activationGeneration = 0
     private var queue: Task<Void, Never>?
+    /// Called on this actor right after memory changes and before storage is
+    /// touched: the app layer locks the feature from here, synchronously.
+    public private(set) var onChange: (@Sendable (LicenseSnapshot) -> Void)?
 
-    public init(
+    public func setOnChange(_ handler: @escaping @Sendable (LicenseSnapshot) -> Void) {
+        onChange = handler
+        handler(snapshot)
+    }
+
+    /// Creates the manager without touching storage; call `load()` on the
+    /// license actor to read what is stored.
+    public nonisolated init(
         products: LicenseProducts, client: any LicenseClient, store: any LicenseStore,
-        journal: any InvalidationJournal, now: @escaping () -> Date = Date.init
+        journal: any InvalidationJournal, now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.products = products
         self.client = client
         self.store = store
         self.journal = journal
         self.now = now
+    }
+
+    /// Reads the stored record, journal and cleanups. Until it ran, there is
+    /// no record: the feature is off.
+    public func load() {
         reloadFromStore()
     }
 
@@ -150,7 +165,9 @@ public final class LicenseManager {
             failure = failure ?? error
         }
         storageError = failure
+        notify()
         flushRecord()
+        notify()
     }
 
     /// Union by activation, keeping order: what was already known first.
@@ -167,11 +184,21 @@ public final class LicenseManager {
     // MARK: State
 
     public var state: LicenseState {
-        let policy = LicensePolicy.state(record: record, now: now())
-        // The journal may say this activation is dead; until Dodo answers,
-        // nothing local is trusted.
-        if isRestricted, policy.isFeatureEnabled { return .checkRequired }
-        return policy
+        snapshot.state(now: now())
+    }
+
+    /// What the app layer works from; `onChange` hands it over.
+    public var snapshot: LicenseSnapshot {
+        LicenseSnapshot(
+            record: record, isRestricted: isRestricted, storageError: storageError, journalError: journalError,
+            journalUnreadable: journalUnreadable, trialUsed: trialUsed, nextCheckDelay: nextCheckDelay,
+            nextDeadline: nextDeadline, hasPendingCleanups: !pendingCleanups.isEmpty
+        )
+    }
+
+    /// Memory changed: tell the app layer before any storage runs.
+    private func notify() {
+        onChange?(snapshot)
     }
 
     public var isFeatureEnabled: Bool { state.isFeatureEnabled }
@@ -246,9 +273,9 @@ public final class LicenseManager {
     // MARK: Serialization
 
     /// Runs `operation` after every earlier operation has finished.
-    private func perform<T: Sendable>(_ operation: @escaping @MainActor () async -> T) async -> T {
+    private func perform<T: Sendable>(_ operation: @escaping @LicenseActor () async -> T) async -> T {
         let previous = queue
-        let task = Task { @MainActor in
+        let task = Task { @LicenseActor in
             await previous?.value
             return await operation()
         }
@@ -261,7 +288,9 @@ public final class LicenseManager {
     private func write(_ newRecord: LicenseRecord?) {
         record = newRecord
         pendingDurableWrite = .some(newRecord)
+        notify() // enforcement first, storage second
         flushRecord()
+        notify() // and what storage said
     }
 
     private func flushRecord() {
@@ -333,6 +362,7 @@ public final class LicenseManager {
                 if let known = journaledSeq[instanceID], known <= upTo { journaledSeq[instanceID] = nil }
             case .replaceUnreadable(let entry):
                 unreadableJournalInstances.remove(instanceID)
+                restrictedInstances.remove(instanceID)
                 if entry == nil { journaledSeq[instanceID] = nil }
             case .record:
                 break
@@ -343,6 +373,7 @@ public final class LicenseManager {
 
     private func retryJournal() {
         for (instanceID, pending) in pendingJournalOps { run(pending, for: instanceID) }
+        notify()
     }
 
     /// Writes the cleanups, first merging in whatever the store holds if it
@@ -429,6 +460,7 @@ public final class LicenseManager {
         failedChecks = 0
         blockedUntil = nil
         lastAttemptAt = now()
+        notify()
     }
 
     /// Invalidation takes effect immediately, whatever storage says: the
@@ -441,7 +473,6 @@ public final class LicenseManager {
         if unreadableJournalInstances.contains(current.instanceID) {
             // Dodo's answer supersedes whatever the unreadable entry said;
             // it is replaced only once the revocation is durable.
-            restrictedInstances.remove(current.instanceID)
             replaceUnreadableJournal(current.instanceID, with: JournalEntry(seq: revoked.eventSeq))
         } else {
             journalRecord(current.instanceID, entry: JournalEntry(seq: revoked.eventSeq))
@@ -670,9 +701,10 @@ public final class LicenseManager {
         updated.eventSeq = current.eventSeq + 1
         if unreadableJournalInstances.contains(current.instanceID) {
             // Dodo settled what the unreadable entry might have said: the
-            // journal is rebuilt without it, atomically.
-            restrictedInstances.remove(current.instanceID)
+            // journal is rebuilt without it, atomically. The restriction is
+            // lifted only once that rebuild is durable (retried on ticks).
             replaceUnreadableJournal(current.instanceID, with: nil)
+            if pendingJournalOps[current.instanceID] == nil { restrictedInstances.remove(current.instanceID) }
         }
         write(updated)
         failedChecks = 0
