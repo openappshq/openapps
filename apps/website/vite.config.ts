@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         openklack: new URL("./index.html", import.meta.url).pathname,
         openreaction: new URL("./openreaction/index.html", import.meta.url).pathname,
+        home: new URL("./home/index.html", import.meta.url).pathname,
       },
     },
   },
