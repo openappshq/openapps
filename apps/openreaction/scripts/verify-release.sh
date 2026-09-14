@@ -51,7 +51,14 @@ echo "==> App bundle"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 echo "version: $(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist") ($(plutil -extract CFBundleVersion raw -o - "$APP/Contents/Info.plist"))"
 echo "bundle id: $(plutil -extract CFBundleIdentifier raw -o - "$APP/Contents/Info.plist")"
-echo "architectures: $(lipo -archs "$APP/Contents/MacOS/${APP_NAME}")"
+archs="$(lipo -archs "$APP/Contents/MacOS/${APP_NAME}")"
+echo "architectures: ${archs}"
+for arch in arm64 x86_64; do
+    case " $archs " in
+        *" $arch "*) ;;
+        *) echo "error: not a universal binary, ${arch} is missing (got '${archs}')" >&2; exit 1 ;;
+    esac
+done
 test -f "$APP/Contents/Resources/AppIcon.icns"
 test -f "$APP/Contents/Resources/emoji.json"
 codesign --verify --deep --strict --verbose=2 "$APP"
