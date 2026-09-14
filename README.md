@@ -7,7 +7,7 @@
 
 Free & open source desktop tools, built in one workspace.
 
-[Development guide](docs/development.md) · [Design system](design/README.md) · [Issues](https://github.com/openappshq/openklack/issues)
+[Development guide](docs/development.md) · [Design system](design/README.md) · [Issues](https://github.com/openappshq/openapps/issues)
 
 </div>
 

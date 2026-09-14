@@ -76,7 +76,6 @@ Start with the [design checklist](../design/system.md#adding-a-product) so the n
 New desktop apps can have their own native stack and release workflow.
 Do not copy OpenKlack's signing identifier, preference storage, or keyboard dependencies into an unrelated app.
 Use app-specific release tags and updater channels so one app's release cannot become another app's update.
-The existing GitHub repository URL is retained; this change does not rename the remote repository.
 
 ### Shared styling
 

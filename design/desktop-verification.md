@@ -109,11 +109,11 @@ The scoped interface review is in [desktop-interface-review.md](archive/desktop-
 - Measure an optimized release with settings open/closed and establish CPU, wakeup, memory, and acoustic-latency budgets.
 - Verify native tray slider and live app-rule interactions, complete keyboard-only operation, VoiceOver, and reduced motion.
 - Complete the native visual pass of the original shared 3D keyboard after unlocking the Mac.
-- Configure the official update destination for openappshq/openklack with its updater signing key, then verify explicit update installation and rollback behavior.
+- Configure the official update destination for openappshq/openapps with its updater signing key, then verify explicit update installation and rollback behavior.
 - Run the GitHub workflow in the actual repository; it has been authored locally but not executed remotely.
 - Supply Developer ID signing/notarization credentials and verify download, installation, launch, and updates on the supported Macs.
 
-The user selected https://github.com/openappshq/openklack on September 14; it is configured as the origin remote.
+The user selected https://github.com/openappshq/openapps on September 14; it is configured as the origin remote.
 Only an Apple Development signing identity was available locally; no signing identity or credential is hardcoded into repository configuration.
 Developer ID Application signing and notarization setup are still required for public Mac distribution.
 

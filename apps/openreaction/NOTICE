@@ -64,6 +64,6 @@ or distributed with this repository or the app.
 Brand system
 -------------------------------------------------------------------------------
 design/tokens.json and design/assets/openapps-hq/app-icon.svg come from the
-OpenApps HQ "Tactile Studio" system (openappshq/openklack, MIT). The orchid
+OpenApps HQ "Tactile Studio" system (openappshq/openapps, MIT). The orchid
 ramp beyond orchid/300 and the OpenReaction mark are original to this
 repository.

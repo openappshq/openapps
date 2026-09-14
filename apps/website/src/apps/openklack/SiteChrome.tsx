@@ -2,6 +2,7 @@ import { Link } from "@heroui/react";
 import { ArrowLeft, ArrowUpRight, Download } from "lucide-react";
 
 import StarButton from "../../shared/StarButton";
+import { GITHUB_URL } from "../../shared/github";
 
 export function SiteHeader() {
   return (
@@ -53,7 +54,7 @@ export function SiteFooter() {
       </Link>
       <div>
         <span>OpenKlack / 2026</span>
-        <Link href="https://github.com/openappshq/openklack" target="_blank" rel="noreferrer">
+        <Link href={GITHUB_URL} target="_blank" rel="noreferrer">
           GitHub <ArrowUpRight size={14} />
         </Link>
       </div>

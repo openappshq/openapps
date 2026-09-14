@@ -1,5 +1,5 @@
 /** The monorepo for every OpenApps HQ app; GitHub redirects if it is renamed. */
-export const GITHUB_REPO = "openappshq/openklack";
+export const GITHUB_REPO = "openappshq/openapps";
 export const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
 
 /** Written at build time by scripts/github-stars.mjs. */

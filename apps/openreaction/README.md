@@ -8,7 +8,7 @@
 
 Free & open source · Mac native · No account · No telemetry
 
-[Build and run](#build-and-run) · [Architecture](docs/architecture.md) · [Report a bug](https://github.com/openappshq/openklack/issues)
+[Build and run](#build-and-run) · [Architecture](docs/architecture.md) · [Report a bug](https://github.com/openappshq/openapps/issues)
 
 </div>
 

@@ -4,13 +4,13 @@ import { motion } from "motion/react";
 import { ArrowDown, ArrowUpRight, Download, Star } from "lucide-react";
 import { enter } from "@openapps/ui/transitions";
 import { SiteFooter, SiteHeader } from "../SiteChrome";
+import { GITHUB_URL } from "../../../shared/github";
 import "../styles.css";
 import "../download.css";
 
-const repository = "https://github.com/openappshq/openklack";
 const shareUrl = `https://twitter.com/intent/tweet?${new URLSearchParams({
   text: "Meet OpenKlack: mechanical keyboard sounds for the keyboard you already own. Free & open source.",
-  url: repository,
+  url: GITHUB_URL,
 })}`;
 
 export default function DownloadPage({
@@ -116,7 +116,7 @@ export default function DownloadPage({
           <div className="download-socials">
             <Link
               className="button-link inverse"
-              href={repository}
+              href={GITHUB_URL}
               target="_blank"
               rel="noopener noreferrer"
             >

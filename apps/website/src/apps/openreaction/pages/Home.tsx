@@ -99,7 +99,7 @@ const questions: [string, string][] = [
 ];
 
 const buildCommands = `git clone ${REPO}.git
-cd openklack/apps/openreaction
+cd openapps/apps/openreaction
 ./scripts/bundle.sh
 open build/OpenReaction.app`;
 

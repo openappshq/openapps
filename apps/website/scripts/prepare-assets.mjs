@@ -1,5 +1,6 @@
 import { cp, mkdir } from "node:fs/promises";
 import { products } from "../src/catalog.ts";
+import { GITHUB_REPO } from "../src/shared/github.ts";
 import { writeGithubStars } from "./github-stars.mjs";
 
 const publicDir = new URL("../public/", import.meta.url);
@@ -20,4 +21,4 @@ for (const product of products) {
     );
   }
 }
-await writeGithubStars("openappshq/openklack", new URL("data/github.json", publicDir));
+await writeGithubStars(GITHUB_REPO, new URL("data/github.json", publicDir));
