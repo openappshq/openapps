@@ -1,0 +1,24 @@
+<svg width="280" height="280" viewBox="0 0 280 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g filter="url(#filter0_d_openreaction)">
+<rect x="24" y="12" width="232" height="232" rx="54" fill="#D35DB4"/>
+</g>
+<rect x="28" y="12" width="224" height="220" rx="50" fill="#F3A0DC"/>
+<rect x="28.5" y="12.5" width="223" height="219" rx="49.5" stroke="white" stroke-opacity="0.24"/>
+<g transform="translate(66 48) scale(1.16)">
+<path d="M34 28H22C18.6863 28 16 30.6863 16 34V46C16 49.3137 18.6863 52 22 52H34C37.3137 52 40 49.3137 40 46V34C40 30.6863 37.3137 28 34 28Z" fill="#141414"/>
+<path d="M34 76H22C18.6863 76 16 78.6863 16 82V94C16 97.3137 18.6863 100 22 100H34C37.3137 100 40 97.3137 40 94V82C40 78.6863 37.3137 76 34 76Z" fill="#141414"/>
+<path d="M84 15.5033A56 56 0 0 1 84 112.4967L72 91.7128A32 32 0 0 0 72 36.2872L84 15.5033Z" fill="#141414"/>
+</g>
+<defs>
+<filter id="filter0_d_openreaction" x="0" y="0" width="280" height="280" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feMorphology radius="8" operator="erode" in="SourceAlpha" result="effect1_dropShadow_openreaction"/>
+<feOffset dy="12"/>
+<feGaussianBlur stdDeviation="16"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.16 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_openreaction"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_openreaction" result="shape"/>
+</filter>
+</defs>
+</svg>
