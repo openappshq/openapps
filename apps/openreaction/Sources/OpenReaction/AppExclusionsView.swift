@@ -10,7 +10,7 @@ struct AppExclusionsSection: View {
     let controller: AppController
 
     @State private var filter = ""
-    @State private var infoCache: [String: InstalledApp] = [:]
+    @State private var apps = InstalledAppStore()
     @State private var runningApps: [RunningApp] = []
 
     private static let filterThreshold = 12
@@ -21,7 +21,7 @@ struct AppExclusionsSection: View {
         guard !needle.isEmpty else { return all }
         return all.filter { entry in
             entry.bundleIdentifier.lowercased().contains(needle)
-                || info(for: entry.bundleIdentifier).name.lowercased().contains(needle)
+                || apps.info(for: entry.bundleIdentifier).name.lowercased().contains(needle)
         }
     }
 
@@ -33,8 +33,8 @@ struct AppExclusionsSection: View {
                     .accessibilityLabel("Filter excluded apps")
             }
             ForEach(entries, id: \.bundleIdentifier) { entry in
-                ExclusionRow(entry: entry, app: info(for: entry.bundleIdentifier)) { excluded in
-                    controller.setExcluded(excluded, bundleIdentifier: entry.bundleIdentifier)
+                ExclusionRow(entry: entry, app: apps.info(for: entry.bundleIdentifier)) { active in
+                    controller.setExcluded(!active, bundleIdentifier: entry.bundleIdentifier)
                 } remove: {
                     controller.removeExclusion(entry.bundleIdentifier)
                 }
@@ -88,7 +88,7 @@ struct AppExclusionsSection: View {
         } header: {
             MonoLabel("Apps")
         } footer: {
-            Text("OpenReaction stays off in these apps. Defaults cover apps with their own emoji shortcodes and terminals; switch one on to use OpenReaction there anyway.")
+            Text("OpenReaction stays off in these apps. Defaults cover apps with their own emoji shortcodes and terminals. The switch means “OpenReaction on in this app”: turn it on to use OpenReaction there anyway.")
                 .font(Brand.body(12))
                 .foregroundStyle(Brand.textSecondary)
         }
@@ -107,8 +107,42 @@ struct AppExclusionsSection: View {
         panel.treatsFilePackagesAsDirectories = false
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         guard panel.runModal() == .OK else { return }
-        let identifiers = panel.urls.compactMap { Bundle(url: $0)?.bundleIdentifier }
+        addApps(at: panel.urls)
+    }
+
+    /// Common add path: reads each bundle id, skips OpenReaction itself and
+    /// bundles without a readable id, and says which were skipped.
+    private func addApps(at urls: [URL]) {
+        var identifiers: [String] = []
+        var unreadable: [String] = []
+        var ownApp = false
+        for url in urls {
+            let name = FileManager.default.displayName(atPath: url.path)
+            guard let bundleIdentifier = Bundle(url: url)?.bundleIdentifier, !bundleIdentifier.isEmpty else {
+                unreadable.append(name)
+                continue
+            }
+            if bundleIdentifier == Bundle.main.bundleIdentifier {
+                ownApp = true
+                continue
+            }
+            identifiers.append(bundleIdentifier)
+        }
         controller.addExclusions(identifiers)
+
+        var notes: [String] = []
+        if ownApp {
+            notes.append("OpenReaction can’t exclude itself: the setup guide’s practice field needs it to work here.")
+        }
+        if !unreadable.isEmpty {
+            notes.append("Skipped (no bundle identifier): " + unreadable.joined(separator: ", "))
+        }
+        guard !notes.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = identifiers.isEmpty ? "No apps were added" : "Some apps were not added"
+        alert.informativeText = notes.joined(separator: "\n\n")
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private func refreshRunningApps() {
@@ -132,7 +166,7 @@ struct AppExclusionsSection: View {
     private func confirmRestoreDefaults() {
         let alert = NSAlert()
         alert.messageText = "Restore the default app list?"
-        alert.informativeText = "Apps you added will be removed from the list, and defaults you switched on will be excluded again."
+        alert.informativeText = "Apps you added will be removed from the list, and defaults you switched on will be switched off again."
         alert.addButton(withTitle: "Restore Defaults")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {
@@ -140,12 +174,6 @@ struct AppExclusionsSection: View {
         }
     }
 
-    private func info(for bundleIdentifier: String) -> InstalledApp {
-        if let cached = infoCache[bundleIdentifier] { return cached }
-        let resolved = InstalledApp.resolve(bundleIdentifier)
-        DispatchQueue.main.async { infoCache[bundleIdentifier] = resolved }
-        return resolved
-    }
 }
 
 private struct RunningApp: Identifiable {
@@ -155,19 +183,23 @@ private struct RunningApp: Identifiable {
     var id: String { bundleIdentifier }
 }
 
-/// Display name and icon for a bundle id, if the app is installed.
-private struct InstalledApp {
+/// Display name and icon for a bundle id.
+private struct InstalledApp: @unchecked Sendable {
     let name: String
     let icon: NSImage
-    let isInstalled: Bool
+    /// nil while the lookup is still running.
+    let isInstalled: Bool?
 
+    static func placeholder(_ bundleIdentifier: String) -> InstalledApp {
+        InstalledApp(name: bundleIdentifier, icon: Self.genericIcon, isInstalled: nil)
+    }
+
+    static let genericIcon = NSImage(named: NSImage.applicationIconName) ?? NSImage()
+
+    /// Launch Services and icon lookups; runs off the main thread.
     static func resolve(_ bundleIdentifier: String) -> InstalledApp {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
-            return InstalledApp(
-                name: bundleIdentifier,
-                icon: NSImage(named: NSImage.applicationIconName) ?? NSImage(),
-                isInstalled: false
-            )
+            return InstalledApp(name: bundleIdentifier, icon: genericIcon, isInstalled: false)
         }
         let info = Bundle(url: url)?.infoDictionary
         let name = (info?["CFBundleDisplayName"] as? String)
@@ -177,10 +209,38 @@ private struct InstalledApp {
     }
 }
 
+/// Resolves app names and icons off the render path. `info(for:)` returns a
+/// placeholder at once, starts one lookup per bundle id, and publishes the
+/// result so rows re-render when it lands.
+@MainActor
+@Observable
+private final class InstalledAppStore {
+    private var cache: [String: InstalledApp] = [:]
+    @ObservationIgnored private var inFlight: Set<String> = []
+    @ObservationIgnored private let queue = DispatchQueue(label: "com.openappshq.openreaction.app-info", qos: .userInitiated)
+
+    func info(for bundleIdentifier: String) -> InstalledApp {
+        if let cached = cache[bundleIdentifier] { return cached }
+        if inFlight.insert(bundleIdentifier).inserted {
+            queue.async {
+                let resolved = InstalledApp.resolve(bundleIdentifier)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self.cache[bundleIdentifier] = resolved
+                        self.inFlight.remove(bundleIdentifier)
+                    }
+                }
+            }
+        }
+        return .placeholder(bundleIdentifier)
+    }
+}
+
 private struct ExclusionRow: View {
     let entry: AppExclusions.Entry
     let app: InstalledApp
-    let setExcluded: @MainActor (Bool) -> Void
+    /// Called with the switch's new value: true means OpenReaction is on here.
+    let setActive: @MainActor (Bool) -> Void
     let remove: @MainActor () -> Void
 
     var body: some View {
@@ -210,13 +270,13 @@ private struct ExclusionRow: View {
                             .font(Brand.body(12))
                             .foregroundStyle(Brand.textSecondary)
                     }
-                    if !app.isInstalled {
+                    if app.isInstalled == false {
                         Text("Not installed")
                             .font(Brand.body(12))
                             .foregroundStyle(Brand.textSecondary)
                     }
                     if !entry.isExcluded {
-                        Text("OpenReaction active")
+                        Text("OpenReaction on")
                             .font(Brand.body(12))
                             .foregroundStyle(Brand.textSecondary)
                     }
@@ -224,12 +284,16 @@ private struct ExclusionRow: View {
             }
             Spacer(minLength: Brand.Space.s8)
             if entry.isDefault {
-                Toggle("", isOn: Binding(get: { entry.isExcluded }, set: { setExcluded($0) }))
+                // On means OpenReaction is on in this app; off means excluded.
+                Toggle("", isOn: Binding(get: { !entry.isExcluded }, set: { setActive($0) }))
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()
-                    .accessibilityLabel(entry.isExcluded ? "Excluded" : "OpenReaction active")
-                    .accessibilityHint("Switch off to use OpenReaction in \(app.name)")
+                    .accessibilityLabel("OpenReaction in \(app.name)")
+                    .accessibilityValue(entry.isExcluded ? "Off" : "On")
+                    .accessibilityHint(entry.isExcluded
+                        ? "Switch on to use OpenReaction in \(app.name)"
+                        : "Switch off to keep OpenReaction out of \(app.name)")
             } else {
                 Button(action: remove) {
                     Image(systemName: "minus.circle")
@@ -251,8 +315,8 @@ private struct ExclusionRow: View {
         } else {
             parts.append("added by you")
         }
-        if !app.isInstalled { parts.append("not installed") }
-        parts.append(entry.isExcluded ? "OpenReaction off" : "OpenReaction active")
+        if app.isInstalled == false { parts.append("not installed") }
+        parts.append(entry.isExcluded ? "OpenReaction off" : "OpenReaction on")
         return parts.joined(separator: ", ")
     }
 }
