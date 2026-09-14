@@ -246,6 +246,37 @@ extension LicensingTests {
         #expect(trialStore.record?.startedAt == Clock.start) // the earlier, provisional start
     }
 
+    @Test("20. A registration that extends a running trial is saved before it counts: it still stops at 24 h while the save fails")
+    func case20_extensionSavedFirst() async {
+        trialStore.record = trialRecord(elapsed: 23 * 3600, registered: false)
+        registry.result = .registered(startedAt: clock.now, now: clock.now) // the registry agrees on the start
+        let manager = makeManager()
+        let seen = Snapshots()
+        manager.setOnChange { seen.append($0) }
+        trialStore.failsWrites = true
+        await manager.checkOnLaunch()
+        #expect(registry.devices.count == 1)
+        #expect(manager.trial?.registered == false) // not published: not saved
+        #expect(!seen.all.contains { $0.trial?.registered == true })
+        #expect(manager.state == .trial(daysLeft: 3))
+        #expect(manager.trialStorageError == .unavailable("denied"))
+        #expect(manager.nextCheckDelay == LicensePolicy.minimumRetryDelay)
+        clock.advance(2 * 3600) // 25 h: the provisional limit still applies
+        #expect(manager.state == .trialNeedsConnection)
+        #expect(!manager.isFeatureEnabled)
+        await manager.tick()
+        #expect(manager.state == .trialNeedsConnection)
+        #expect(registry.devices.count == 1) // the answer is kept, not asked for again
+        trialStore.failsWrites = false
+        await manager.tick()
+        #expect(manager.state == .trial(daysLeft: 2))
+        #expect(manager.isFeatureEnabled)
+        #expect(trialStore.record?.registered == true)
+        #expect(trialStore.record?.startedAt == Clock.start.addingTimeInterval(-23 * 3600))
+        #expect(manager.trialStorageError == nil)
+        #expect(registry.devices.count == 1)
+    }
+
     @Test("21. Registry 429 Retry-After: 120 blocks calls for 120 s; state unchanged")
     func case21_registryRateLimited() async {
         trialStore.record = trialRecord(elapsed: 3600, registered: false)
@@ -313,6 +344,36 @@ extension LicensingTests {
         #expect(request == ["app": "openreaction", "device": hardwareHash, "env": "test"])
     }
 
+    @Test("A stored record for a retired trial key, or for another product, is not a license: the trial rules apply", arguments: [true, false])
+    func nonPaidRecordIsNotALicense(legacyTrialKind: Bool) async throws {
+        let paid = paidRecord(lastSuccessAge: 3600)
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(paid)) as? [String: Any])
+        if legacyTrialKind {
+            object["kind"] = "trial" // saved before the trial moved in-app
+        } else {
+            object["productID"] = Self.retiredTrial
+        }
+        let stored = try JSONDecoder().decode(LicenseRecord.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(stored.isLegacyTrial == legacyTrialKind)
+        store.record = stored
+        trialStore.record = trialRecord(elapsed: Day.day)
+        client.validation = .valid(serverDate: clock.now)
+        let manager = makeManager()
+        #expect(manager.record == nil)
+        #expect(manager.state == .trial(daysLeft: 2))
+        #expect(manager.isFeatureEnabled)
+        await manager.checkOnLaunch()
+        #expect(client.calls.isEmpty) // nothing to check with Dodo
+        // With the trial over it is TrialEnded, never Licensed.
+        trialStore.record = trialRecord(elapsed: 4 * Day.day)
+        #expect(makeManager().state == .trialEnded)
+        // A real activation replaces it.
+        client.activation = .activated(activation(Self.paid, instance: "inst_new"))
+        #expect(await makeManager().activate(key: "KEY-PAID-2") == .activated)
+        #expect(store.record?.instanceID == "inst_new")
+        #expect(store.record?.isLegacyTrial == false)
+    }
+
     @Test("A Mac with a license never asks the registry, even with an unregistered trial record")
     func licensedMacNeverRegisters() async {
         store.record = paidRecord(lastSuccessAge: 3600)
@@ -373,6 +434,16 @@ extension LicensingTests {
         #expect(registry.devices.isEmpty)
         #expect(manager.trialStorageError != nil)
         #expect(manager.state == .trial(daysLeft: 3)) // a failed save never stops the trial
+        // The id now sits in memory, but still not in the store: every
+        // attempt, however it is prompted, waits for it to be saved.
+        #expect(manager.trial?.fallbackDeviceID != nil)
+        for _ in 0..<3 {
+            clock.advance(3600)
+            await manager.tick()
+            await manager.tick(wake: true)
+        }
+        #expect(registry.devices.isEmpty)
+        #expect(trialStore.record?.fallbackDeviceID == nil)
         trialStore.failsWrites = false
         clock.advance(60)
         await manager.tick()

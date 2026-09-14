@@ -20,6 +20,9 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
     /// revocation, removal). The invalidation journal refers to it, so
     /// staleness is decided by order, never by comparing clocks.
     public var eventSeq: UInt64
+    /// Read from a record saved as `kind: trial` before the trial moved
+    /// in-app. Never written: such a record is not a license.
+    public private(set) var isLegacyTrial = false
 
     public init(
         licenseKey: String, instanceID: String, productID: String,
@@ -37,8 +40,9 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
 
     /// Records saved before the sequence existed read as 0, so any journal
     /// entry about them is honored. A `kind` from before the trial moved
-    /// in-app is ignored: only paid keys are ever stored.
+    /// in-app is read only to recognise a retired trial record.
     public init(from decoder: Decoder) throws {
+        isLegacyTrial = (try? decoder.container(keyedBy: LegacyKeys.self).decodeIfPresent(String.self, forKey: .kind)) == "trial"
         let container = try decoder.container(keyedBy: CodingKeys.self)
         licenseKey = try container.decode(String.self, forKey: .licenseKey)
         instanceID = try container.decode(String.self, forKey: .instanceID)
@@ -52,6 +56,10 @@ public struct LicenseRecord: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case licenseKey, instanceID, productID, activatedAt, lastSuccessAt, revokedAt, lastObservedAt, eventSeq
+    }
+
+    private enum LegacyKeys: String, CodingKey {
+        case kind
     }
 
     public var isRevoked: Bool { revokedAt != nil }

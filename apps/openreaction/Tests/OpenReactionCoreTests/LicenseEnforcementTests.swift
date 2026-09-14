@@ -87,6 +87,13 @@ struct LicenseEnforcementTests {
         }
     }
 
+    /// A registry that answers at once with a fixed start.
+    struct AnsweringRegistry: TrialRegistryClient {
+        let startedAt: Date
+        let now: Date
+        func register(device: String) async -> TrialRegistrationResult { .registered(startedAt: startedAt, now: now) }
+    }
+
     struct Device: DeviceIdentity {
         func hardwareUUID() -> String? { "00000000-1111-2222-3333-444444444444" }
     }
@@ -259,6 +266,37 @@ struct LicenseEnforcementTests {
         await tick.value
         #expect(trialStore.record?.lastSeenAt == clock.now)
         #expect(await manager.state == .trialEnded)
+    }
+
+    @Test("20. A registration that extends the trial is not published while its save hangs past 24 h")
+    func anExtensionWaitsForItsSave() async {
+        let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
+        let hour: TimeInterval = 3600
+        let trialStore = BlockingTrialStore(record: TrialRecord(
+            startedAt: clock.now.addingTimeInterval(-23 * hour), lastSeenAt: clock.now, registered: false
+        ))
+        let seen = Seen()
+        let manager = Self.manager(
+            store: BlockingStore(record: nil), journal: Journal(), trialStore: trialStore,
+            registry: AnsweringRegistry(startedAt: clock.now, now: clock.now), clock: clock
+        )
+        await manager.setOnChange { seen.append($0) }
+        await manager.load()
+        #expect(seen.snapshots.last?.state(now: clock.now) == .trial(daysLeft: 3))
+
+        trialStore.blockIO = true // the registration's save hangs
+        let launch = Task { await manager.checkOnLaunch() }
+        await Self.eventually { trialStore.isBlocked }
+        #expect(trialStore.isBlocked)
+        #expect(!seen.snapshots.contains { $0.trial?.registered == true })
+        clock.advance(2 * hour) // 25 h, save still stuck
+        #expect(seen.snapshots.last?.state(now: clock.now) == .trialNeedsConnection)
+        trialStore.blockIO = false
+        trialStore.release()
+        await launch.value
+        #expect(trialStore.record?.registered == true)
+        #expect(seen.snapshots.last?.trial?.registered == true)
+        #expect(seen.snapshots.last?.state(now: clock.now) == .trial(daysLeft: 2)) // on again once saved
     }
 
     @Test("20. An unregistered trial stops at its offline limit while the registry call hangs")

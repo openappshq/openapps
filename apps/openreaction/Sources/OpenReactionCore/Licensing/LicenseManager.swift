@@ -75,6 +75,12 @@ public final class LicenseManager {
     /// Registry calls made, for diagnostics and tests.
     public private(set) var registryCallCount = 0
     private var isRegistering = false
+    /// A registry answer (the start on the local clock) whose record could
+    /// not be saved yet. Retried on ticks; the registry is not asked again.
+    private var pendingRegistrationStart: Date?
+    /// The fallback device id the store is known to hold; only that id is
+    /// ever sent.
+    private var durableFallbackID: String?
 
     /// The record as it should be on disk while the last write has failed.
     private var pendingDurableWrite: LicenseRecord??
@@ -182,6 +188,12 @@ public final class LicenseManager {
         var failure: LicenseStoreError?
         do {
             var loaded = try store.loadRecord()
+            if let stored = loaded, stored.isLegacyTrial || !products.isPaid(stored.productID) {
+                // A retired trial key or another product is not a license:
+                // it is ignored (and replaced by any activation), and the
+                // trial rules apply.
+                loaded = nil
+            }
             if var current = loaded {
                 do {
                     unreadableJournalInstances.remove(current.instanceID)
@@ -725,6 +737,7 @@ public final class LicenseManager {
         await perform {
             self.retryStorage()
             self.settleTrial()
+            self.commitPendingRegistration()
             self.noteTime()
             self.noteTrialTime()
             await self.retryCleanupsNow()
@@ -883,6 +896,8 @@ public final class LicenseManager {
                 trial = nil
                 trialLoad = .absent
             }
+            durableFallbackID = trial?.fallbackDeviceID
+            pendingRegistrationStart = nil
             trialStorageError = nil
             trialDirty = false
             trialSaveRequired = false
@@ -910,6 +925,8 @@ public final class LicenseManager {
         }
         trial = provisional
         trialLoad = .present
+        durableFallbackID = fallback
+        pendingRegistrationStart = nil
         trialStorageError = nil
         trialDirty = false
         trialSaveRequired = false
@@ -930,6 +947,7 @@ public final class LicenseManager {
             trialDirty = false
             trialSaveRequired = false
             trialStorageError = nil
+            durableFallbackID = trial.fallbackDeviceID
             lastTrialSaveAt = now()
             if LicensePolicy.trialState(trial, timing: trialTiming, now: now()) == .trialEnded { trialEndSaved = true }
         } catch {
@@ -970,7 +988,7 @@ public final class LicenseManager {
     /// An unregistered trial may ask the registry now, ignoring backoff but
     /// not a `Retry-After`.
     private var canRegister: Bool {
-        guard trialApplies, let trial, !trial.registered, !isRegistering else { return false }
+        guard trialApplies, let trial, !trial.registered, !isRegistering, pendingRegistrationStart == nil else { return false }
         if let registryBlockedUntil, now() < registryBlockedUntil { return false }
         return true
     }
@@ -992,17 +1010,18 @@ public final class LicenseManager {
         let deviceID: String
         if let hardware = device.hardwareUUID() {
             deviceID = hardware
-        } else if let fallback = current.fallbackDeviceID {
-            deviceID = fallback
         } else {
-            // The same random id has to be used next time: saved before it is sent.
-            let fallback = UUID().uuidString.lowercased()
-            current.fallbackDeviceID = fallback
-            trial = current
-            trialDirty = true
-            trialSaveRequired = true
-            flushTrial()
-            guard !trialDirty else { notify(); return }
+            // The same random id has to be used next time: it is sent only
+            // once the store holds it, on every attempt.
+            let fallback = current.fallbackDeviceID ?? UUID().uuidString.lowercased()
+            if current.fallbackDeviceID == nil {
+                current.fallbackDeviceID = fallback
+                trial = current
+                trialDirty = true
+                trialSaveRequired = true
+            }
+            if durableFallbackID != fallback { flushTrial() }
+            guard durableFallbackID == fallback else { notify(); return }
             deviceID = fallback
         }
         let generation = trialGeneration
@@ -1029,40 +1048,64 @@ public final class LicenseManager {
 
     /// The registry's start, converted to the local clock
     /// (`local_now − (registry_now − registry_started_at)`); the earlier of
-    /// that and the provisional start wins. A change that turns the core on
-    /// (an offline-limited trial with time left) is saved first; anything
-    /// else takes effect in memory first and is then saved.
+    /// that and the provisional start wins. The registry has answered, so it
+    /// is not asked again; the record is committed now or on a later tick.
     private func applyRegistration(startedAt: Date, serverNow: Date, to latest: TrialRecord) {
-        let current = now()
         let used = max(0, serverNow.timeIntervalSince(startedAt))
+        pendingRegistrationStart = min(latest.startedAt, now().addingTimeInterval(-used))
+        registryFailures = 0
+        registryBlockedUntil = nil
+        commitPendingRegistration()
+    }
+
+    /// When a trial record's access ends: the offline limit while
+    /// unregistered, the full length once registered.
+    private func entitlementEnd(_ record: TrialRecord) -> Date {
+        let limit = record.registered ? trialTiming.duration : min(trialTiming.offlineLimit, trialTiming.duration)
+        return record.startedAt.addingTimeInterval(limit)
+    }
+
+    /// Registers the trial record. Anything that lets access run longer than
+    /// the record in memory allows is saved first and published only once
+    /// the store holds it: until then the provisional deadline keeps
+    /// applying, and a failed save is retried on ticks. A registration that
+    /// shortens or ends the trial takes effect in memory first, then is saved.
+    private func commitPendingRegistration() {
+        guard let start = pendingRegistrationStart else { return }
+        guard trialApplies, let latest = trial, !latest.registered else {
+            pendingRegistrationStart = nil
+            return
+        }
+        let current = now()
         var updated = latest
-        updated.startedAt = min(latest.startedAt, current.addingTimeInterval(-used))
+        updated.startedAt = min(latest.startedAt, start)
         updated.lastSeenAt = max(latest.lastSeenAt, current)
         updated.registered = true
-        let wasOn = LicensePolicy.trialState(latest, timing: trialTiming, now: current).isFeatureEnabled
-        let isOn = LicensePolicy.trialState(updated, timing: trialTiming, now: current).isFeatureEnabled
-        if isOn, !wasOn {
+        if entitlementEnd(updated) > entitlementEnd(latest) {
             do {
                 try trialStore.saveTrial(updated)
             } catch {
-                // Not saved, not granted: the registry is asked again after backoff.
                 trialStorageError = error
-                registryFailures += 1
+                notify()
                 return
             }
+            pendingRegistrationStart = nil
             trial = updated
             trialDirty = false
             trialSaveRequired = false
             trialStorageError = nil
+            durableFallbackID = updated.fallbackDeviceID
             lastTrialSaveAt = current
+            if LicensePolicy.trialState(updated, timing: trialTiming, now: current) == .trialEnded { trialEndSaved = true }
+            notify()
         } else {
+            pendingRegistrationStart = nil
             trial = updated
             trialDirty = true
             trialSaveRequired = true
             notify() // enforcement first
             flushTrial()
+            notify()
         }
-        registryFailures = 0
-        registryBlockedUntil = nil
     }
 }
