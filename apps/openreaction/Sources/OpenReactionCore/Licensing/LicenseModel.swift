@@ -235,6 +235,17 @@ public protocol LicenseStore: Sendable {
     func savePendingCleanups(_ cleanups: [PendingCleanup]) throws(LicenseStoreError)
 }
 
+/// A non-secret note that an activation was invalidated, kept outside the
+/// Keychain so a `valid: false` survives a restart even when the Keychain
+/// refused to save the revoked record. Keyed by activation (the instance id,
+/// hashed by the implementation); never holds the license key.
+public protocol InvalidationJournal: Sendable {
+    func revokedAt(instanceID: String) -> Date?
+    /// Written synchronously, before the record is saved.
+    func record(instanceID: String, revokedAt: Date)
+    func clear(instanceID: String)
+}
+
 /// An activation this Mac owes a deactivation for.
 public struct PendingCleanup: Codable, Equatable, Sendable {
     public let licenseKey: String

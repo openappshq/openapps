@@ -65,6 +65,7 @@ struct LicensingTests {
         var pendingCleanups: [PendingCleanup] = []
         var failsWrites = false
         var failsReads = false
+        var cleanupReadError: LicenseStoreError?
         func loadRecord() throws(LicenseStoreError) -> LicenseRecord? {
             if failsReads { throw .unavailable("locked") }
             return record
@@ -87,6 +88,7 @@ struct LicensingTests {
         }
         func loadPendingCleanups() throws(LicenseStoreError) -> [PendingCleanup] {
             if failsReads { throw .unavailable("locked") }
+            if let cleanupReadError { throw cleanupReadError }
             return pendingCleanups
         }
         func savePendingCleanups(_ cleanups: [PendingCleanup]) throws(LicenseStoreError) {
@@ -95,12 +97,20 @@ struct LicensingTests {
         }
     }
 
+    final class MemoryJournal: InvalidationJournal, @unchecked Sendable {
+        var entries: [String: Date] = [:]
+        func revokedAt(instanceID: String) -> Date? { entries[instanceID] }
+        func record(instanceID: String, revokedAt: Date) { entries[instanceID] = revokedAt }
+        func clear(instanceID: String) { entries[instanceID] = nil }
+    }
+
     let clock = Clock()
     let client = FakeClient()
     let store = MemoryStore()
+    let journal = MemoryJournal()
 
     private func makeManager() -> LicenseManager {
-        LicenseManager(products: Self.products, client: client, store: store, now: { self.clock.now })
+        LicenseManager(products: Self.products, client: client, store: store, journal: journal, now: { self.clock.now })
     }
 
     private func activation(_ product: String, name: String = "OpenReaction", instance: String = "inst_1") -> Activation {
@@ -305,7 +315,9 @@ struct LicensingTests {
         #expect(!manager.isFeatureEnabled)
         #expect(manager.nextDeadline == nil)
         clock.advance(3 * Clock.day)
-        await manager.tick() // offline: nothing re-anchors
+        let observed = store.record?.lastObservedAt
+        await manager.tick() // offline: nothing re-anchors, and a tick never lowers the mark
+        #expect(store.record?.lastObservedAt == observed)
         #expect(manager.state == .trialEnded(clockChanged: true))
         #expect(manager.state != .trial(daysLeft: 2))
         // Once the clock is right again, the trial is what it always was.
@@ -327,7 +339,7 @@ struct LicensingTests {
         #expect(manager.isCheckDue)
         client.validation = .valid(serverDate: clock.now)
         await manager.tick()
-        #expect(store.record?.lastObservedAt == clock.now)
+        #expect(store.record?.lastObservedAt == clock.now) // lowered by ten days: the server said so
         #expect(manager.state == .trial(daysLeft: 3))
         #expect(manager.isFeatureEnabled)
     }
@@ -728,6 +740,46 @@ struct LicensingTests {
         #expect(client.calls.last == .deactivate(instance: "inst_x"))
     }
 
+    @Test("T4. Unreadable cleanups are an error, keep retrying, and are never overwritten")
+    func unreadableCleanupsAreNotOverwritten() async {
+        store.pendingCleanups = [PendingCleanup(licenseKey: "KEY-OLD", instanceID: "inst_old")]
+        store.cleanupReadError = .unavailable("locked")
+        client.activation = .activated(activation(Self.other, name: "OpenKlack", instance: "inst_x"))
+        client.deactivation = .unreachable
+        let manager = makeManager()
+        #expect(manager.storageError == .unavailable("locked"))
+        #expect(manager.pendingCleanups.isEmpty)
+        #expect(manager.nextCheckDelay == LicenseManager.cleanupRetryInterval) // no record, still scheduled
+        // A new cleanup while the old ones cannot be read: remembered in
+        // memory, but the store is not overwritten.
+        _ = await manager.activate(key: "KEY-X")
+        #expect(manager.pendingCleanups.map(\.instanceID) == ["inst_x"])
+        #expect(store.pendingCleanups.map(\.instanceID) == ["inst_old"])
+        #expect(manager.storageError != nil)
+        // Readable again: merged, written, and both retried.
+        store.cleanupReadError = nil
+        client.deactivation = .deactivated
+        await manager.tick()
+        #expect(client.calls.suffix(2) == [.deactivate(instance: "inst_x"), .deactivate(instance: "inst_old")])
+        #expect(manager.pendingCleanups.isEmpty)
+        #expect(store.pendingCleanups.isEmpty)
+        #expect(manager.storageError == nil)
+    }
+
+    @Test("T4. Corrupt cleanups are replaced, not kept as an error forever")
+    func corruptCleanupsAreReplaced() async {
+        store.cleanupReadError = .corrupt
+        client.activation = .activated(activation(Self.other, name: "OpenKlack", instance: "inst_x"))
+        client.deactivation = .unreachable
+        let manager = makeManager()
+        #expect(manager.storageError == .corrupt)
+        _ = await manager.activate(key: "KEY-X")
+        #expect(store.pendingCleanups.map(\.instanceID) == ["inst_x"])
+        store.cleanupReadError = nil
+        await manager.tick()
+        #expect(manager.storageError == nil)
+    }
+
     @Test("L12. A replaced trial that cannot be freed is owed after a restart")
     func replacedTrialCleanupPersists() async {
         store.record = trialRecord(activatedAge: Clock.day)
@@ -744,8 +796,9 @@ struct LicensingTests {
 
     // MARK: L13 — malformed answers
 
-    @Test("L13. Blank ids in a 201 are malformed: nothing is saved or released", arguments: [
-        ("  ", "pdt_openreaction_PAID"), ("inst_1", ""), ("", " "),
+    @Test("L13. Blank or control-character ids in a 201 are malformed: nothing is saved or released", arguments: [
+        ("  ", "pdt_openreaction_PAID"), ("inst_1", ""), ("", " "), ("\n", "pdt_openreaction_PAID"),
+        ("inst_1", "\r\n"), ("inst\u{0}1", "pdt_openreaction_PAID"), ("inst_1", "pdt_openreaction_PAID\u{1B}"),
     ])
     func blankIDsAreMalformed(instance: String, product: String) async {
         client.activation = .activated(Activation(instanceID: instance, productID: product, productName: "OpenReaction", createdAt: clock.now))
@@ -911,6 +964,72 @@ struct LicensingTests {
         #expect(manager.state == .licensed)
         #expect(store.record?.instanceID == "inst_9")
         #expect(store.record?.isRevoked == false)
+    }
+
+    @Test("T2. A revocation the Keychain refused survives an offline restart")
+    func revocationSurvivesRestartWhenSaveFailed() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        client.validation = .invalid
+        let manager = makeManager()
+        store.failsWrites = true
+        await manager.check()
+        #expect(manager.state == .revoked)
+        #expect(store.record?.isRevoked == false)
+        #expect(journal.entries["inst_1"] == clock.now)
+        // Quit before the retry; relaunch offline over the same stores.
+        client.validation = .unreachable
+        let restarted = makeManager()
+        #expect(restarted.state == .revoked)
+        #expect(!restarted.isFeatureEnabled)
+        #expect(restarted.storageError != nil)
+        await restarted.checkOnLaunch()
+        #expect(restarted.state == .revoked)
+        // The Keychain accepts the write later: the journal entry is done.
+        store.failsWrites = false
+        await restarted.tick()
+        #expect(store.record?.isRevoked == true)
+        #expect(journal.entries.isEmpty)
+        #expect(restarted.storageError == nil)
+        // Another restart: revoked from the record itself.
+        #expect(makeManager().state == .revoked)
+    }
+
+    @Test("T2. A journaled revocation is cleared by valid:true for that activation")
+    func journalClearedByValidTrue() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_1"] = clock.now.addingTimeInterval(-60)
+        store.failsWrites = true
+        let manager = makeManager()
+        #expect(manager.state == .revoked)
+        store.failsWrites = false
+        client.validation = .valid(serverDate: clock.now)
+        await manager.check()
+        #expect(manager.state == .licensed)
+        #expect(journal.entries.isEmpty)
+        #expect(store.record?.isRevoked == false)
+    }
+
+    @Test("T2. A journaled revocation is cleared by a new activation or removal")
+    func journalClearedByNewActivationAndRemoval() async {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_1"] = clock.now
+        client.activation = .activated(activation(Self.paid, instance: "inst_2"))
+        let manager = makeManager()
+        #expect(manager.state == .revoked)
+        #expect(await manager.activate(key: "KEY-PAID-2") == .activated(.paid))
+        #expect(journal.entries.isEmpty)
+        #expect(manager.state == .licensed)
+        journal.entries["inst_2"] = clock.now
+        #expect(await manager.removeThisMac() == .removed)
+        #expect(journal.entries.isEmpty)
+        #expect(makeManager().state == .unlicensed)
+    }
+
+    @Test("T2. The journal never wins over a different activation")
+    func journalIsPerActivation() {
+        store.record = paidRecord(lastSuccessAge: 3600)
+        journal.entries["inst_other"] = clock.now
+        #expect(makeManager().state == .licensed)
     }
 
     @Test("P0-2. Remove this Mac that cannot be saved stays removed in memory and is retried")

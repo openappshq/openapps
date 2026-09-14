@@ -11,10 +11,12 @@ import Foundation
 /// network answer is applied only to the activation it was about. Time
 /// metadata never changes the generation.
 ///
-/// Invalidation (`valid: false`) takes effect in memory at once; if the
-/// Keychain refuses the write it is retried on every tick and surfaced as a
-/// storage problem. Nothing ever re-enables an invalidated activation except
-/// a successful check of that same activation or a successful new activation.
+/// Invalidation (`valid: false`) is journaled outside the Keychain first,
+/// then takes effect in memory at once; if the Keychain refuses the write it
+/// is retried on every tick and surfaced as a storage problem, and the
+/// journal keeps the activation revoked across a restart until the record
+/// is durable. Nothing ever re-enables an invalidated activation except a
+/// successful check of that same activation or a successful new activation.
 @MainActor
 public final class LicenseManager {
     public static let activationName = "Mac"
@@ -24,6 +26,7 @@ public final class LicenseManager {
     public let products: LicenseProducts
     private let client: any LicenseClient
     private let store: any LicenseStore
+    private let journal: any InvalidationJournal
     private let now: () -> Date
 
     public private(set) var record: LicenseRecord?
@@ -31,6 +34,9 @@ public final class LicenseManager {
     private var pendingDurableWrite: LicenseRecord??
     /// The cleanups list on disk is behind memory.
     private var cleanupsDirty = false
+    /// The cleanups on disk could not be read; nothing may overwrite them
+    /// until they were merged in.
+    private var cleanupsUnread = false
     /// Storage could not be read or written; retried on every tick.
     public private(set) var storageError: LicenseStoreError?
     /// Consecutive failed checks, for backoff.
@@ -49,26 +55,53 @@ public final class LicenseManager {
     private var activationGeneration = 0
     private var queue: Task<Void, Never>?
 
-    public init(products: LicenseProducts, client: any LicenseClient, store: any LicenseStore, now: @escaping () -> Date = Date.init) {
+    public init(
+        products: LicenseProducts, client: any LicenseClient, store: any LicenseStore,
+        journal: any InvalidationJournal, now: @escaping () -> Date = Date.init
+    ) {
         self.products = products
         self.client = client
         self.store = store
+        self.journal = journal
         self.now = now
         reloadFromStore()
     }
 
+    /// Reads what the store has. A journaled invalidation wins over the
+    /// stored record: the record is revoked in memory and its save owed.
     private func reloadFromStore() {
+        var failure: LicenseStoreError?
         do {
-            record = try store.loadRecord()
-            pendingCleanups = (try? store.loadPendingCleanups()) ?? []
-            storageError = nil
+            var loaded = try store.loadRecord()
+            if var current = loaded, !current.isRevoked, let revokedAt = journal.revokedAt(instanceID: current.instanceID) {
+                current.revokedAt = revokedAt
+                loaded = current
+                pendingDurableWrite = .some(current)
+            }
+            record = loaded
         } catch {
-            storageError = error
+            failure = error
         }
+        do {
+            let stored = try store.loadPendingCleanups()
+            pendingCleanups = Self.merged(pendingCleanups, stored)
+            cleanupsUnread = false
+        } catch {
+            cleanupsUnread = true
+            failure = failure ?? error
+        }
+        storageError = failure
+        flushRecord()
     }
 
-    /// Whether memory holds something the store has not accepted yet.
-    private var owesDurableWrite: Bool { pendingDurableWrite != nil || cleanupsDirty }
+    /// Union by activation, keeping order: what was already known first.
+    private static func merged(_ known: [PendingCleanup], _ stored: [PendingCleanup]) -> [PendingCleanup] {
+        known + stored.filter { candidate in !known.contains { $0.instanceID == candidate.instanceID } }
+    }
+
+    /// Whether memory holds something the store has not accepted yet, or
+    /// the store holds cleanups memory has not seen.
+    private var owesDurableWrite: Bool { pendingDurableWrite != nil || cleanupsDirty || cleanupsUnread }
 
     // MARK: State
 
@@ -168,14 +201,29 @@ public final class LicenseManager {
         do {
             if let pending { try store.saveRecord(pending) } else { try store.clearRecord() }
             pendingDurableWrite = nil
-            if !cleanupsDirty { storageError = nil }
+            // Durable now: a revoked record carries its own revocation.
+            if let pending, pending.isRevoked { journal.clear(instanceID: pending.instanceID) }
+            if !cleanupsDirty, !cleanupsUnread { storageError = nil }
         } catch {
             storageError = error
         }
     }
 
+    /// Writes the cleanups, first merging in whatever the store holds if it
+    /// could not be read before; an unreadable store is never overwritten.
     private func flushCleanups() {
         guard cleanupsDirty else { return }
+        if cleanupsUnread {
+            do {
+                pendingCleanups = Self.merged(pendingCleanups, try store.loadPendingCleanups())
+                cleanupsUnread = false
+            } catch .corrupt {
+                cleanupsUnread = false // nothing recoverable there; replace it
+            } catch {
+                storageError = error
+                return
+            }
+        }
         do {
             try store.savePendingCleanups(pendingCleanups)
             cleanupsDirty = false
@@ -185,10 +233,10 @@ public final class LicenseManager {
         }
     }
 
-    /// Retries whatever the store refused; with nothing owed, a store that
-    /// could not be read is read again.
+    /// Retries whatever the store refused; with no write owed, a store that
+    /// could not be read is read again (merging in unread cleanups).
     private func retryStorage() {
-        guard owesDurableWrite else {
+        guard pendingDurableWrite != nil || cleanupsDirty else {
             if storageError != nil { reloadFromStore() }
             return
         }
@@ -199,24 +247,30 @@ public final class LicenseManager {
     /// A removed activation: answers about the old one are stale.
     private func replaceActivation(with newRecord: LicenseRecord?) {
         activationGeneration += 1
+        if let previous = record { journal.clear(instanceID: previous.instanceID) }
         write(newRecord)
     }
 
     /// A new activation whose record the store already holds.
     private func commitActivation(_ newRecord: LicenseRecord) {
         activationGeneration += 1
+        if let previous = record { journal.clear(instanceID: previous.instanceID) }
         record = newRecord
         pendingDurableWrite = nil
-        if !cleanupsDirty { storageError = nil }
+        if !cleanupsDirty, !cleanupsUnread { storageError = nil }
         failedChecks = 0
         blockedUntil = nil
         lastAttemptAt = now()
     }
 
-    /// Invalidation takes effect immediately, whatever storage says.
+    /// Invalidation takes effect immediately, whatever storage says: the
+    /// journal is written first, so a restart before the Keychain accepts
+    /// the revoked record still finds it revoked.
     private func invalidate(_ current: LicenseRecord) {
         var revoked = current
-        revoked.revokedAt = now()
+        let revokedAt = now()
+        revoked.revokedAt = revokedAt
+        journal.record(instanceID: current.instanceID, revokedAt: revokedAt)
         write(revoked)
         failedChecks = 0
         blockedUntil = nil
@@ -272,9 +326,8 @@ public final class LicenseManager {
         case .unreachable: return .unreachable
         case .malformed: return .malformedResponse
         case .activated(let activation):
-            let instanceID = activation.instanceID.trimmingCharacters(in: .whitespaces)
-            let productID = activation.productID.trimmingCharacters(in: .whitespaces)
-            guard !instanceID.isEmpty, !productID.isEmpty else { return .malformedResponse }
+            guard let instanceID = Self.identifier(activation.instanceID),
+                  let productID = Self.identifier(activation.productID) else { return .malformedResponse }
             guard let kind = products.kind(of: productID) else {
                 // Another app's key or the wrong environment: give the slot back.
                 await release(licenseKey: key, instanceID: instanceID)
@@ -311,6 +364,15 @@ public final class LicenseManager {
             }
             return pendingCleanups.isEmpty ? .activated(kind) : .cleanupPending
         }
+    }
+
+    /// A usable id from a response field: trimmed, non-empty, no control
+    /// characters (newlines included). Anything else is malformed.
+    private static func identifier(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.rangeOfCharacter(from: .controlCharacters) == nil,
+              trimmed.rangeOfCharacter(from: .newlines) == nil else { return nil }
+        return trimmed
     }
 
     /// Saves a new record and, for a trial, the used marker. Returns the
@@ -427,6 +489,7 @@ public final class LicenseManager {
         updated.lastSuccessAt = successAt
         updated.revokedAt = nil
         updated.lastObservedAt = serverDate.map { max($0, current.activatedAt) } ?? max(current.lastObservedAt, now())
+        journal.clear(instanceID: current.instanceID)
         write(updated)
         failedChecks = 0
         blockedUntil = nil
