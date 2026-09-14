@@ -8,8 +8,10 @@ enum KeyInput: Equatable, Sendable {
     case backspace
     /// The caret may have moved without typing, or focus may have changed.
     case reset
-    case moveUp
-    case moveDown
+    /// ← or ↑.
+    case movePrevious
+    /// → or ↓.
+    case moveNext
     /// Return, keypad Enter or Tab.
     case confirm
     case escape
@@ -19,7 +21,7 @@ enum KeyInput: Equatable, Sendable {
     /// Keys the picker consumes while it is visible.
     var isPickerCommand: Bool {
         switch self {
-        case .moveUp, .moveDown, .confirm, .escape: true
+        case .movePrevious, .moveNext, .confirm, .escape: true
         default: false
         }
     }
@@ -179,17 +181,17 @@ final class KeyboardTap: @unchecked Sendable {
         switch Int(keyCode) {
         case kVK_Delete:
             return option ? .reset : .backspace
-        case kVK_UpArrow:
-            return shift || option ? .reset : .moveUp
-        case kVK_DownArrow:
-            return shift || option ? .reset : .moveDown
+        case kVK_UpArrow, kVK_LeftArrow:
+            return shift || option ? .reset : .movePrevious
+        case kVK_DownArrow, kVK_RightArrow:
+            return shift || option ? .reset : .moveNext
         case kVK_Return, kVK_ANSI_KeypadEnter:
             return shift || option ? .reset : .confirm
         case kVK_Tab:
             return shift ? .reset : .confirm
         case kVK_Escape:
             return .escape
-        case kVK_LeftArrow, kVK_RightArrow, kVK_ForwardDelete, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_Help:
+        case kVK_ForwardDelete, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_Help:
             return .reset
         default:
             guard !text.isEmpty else { return .ignore }

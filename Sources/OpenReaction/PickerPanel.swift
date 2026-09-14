@@ -2,45 +2,19 @@ import AppKit
 import OpenReactionCore
 import SwiftUI
 
-/// `list` shows glyph and shortcode per row; `strip` is a compact horizontal
-/// capsule of glyphs only.
-enum PickerLayout: Sendable {
-    case list
-    case strip
-}
-
 enum PickerMetrics {
-    static let contentWidth: CGFloat = 280
-    static let rowHeight: CGFloat = 32
-    static let stripCell: CGFloat = 40
-    static let padding: CGFloat = Brand.Space.s8
+    static let pill = PillLayout(cell: 40, padding: 6, labelTrailing: 12, maxWidth: 440, peek: 20)
     /// Transparent margin so the system glass shadow is not clipped by the window.
     static let shadowInset: CGFloat = 24
-    static let maxRows = 7
+    static let maxItems = 12
+    static let maxLabelWidth: CGFloat = 180
+    /// Centers the first emoji under the caret.
+    static let leadingOffset: CGFloat = pill.padding + pill.cell / 2
 
-    /// Concentric with the capsule rows inside.
-    static func cornerRadius(for layout: PickerLayout) -> CGFloat {
-        switch layout {
-        case .list: padding + rowHeight / 2
-        case .strip: padding + stripCell / 2
-        }
-    }
-
-    /// Moves the panel left so the glyph column lines up under the caret.
-    static func leadingOffset(for layout: PickerLayout) -> CGFloat {
-        switch layout {
-        case .list: padding + Brand.Space.s12
-        case .strip: padding
-        }
-    }
-
-    static func contentSize(rows: Int, layout: PickerLayout) -> CGSize {
-        switch layout {
-        case .list:
-            CGSize(width: contentWidth, height: CGFloat(rows) * rowHeight + padding * 2)
-        case .strip:
-            CGSize(width: CGFloat(rows) * stripCell + padding * 2, height: stripCell + padding * 2)
-        }
+    static func labelWidth(for title: String) -> CGFloat {
+        let font = NSFont(name: "IBMPlexMono-Medium", size: 13) ?? .monospacedSystemFont(ofSize: 13, weight: .medium)
+        let width = (":\(title):" as NSString).size(withAttributes: [.font: font]).width
+        return min(ceil(width), maxLabelWidth)
     }
 }
 
@@ -83,21 +57,28 @@ private final class FirstMouseHostingView<Content: View>: NSHostingView<Content>
 @Observable
 final class PickerModel {
     var suggestions: [Suggestion] = []
+    var labelWidths: [CGFloat] = []
     var selectedIndex = 0
+    var scrollOffset: CGFloat = 0
     var isAboveCaret = false
     var isPresented = false
-    var layout = PickerLayout.list
     @ObservationIgnored var onChoose: ((Int) -> Void)?
+
+    var selectedLabelWidth: CGFloat {
+        labelWidths.indices.contains(selectedIndex) ? labelWidths[selectedIndex] : 0
+    }
 }
 
 @MainActor
 final class PickerPanelController {
     let model = PickerModel()
-    /// Reports the visible content frame in Quartz coordinates, or nil when hidden.
+    /// Reports the visible pill frame in Quartz coordinates, or nil when hidden.
     var onVisibilityChange: ((CGRect?) -> Void)?
 
     private let panel = PickerPanel()
     private var caret = CGRect.zero
+    /// Pill frame in AppKit coordinates at its widest, as placed on screen.
+    private var placedFrame = CGRect.zero
 
     init() {
         let hostingView = FirstMouseHostingView(rootView: PickerView(model: model))
@@ -113,23 +94,29 @@ final class PickerPanelController {
 
     /// - Parameter caret: AppKit global coordinates.
     func present(_ suggestions: [Suggestion], caret: CGRect) {
-        let rows = Array(suggestions.prefix(PickerMetrics.maxRows))
-        if rows.map(\.id) != model.suggestions.map(\.id) {
+        let items = Array(suggestions.prefix(PickerMetrics.maxItems))
+        let selectionChanged = items.map(\.id) != model.suggestions.map(\.id)
+        if selectionChanged {
             model.selectedIndex = 0
+            model.scrollOffset = 0
         }
-        model.suggestions = rows
+        model.suggestions = items
+        model.labelWidths = items.map { PickerMetrics.labelWidth(for: $0.title) }
         self.caret = caret
         layout()
 
-        guard !panel.isVisible else { return }
+        guard !panel.isVisible else {
+            if selectionChanged { announceSelection() }
+            return
+        }
         model.isPresented = false
-        panel.alphaValue = 1
         panel.orderFrontRegardless()
         // Render the hidden state first so the appearance animates from it.
         panel.displayIfNeeded()
         withAnimation(Self.appearAnimation) {
             model.isPresented = true
         }
+        announceSelection()
     }
 
     func dismiss() {
@@ -143,32 +130,69 @@ final class PickerPanelController {
         let count = model.suggestions.count
         guard count > 0 else { return }
         let next = (model.selectedIndex + delta + count) % count
-        withAnimation(Self.reduceMotion ? nil : .spring(duration: Brand.Motion.standard, bounce: 0.15)) {
+        let offset = PickerMetrics.pill.scrollOffset(
+            selected: next,
+            count: count,
+            labelWidth: model.labelWidths[next],
+            current: model.scrollOffset
+        )
+        withAnimation(Self.reduceMotion ? nil : .spring(duration: Brand.Motion.standard, bounce: 0.2)) {
             model.selectedIndex = next
+            model.scrollOffset = offset
         }
+        reportFrame()
+        announceSelection()
     }
 
     private func layout() {
-        let size = PickerMetrics.contentSize(rows: model.suggestions.count, layout: model.layout)
+        let pill = PickerMetrics.pill
+        let size = CGSize(
+            width: pill.stableWidth(count: model.suggestions.count, labelWidths: model.labelWidths),
+            height: pill.height
+        )
         let placement = PanelPlacement.place(
             size: size,
             caret: caret,
             visibleFrames: NSScreen.screens.map(\.visibleFrame),
             gap: Brand.Space.s4,
-            leadingOffset: PickerMetrics.leadingOffset(for: model.layout)
+            leadingOffset: PickerMetrics.leadingOffset
         )
         model.isAboveCaret = placement.isAboveCaret
+        model.scrollOffset = pill.scrollOffset(
+            selected: model.selectedIndex,
+            count: model.suggestions.count,
+            labelWidth: model.selectedLabelWidth,
+            current: model.scrollOffset
+        )
+        placedFrame = placement.frame
         let inset = PickerMetrics.shadowInset
         panel.setFrame(placement.frame.insetBy(dx: -inset, dy: -inset), display: panel.isVisible)
+        reportFrame()
+    }
 
+    /// The pill is leading-aligned in the panel and narrower than its widest
+    /// size for most selections; report the part that is actually drawn.
+    private func reportFrame() {
+        let visibleWidth = PickerMetrics.pill.visibleWidth(count: model.suggestions.count, labelWidth: model.selectedLabelWidth)
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        let quartz = CGRect(
-            x: placement.frame.minX,
-            y: primaryHeight - placement.frame.maxY,
-            width: placement.frame.width,
-            height: placement.frame.height
-        )
-        onVisibilityChange?(quartz)
+        onVisibilityChange?(CGRect(
+            x: placedFrame.minX,
+            y: primaryHeight - placedFrame.maxY,
+            width: visibleWidth,
+            height: placedFrame.height
+        ))
+    }
+
+    private func announceSelection() {
+        guard let suggestion = selectedSuggestion else { return }
+        let text: String
+        switch suggestion.preview {
+        case .glyph(let glyph): text = "\(glyph) \(suggestion.subtitle.isEmpty ? suggestion.title : suggestion.subtitle)"
+        }
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
+            .announcement: text,
+            .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ])
     }
 
     private static var reduceMotion: Bool {
