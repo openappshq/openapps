@@ -1,0 +1,41 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "openapps-site",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-14",
+  // The site is served only on its own domain; preview versions still get workers.dev URLs.
+  "workers_dev": false,
+  "preview_urls": true,
+  "routes": [{ "pattern": "openapps.space", "custom_domain": true }],
+  "assets": {
+    // Built by `pnpm build` at the repository root.
+    "directory": "../../dist",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    // `404.html` sends unknown pages to the home page, as it did on static hosting.
+    "not_found_handling": "404-page",
+    // Only the API runs code; every other request is a free static asset request.
+    "run_worker_first": ["/api/*"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "trial-registry",
+      // Replace with the ID printed by `wrangler d1 create trial-registry` (docs/cloudflare.md).
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "ratelimits": [
+    {
+      "name": "TRIAL_RATE_LIMIT",
+      "namespace_id": "1001",
+      // Per IP, per Cloudflare location. A Mac registers once, so this only stops floods.
+      "simple": { "limit": 30, "period": 60 },
+    },
+  ],
+  // The registry keeps no request logs (LICENSING.md, "Trial registry").
+  "observability": { "enabled": false },
+  // Development builds of the apps point at http://127.0.0.1:8787/api/trial.
+  "dev": { "ip": "127.0.0.1", "port": 8787 },
+}

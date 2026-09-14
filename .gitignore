@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 .sites-runtime/
+.wrangler/
+.dev.vars*
 target/
 apps/*-desktop/src-tauri/gen/
 *.local

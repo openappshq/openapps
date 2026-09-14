@@ -1,0 +1,111 @@
+name: Website
+
+# Builds the site and deploys it with the trial registry as one Cloudflare Worker.
+# Setup and DNS cutover: docs/cloudflare.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@12.4.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openapps/site-worker typecheck
+      - run: pnpm site:test
+
+  preview:
+    # Secrets aren't available to forks, so only branches of this repository get a preview.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: website-test
+    concurrency:
+      group: website-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@12.4.1
+      - run: pnpm install --frozen-lockfile
+      - name: Build the site with test-mode configuration
+        env:
+          VITE_DODO_CHECKOUT_ORIGIN: ${{ vars.VITE_DODO_CHECKOUT_ORIGIN }}
+          VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: ${{ vars.VITE_OPENKLACK_DODO_PAID_PRODUCT_ID }}
+          VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: ${{ vars.VITE_OPENREACTION_DODO_PAID_PRODUCT_ID }}
+          VITE_OPENKLACK_MAC_DOWNLOAD_URL: ${{ vars.VITE_OPENKLACK_MAC_DOWNLOAD_URL }}
+          VITE_OPENREACTION_MAC_DOWNLOAD_URL: ${{ vars.VITE_OPENREACTION_MAC_DOWNLOAD_URL }}
+        run: pnpm build
+      - name: Use the preview database
+        env:
+          TRIAL_REGISTRY_D1_ID: ${{ vars.TRIAL_REGISTRY_D1_ID }}
+        run: node apps/site-worker/scripts/set-database-id.mjs
+      - name: Upload a preview version
+        working-directory: apps/site-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pnpm exec wrangler d1 migrations apply trial-registry --remote
+          pnpm exec wrangler versions upload --preview-alias "pr-$PR_NUMBER" --message "PR #$PR_NUMBER at $HEAD_SHA"
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: website-live
+    concurrency:
+      group: website-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@12.4.1
+      - run: pnpm install --frozen-lockfile
+      - name: Build the site with live configuration
+        env:
+          VITE_DODO_CHECKOUT_ORIGIN: ${{ vars.VITE_DODO_CHECKOUT_ORIGIN }}
+          VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: ${{ vars.VITE_OPENKLACK_DODO_PAID_PRODUCT_ID }}
+          VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: ${{ vars.VITE_OPENREACTION_DODO_PAID_PRODUCT_ID }}
+          VITE_OPENKLACK_MAC_DOWNLOAD_URL: ${{ vars.VITE_OPENKLACK_MAC_DOWNLOAD_URL }}
+          VITE_OPENREACTION_MAC_DOWNLOAD_URL: ${{ vars.VITE_OPENREACTION_MAC_DOWNLOAD_URL }}
+        run: pnpm build
+      - name: Use the live database
+        env:
+          TRIAL_REGISTRY_D1_ID: ${{ vars.TRIAL_REGISTRY_D1_ID }}
+        run: node apps/site-worker/scripts/set-database-id.mjs
+      - name: Migrate and deploy
+        working-directory: apps/site-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          pnpm exec wrangler d1 migrations apply trial-registry --remote
+          pnpm exec wrangler deploy --message "main at $HEAD_SHA"

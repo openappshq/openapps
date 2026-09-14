@@ -7,6 +7,8 @@
     "dev": "pnpm --filter @openapps/website dev",
     "build": "pnpm --filter @openapps/website build",
     "preview": "pnpm --filter @openapps/website preview",
+    "site:dev": "pnpm --filter @openapps/site-worker dev",
+    "site:test": "pnpm --filter @openapps/site-worker test",
     "lint": "vp lint",
     "test": "vp test run",
     "theme": "node scripts/generate-theme.mjs",

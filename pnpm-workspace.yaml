@@ -1,6 +1,10 @@
 packages:
   - apps/*
   - packages/*
+allowBuilds:
+  # Wrangler's bundler and the local Workers runtime.
+  esbuild: true
+  workerd: true
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.3.1
   vite-plus: 0.3.1
