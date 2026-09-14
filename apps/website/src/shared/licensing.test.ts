@@ -5,12 +5,17 @@ import {
   DODO_CHECKOUT_ORIGINS,
   dodoConfigFrom,
   licensingFor,
+  macDownloadUrlsFrom,
   officialBuilds,
 } from "./licensing";
 
 const liveEnv = {
   VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
   VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
+};
+const downloads = {
+  openreaction: "https://downloads.example/OpenReaction.dmg",
+  openklack: "https://downloads.example/OpenKlack.dmg",
 };
 import { activateUrl, cleanedUrl, parseCheckoutReturn, readCheckoutReturn } from "./thanks";
 import { CHECKOUT_GLOBAL } from "./checkoutCapture";
@@ -73,38 +78,55 @@ describe("dodoConfigFrom", () => {
 describe("licensingFor", () => {
   const dodo = dodoConfigFrom(liveEnv);
 
-  it("sells every catalogued app, and disables buying one taken off sale", () => {
+  it("sells an app only when it is on sale and both its paid product and installer are set", () => {
     for (const product of products) {
       expect(officialBuilds[product.id], product.id).toBe(true);
-      const licensing = licensingFor(product.id, { dodo });
+      const licensing = licensingFor(product.id, { dodo, downloads });
       expect(licensing.officialBuildAvailable, product.id).toBe(true);
       expect(licensing.buyUrl, product.id).not.toBeNull();
-
-      const offSale = licensingFor(product.id, { dodo, officialBuildAvailable: false });
-      expect(offSale.buyUrl).toBeNull();
+      expect(licensing.downloadUrl, product.id).toBe(downloads[product.id as keyof typeof downloads]);
     }
   });
 
-  it("keeps buying disabled when the product ID is not configured", () => {
+  it.each([
+    ["taken off sale", { officialBuildAvailable: false }],
+    ["with no paid product ID", { dodo: dodoConfigFrom({}) }],
+    ["with a malformed paid product ID", { dodo: dodoConfigFrom({ VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "nope", VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "nope" }) }],
+    ["with no installer URL", { downloads: {} }],
+    ["with only an http installer URL", { downloads: macDownloadUrlsFrom({ VITE_OPENKLACK_MAC_DOWNLOAD_URL: "http://downloads.example/OpenKlack.dmg", VITE_OPENREACTION_MAC_DOWNLOAD_URL: "http://downloads.example/OpenReaction.dmg" }) }],
+    ["on sale but with neither product nor installer", { officialBuildAvailable: true, dodo: dodoConfigFrom({}), downloads: {} }],
+    ["off sale with only an installer", { officialBuildAvailable: false, dodo: dodoConfigFrom({}) }],
+    ["off sale with only a product", { officialBuildAvailable: false, downloads: {} }],
+  ])("fails closed %s: no checkout, no installer, not available", (_, override) => {
     for (const product of products) {
-      const licensing = licensingFor(product.id, {
-        officialBuildAvailable: true,
-        dodo: dodoConfigFrom({}),
-      });
-      expect(licensing.officialBuildAvailable).toBe(false);
-      expect(licensing.buyUrl).toBeNull();
+      const licensing = licensingFor(product.id, { dodo, downloads, ...override });
+      expect(licensing.officialBuildAvailable, product.id).toBe(false);
+      expect(licensing.buyUrl, product.id).toBeNull();
+      expect(licensing.downloadUrl, product.id).toBeNull();
+    }
+  });
+
+  it("reads installer URLs from the environment, https only", () => {
+    expect(
+      macDownloadUrlsFrom({
+        VITE_OPENKLACK_MAC_DOWNLOAD_URL: ` ${downloads.openklack} `,
+        VITE_OPENREACTION_MAC_DOWNLOAD_URL: downloads.openreaction,
+      }),
+    ).toEqual(downloads);
+    for (const bad of ["", "http://x.example/a.dmg", "/OpenKlack.dmg", "javascript:alert(1)", "not a url"]) {
+      expect(macDownloadUrlsFrom({ VITE_OPENKLACK_MAC_DOWNLOAD_URL: bad }), bad).toEqual({});
     }
   });
 
   it("links the configured product ID to the configured checkout", () => {
     const test = dodoConfigFrom({ ...liveEnv, VITE_DODO_CHECKOUT_ORIGIN: DODO_CHECKOUT_ORIGINS.test });
-    const licensing = licensingFor("openreaction", { officialBuildAvailable: true, dodo: test });
+    const licensing = licensingFor("openreaction", { officialBuildAvailable: true, dodo: test, downloads });
     expect(licensing.buyUrl).toMatch(/^https:\/\/test\.checkout\.dodopayments\.com\/buy\/pdt_orPaid\?/);
   });
 
   it("returns paid checkout to the thanks page and offers no trial checkout", () => {
     for (const product of products) {
-      const licensing = licensingFor(product.id, { officialBuildAvailable: true, dodo });
+      const licensing = licensingFor(product.id, { officialBuildAvailable: true, dodo, downloads });
       const ids = dodo.products[product.id];
       expect(ids, product.id).toBeDefined();
       expect(licensing.buyUrl, product.id).toContain(`${DODO_CHECKOUT_ORIGINS.live}/buy/${ids!.paid}?`);

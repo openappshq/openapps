@@ -1,5 +1,6 @@
 import { ArrowDown, Download } from "lucide-react";
 import Page from "../../../shared/DownloadPage";
+import { licensingFor } from "../../../shared/licensing";
 import { MarketingFooter, MarketingHeader } from "../../../shared/MarketingChrome";
 import "../styles.css";
 
@@ -8,9 +9,10 @@ import "../styles.css";
 const SHARE_TEXT = "I can type :tada anywhere on my Mac now. OpenReaction, $5, open source.";
 
 export default function DownloadPage({
-  downloadUrl = import.meta.env.VITE_OPENREACTION_MAC_DOWNLOAD_URL,
+  // Only when the app is on sale with its product and installer configured.
+  downloadUrl = licensingFor("openreaction").downloadUrl,
 }: {
-  downloadUrl?: string;
+  downloadUrl?: string | null;
 }) {
   return (
     <Page

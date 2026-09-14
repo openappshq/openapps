@@ -58,9 +58,24 @@ export function dodoConfigFrom(env: Env): DodoConfig {
 export const dodoConfig = dodoConfigFrom(import.meta.env);
 
 /**
- * Whether an app is on sale. Set false to pull one: the buy button goes quiet
- * even when its product ID is configured, because a key with nothing to
- * activate helps no one.
+ * Reads each app's official Mac installer from `VITE_<APP>_MAC_DOWNLOAD_URL`.
+ * Only absolute `https:` URLs count; anything else is treated as unset.
+ */
+export function macDownloadUrlsFrom(env: Env): Record<string, string> {
+  const urls: Record<string, string> = {};
+  for (const product of products) {
+    const value = envValue(env, `VITE_${product.id.toUpperCase()}_MAC_DOWNLOAD_URL`);
+    if (URL.canParse(value) && new URL(value).protocol === "https:") urls[product.id] = value;
+  }
+  return urls;
+}
+
+export const macDownloadUrls = macDownloadUrlsFrom(import.meta.env);
+
+/**
+ * Whether an app is on sale. Set false to pull one. Being on sale alone never
+ * enables buying: the paid product ID and the official installer must also be
+ * configured, because a key with nothing to activate helps no one.
  */
 export const officialBuilds: Record<string, boolean> = {
   openreaction: true,
@@ -94,19 +109,23 @@ export interface AppLicensing {
   thanksUrl: string;
   /** The app's download page on this site, e.g. `/openreaction/download/`. */
   downloadPageUrl: string;
-  /** False only while an app is off sale. */
+  /** True only when the app is on sale and both its paid product ID and installer are configured. */
   officialBuildAvailable: boolean;
-  /** Null while the product ID is not configured or the app is off sale. */
+  /** The official installer; null unless `officialBuildAvailable`. */
+  downloadUrl: string | null;
+  /** Paid checkout; null unless `officialBuildAvailable`. */
   buyUrl: string | null;
   supportUrl: string;
 }
 
 export interface LicensingOptions {
   origin?: string;
-  /** Overrides `officialBuilds` (tests and previews). */
+  /** Overrides `officialBuilds` (tests). */
   officialBuildAvailable?: boolean;
   /** Overrides the environment's Dodo settings (tests). */
   dodo?: DodoConfig;
+  /** Overrides the environment's installer URLs (tests). */
+  downloads?: Record<string, string>;
 }
 
 export function licensingFor(appId: string, options: LicensingOptions = {}): AppLicensing {
@@ -115,7 +134,10 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
   const origin = options.origin ?? SITE_ORIGIN;
   const dodo = options.dodo ?? dodoConfig;
   const ids = dodo.products[appId];
-  const available = (options.officialBuildAvailable ?? officialBuilds[appId] ?? false) && !!ids;
+  const installer = (options.downloads ?? macDownloadUrls)[appId];
+  // Fail closed: on sale, a paid product and an official installer, or nothing.
+  const onSale = options.officialBuildAvailable ?? officialBuilds[appId] ?? false;
+  const available = onSale && !!ids && !!installer;
   const thanksUrl = `${origin}${product.route}/thanks/`;
   return {
     id: appId,
@@ -126,6 +148,7 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
     thanksUrl,
     downloadPageUrl: `${product.route}/download/`,
     officialBuildAvailable: available,
+    downloadUrl: available ? installer! : null,
     buyUrl: available ? checkoutUrl(ids?.paid, thanksUrl, dodo.checkoutOrigin) : null,
     supportUrl: SUPPORT_URL,
   };

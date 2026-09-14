@@ -1,5 +1,6 @@
 import { ArrowDown } from "lucide-react";
 import Page from "../../../shared/DownloadPage";
+import { licensingFor } from "../../../shared/licensing";
 import { SiteFooter, SiteHeader } from "../SiteChrome";
 import "../styles.css";
 
@@ -8,9 +9,10 @@ import "../styles.css";
 const SHARE_TEXT = "I just gave my MacBook keyboard a Cherry MX Brown. OpenKlack, $5, open source.";
 
 export default function DownloadPage({
-  downloadUrl = import.meta.env.VITE_OPENKLACK_MAC_DOWNLOAD_URL,
+  // Only when the app is on sale with its product and installer configured.
+  downloadUrl = licensingFor("openklack").downloadUrl,
 }: {
-  downloadUrl?: string;
+  downloadUrl?: string | null;
 }) {
   return (
     <Page

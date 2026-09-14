@@ -25,8 +25,8 @@ export default function DownloadPage({
   header,
   footer,
 }: {
-  /** The installer itself. Without one, nothing here offers a file. */
-  downloadUrl?: string;
+  /** The official installer. Without one, the page says the release is coming soon and offers no file. */
+  downloadUrl?: string | null;
   /** Catalogue id, which selects the artwork and the icon. */
   app: string;
   name: string;
@@ -61,27 +61,30 @@ export default function DownloadPage({
         <section className="hero" aria-labelledby="download-title">
           <div className="page-width">
             <motion.h1 {...enter} id="download-title">
-              Thanks for <KeyToken>downloading</KeyToken>
+              {downloadUrl ? (
+                <>
+                  Thanks for <KeyToken>downloading</KeyToken>
+                </>
+              ) : (
+                <>
+                  Coming <KeyToken>soon</KeyToken>
+                </>
+              )}
             </motion.h1>
             <div className="hero-grid">
               <div className="hero-intro">
                 <p>
-                  It should start on its own. Your {TRIAL_DAYS}-day trial begins the first time
-                  you open the app.
+                  {downloadUrl
+                    ? `It should start on its own. Your ${TRIAL_DAYS}-day trial begins the first time you open the app.`
+                    : `The ${name} Mac release is coming soon. When it lands, it downloads from here with a ${TRIAL_DAYS}-day trial, no signup.`}
                 </p>
                 <div className="hero-actions">
-                  {/* One link, whether the installer is served from here or
-                      still from the releases page. */}
-                  <Link
-                    ref={start}
-                    className="button-link primary"
-                    href={downloadUrl ?? `${GITHUB_URL}/releases`}
-                    download={downloadUrl ? true : undefined}
-                    target={downloadUrl ? undefined : "_blank"}
-                    rel={downloadUrl ? undefined : "noreferrer"}
-                  >
-                    Start it manually <Download size={18} aria-hidden="true" />
-                  </Link>
+                  {/* Only the configured official installer; never a guess. */}
+                  {downloadUrl && (
+                    <Link ref={start} className="button-link primary" href={downloadUrl} download>
+                      Start it manually <Download size={18} aria-hidden="true" />
+                    </Link>
+                  )}
                   <Link className="text-link hero-aside" href={playgroundHref}>
                     {playgroundLabel}
                   </Link>

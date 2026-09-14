@@ -110,7 +110,7 @@ The website’s primary Download for Mac links open `/openklack/download/`, a se
 
 What no page code can prevent: the host that serves the thanks page receives the initial request, query string included. The build emits `dist/_headers` from the catalog (`apps/website/headers.ts`): every `noindex` page is served with `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex` and `Cache-Control: no-store`. On Cloudflare those pages are plain static asset requests that never run Worker code, and the Worker keeps Workers Logs off; don't enable Logpush or Workers Logs for it.
 
-App pages offer Download for Mac (the official build, with its 3-day trial and no signup) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buy shows “Temporarily unavailable” while the app's paid product ID is unset or `officialBuilds` in `apps/website/src/shared/licensing.ts` takes it off sale.
+App pages offer Download for Mac (the official build, with its 3-day trial and no signup) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless `officialBuilds` in `apps/website/src/shared/licensing.ts` marks the app on sale, its paid product ID is set and its `VITE_<APP>_MAC_DOWNLOAD_URL` is an https URL.
 
 ## Sound library
 

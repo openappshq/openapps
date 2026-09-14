@@ -29,7 +29,7 @@ export default function BuyButtons({ app, small = false }: { app: string; small?
   );
 }
 
-/** A checkout link, or a quiet plate if the app is ever taken off sale. */
+/** A checkout link, or a quiet plate until the app can actually be bought and installed. */
 function Action({
   href,
   className,
@@ -43,7 +43,7 @@ function Action({
     return (
       <span className={`${className} is-disabled`} aria-disabled="true">
         {children}
-        <small>Temporarily unavailable</small>
+        <small>Coming soon</small>
       </span>
     );
   }
