@@ -25,11 +25,19 @@ case "$env_name" in
     *) echo "error: OPENAPPS_DODO_ENV must be 'test' or 'live' (got '${env_name}')" >&2; exit 1 ;;
 esac
 # Product IDs: Dodo's `pdt_` form, and paid ≠ trial (equal IDs would make
-# every trial key look paid). The trial ID may be left unset.
+# every trial key look paid). The trial ID may be left unset. Placeholder
+# names are refused outright in their shouting form and, for a live build,
+# in any casing: the CI checks job compiles the test flavour with
+# `pdt_placeholder_…`, and that must never be what a release ships.
 check_product_id() {
-    local var="$1" value="$2"
+    local var="$1" value="$2" lowered
+    lowered="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
     if [[ ! "$value" =~ ^pdt_[A-Za-z0-9_-]{4,}$ ]] || [[ "$value" == *PLACEHOLDER* || "$value" == *TODO* ]]; then
         echo "error: $var must be a real Dodo product id (pdt_…); create the products first (LICENSING.md)" >&2
+        exit 1
+    fi
+    if [[ "$env_name" == live ]] && [[ "$lowered" == *placeholder* || "$lowered" == *todo* || "$lowered" == *example* || "$lowered" == *dummy* ]]; then
+        echo "error: $var is a placeholder ('${value}'); a live build needs the real Dodo product id (LICENSING.md)" >&2
         exit 1
     fi
 }
