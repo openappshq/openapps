@@ -26,7 +26,9 @@ Free & open source · Mac native · No account · No telemetry
 
 macOS 14 Sonoma or later.
 
-OpenReaction needs **Accessibility** and **Input Monitoring** permission to notice shortcodes as you type and insert the result into the app you are using. What you type is matched on your Mac and never stored or sent anywhere.
+OpenReaction needs **Accessibility** and **Input Monitoring** permission to notice shortcodes as you type and insert the result into the app you are using.
+
+**Privacy.** Typing is read only while the focused field is known to be an ordinary text field, matched on your Mac, and never stored or sent anywhere. Password fields and secure input are never read. To rank suggestions, OpenReaction remembers which emoji you pick (on this Mac only, with the day of last use); Settings has a "Clear Usage History" button.
 
 ## Build and run
 
