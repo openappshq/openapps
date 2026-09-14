@@ -108,8 +108,9 @@ fn trial_registry(environment: &str) -> String {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
         && !host.starts_with(['.', '-'])
         && !host.ends_with(['.', '-']);
-    let valid_port =
-        port.is_none_or(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()));
+    let valid_port = port.is_none_or(|port| {
+        port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok_and(|port| port > 0)
+    });
     if !valid_host || !valid_port {
         not_an_origin();
     }

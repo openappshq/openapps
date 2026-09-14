@@ -912,19 +912,21 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     pub fn run_deadlines(&self) {
         loop {
             self.enforce();
-            let now = self.now();
-            let next = {
+            let (now, next) = {
                 let engine = self.engine.lock().unwrap();
+                // Sampled under the lock: no wait comes between reading the clocks and using them.
+                let now = self.now();
                 // The saved trial record gates too: an unsaved registration still stops at the
                 // saved record's offline limit.
                 let durable = match (engine.license(), &*self.durable_trial.lock().unwrap()) {
                     (None, TrialSlot::Present(saved)) => engine.trial_transition_at(saved, now),
                     _ => None,
                 };
-                [engine.next_transition_at(now), durable]
+                let next = [engine.next_transition_at(now), durable]
                     .into_iter()
                     .flatten()
-                    .min()
+                    .min();
+                (now, next)
             };
             // A pending deadline is rechecked every minute, so a wall clock moved during the
             // wait is noticed on time.
@@ -1123,9 +1125,10 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 record.event_seq = seq;
             }
             // Launch: elapsed time follows the monotonic clock from here, unless the clock is
-            // behind the trial.
-            engine.anchor_trial(now);
-            engine.check_clock(now);
+            // behind the trial. Sampled under the lock, after the reads and lock waits above.
+            let launched = self.now();
+            engine.anchor_trial(launched);
+            engine.check_clock(launched);
             drop(engine);
             *self.durable.lock().unwrap() = Some(stored);
             *self.durable_trial.lock().unwrap() = slot;
@@ -1180,7 +1183,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 return;
             }
         }
-        let provisional = self.engine.lock().unwrap().provisional_trial(now);
+        let provisional = self.engine.lock().unwrap().provisional_trial(self.now());
         let Some(mut trial) = provisional else {
             return;
         };
@@ -1230,9 +1233,10 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 let slot = record.map_or(TrialSlot::Absent, TrialSlot::Present);
                 {
                     let mut engine = self.engine.lock().unwrap();
+                    let read_at = self.now();
                     engine.trial = slot.clone();
-                    engine.anchor_trial(now);
-                    engine.check_clock(now);
+                    engine.anchor_trial(read_at);
+                    engine.check_clock(read_at);
                 }
                 *self.durable_trial.lock().unwrap() = slot;
                 self.generation.fetch_add(1, Ordering::SeqCst);
@@ -1328,8 +1332,11 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     /// On quit: raises `last_seen_at` once more and saves the trial record if it changed. Called
     /// through `flush_within`, which bounds the whole save.
     pub fn flush(&self) {
-        let now = self.now();
-        self.engine.lock().unwrap().observe(now);
+        {
+            let mut engine = self.engine.lock().unwrap();
+            let now = self.now();
+            engine.observe(now);
+        }
         let ordered = self.trial_mutate.lock().unwrap();
         let changed = {
             let engine = self.engine.lock().unwrap();
@@ -1377,20 +1384,26 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         let Ok(_running) = self.registering.try_lock() else {
             return;
         };
-        let now = self.now();
-        if !self.engine.lock().unwrap().begin_registration(now, forced) {
+        let wanted = {
+            let engine = self.engine.lock().unwrap();
+            engine.begin_registration(self.now(), forced)
+        };
+        if !wanted {
             return;
         }
         let Some(device) = self.device() else {
             // No device id could be saved: back off and try again.
             let failed = Err(RegistryError::Unexpected("no device id".into()));
-            let _ = self.engine.lock().unwrap().finish_registration(failed, now);
+            let mut engine = self.engine.lock().unwrap();
+            let now = self.now();
+            let _ = engine.finish_registration(failed, now);
             return;
         };
         let answer = self.registry.register(&device);
         let (changed, network_down) = {
             let mut engine = self.engine.lock().unwrap();
-            let changed = engine.finish_registration(answer, self.now());
+            let answered = self.now();
+            let changed = engine.finish_registration(answer, answered);
             (
                 matches!(changed, Ok(true)),
                 engine.registration.network_down,
@@ -1437,7 +1450,13 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             self.ensure_trial(false);
         }
         // The high-water marks: a rolled-back clock is not trusted and gives no trial time back.
-        let observed = self.engine.lock().unwrap().observe(now);
+        // Every engine step below samples the clocks under the engine lock, after whatever
+        // waits came before it; `now` above only decides the storage retries.
+        let observed = {
+            let mut engine = self.engine.lock().unwrap();
+            let now = self.now();
+            engine.observe(now)
+        };
         if observed.license {
             self.generation.fetch_add(1, Ordering::SeqCst);
             let ordered = self.mutate.lock().unwrap();
@@ -1449,16 +1468,18 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         }
         let (due, network_down) = {
             let engine = self.engine.lock().unwrap();
+            let now = self.now();
             (engine.check_due(now), engine.schedule.network_down)
         };
         if due {
             let _ = self.check_once(false);
-        } else if network_down && self.network_recovered(now.wall, false) {
+        } else if network_down && self.network_recovered(self.now().wall, false) {
             let _ = self.check_once(true);
         }
         let register_now = std::mem::take(&mut self.meta.lock().unwrap().register_now);
         let (registration_due, registry_down) = {
             let engine = self.engine.lock().unwrap();
+            let now = self.now();
             (
                 engine
                     .next_registration_at(now)
@@ -1468,10 +1489,10 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         };
         if registration_due || register_now {
             self.register_once(register_now);
-        } else if registry_down && self.network_recovered(now.wall, true) {
+        } else if registry_down && self.network_recovered(self.now().wall, true) {
             self.register_once(true);
         }
-        self.release_cleanups(now.wall);
+        self.release_cleanups(self.now().wall);
         if self.meta.lock().unwrap().storage_dirty {
             let ordered = self.mutate.lock().unwrap();
             self.persist(&ordered);
@@ -1531,10 +1552,11 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
 
     /// How long the scheduler may sleep before something is due.
     fn next_wait(&self) -> Duration {
-        let now = self.now();
-        let (next_check, next_transition, next_registration, probing, clock_behind) = {
+        let (now, next_check, next_transition, next_registration, probing, clock_behind) = {
             let engine = self.engine.lock().unwrap();
+            let now = self.now();
             (
+                now,
                 engine.next_check_at(now),
                 engine.next_transition_at(now),
                 engine.next_registration_at(now),
@@ -1581,8 +1603,8 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     /// again whatever the backoff.
     pub fn woke(&self) {
         {
-            let now = self.now();
             let mut engine = self.engine.lock().unwrap();
+            let now = self.now();
             engine.observe(now);
             engine.check_clock(now);
         }
@@ -1600,8 +1622,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         let Ok(_running) = self.check.try_lock() else {
             return Ok(self.state());
         };
-        let now = self.now();
-        let begun = self.engine.lock().unwrap().begin_check(now, forced);
+        let begun = self.engine.lock().unwrap().begin_check(self.now(), forced);
         let probe = match begun {
             Ok(Some(probe)) => probe,
             Ok(None) => return Ok(self.state()),
@@ -1810,8 +1831,8 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
     }
 
     pub fn view(&self) -> View {
-        let now = self.now();
         let engine = self.engine.lock().unwrap();
+        let now = self.now();
         let meta = self.meta.lock().unwrap();
         let durable = self.durable_state(&engine, now);
         let (state, playable) =
@@ -1883,16 +1904,17 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 self.engine
                     .lock()
                     .unwrap()
-                    .note_rate_limit(now, retry_after);
+                    .note_rate_limit(self.now(), retry_after);
                 return Err(LicenseError::RateLimited { retry_after });
             }
             Err(error) => return Err(error.into()),
         };
+        // Sampled after the network call, under the engine lock.
         let accepted = self
             .engine
             .lock()
             .unwrap()
-            .accept_activation(key, activation, now);
+            .accept_activation(key, activation, self.now());
         let activated = match accepted {
             Ok(activated) => activated,
             Err(Refusal { probe, error }) => {
@@ -1911,12 +1933,13 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         }
         let (state, replaced) = {
             let mut engine = self.engine.lock().unwrap();
+            let committed = self.now();
             let next = activated.next.clone();
-            let replaced = engine.commit_activation(activated, now);
+            let replaced = engine.commit_activation(activated, committed);
             // The record just saved is the one now in effect.
             *self.durable.lock().unwrap() = Some(next);
             self.generation.fetch_add(1, Ordering::SeqCst);
-            (engine.state(now), replaced)
+            (engine.state(committed), replaced)
         };
         self.gate(false);
         if let Some(replaced) = replaced {
@@ -1950,7 +1973,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                     .engine
                     .lock()
                     .unwrap()
-                    .finish_remove(&probe, answer, now);
+                    .finish_remove(&probe, answer, self.now());
                 self.generation.fetch_add(1, Ordering::SeqCst);
                 self.gate(false);
                 if let Some(seq) = removed_seq
@@ -3458,6 +3481,76 @@ mod tests {
                 last_elapsed = elapsed;
             }
         }
+    }
+
+    #[test]
+    fn a_tick_that_waited_behind_a_stalled_save_cannot_undo_a_newer_wake() {
+        // Review 2's scenario: a 25 h unregistered trial, a manual registration whose save
+        // stalls, a tick waiting behind it, a wake two hours later, then the release.
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let mono = Arc::new(AtomicI64::new(0));
+        let vault = FakeVault::default();
+        *vault.trial.lock().unwrap() = Some(trial_record(25 * HOUR, false));
+        let service = monotonic_service(
+            vault,
+            Arc::new(FakeJournal::default()),
+            clock.clone(),
+            mono.clone(),
+        );
+        service.load();
+        assert_eq!(service.view().state, State::TrialOffline);
+        // Try again: the registry answers and the save stalls.
+        service.registry.started(NOW - 25 * HOUR, NOW);
+        service.vault.trial_write_pause.arm();
+        let manual = {
+            let service = service.clone();
+            thread::spawn(move || {
+                service.retry_trial();
+                service.register_once(true);
+            })
+        };
+        service.vault.trial_write_pause.wait_entered();
+        let ticker = {
+            let service = service.clone();
+            thread::spawn(move || service.tick())
+        };
+        thread::sleep(Duration::from_millis(100));
+        assert!(!ticker.is_finished(), "the tick waits behind the save");
+        clock.store(NOW + 2 * HOUR, Ordering::SeqCst);
+        mono.store(2 * HOUR, Ordering::SeqCst);
+        service.woke();
+        service.vault.trial_write_pause.open();
+        manual.join().unwrap();
+        ticker.join().unwrap();
+        // The next wake, ten minutes on, with a correct clock: no hold, time counted once.
+        let later = NOW + 2 * HOUR + 600;
+        clock.store(later, Ordering::SeqCst);
+        mono.store(2 * HOUR + 600, Ordering::SeqCst);
+        service.woke();
+        service.tick();
+        assert_eq!(service.view().state, State::Trial { days_left: 2 });
+        assert!(!service.host.blocked());
+        {
+            let engine = service.engine.lock().unwrap();
+            assert!(!engine.clock_behind);
+            let TrialSlot::Present(trial) = &engine.trial else {
+                panic!("a trial is running")
+            };
+            assert_eq!(trial.last_seen_at, later);
+            assert!(trial.registered);
+        }
+        // And after a relaunch over what was saved.
+        service.flush();
+        assert!(service.vault.saved_trial().unwrap().last_seen_at <= later);
+        let restarted = monotonic_service(
+            service.vault.reopen(),
+            Arc::new(FakeJournal::default()),
+            clock,
+            Arc::new(AtomicI64::new(0)),
+        );
+        restarted.load();
+        assert_eq!(restarted.view().state, State::Trial { days_left: 2 });
+        assert!(!restarted.host.blocked());
     }
 
     #[test]

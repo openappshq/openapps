@@ -541,7 +541,8 @@ impl Engine {
     /// the clock is corrected.
     pub fn check_clock(&mut self, at: impl Into<Moment>) {
         let at = at.into();
-        if self.license().is_none()
+        if !self.stale(at)
+            && self.license().is_none()
             && let TrialSlot::Present(trial) = &self.trial
             && at.wall < self.trial_seen(trial, at) - CLOCK_ROLLBACK_TOLERANCE
         {
@@ -549,10 +550,19 @@ impl Engine {
         }
     }
 
-    /// Starts measuring the trial's elapsed time on the monotonic clock from `at`.
+    /// Whether `at` is older, on the monotonic clock, than the trial's anchor.
+    fn stale(&self, at: Moment) -> bool {
+        self.trial_anchor
+            .is_some_and(|anchor| at.mono < anchor.mono)
+    }
+
+    /// Starts measuring the trial's elapsed time on the monotonic clock from `at`. The anchor
+    /// never moves back.
     pub fn anchor_trial(&mut self, at: impl Into<Moment>) {
         let at = at.into();
-        if let TrialSlot::Present(trial) = &self.trial {
+        if !self.stale(at)
+            && let TrialSlot::Present(trial) = &self.trial
+        {
             self.trial_anchor = Some(TrialAnchor {
                 seen: trial.last_seen_at,
                 mono: at.mono,
@@ -654,6 +664,11 @@ impl Engine {
     /// Returns which records changed.
     pub fn observe(&mut self, at: impl Into<Moment>) -> Observed {
         let at = at.into();
+        if self.stale(at) {
+            // Sampled before a newer observation landed: it changes nothing, so the anchor,
+            // `last_seen_at` and the clock hold only ever move forward.
+            return Observed::default();
+        }
         let license = self.license().is_some()
             && match self.stored.license.as_mut() {
                 Some(record) if Self::anchored_now(record, at.wall) > record.last_observed_at => {
@@ -1816,6 +1831,109 @@ pub(crate) mod tests {
         assert_eq!(trial.started_at, NOW - 10 * DAY - HOUR);
         assert_eq!(trial.last_seen_at, NOW);
         assert_eq!(engine.state(fixed), State::TrialEnded);
+    }
+
+    #[test]
+    fn an_observation_sampled_before_a_newer_one_changes_nothing() {
+        // The review's scenario in the engine: a tick samples (T, 0) and waits; a wake observes
+        // (T + 2 h, 2 h); then the tick's stale sample arrives.
+        let mut engine = with_trial(unlicensed(), 25 * HOUR, false);
+        engine.anchor_trial(Moment { wall: NOW, mono: 0 });
+        let wake = Moment {
+            wall: NOW + 2 * HOUR,
+            mono: 2 * HOUR,
+        };
+        engine.observe(wake);
+        let (anchor, trial, behind) = (
+            engine.trial_anchor,
+            engine.trial.clone(),
+            engine.clock_behind,
+        );
+        let stale = Moment { wall: NOW, mono: 0 };
+        assert_eq!(engine.observe(stale), Observed::default());
+        engine.check_clock(stale);
+        engine.anchor_trial(stale);
+        assert_eq!(engine.trial_anchor, anchor, "the anchor never moves back");
+        assert_eq!(engine.trial, trial);
+        assert_eq!(engine.clock_behind, behind);
+        // The next wake, ten minutes on with a correct clock: no false hold, time counted once.
+        let next = Moment {
+            wall: NOW + 2 * HOUR + 600,
+            mono: 2 * HOUR + 600,
+        };
+        engine.observe(next);
+        engine.check_clock(next);
+        assert!(!engine.clock_behind);
+        let TrialSlot::Present(trial) = &engine.trial else {
+            panic!()
+        };
+        assert_eq!(trial.last_seen_at, NOW + 2 * HOUR + 600);
+    }
+
+    #[test]
+    fn observations_out_of_order_never_move_time_back_count_it_twice_or_run_ahead() {
+        for seed in 1..=20u64 {
+            let mut state = seed;
+            let mut next = |bound: i64| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                ((state >> 33) % bound.max(1) as u64) as i64
+            };
+            // Real moments: a correct wall clock that moves with monotonic time and sometimes
+            // jumps ahead.
+            let mut real = Vec::new();
+            let (mut wall, mut mono) = (NOW, 0);
+            for _ in 0..80 {
+                let step = next(3 * HOUR);
+                mono += step;
+                wall += step;
+                if next(10) == 0 {
+                    wall += next(DAY);
+                }
+                real.push(Moment { wall, mono });
+            }
+            let mut engine = in_trial(HOUR);
+            engine.anchor_trial(Moment { wall: NOW, mono: 0 });
+            let (mut last_seen, mut last_anchor) = (NOW, 0);
+            let (mut max_wall, mut max_mono) = (NOW, 0);
+            for (index, moment) in real.iter().enumerate() {
+                // Each moment arrives, sometimes with an older sample delivered after it.
+                let mut batch = vec![*moment];
+                if index > 0 && next(2) == 0 {
+                    batch.push(real[next(index as i64) as usize]);
+                }
+                if next(3) == 0 {
+                    batch.reverse();
+                }
+                for at in batch {
+                    engine.observe(at);
+                    if next(2) == 0 {
+                        engine.check_clock(at);
+                    }
+                    max_wall = max_wall.max(at.wall);
+                    max_mono = max_mono.max(at.mono);
+                    let TrialSlot::Present(trial) = &engine.trial else {
+                        panic!()
+                    };
+                    let anchor = engine.trial_anchor.unwrap();
+                    assert!(
+                        trial.last_seen_at >= last_seen,
+                        "seed {seed}: time went back"
+                    );
+                    assert!(
+                        trial.last_seen_at <= max_wall.max(NOW + max_mono),
+                        "seed {seed}: counted twice or ahead of real time"
+                    );
+                    assert!(anchor.mono >= last_anchor, "seed {seed}: anchor moved back");
+                    assert!(
+                        !engine.clock_behind,
+                        "seed {seed}: a correct clock was held"
+                    );
+                    (last_seen, last_anchor) = (trial.last_seen_at, anchor.mono);
+                }
+            }
+        }
     }
 
     #[test]
