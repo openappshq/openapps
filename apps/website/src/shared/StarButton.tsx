@@ -1,6 +1,6 @@
 import { Star } from "lucide-react";
 import { useEffect, useState } from "react";
-import { formatStars, GITHUB_URL, loadStars } from "./github";
+import { formatStars, GITHUB_URL, loadStars, shownStars } from "./github";
 
 function GithubMark() {
   return (
@@ -15,7 +15,7 @@ export default function StarButton() {
   const [stars, setStars] = useState<number | null>(null);
   useEffect(() => {
     let live = true;
-    void loadStars().then((count) => live && setStars(count));
+    void loadStars().then((count) => live && setStars(shownStars(count)));
     return () => {
       live = false;
     };

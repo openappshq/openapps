@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { formatStars, loadStars } from "./github";
+import { formatStars, loadStars, shownStars } from "./github";
 
 describe("formatStars", () => {
   it("shows small counts in full and larger ones in thousands", () => {
@@ -9,6 +9,16 @@ describe("formatStars", () => {
     expect(formatStars(1234)).toBe("1.2k");
     expect(formatStars(9950)).toBe("10k");
     expect(formatStars(12345)).toBe("12k");
+  });
+});
+
+describe("shownStars", () => {
+  it("hides the chip below ten stars", () => {
+    expect(shownStars(null)).toBeNull();
+    expect(shownStars(0)).toBeNull();
+    expect(shownStars(9)).toBeNull();
+    expect(shownStars(10)).toBe(10);
+    expect(shownStars(1234)).toBe(1234);
   });
 });
 
