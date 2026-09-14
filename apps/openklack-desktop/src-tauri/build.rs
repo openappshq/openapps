@@ -76,6 +76,6 @@ fn licensing_config() {
     let support = std::env::var("OPENKLACK_SUPPORT_URL")
         .ok()
         .filter(|value| value.starts_with("https://") && !value.contains(char::is_whitespace))
-        .unwrap_or_else(|| "https://openapps.space/OpenKlack/".into());
+        .unwrap_or_else(|| "https://openapps.space/openklack/".into());
     println!("cargo:rustc-env=OPENKLACK_SUPPORT_URL={support}");
 }

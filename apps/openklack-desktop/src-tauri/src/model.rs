@@ -437,6 +437,28 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_license_pauses_playback_without_offering_a_resume() {
+        let mut prefs = Preferences::default();
+        let runtime = Runtime {
+            input_permission: true,
+            audio_ready: true,
+            license_blocked: true,
+            temporary_resume: true,
+            ..Runtime::default()
+        };
+        assert_eq!(runtime.pause_reason(&prefs), Some("License needed"));
+        assert!(!runtime.can_resume(&prefs));
+        prefs.muted = true;
+        assert_eq!(runtime.pause_reason(&prefs), Some("Muted"));
+        let unlocked = Runtime {
+            license_blocked: false,
+            ..runtime
+        };
+        prefs.muted = false;
+        assert_eq!(unlocked.pause_reason(&prefs), None);
+    }
+
+    #[test]
     fn manual_mute_and_unavailable_input_win_over_temporary_resume() {
         let mut prefs = Preferences::default();
         let runtime = Runtime {

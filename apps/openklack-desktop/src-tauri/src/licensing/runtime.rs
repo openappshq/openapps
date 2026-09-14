@@ -305,10 +305,15 @@ impl Service {
                 }
                 *woken = false;
             }
+            // The high-water mark keeps a rolled-back clock from extending a trial.
+            if self.engine.lock().unwrap().observe(now()) {
+                self.persist();
+            }
             if self.engine.lock().unwrap().check_due(now()) {
                 let _ = self.check_once(false);
             }
-            // Trials end and grace runs out by time alone.
+            self.release_stale();
+            // Trials end and grace runs out by time alone: re-evaluate and tell the window.
             self.apply();
         }
     }
@@ -325,36 +330,34 @@ impl Service {
             return Ok(self.engine.lock().unwrap().state(now()));
         };
         let now = now();
-        // Read what the call needs, then release the engine so the window stays responsive
-        // while the request is in flight.
-        let (key, instance) = {
-            let engine = self.engine.lock().unwrap();
-            if !forced && !engine.check_due(now) {
-                return Ok(engine.state(now));
-            }
-            if let Some(hold_until) = engine.schedule.hold_until
-                && now < hold_until
-            {
-                return Err(LicenseError::RateLimited {
-                    retry_after: hold_until - now,
-                });
-            }
-            match engine.stored.license.as_ref() {
-                Some(record) if !record.revoked => {
-                    (record.license_key.clone(), record.instance_id.clone())
-                }
-                _ => return Ok(engine.state(now)),
-            }
+        // Ask for what the call needs, then release the engine so the window stays responsive
+        // while the request is in flight; the answer is matched back to this activation.
+        let probe = match self.engine.lock().unwrap().begin_check(now, forced) {
+            Ok(Some(probe)) => probe,
+            Ok(None) => return Ok(self.engine.lock().unwrap().state(now)),
+            Err(error) => return Err(error),
         };
         self.publish(|meta| meta.checking = true);
-        let answer = self.dodo.validate(&key, &instance);
-        let result = self.engine.lock().unwrap().check(&Replay(answer), now);
+        let answer = self.dodo.validate(&probe.license_key, &probe.instance_id);
+        let result = self
+            .engine
+            .lock()
+            .unwrap()
+            .finish_check(&probe, answer, now);
         self.persist();
         self.publish(|meta| {
             meta.checking = false;
             meta.last_error = result.as_ref().err().map(LicenseError::message);
         });
         result
+    }
+
+    /// Frees slots this Mac gave up while Dodo was unreachable.
+    fn release_stale(&self) {
+        let pending = !self.engine.lock().unwrap().stored.stale.is_empty();
+        if pending && self.engine.lock().unwrap().release_stale(&self.dodo, now()) {
+            self.persist();
+        }
     }
 
     fn persist(&self) {
@@ -412,14 +415,26 @@ impl Service {
     }
 
     fn activate(&self, key: &str, hint: KeyHint) -> Result<View, String> {
-        let _running = self.check.lock().unwrap();
-        let result = self
-            .engine
-            .lock()
-            .unwrap()
-            .activate(key, hint, &self.dodo, now());
+        let now = now();
+        let outcome = {
+            let mut engine = self.engine.lock().unwrap();
+            engine
+                .activate(key, hint, &self.dodo, now)
+                .map_err(|error| error.message())
+                .and_then(|activated| {
+                    // Persist first: a record that could not be saved is not in effect, and its
+                    // slot is given back so the customer keeps all three Macs.
+                    match vault::save(&activated.next) {
+                        Ok(()) => Ok(engine.commit_activation(activated, &self.dodo, now)),
+                        Err(error) => {
+                            engine.abandon_activation(activated, &self.dodo);
+                            Err(error)
+                        }
+                    }
+                })
+        };
+        // Refusals and failed deactivations may have changed the stale list.
         self.persist();
-        let outcome = result.map_err(|error| error.message());
         self.publish(|meta| {
             meta.last_error = None;
             if outcome.is_ok() {
@@ -432,7 +447,6 @@ impl Service {
     }
 
     fn remove(&self) -> Result<View, String> {
-        let _running = self.check.lock().unwrap();
         let result = self.engine.lock().unwrap().remove(&self.dodo, now());
         self.persist();
         let outcome = result.map_err(|error| error.message());
@@ -458,23 +472,6 @@ impl Service {
         if let Some(key) = key {
             self.publish(|meta| meta.pending_key = Some(key));
         }
-    }
-}
-
-/// Hands the engine an answer that was fetched without holding its lock.
-struct Replay(Result<Validation, DodoError>);
-
-impl super::core::Dodo for Replay {
-    fn activate(&self, _: &str, _: &str) -> Result<Activation, DodoError> {
-        Err(DodoError::Unexpected("no activation during a check".into()))
-    }
-    fn validate(&self, _: &str, _: &str) -> Result<Validation, DodoError> {
-        self.0.clone()
-    }
-    fn deactivate(&self, _: &str, _: &str) -> Result<(), DodoError> {
-        Err(DodoError::Unexpected(
-            "no deactivation during a check".into(),
-        ))
     }
 }
 
