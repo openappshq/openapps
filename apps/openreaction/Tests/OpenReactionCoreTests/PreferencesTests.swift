@@ -26,6 +26,92 @@ struct PreferencesTests {
         #expect(exclusions == AppExclusions())
     }
 
+    @Test func entriesListEveryDefaultThenUserAdditions() {
+        var exclusions = AppExclusions()
+        exclusions.add(["com.apple.TextEdit", "com.apple.Notes"])
+        exclusions.setExcluded(false, bundleIdentifier: "com.apple.Terminal")
+        let entries = exclusions.entries
+        #expect(entries.count == AppExclusions.defaults.count + 2)
+        #expect(entries.prefix(AppExclusions.defaults.count).map(\.bundleIdentifier) == AppExclusions.defaults.map(\.bundleIdentifier))
+        #expect(entries.suffix(2).map(\.bundleIdentifier) == ["com.apple.Notes", "com.apple.TextEdit"])
+        // A default that was switched off stays listed, marked as not excluded.
+        let terminal = entries.first { $0.bundleIdentifier == "com.apple.Terminal" }
+        #expect(terminal?.isDefault == true)
+        #expect(terminal?.defaultReason == .terminal)
+        #expect(terminal?.isExcluded == false)
+        let slack = entries.first { $0.bundleIdentifier == "com.tinyspeck.slackmacgap" }
+        #expect(slack?.defaultReason == .ownShortcodes)
+        #expect(slack?.isExcluded == true)
+        #expect(entries.last?.isDefault == false)
+        #expect(entries.last?.isExcluded == true)
+    }
+
+    @Test func addDedupesIgnoresEmptyAndRevivesDefaults() {
+        var exclusions = AppExclusions()
+        exclusions.setExcluded(false, bundleIdentifier: "com.apple.Terminal")
+        exclusions.add(["com.apple.TextEdit", "", "com.apple.TextEdit", "com.apple.Terminal"])
+        #expect(exclusions.added == ["com.apple.TextEdit"])
+        #expect(exclusions.removed.isEmpty)
+        #expect(exclusions.isExcluded("com.apple.Terminal"))
+    }
+
+    @Test func removeOnlyAffectsUserAdditions() {
+        var exclusions = AppExclusions()
+        exclusions.add(["com.apple.TextEdit"])
+        exclusions.remove("com.apple.TextEdit")
+        exclusions.remove("com.apple.Terminal")
+        #expect(!exclusions.isExcluded("com.apple.TextEdit"))
+        #expect(exclusions.isExcluded("com.apple.Terminal"))
+        #expect(exclusions == AppExclusions())
+    }
+
+    @Test func restoreDefaultsClearsEveryChange() {
+        var exclusions = AppExclusions()
+        exclusions.add(["com.apple.TextEdit"])
+        exclusions.setExcluded(false, bundleIdentifier: "com.apple.Terminal")
+        #expect(exclusions.hasUserChanges)
+        exclusions.restoreDefaults()
+        #expect(!exclusions.hasUserChanges)
+        #expect(exclusions.effectiveBundleIdentifiers == AppExclusions.defaultBundleIdentifiers)
+    }
+
+    @Test func effectiveSetReflectsDifferences() {
+        var exclusions = AppExclusions()
+        exclusions.add(["com.apple.TextEdit"])
+        exclusions.setExcluded(false, bundleIdentifier: "com.apple.Terminal")
+        let effective = exclusions.effectiveBundleIdentifiers
+        #expect(effective.contains("com.apple.TextEdit"))
+        #expect(!effective.contains("com.apple.Terminal"))
+        #expect(effective.count == AppExclusions.defaultBundleIdentifiers.count)
+    }
+
+    @Test func exclusionsRoundTripAsDifferences() throws {
+        var exclusions = AppExclusions()
+        exclusions.add(["com.apple.TextEdit"])
+        exclusions.setExcluded(false, bundleIdentifier: "com.apple.Terminal")
+        let data = try JSONEncoder().encode(exclusions)
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("com.apple.TextEdit"))
+        #expect(json.contains("com.apple.Terminal"))
+        // Defaults themselves are not written, so a new default list applies on load.
+        #expect(!json.contains("com.tinyspeck.slackmacgap"))
+        #expect(try JSONDecoder().decode(AppExclusions.self, from: data) == exclusions)
+    }
+
+    @Test func decodingNormalizesAgainstTheCurrentDefaults() throws {
+        // A stored file from a version where Slack was user-added and
+        // "org.example.OldTerminal" was a default the user switched off.
+        let stored = """
+        {"added":["com.tinyspeck.slackmacgap","com.apple.TextEdit",""],"removed":["org.example.OldTerminal","com.apple.Terminal"]}
+        """
+        let exclusions = try JSONDecoder().decode(AppExclusions.self, from: Data(stored.utf8))
+        #expect(exclusions.added == ["com.apple.TextEdit"])
+        #expect(exclusions.removed == ["com.apple.Terminal"])
+        #expect(exclusions.isExcluded("com.tinyspeck.slackmacgap"))
+        #expect(!exclusions.isExcluded("org.example.OldTerminal"))
+        #expect(!exclusions.entries.contains { $0.bundleIdentifier == "org.example.OldTerminal" })
+    }
+
     @Test func frecencyFavorsFrequentAndRecentUse() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let day: TimeInterval = 24 * 60 * 60
