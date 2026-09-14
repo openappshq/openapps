@@ -94,6 +94,10 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 90
     environment: openreaction-release
+    # One release at a time, so two runs can never publish the same tag concurrently.
+    concurrency:
+      group: openreaction-release
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
@@ -116,13 +120,17 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_PUBLISH: ${{ inputs.publish }}
         run: |
+          # A tag push always publishes; a manual run publishes only when asked,
+          # whether it was started from a branch or from a release tag.
+          if [ "$GITHUB_EVENT_NAME" = push ]; then publish=true; else publish="${INPUT_PUBLISH:-false}"; fi
           case "$GITHUB_REF" in
             refs/tags/openreaction-v*)
               version="${GITHUB_REF#refs/tags/openreaction-v}"
-              publish=true ;;
+              if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$version" ]; then
+                echo "This run is on tag $GITHUB_REF_NAME; leave the version input empty or set it to $version."; exit 1
+              fi ;;
             *)
               version="$INPUT_VERSION"
-              publish="${INPUT_PUBLISH:-false}"
               if [ -z "$version" ]; then echo "Give a version, or run from an openreaction-v* tag."; exit 1; fi ;;
           esac
           if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -185,14 +193,16 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           KEYCHAIN="$RUNNER_TEMP/$KEYCHAIN_NAME"
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/openreaction.p12"
+          P12="$RUNNER_TEMP/openreaction.p12"
+          trap 'rm -f "$P12"' EXIT
+          umask 077
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$P12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security set-keychain-settings -lut 3600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import "$RUNNER_TEMP/openreaction.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security import "$P12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
-          rm -f "$RUNNER_TEMP/openreaction.p12"
           if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -Fq "$APPLE_SIGNING_IDENTITY"; then
             echo "::error::APPLE_CERTIFICATE does not contain the identity named by APPLE_SIGNING_IDENTITY."
             security find-identity -v -p codesigning "$KEYCHAIN"
@@ -221,6 +231,17 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: scripts/make-dmg.sh
+      - name: Remove the signing identity
+        # The DMG was the last thing signed. Notarization, verification,
+        # upload and publish only need the notary credentials, so the
+        # keychain goes now, not at the end of the job; failing to remove
+        # it fails the release.
+        run: |
+          security delete-keychain "$RUNNER_TEMP/$KEYCHAIN_NAME"
+          security list-keychains -d user -s login.keychain-db
+          if security find-identity -v -p codesigning | grep -q 'Developer ID Application:'; then
+            echo "::error::A Developer ID identity is still available after cleanup."; exit 1
+          fi
       - name: Notarize and staple the DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -250,21 +271,45 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
+          built="$(git rev-parse HEAD)"
+          # The commit the remote tag points at, peeled through an annotated tag; empty when the tag does not exist.
+          tag_commit() {
+            local ref sha type
+            ref="$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" 2>/dev/null)" || return 0
+            sha="$(printf '%s' "$ref" | jq -r .object.sha)"
+            type="$(printf '%s' "$ref" | jq -r .object.type)"
+            if [ "$type" = tag ]; then
+              gh api "repos/$GH_REPO/git/tags/$sha" --jq .object.sha
+            else
+              printf '%s\n' "$sha"
+            fi
+          }
+          existing="$(tag_commit)"
+          if [ -z "$existing" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/*) echo "::error::Tag $TAG no longer exists on the remote."; exit 1 ;;
+            esac
+            echo "Creating tag $TAG at $built."
+            gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$built" >/dev/null
+            existing="$(tag_commit)"
+          fi
+          if [ "$existing" != "$built" ]; then
+            echo "::error::Tag $TAG points at $existing but this build is $built; refusing to publish. Delete the tag or build from the tagged commit."
+            exit 1
+          fi
           cd dist
           files=("OpenReaction-$VERSION.dmg" "OpenReaction-$VERSION.dmg.sha256")
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists; replacing its assets."
+            echo "Release $TAG exists; replacing its assets with this build of the same commit."
             gh release upload "$TAG" "${files[@]}" --clobber
           else
-            case "$GITHUB_REF" in
-              refs/tags/*) ref=(--verify-tag) ;;
-              *) ref=(--target "$GITHUB_SHA") ;;
-            esac
-            gh release create "$TAG" "${files[@]}" --title "OpenReaction $VERSION" --generate-notes "${ref[@]}"
+            gh release create "$TAG" "${files[@]}" --title "OpenReaction $VERSION" --generate-notes --verify-tag
           fi
           gh release view "$TAG" --json url --jq .url
       - name: Remove temporary signing material
+        # Fallback for runs that fail before the identity was removed above.
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/$KEYCHAIN_NAME" 2>/dev/null || true
+          security list-keychains -d user -s login.keychain-db || true
           rm -f "$RUNNER_TEMP/openreaction.p12"

@@ -66,7 +66,10 @@ the in-app trial does not need them.
 The release job checks every secret and the paid product ID before it
 touches the certificate, and fails naming what is missing. There is no
 unsigned fallback: without a `Developer ID Application` identity the job
-stops before building.
+stops before building. The certificate lives in a temporary keychain that is
+deleted as soon as the DMG is signed, before notarization, upload or
+publishing run, and a live build refuses placeholder product IDs in any
+casing.
 
 ## Cutting a release
 
@@ -92,18 +95,23 @@ stops before building.
 5. Open the release, check the notes, and download the DMG for the clean-Mac
    check below before linking it from the website.
 
-If the job fails after the tag is pushed, fix the cause on `main`, delete
-the tag (`git push --delete origin openreaction-v1.0.0`; a release is only
-created once everything before it passed) and tag the fixed commit. Re-running
-a failed job on the same tag also works and replaces the release's assets.
+Before publishing, the job checks that `openreaction-v1.0.0` on GitHub
+points at exactly the commit it built and refuses otherwise, so a tag can
+never end up with binaries from another commit; releases also run one at a
+time. If the job fails after the tag is pushed, fix the cause on `main`,
+delete the tag (`git push --delete origin openreaction-v1.0.0`; a release is
+only created once everything before it passed) and tag the fixed commit.
+Re-running a failed job on the same tag also works and replaces the
+release's assets with a build of that same commit.
 
 ### Release candidates
 
-**Actions → OpenReaction → Run workflow** on a branch or tag, with a
-`version` and `publish` left off, runs the same signed and notarized build
-and uploads `OpenReaction-<version>-signed` as a workflow artifact without
-creating a release. With `publish` on it also creates the tag at that commit
-and publishes; prefer pushing a tag on `main`.
+**Actions → OpenReaction → Run workflow** on a branch (with a `version`) or
+on an existing `openreaction-v*` tag (version comes from the tag), with
+`publish` left off, runs the same signed and notarized build and uploads
+`OpenReaction-<version>-signed` as a workflow artifact without creating a
+release. With `publish` on it creates the tag at that commit if it does not
+exist yet and publishes; prefer pushing a tag on `main`.
 
 ## Verifying the download on a clean Mac
 
