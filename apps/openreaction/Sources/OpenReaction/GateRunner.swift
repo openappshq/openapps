@@ -39,15 +39,18 @@ final class GateRunner: @unchecked Sendable {
         var nextEventID = 0
         /// Picker frame in Quartz coordinates while it is visible.
         var pickerFrame = CGRect.null
-        /// Shutdowns waiting for the gate to owe the host nothing.
-        var idleWaiters: [CheckedContinuation<Void, Never>] = []
+        /// Shutdowns waiting for their outcome, by waiter token.
+        var shutdownWaiters: [Int: CheckedContinuation<InputGate.ShutdownOutcome, Never>] = [:]
+        var nextWaiterToken = 0
     }
 
     private let state: OSAllocatedUnfairLock<State>
+    private let poster: any EventPoster
     private let mainHandler: @Sendable ([MainEffect]) -> Void
 
-    init(gate: InputGate, mainHandler: @escaping @Sendable ([MainEffect]) -> Void) {
+    init(gate: InputGate, poster: any EventPoster = LiveEventPoster(), mainHandler: @escaping @Sendable ([MainEffect]) -> Void) {
         state = OSAllocatedUnfairLock(initialState: State(gate: gate))
+        self.poster = poster
         self.mainHandler = mainHandler
     }
 
@@ -122,20 +125,41 @@ final class GateRunner: @unchecked Sendable {
         state.withLock { !$0.gate.isHolding }
     }
 
-    /// Returns once the gate holds nothing and has nothing in flight: after
-    /// `beginShutdown`, that is when every held or replayed event has been
-    /// acknowledged by the tap. No timer ends the wait.
-    func waitUntilIdle() async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let idle = state.withLock { state in
-                if state.gate.isHolding {
-                    state.idleWaiters.append(continuation)
-                    return false
-                }
-                return true
+    /// The outcome of a shutdown begun with `beginShutdown`, once the gate
+    /// has nothing left to wait for: `.delivered` after the tap acknowledged
+    /// everything, `.interrupted` or `.failed` once a best-effort replay has
+    /// actually run on the posting queue. Never resumes on enqueued work.
+    /// With a `bound`, the wait ends as `.failed` once it passes with no
+    /// outcome — never as delivery.
+    func waitForShutdown(bound: Duration? = nil) async -> InputGate.ShutdownOutcome {
+        await withCheckedContinuation { (continuation: CheckedContinuation<InputGate.ShutdownOutcome, Never>) in
+            let (outcome, token) = state.withLock { state -> (InputGate.ShutdownOutcome?, Int) in
+                if let outcome = state.gate.shutdownOutcome { return (outcome, 0) }
+                state.nextWaiterToken += 1
+                state.shutdownWaiters[state.nextWaiterToken] = continuation
+                return (nil, state.nextWaiterToken)
             }
-            if idle { continuation.resume() }
+            if let outcome {
+                continuation.resume(returning: outcome)
+                return
+            }
+            guard let bound else { return }
+            Task { [state] in
+                try? await Task.sleep(for: bound)
+                let waiter = state.withLock { $0.shutdownWaiters.removeValue(forKey: token) }
+                waiter?.resume(returning: .failed)
+            }
         }
+    }
+
+    /// A flush could not be posted: the gate will never see its acknowledgement.
+    private func streamFailed(transaction id: Int) {
+        state.withLock { state in dispatch(state.gate.streamFailed(transaction: id), state: &state) }
+    }
+
+    /// The posting queue ran every replay enqueued before the confirmation.
+    private func replayExecuted(transaction id: Int) {
+        state.withLock { state in dispatch(state.gate.replayExecuted(transaction: id), state: &state) }
     }
 
     /// The tap stopped or the app paused; no events flow until it restarts.
@@ -226,27 +250,36 @@ final class GateRunner: @unchecked Sendable {
             case .transactionEnded(let transaction, let recordUse):
                 main.append(.transactionEnded(transaction: transaction, recordUse: recordUse))
             case .post(let transaction, let deleteCount, let text):
-                TextInserter.postReplacement(transaction: transaction, deleteCount: deleteCount, text: text) { [weak self] in
+                poster.postReplacement(transaction: transaction, deleteCount: deleteCount, text: text, commit: { [weak self] in
                     self?.commit(transaction: transaction, secureInput: IsSecureEventInputEnabled()) ?? false
-                }
+                }, onFailure: { [weak self] in
+                    self?.streamFailed(transaction: transaction)
+                })
             case .postFlush(let transaction):
-                TextInserter.postFlush(transaction: transaction)
+                poster.postFlush(transaction: transaction) { [weak self] in
+                    self?.streamFailed(transaction: transaction)
+                }
             case .replay(let eventIDs):
                 let copies = eventIDs.compactMap { state.held.removeValue(forKey: $0) }
-                TextInserter.replay(copies.map(\.event))
+                poster.replay(copies.map(\.event), completion: nil)
+            case .confirmReplay(let transaction):
+                // Queued behind every replay above: runs once they were posted.
+                poster.replay([]) { [weak self] in
+                    self?.replayExecuted(transaction: transaction)
+                }
             case .drop(let eventIDs):
                 for id in eventIDs { state.held.removeValue(forKey: id) }
             case .repost(let keyCode):
-                TextInserter.repost(keyCode: keyCode)
+                poster.repost(keyCode: keyCode)
             }
         }
         if !main.isEmpty {
             mainHandler(main)
         }
-        if !state.gate.isHolding, !state.idleWaiters.isEmpty {
-            let waiters = state.idleWaiters
-            state.idleWaiters = []
-            for waiter in waiters { waiter.resume() }
+        if let outcome = state.gate.shutdownOutcome, !state.shutdownWaiters.isEmpty {
+            let waiters = state.shutdownWaiters.values
+            state.shutdownWaiters = [:]
+            for waiter in waiters { waiter.resume(returning: outcome) }
         }
     }
 }

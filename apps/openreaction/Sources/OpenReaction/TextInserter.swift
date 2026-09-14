@@ -18,6 +18,39 @@ import Foundation
 ///
 /// Media payloads (GIFs, images) cannot be typed and will need a pasteboard
 /// path with explicit clipboard save and restore.
+/// What the gate runner posts through. The app posts real events; tests
+/// substitute a recorder so nothing reaches the session.
+protocol EventPoster: Sendable {
+    /// Deletes, types, then flushes — only if `commit` agrees when the work
+    /// runs. `onFailure` is called instead if the flush could not be posted.
+    func postReplacement(transaction: Int, deleteCount: Int, text: String, commit: @escaping @Sendable () -> Bool, onFailure: @escaping @Sendable () -> Void)
+    /// Posts the flush marker; `onFailure` if it could not be posted.
+    func postFlush(transaction: Int, onFailure: @escaping @Sendable () -> Void)
+    /// Re-posts held physical events in order; `completion` runs once they
+    /// have been posted (on the posting queue, after them).
+    func replay(_ events: [CGEvent], completion: (@Sendable () -> Void)?)
+    func repost(keyCode: UInt16)
+}
+
+/// The app's poster: `TextInserter`.
+struct LiveEventPoster: EventPoster {
+    func postReplacement(transaction: Int, deleteCount: Int, text: String, commit: @escaping @Sendable () -> Bool, onFailure: @escaping @Sendable () -> Void) {
+        TextInserter.postReplacement(transaction: transaction, deleteCount: deleteCount, text: text, commit: commit, onFailure: onFailure)
+    }
+
+    func postFlush(transaction: Int, onFailure: @escaping @Sendable () -> Void) {
+        TextInserter.postFlush(transaction: transaction, onFailure: onFailure)
+    }
+
+    func replay(_ events: [CGEvent], completion: (@Sendable () -> Void)?) {
+        TextInserter.replay(events, completion: completion)
+    }
+
+    func repost(keyCode: UInt16) {
+        TextInserter.repost(keyCode: keyCode)
+    }
+}
+
 enum TextInserter {
     static let queue = DispatchQueue(label: "com.openappshq.openreaction.insertion", qos: .userInteractive)
     /// CGEventKeyboardSetUnicodeString accepts at most 20 UTF-16 units per event.
@@ -27,8 +60,9 @@ enum TextInserter {
     /// the transaction — but only if `commit` agrees at that moment. If the
     /// commit is refused nothing is posted (the gate has already arranged its
     /// own flush). If events cannot be created the flush is still posted, so
-    /// the gate learns the phase is over instead of waiting for the watchdog.
-    static func postReplacement(transaction: Int, deleteCount: Int, text: String, commit: @escaping @Sendable () -> Bool) {
+    /// the gate learns the phase is over instead of waiting for the watchdog;
+    /// if the flush itself cannot be posted, `onFailure` says so.
+    static func postReplacement(transaction: Int, deleteCount: Int, text: String, commit: @escaping @Sendable () -> Bool, onFailure: @escaping @Sendable () -> Void) {
         queue.async {
             guard commit() else { return }
             if let source = makeSource() {
@@ -39,22 +73,26 @@ enum TextInserter {
                     postUnicode(chunk, source: source)
                 }
             }
-            postFlushNow(transaction: transaction)
+            if !postFlushNow(transaction: transaction) { onFailure() }
         }
     }
 
-    static func postFlush(transaction: Int) {
-        queue.async { postFlushNow(transaction: transaction) }
+    static func postFlush(transaction: Int, onFailure: @escaping @Sendable () -> Void) {
+        queue.async {
+            if !postFlushNow(transaction: transaction) { onFailure() }
+        }
     }
 
-    /// Re-posts physical events the tap held, tagged so it passes them through.
-    static func replay(_ events: [CGEvent]) {
+    /// Re-posts physical events the tap held, tagged so it passes them
+    /// through; `completion` runs on the queue right after them.
+    static func replay(_ events: [CGEvent], completion: (@Sendable () -> Void)? = nil) {
         let boxed = events.map(EventBox.init)
         queue.async {
             for box in boxed {
                 box.event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
                 box.event.post(tap: .cgSessionEventTap)
             }
+            completion?()
         }
     }
 
@@ -70,12 +108,15 @@ enum TextInserter {
         let event: CGEvent
     }
 
-    private static func postFlushNow(transaction: Int) {
+    /// False when the marker could not be created: no acknowledgement will
+    /// ever come for this flush.
+    private static func postFlushNow(transaction: Int) -> Bool {
         guard let source = makeSource(),
-              let marker = CGEvent(keyboardEventSource: source, virtualKey: 0xFF, keyDown: false) else { return }
+              let marker = CGEvent(keyboardEventSource: source, virtualKey: 0xFF, keyDown: false) else { return false }
         marker.flags = []
         marker.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.flush, id: transaction))
         marker.post(tap: .cgSessionEventTap)
+        return true
     }
 
     private static func makeSource() -> CGEventSource? {

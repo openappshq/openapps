@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import OpenReactionCore
+import os
 
 /// Connects the event tap, trigger state machine, suggestion provider, caret
 /// lookup, picker and insertion. Everything here runs on the main thread;
@@ -189,25 +190,41 @@ final class AppController {
     }
 
     /// Called before the process exits, so held input reaches the host.
-    func prepareToQuit() async {
+    /// Returns how the drain ended; only `.delivered` is a confirmed delivery.
+    @discardableResult
+    func prepareToQuit() async -> InputGate.ShutdownOutcome {
         isRelaunching = true // no restarts from the permission poll meanwhile
-        await stopTapDraining()
+        return await stopTapDraining()
     }
+
+    /// The one bound on a deliberate stop: past it the stop ends `.failed`,
+    /// never "delivered".
+    static let shutdownBound: Duration = .seconds(10)
+    private static let log = Logger(subsystem: "com.openappshq.openreaction", category: "tap")
 
     /// Stops the tap without reordering input. Focus tracking stops first so
     /// nothing can reopen capture; the gate stops authorizing at once, and
     /// everything it still owes the host (held keys, and input typed while
     /// they drain) goes out through acknowledged flushes while the tap owns
-    /// the stream. Only then is the tap uninstalled. The wait has no deadline:
-    /// it ends when the tap acknowledges, or when macOS disables the tap and
-    /// the gate lets what is owed out best effort.
-    private func stopTapDraining() async {
-        guard let tap, let runner, tap.isRunning else { return }
+    /// the stream. Only then is the tap uninstalled.
+    ///
+    /// The wait ends with the gate's outcome: `.delivered` when the tap
+    /// acknowledged everything; `.interrupted` when macOS disabled the tap and
+    /// the best-effort replay has run; `.failed` when a flush could not be
+    /// posted and the replay has run — or when `shutdownBound` passes with no
+    /// outcome at all, which is logged and never reported as delivery.
+    @discardableResult
+    private func stopTapDraining() async -> InputGate.ShutdownOutcome {
+        guard let tap, let runner, tap.isRunning else { return .delivered }
         focusMonitor.stop()
         runner.beginShutdown()
-        await runner.waitUntilIdle()
-        tap.stop() // reports `tapStopped` to the gate
+        let outcome = await runner.waitForShutdown(bound: Self.shutdownBound)
+        if outcome != .delivered {
+            Self.log.error("Tap stopped without confirmed delivery of held input: \(String(describing: outcome), privacy: .public)")
+        }
+        tap.stop() // reports `tapStopped` to the gate; anything still held goes out as a last resort
         if isTapRunning { isTapRunning = false }
+        return outcome
     }
 
     // MARK: - Tap lifecycle

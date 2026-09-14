@@ -1010,23 +1010,101 @@ struct InputGateTests {
         #expect(!harness.gate.isHolding)
     }
 
-    @Test func onlyAnOSDisabledTapEndsAShutdownBestEffort() {
+    @Test func shutdownOutcomeIsDeliveredOnlyThroughAcknowledgement() {
+        var idle = makeHarness()
+        idle.run(idle.gate.beginShutdown())
+        #expect(idle.gate.shutdownOutcome == .delivered) // nothing owed
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        #expect(harness.gate.shutdownOutcome == nil)
+        harness.ack() // replay + flush
+        #expect(harness.gate.shutdownOutcome == nil) // replay enqueued, not acknowledged
+        harness.ack()
+        #expect(harness.gate.shutdownOutcome == .delivered)
+        #expect(!harness.gate.isHolding)
+        harness.run(harness.gate.tapStopped())
+        #expect(harness.gate.shutdownOutcome == nil)
+    }
+
+    @Test func anOSDisabledTapEndsAShutdownOnlyOnceTheReplayHasRun() {
         var harness = makeHarness()
         harness.type(":ta")
         harness.run(harness.gate.beginShutdown())
         harness.press(KeyCode.delete)
         let backspace = harness.nextID
-        #expect(harness.gate.isHolding)
-        // macOS disabled the tap: the acknowledgement may never come, so what
-        // is owed goes out in order and the gate reports done.
+        // macOS disabled the tap: the acknowledgement may never come. What is
+        // owed is replayed in order — and the gate keeps holding until the app
+        // layer confirms that the replay actually ran.
         let effects = harness.run(harness.gate.tapInterrupted())
         #expect(replays(effects) == [Array(1...6) + [backspace]])
-        #expect(ended(effects, 1, recorded: false))
+        #expect(effects.last == .confirmReplay(transaction: 1))
+        #expect(!ended(effects, 1, recorded: false))
+        #expect(harness.gate.isHolding)
+        #expect(harness.gate.shutdownOutcome == nil)
+        // A fresh Backspace (the physical release, then a new press) while the
+        // replay is queued: held behind it, never passed.
+        #expect(harness.release(KeyCode.delete).decision == .hold)
+        #expect(harness.press(KeyCode.delete).decision == .hold)
+        let fresh = [backspace + 1, backspace + 2]
+        // Timeouts and late flush acks change nothing now.
+        #expect(harness.run(harness.gate.timeout(transaction: 1)).isEmpty)
+        #expect(harness.ack().isEmpty)
+        // The replay ran: the fresh input goes out after it, the same way.
+        let next = harness.run(harness.gate.replayExecuted(transaction: 1))
+        #expect(replays(next) == [fresh])
+        #expect(next.last == .confirmReplay(transaction: 1))
+        #expect(harness.gate.isHolding)
+        let done = harness.run(harness.gate.replayExecuted(transaction: 1))
+        #expect(ended(done, 1, recorded: false))
         #expect(!harness.gate.isHolding)
-        #expect(probes(effects).isEmpty)
+        #expect(harness.gate.shutdownOutcome == .interrupted)
+        #expect(probes(effects + next + done).isEmpty)
         #expect(!harness.gate.capturesText)
-        harness.run(harness.gate.tapStopped())
+    }
+
+    @Test func aFlushThatCannotBePostedEndsAShutdownAsFailedAfterTheOrderedReplay() {
+        var harness = harnessWithToken()
+        let id = postReplacement(&harness)
+        harness.press(7, "x")
+        let xDown = harness.nextID
+        harness.run(harness.gate.beginShutdown())
+        // The insertion queue could not create the flush marker.
+        let effects = harness.run(harness.gate.streamFailed(transaction: id))
+        #expect(replays(effects) == [[xDown]])
+        #expect(effects.last == .confirmReplay(transaction: id))
+        #expect(harness.gate.isHolding)
+        #expect(harness.gate.shutdownOutcome == nil)
+        #expect(harness.press(8, "c").decision == .hold)
+        let cDown = harness.nextID
+        let next = harness.run(harness.gate.replayExecuted(transaction: id))
+        #expect(replays(next) == [[cDown]])
+        let done = harness.run(harness.gate.replayExecuted(transaction: id))
+        #expect(ended(done, id, recorded: false))
+        #expect(harness.gate.shutdownOutcome == .failed)
         #expect(!harness.gate.isHolding)
+    }
+
+    @Test func aFlushThatCannotBePostedOutsideAShutdownGivesUpInOrder() {
+        var harness = harnessWithToken()
+        let id = postReplacement(&harness)
+        harness.press(7, "x")
+        let xDown = harness.nextID
+        let effects = harness.run(harness.gate.streamFailed(transaction: id))
+        #expect(replays(effects) == [[xDown]])
+        #expect(ended(effects, id, recorded: false))
+        #expect(!harness.gate.isHolding)
+        #expect(!harness.gate.capturesText) // probed again before anything is trusted
+        #expect(harness.gate.shutdownOutcome == nil)
+    }
+
+    @Test func replayConfirmationsForAnotherTransactionAreIgnored() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        harness.run(harness.gate.tapInterrupted())
+        #expect(harness.run(harness.gate.replayExecuted(transaction: 99)).isEmpty)
+        #expect(harness.gate.isHolding)
     }
 
     // MARK: Picker commands

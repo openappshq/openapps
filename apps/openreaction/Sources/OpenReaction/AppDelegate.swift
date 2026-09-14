@@ -55,7 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let license = LicenseController(manager: LicenseManager(
             products: LicensingConfig.products,
             client: DodoLicenseClient(host: LicensingConfig.host),
-            store: KeychainLicenseStore()
+            store: KeychainLicenseStore(),
+            journal: DefaultsInvalidationJournal()
         ))
         self.license = license
         license.onChange = { [weak controller, weak license] in
@@ -91,7 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Quitting drains what the gate still owes the host before the tap goes
-    /// away with the process.
+    /// away with the process. The wait ends with the drain's outcome (or the
+    /// controller's one bound, as a logged failure); the app terminates either
+    /// way, since keeping a process the user quit is worse than a logged
+    /// unconfirmed delivery.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let controller, controller.isTapRunning else { return .terminateNow }
         Task {

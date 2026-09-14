@@ -103,6 +103,10 @@ public enum GateEffect: Equatable, Sendable {
     case replay(eventIDs: [Int])
     /// Release the app layer's copies of these held events.
     case drop(eventIDs: [Int])
+    /// Call `replayExecuted` once every replay posted before this point has
+    /// actually been posted (the insertion queue ran it). Used only when the
+    /// stream can no longer acknowledge, during a shutdown.
+    case confirmReplay(transaction: Int)
     /// Send a synthetic press of this key; the tap swallowed a physical one
     /// the picker could not use.
     case repost(keyCode: UInt16)
@@ -178,6 +182,19 @@ public struct InputGate: Sendable {
         public let effects: [GateEffect]
     }
 
+    /// How a shutdown ended. Only `.delivered` means the tap acknowledged
+    /// everything the gate owed the host.
+    public enum ShutdownOutcome: Equatable, Sendable {
+        /// Every held or replayed event was acknowledged by the tap.
+        case delivered
+        /// macOS disabled the tap meanwhile; what was owed was replayed and
+        /// the replay ran, but no acknowledgement confirms its arrival.
+        case interrupted
+        /// A flush could not be posted; what was owed was replayed in order,
+        /// unacknowledged.
+        case failed
+    }
+
     // MARK: State
 
     private enum Capture: Equatable {
@@ -217,9 +234,14 @@ public struct InputGate: Sendable {
         /// Acknowledgements stopped coming; held events were replayed and a
         /// flush posted to find out whether the stream is alive.
         case recovering
+        /// Shutting down and the stream cannot acknowledge any more (the tap
+        /// was interrupted, or a flush could not be posted): held events were
+        /// replayed and the gate waits for the app layer to confirm that the
+        /// replay was executed, holding new input behind it meanwhile.
+        case bestEffort
 
         var isBeforeCommit: Bool { self == .probing || self == .verifying || self == .authorized }
-        var holdsMouse: Bool { self == .posting || self == .draining || self == .recovering }
+        var holdsMouse: Bool { self == .posting || self == .draining || self == .recovering || self == .bestEffort }
     }
 
     private enum Kind: Equatable {
@@ -241,6 +263,9 @@ public struct InputGate: Sendable {
         var inserted: String?
         var cancelled = false
         var missedAcks = 0
+        /// How the shutdown ends if this transaction is its last: set when
+        /// the stream stopped acknowledging.
+        var bestEffortOutcome: ShutdownOutcome?
 
         /// Appends an event, tracking presses chronologically so their
         /// releases are held too (a release then a new press counts again).
@@ -556,7 +581,7 @@ public struct InputGate: Sendable {
     /// The flush marker for `id` came back through the tap: everything posted
     /// before it, including any replay, has reached the host.
     public mutating func flushAck(transaction id: Int, decode: (Int) -> String = { _ in "" }) -> [GateEffect] {
-        guard var current = transaction, current.id == id, !current.phase.isBeforeCommit else { return [] }
+        guard var current = transaction, current.id == id, !current.phase.isBeforeCommit, current.phase != .bestEffort else { return [] }
         if current.phase == .posting, let inserted = current.inserted, case .replacement(let typed, _) = current.kind {
             // Our deletes and text have reached the host; account for them
             // before any drained key is interpreted after them.
@@ -582,6 +607,7 @@ public struct InputGate: Sendable {
     private mutating func drain(decode: (Int) -> String) -> [GateEffect] {
         guard var current = transaction else { return [] }
         let id = current.id
+        if isShuttingDown { deferred = nil } // nothing new starts; leftovers only go out
         guard deferred == nil, !current.held.isEmpty else {
             return finishTransaction()
         }
@@ -653,27 +679,89 @@ public struct InputGate: Sendable {
             current.missedAcks += 1
             transaction = current
             // While shutting down no timer may decide that input was
-            // delivered: keep asking the stream until it answers or the
-            // system disables the tap.
+            // delivered: keep asking the stream until it answers, the
+            // system disables the tap, or a flush cannot be posted.
             if isShuttingDown { return recover() }
             return current.missedAcks > Self.recoveryAttempts ? giveUp() : recover()
+        case .bestEffort:
+            return [] // Nothing to time out: waiting for the replay to run.
         }
     }
 
     /// The tap was disabled by the system and re-enabled: events may have
     /// been lost, including a flush marker, but the stream is alive. During a
-    /// shutdown this is the one signal that ends the wait: the acknowledgement
-    /// may never come, so what is owed goes out in order, best effort.
+    /// shutdown the acknowledgement may never come, so what is owed goes out
+    /// in order, best effort, and the shutdown ends `.interrupted` once that
+    /// replay has actually run.
     public mutating func tapInterrupted() -> [GateEffect] {
         ownedKeys.removeAll()
         if isShuttingDown {
-            return transaction == nil ? [] : giveUp()
+            return bestEffortReplay(outcome: .interrupted)
         }
         var effects: [GateEffect] = []
         if let current = transaction {
             effects += current.phase.isBeforeCommit ? cancelTransaction() : recover()
         }
         return effects + closeGate()
+    }
+
+    /// The app layer could not post the flush for `id`: no acknowledgement
+    /// will ever come for it. What is owed goes out in order, unacknowledged;
+    /// during a shutdown the outcome is `.failed`.
+    public mutating func streamFailed(transaction id: Int) -> [GateEffect] {
+        guard let current = transaction, current.id == id, !current.phase.isBeforeCommit else { return [] }
+        if isShuttingDown {
+            return bestEffortReplay(outcome: .failed)
+        }
+        return giveUp() + closeGate()
+    }
+
+    /// The insertion queue has run every replay posted before the matching
+    /// `confirmReplay`. Input held meanwhile goes out the same way; when
+    /// nothing is left the shutdown ends with the recorded outcome.
+    public mutating func replayExecuted(transaction id: Int) -> [GateEffect] {
+        guard var current = transaction, current.id == id, current.phase == .bestEffort else { return [] }
+        current.replayingDownKeys = []
+        guard current.held.isEmpty else {
+            let ids = Self.replayAllHeld(&current)
+            transaction = current
+            return [.replay(eventIDs: ids), .confirmReplay(transaction: id)]
+        }
+        transaction = nil
+        shutdownOutcome = current.bestEffortOutcome ?? .interrupted
+        return [.transactionEnded(transaction: id, recordUse: false)] + forgetTyping()
+    }
+
+    /// Shutting down and the stream cannot acknowledge: replay what is held
+    /// and wait for the app layer to confirm that the replay ran. New input
+    /// keeps being held behind it.
+    private mutating func bestEffortReplay(outcome: ShutdownOutcome) -> [GateEffect] {
+        guard var current = transaction else {
+            if shutdownOutcome == nil { shutdownOutcome = .delivered }
+            return []
+        }
+        if current.phase == .bestEffort { return [] } // already waiting for the replay to run
+        let ids = Self.replayAllHeld(&current)
+        current.phase = .bestEffort
+        current.bestEffortOutcome = outcome
+        transaction = current
+        var effects: [GateEffect] = []
+        if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
+        return effects + [.confirmReplay(transaction: current.id)]
+    }
+
+    /// Moves everything held to "replayed, unacknowledged": releases of the
+    /// replayed presses stay held until the replay is known to have run.
+    private static func replayAllHeld(_ current: inout Transaction) -> [Int] {
+        let ids = current.held.map(\.id)
+        for entry in current.held {
+            if case .key(let event) = entry {
+                if event.isDown { current.replayingDownKeys.insert(event.keyCode) } else { current.replayingDownKeys.remove(event.keyCode) }
+            }
+        }
+        current.held = []
+        current.heldDownKeys = []
+        return ids
     }
 
     /// A deliberate stop is coming (pause, license lock, relaunch, quit).
@@ -686,6 +774,7 @@ public struct InputGate: Sendable {
     /// ends the wait; only `tapInterrupted` does, best effort.
     public mutating func beginShutdown() -> [GateEffect] {
         isShuttingDown = true
+        shutdownOutcome = nil
         trackingActive = false
         deferred = nil
         var effects = forgetTyping()
@@ -694,6 +783,7 @@ public struct InputGate: Sendable {
         if let transaction, transaction.phase.isBeforeCommit {
             effects += cancelTransaction()
         }
+        if transaction == nil { shutdownOutcome = .delivered }
         return effects
     }
 
@@ -705,12 +795,17 @@ public struct InputGate: Sendable {
     public mutating func tapStopped() -> [GateEffect] {
         ownedKeys.removeAll()
         isShuttingDown = false
+        shutdownOutcome = nil
         var effects: [GateEffect] = []
         if transaction != nil { effects += giveUp() }
         return effects + closeGate()
     }
 
     public private(set) var isShuttingDown = false
+
+    /// Set once a shutdown has nothing left to wait for. `nil` while the gate
+    /// still owes the host something (or no shutdown is in progress).
+    public private(set) var shutdownOutcome: ShutdownOutcome?
 
     // MARK: Internals
 
@@ -766,9 +861,9 @@ public struct InputGate: Sendable {
             atBoundary = false
         }
         if isShuttingDown {
-            // Let whatever waited through, uninterpreted; nothing new starts.
-            let ids = current.held.map(\.id)
-            if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
+            // Reached only through an acknowledged flush with nothing held:
+            // everything owed has arrived.
+            shutdownOutcome = .delivered
             return effects + forgetTyping()
         }
         switch deferred {
@@ -797,14 +892,7 @@ public struct InputGate: Sendable {
     private mutating func recover() -> [GateEffect] {
         guard var current = transaction else { return [] }
         current.phase = .recovering
-        let ids = current.held.map(\.id)
-        for entry in current.held {
-            if case .key(let event) = entry {
-                if event.isDown { current.replayingDownKeys.insert(event.keyCode) } else { current.replayingDownKeys.remove(event.keyCode) }
-            }
-        }
-        current.held = []
-        current.heldDownKeys = []
+        let ids = Self.replayAllHeld(&current)
         transaction = current
         var effects: [GateEffect] = []
         if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
