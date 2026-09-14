@@ -29,7 +29,7 @@ struct PreferencesTests {
     @Test func frecencyFavorsFrequentAndRecentUse() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let day: TimeInterval = 24 * 60 * 60
-        var frecency = Frecency(halfLife: 7 * day)
+        var frecency = Frecency(halfLifeDays: 7)
         frecency.record("old", now: start)
         frecency.record("old", now: start)
         frecency.record("old", now: start)
@@ -40,6 +40,26 @@ struct PreferencesTests {
         #expect(abs(frecency.score("old", now: now) - 0.375) < 0.0001)
         #expect(frecency.score("new", now: now) == 1)
         #expect(frecency.score("never", now: now) == 0)
+    }
+
+    @Test func frecencyStoresOnlyTheDayOfUse() throws {
+        var frecency = Frecency()
+        frecency.record("🎉", now: Date(timeIntervalSince1970: 86_400 * 100 + 12_345))
+        let json = String(decoding: try JSONEncoder().encode(frecency), as: UTF8.self)
+        #expect(json.contains("\"day\":100"))
+        #expect(!json.contains("12345"))
+        // Same score at any time of that day, and nothing else is recorded.
+        #expect(frecency.score("🎉", now: Date(timeIntervalSince1970: 86_400 * 100)) == 1)
+        #expect(frecency.score("🎉", now: Date(timeIntervalSince1970: 86_400 * 101 - 1)) == 1)
+    }
+
+    @Test func frecencyCanBeCleared() {
+        var frecency = Frecency()
+        frecency.record("🎉")
+        #expect(!frecency.isEmpty)
+        frecency.removeAll()
+        #expect(frecency.isEmpty)
+        #expect(frecency.scores().isEmpty)
     }
 
     @Test func frecencyDropsWeakestBeyondLimit() {

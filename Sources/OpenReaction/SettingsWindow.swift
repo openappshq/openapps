@@ -88,8 +88,17 @@ private struct SettingsView: View {
                         .multilineTextAlignment(.trailing)
                         .textSelection(.enabled)
                 }
+                HStack(alignment: .top) {
+                    Text("OpenReaction remembers which emoji you pick, on this Mac only, to rank suggestions. It never keeps what you type.")
+                        .font(Brand.body(12))
+                        .foregroundStyle(Brand.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Clear Usage History") { controller.clearUsageHistory() }
+                        .disabled(!controller.hasUsageHistory)
+                }
                 HStack {
-                    Text("MIT License. Nothing you type leaves this Mac.")
+                    Text("MIT License.")
                         .font(Brand.body(12))
                         .foregroundStyle(Brand.textSecondary)
                     Spacer()
