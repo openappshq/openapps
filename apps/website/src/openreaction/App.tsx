@@ -421,7 +421,7 @@ export default function App() {
         </div>
         <div className="footer-links">
           <span>OpenReaction / 2026</span>
-          <a href="/">OpenKlack</a>
+          <a href="/home/">All OpenApps HQ apps</a>
           <a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noreferrer">
             MIT License
           </a>

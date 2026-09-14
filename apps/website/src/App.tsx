@@ -308,7 +308,7 @@ export default function App() {
         </div>
         <div>
           <span>OpenKlack / 2026</span>
-          <a href="/openreaction/">OpenReaction</a>
+          <a href="/home/">All OpenApps HQ apps</a>
           <a href="https://github.com/openappshq/openklack" target="_blank" rel="noreferrer">
             GitHub <ArrowUpRight size={14} />
           </a>
