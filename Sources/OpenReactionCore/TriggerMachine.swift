@@ -12,11 +12,13 @@ public struct TriggerMachine: Sendable {
         public let id: Int
         /// Lowercased characters after the colon. May be empty.
         public let query: String
+        /// The characters as typed, including the colon, e.g. `:TaDa`.
+        public let typed: String
         /// The user pressed Escape while this token was active.
         public let isDismissed: Bool
 
         /// Characters currently in the host text for this token, including the colon.
-        public var typedLength: Int { query.count + 1 }
+        public var typedLength: Int { typed.count }
     }
 
     public enum Input: Equatable, Sendable {
@@ -35,10 +37,13 @@ public struct TriggerMachine: Sendable {
         public var token: Token?
         /// Set when a closing colon finished `:query:`. Holds the lowercased query.
         public var completedShortcode: String?
+        /// The completed token as typed, including both colons.
+        public var completedText: String?
 
-        public init(token: Token? = nil, completedShortcode: String? = nil) {
+        public init(token: Token? = nil, completedShortcode: String? = nil, completedText: String? = nil) {
             self.token = token
             self.completedShortcode = completedShortcode
+            self.completedText = completedText
         }
     }
 
@@ -62,13 +67,13 @@ public struct TriggerMachine: Sendable {
 
     @discardableResult
     public mutating func handle(_ input: Input) -> Output {
-        var completed: String?
+        var completed: (shortcode: String, text: String)?
         switch input {
         case .text(let text):
             for character in text {
                 completed = nil
                 if character == ":", let token = current.token, !token.query.isEmpty, !token.isDismissed {
-                    completed = token.query
+                    completed = (token.query, token.typed + ":")
                 }
                 append(character)
                 refreshToken()
@@ -97,7 +102,8 @@ public struct TriggerMachine: Sendable {
             for character in text { append(character) }
             refreshToken()
         }
-        current.completedShortcode = completed
+        current.completedShortcode = completed?.shortcode
+        current.completedText = completed?.text
         return current
     }
 
@@ -123,8 +129,8 @@ public struct TriggerMachine: Sendable {
             tokenID += 1
         }
         tokenStart = start
-        let query = String(history[(start + 1)...]).lowercased()
-        current.token = Token(id: tokenID, query: query, isDismissed: dismissedTokenID == tokenID)
+        let typed = String(history[start...])
+        current.token = Token(id: tokenID, query: String(typed.dropFirst()).lowercased(), typed: typed, isDismissed: dismissedTokenID == tokenID)
     }
 
     /// Index of the colon that starts the token ending at the caret, if any.

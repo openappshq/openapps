@@ -7,11 +7,11 @@ enum FocusInfo: Equatable, Sendable {
     /// A password field. Nothing may be observed or inserted.
     case secure
     /// Editable text whose caret bounds are known (Quartz coordinates).
-    case caret(CGRect)
+    case caret(CGRect, FocusTarget)
     /// Editable text without caret bounds; the element's frame (Quartz coordinates).
-    case element(CGRect)
+    case element(CGRect, FocusTarget)
     /// A non-secure focused element with no usable geometry.
-    case noGeometry
+    case noGeometry(FocusTarget)
     /// No focused element, or the check could not complete (timeout, no
     /// Accessibility access). Unsafe: the field might be secure.
     case unavailable
@@ -22,42 +22,96 @@ enum FocusInfo: Equatable, Sendable {
 /// Accessibility calls are synchronous IPC into the target app. A busy or hung
 /// app can stall them for seconds, so they run on a private queue with a short
 /// messaging timeout, and the main thread only ever awaits the result.
-final class CaretLocator: Sendable {
+///
+/// The element behind the last editable answer is kept so a replacement can
+/// check, right before deleting, that focus is still there and the typed
+/// token is still in front of the caret.
+final class CaretLocator: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.openappshq.openreaction.accessibility", qos: .userInitiated)
     private static let messagingTimeout: Float = 0.15
     /// Elements taller than this are text areas or web views; their frame says little about the caret.
     private static let maxElementAnchorHeight: CGFloat = 80
 
+    /// Accessed on `queue` only.
+    private var elements: [FocusTarget: AXUIElement] = [:]
+
     func focusInfo() async -> FocusInfo {
         await withCheckedContinuation { continuation in
             queue.async {
-                continuation.resume(returning: Self.queryFocusedElement())
+                continuation.resume(returning: self.queryFocusedElement())
             }
         }
     }
 
-    private static func queryFocusedElement() -> FocusInfo {
+    /// Whether `target` still has focus and, when the app exposes its text,
+    /// the characters before the caret are exactly `typed`.
+    func verify(_ target: FocusTarget, typed: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: self.verifyTarget(target, typed: typed))
+            }
+        }
+    }
+
+    // MARK: - Queue
+
+    private func queryFocusedElement() -> FocusInfo {
         let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
-        guard let focused = element(systemWide, kAXFocusedUIElementAttribute) else {
+        AXUIElementSetMessagingTimeout(systemWide, Self.messagingTimeout)
+        guard let focused = Self.element(systemWide, kAXFocusedUIElementAttribute) else {
             return .unavailable
         }
-        AXUIElementSetMessagingTimeout(focused, messagingTimeout)
+        AXUIElementSetMessagingTimeout(focused, Self.messagingTimeout)
 
         // The secure-field check must complete, not merely fail to say "secure".
-        switch secureFieldCheck(focused) {
+        switch Self.secureFieldCheck(focused) {
         case .some(true): return .secure
         case .none: return .unavailable
         case .some(false): break
         }
-        if let caret = caretBounds(focused) {
-            return .caret(caret)
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(focused, &pid) == .success else { return .unavailable }
+        let target = FocusTarget(pid: pid, element: CFHash(focused))
+        elements = [target: focused]
+
+        if let caret = Self.caretBounds(focused) {
+            return .caret(caret, target)
         }
-        if let frame = frame(focused), frame.height > 0, frame.height <= maxElementAnchorHeight {
-            return .element(frame)
+        if let frame = Self.frame(focused), frame.height > 0, frame.height <= Self.maxElementAnchorHeight {
+            return .element(frame, target)
         }
-        return .noGeometry
+        return .noGeometry(target)
     }
+
+    private func verifyTarget(_ target: FocusTarget, typed: String) -> Bool {
+        guard let remembered = elements[target] else { return false }
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, Self.messagingTimeout)
+        guard let focused = Self.element(systemWide, kAXFocusedUIElementAttribute),
+              CFEqual(focused, remembered) else { return false }
+        AXUIElementSetMessagingTimeout(focused, Self.messagingTimeout)
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(focused, &pid) == .success, pid == target.pid else { return false }
+        guard Self.secureFieldCheck(focused) == false else { return false }
+
+        // Compare the text in front of the caret when the app exposes it.
+        // Apps that do not (many web views) pass on element identity alone.
+        guard let selection = Self.value(focused, kAXSelectedTextRangeAttribute), AXValueGetType(selection) == .cfRange else {
+            return true
+        }
+        var range = CFRange()
+        guard AXValueGetValue(selection, .cfRange, &range) else { return true }
+        // A selection would be replaced by typing; refuse rather than guess.
+        guard range.length == 0 else { return false }
+        let count = typed.utf16.count
+        guard range.location >= count else { return false }
+        guard let before = Self.string(focused, CFRange(location: range.location - count, length: count)) else {
+            return true
+        }
+        return before == typed
+    }
+
+    // MARK: - Attribute helpers
 
     /// True/false when the element answered, nil when the question could not
     /// be delivered (timeout, dead app) and the field might be secure.
@@ -93,17 +147,27 @@ final class CaretLocator: Sendable {
         return nil
     }
 
-    private static func bounds(_ element: AXUIElement, _ range: CFRange) -> CGRect? {
+    private static func parameterized(_ element: AXUIElement, _ attribute: String, _ range: CFRange) -> CFTypeRef? {
         var range = range
         guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
         var result: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(
-            element, kAXBoundsForRangeParameterizedAttribute as CFString, parameter, &result
-        ) == .success, let result, CFGetTypeID(result) == AXValueGetTypeID() else { return nil }
+        guard AXUIElementCopyParameterizedAttributeValue(element, attribute as CFString, parameter, &result) == .success else {
+            return nil
+        }
+        return result
+    }
+
+    private static func bounds(_ element: AXUIElement, _ range: CFRange) -> CGRect? {
+        guard let result = parameterized(element, kAXBoundsForRangeParameterizedAttribute, range),
+              CFGetTypeID(result) == AXValueGetTypeID() else { return nil }
         let axValue = result as! AXValue
         var rect = CGRect.zero
         guard AXValueGetType(axValue) == .cgRect, AXValueGetValue(axValue, .cgRect, &rect) else { return nil }
         return rect
+    }
+
+    private static func string(_ element: AXUIElement, _ range: CFRange) -> String? {
+        parameterized(element, kAXStringForRangeParameterizedAttribute, range) as? String
     }
 
     private static func frame(_ element: AXUIElement) -> CGRect? {
@@ -115,8 +179,6 @@ final class CaretLocator: Sendable {
               AXValueGetValue(sizeValue, .cgSize, &size) else { return nil }
         return CGRect(origin: position, size: size)
     }
-
-    // MARK: - Attribute helpers
 
     private static func copy(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -132,9 +194,5 @@ final class CaretLocator: Sendable {
     private static func value(_ element: AXUIElement, _ attribute: String) -> AXValue? {
         guard let value = copy(element, attribute), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         return (value as! AXValue)
-    }
-
-    private static func string(_ element: AXUIElement, _ attribute: String) -> String? {
-        copy(element, attribute) as? String
     }
 }

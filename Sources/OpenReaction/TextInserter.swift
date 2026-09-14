@@ -12,15 +12,25 @@ import Foundation
 /// typing path, so undo, autocorrect and field formatters behave as if the
 /// user typed the emoji.
 ///
+/// A replacement is a transaction against the physical event stream: the tap
+/// holds keyboard events from `beginHold` until a flush marker posted after
+/// the last synthetic event reaches it, then replays them. Typing during the
+/// replacement therefore lands after the emoji, never between the deletes.
+///
 /// Media payloads (GIFs, images) cannot be typed and will need a pasteboard
 /// path with explicit clipboard save and restore.
 enum TextInserter {
-    private static let queue = DispatchQueue(label: "com.openappshq.openreaction.insertion", qos: .userInteractive)
+    /// Also used by the tap to replay held events, so posts stay in order.
+    static let queue = DispatchQueue(label: "com.openappshq.openreaction.insertion", qos: .userInteractive)
     /// CGEventKeyboardSetUnicodeString accepts at most 20 UTF-16 units per event.
     private static let maxUnitsPerEvent = 20
 
-    static func replace(deleting count: Int, with text: String) {
+    /// Deletes `count` characters and types `text`, then posts a flush so the
+    /// tap can replay keys typed meanwhile. The caller must have called
+    /// `tap.beginHold()` first.
+    static func replace(deleting count: Int, with text: String, completion: @escaping @Sendable () -> Void) {
         queue.async {
+            defer { completion() }
             guard let source = makeSource() else { return }
             for _ in 0..<max(0, count) {
                 postKey(CGKeyCode(kVK_Delete), source: source)
@@ -28,7 +38,17 @@ enum TextInserter {
             for chunk in utf16Chunks(text) {
                 postUnicode(chunk, source: source)
             }
+            postFlush()
         }
+    }
+
+    /// Ends a hold without inserting anything.
+    static func postFlush() {
+        guard let source = makeSource(),
+              let marker = CGEvent(keyboardEventSource: source, virtualKey: 0xFF, keyDown: false) else { return }
+        marker.flags = []
+        marker.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.flush)
+        marker.post(tap: .cgSessionEventTap)
     }
 
     /// Re-sends a key that the tap swallowed but the picker could no longer use.
@@ -43,7 +63,7 @@ enum TextInserter {
         // A private state source does not inherit modifier keys the user is
         // still holding, so a held Shift cannot turn Delete into something else.
         let source = CGEventSource(stateID: .privateState)
-        source?.userData = KeyboardTap.syntheticEventTag
+        source?.userData = KeyboardTap.Tag.passthrough
         return source
     }
 
@@ -51,7 +71,7 @@ enum TextInserter {
         for keyDown in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown) else { continue }
             event.flags = []
-            event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.syntheticEventTag)
+            event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.passthrough)
             event.post(tap: .cgSessionEventTap)
         }
     }
@@ -60,7 +80,7 @@ enum TextInserter {
         for keyDown in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown) else { continue }
             event.flags = []
-            event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.syntheticEventTag)
+            event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.passthrough)
             units.withUnsafeBufferPointer { buffer in
                 event.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
             }

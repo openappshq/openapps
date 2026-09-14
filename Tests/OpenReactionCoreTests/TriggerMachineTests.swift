@@ -21,8 +21,17 @@ struct TriggerMachineTests {
         #expect(machine.current.token?.typedLength == 5)
     }
 
-    @Test func queryIsLowercased() {
-        #expect(machine(typing: ":TaDa").current.token?.query == "tada")
+    @Test func queryIsLowercasedButTypedTextIsKept() {
+        let token = machine(typing: ":TaDa").current.token
+        #expect(token?.query == "tada")
+        #expect(token?.typed == ":TaDa")
+        #expect(token?.typedLength == 5)
+    }
+
+    @Test func completionReportsTheTypedText() {
+        let output = machine(typing: "x :TaDa:").current
+        #expect(output.completedShortcode == "tada")
+        #expect(output.completedText == ":TaDa:")
     }
 
     @Test(arguments: ["hello :smi", "(:smi", "\":smi", "🎉:smi", "line\n:smi", "tab\t:smi"])
