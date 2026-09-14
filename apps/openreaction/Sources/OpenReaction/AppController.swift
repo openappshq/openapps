@@ -227,24 +227,40 @@ final class AppController {
     @discardableResult
     private func stopTapDraining() async -> InputGate.ShutdownOutcome {
         guard let tap, let runner, tap.isRunning else { return .delivered }
-        focusMonitor.stop()
+        // Focus tracking keeps running: the gate ignores it for capture now,
+        // but a focus change still stops a delayed replay from going astray.
         runner.beginShutdown()
         let outcome = await runner.awaitShutdown(
             acknowledgementBound: Self.acknowledgementBound, replayBound: Self.replayBound
         ) {
             DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    Self.log.error("Held typing is still being restored; the tap stays installed until it is.")
-                    self.inputNotice = "Still restoring typing that was held back… If this never finishes, force-quit OpenReaction; the held keystrokes are then lost."
-                }
+                MainActor.assumeIsolated { self.reportStuckInput() }
             }
         }
+        stuckPanel?.close()
+        stuckPanel = nil
         if outcome != .delivered {
             Self.log.error("Tap stopped without confirmed delivery of held input: \(String(describing: outcome), privacy: .public)")
         }
         tap.stop() // reports `tapStopped` to the gate; anything still held goes out as a last resort
+        focusMonitor.stop()
         if isTapRunning { isTapRunning = false }
         return outcome
+    }
+
+    @ObservationIgnored private var stuckPanel: StuckInputPanel?
+
+    /// The replay bound passed: say so where it can be seen and used —
+    /// input aimed at our own windows is never held — and offer the choice
+    /// between waiting and discarding.
+    private func reportStuckInput() {
+        Self.log.error("Held typing is still being restored; the tap stays installed until it is.")
+        inputNotice = "Still restoring typing that was held back…"
+        let panel = StuckInputPanel(keepWaiting: {}, discard: { [weak self] in
+            self?.runner?.discardHeldInput()
+        })
+        stuckPanel = panel
+        panel.show()
     }
 
     // MARK: - Tap lifecycle

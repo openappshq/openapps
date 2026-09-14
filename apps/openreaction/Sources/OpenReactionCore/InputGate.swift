@@ -38,14 +38,21 @@ public struct KeyEvent: Equatable, Sendable {
     public let secureInput: Bool
     /// Identifies the app layer's copy of the event, for replay.
     public let id: Int
+    /// The event is aimed at OpenReaction's own windows. While shutting
+    /// down such events are never held, so the app's own UI stays usable.
+    public let targetsOwnApp: Bool
 
-    public init(keyCode: UInt16, isDown: Bool, isRepeat: Bool = false, modifiers: KeyModifiers = [], secureInput: Bool = false, id: Int) {
+    public init(
+        keyCode: UInt16, isDown: Bool, isRepeat: Bool = false, modifiers: KeyModifiers = [], secureInput: Bool = false,
+        id: Int, targetsOwnApp: Bool = false
+    ) {
         self.keyCode = keyCode
         self.isDown = isDown
         self.isRepeat = isRepeat
         self.modifiers = modifiers
         self.secureInput = secureInput
         self.id = id
+        self.targetsOwnApp = targetsOwnApp
     }
 }
 
@@ -101,6 +108,11 @@ public enum GateEffect: Equatable, Sendable {
     case postFlush(transaction: Int)
     /// Post the app layer's copies of these held events, in order, as passthrough.
     case replay(eventIDs: [Int])
+    /// A delayed (best-effort) replay whose destination was just confirmed:
+    /// post like `replay`, but only if the focus has not changed by the time
+    /// the posting queue runs it; otherwise drop the events and report
+    /// `inputLost` from the app layer.
+    case replayGuarded(eventIDs: [Int], transaction: Int)
     /// Release the app layer's copies of these held events.
     case drop(eventIDs: [Int])
     /// Call `replayExecuted` once every replay posted before this point has
@@ -352,6 +364,10 @@ public struct InputGate: Sendable {
     ///   off. Outside a token the result is used for one check and dropped.
     public mutating func key(_ event: KeyEvent, text: () -> String) -> KeyResult {
         if let owned = ownershipDecision(event) { return owned }
+        if isShuttingDown, event.targetsOwnApp {
+            // The app's own windows stay usable while input to others waits.
+            return KeyResult(decision: .pass, effects: [])
+        }
 
         if var current = transaction {
             // Everything physical is held for the whole transaction so nothing
@@ -482,7 +498,10 @@ public struct InputGate: Sendable {
     /// A mouse button event. Clicks inside the picker are its own. After a
     /// replacement is committed, mouse events are held until its flush is
     /// acknowledged so they cannot land between our posted events.
-    public mutating func mouse(_ kind: MouseEventKind, id: Int, onPicker: Bool) -> KeyResult {
+    public mutating func mouse(_ kind: MouseEventKind, id: Int, onPicker: Bool, targetsOwnApp: Bool = false) -> KeyResult {
+        if isShuttingDown, targetsOwnApp {
+            return KeyResult(decision: .pass, effects: [])
+        }
         if var current = transaction, current.phase.holdsMouse {
             current.hold(.mouse(id: id, kind: kind))
             transaction = current
@@ -761,7 +780,7 @@ public struct InputGate: Sendable {
         var effects: [GateEffect] = []
         if matches {
             let ids = Self.replayAllHeld(&current)
-            if !ids.isEmpty { effects.append(.replay(eventIDs: ids)) }
+            if !ids.isEmpty { effects.append(.replayGuarded(eventIDs: ids, transaction: id)) }
         } else {
             let ids = current.held.map(\.id)
             current.held = []
@@ -770,6 +789,20 @@ public struct InputGate: Sendable {
         }
         transaction = current
         return effects + [.confirmReplay(transaction: id)]
+    }
+
+    /// The user chose to discard what is held rather than keep waiting for
+    /// a replay that does not run: everything held is dropped, the user is
+    /// told, and the shutdown ends `.failed`.
+    public mutating func discardHeld() -> [GateEffect] {
+        guard isShuttingDown, let current = transaction else { return [] }
+        transaction = nil
+        shutdownOutcome = .failed
+        let ids = current.held.map(\.id)
+        var effects: [GateEffect] = []
+        if !ids.isEmpty { effects += [.drop(eventIDs: ids), .inputLost(eventCount: ids.count)] }
+        effects.append(.transactionEnded(transaction: current.id, recordUse: false))
+        return effects + forgetTyping()
     }
 
     /// Shutting down and the stream cannot acknowledge: replay what is held

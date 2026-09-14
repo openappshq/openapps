@@ -41,6 +41,12 @@ final class GateRunner: @unchecked Sendable {
         var nextEventID = 0
         /// Picker frame in Quartz coordinates while it is visible.
         var pickerFrame = CGRect.null
+        /// Bumped on every focus change the app layer reports; a delayed
+        /// replay is posted only if it has not moved since its destination
+        /// was checked.
+        var focusEpoch = 0
+        /// The epoch when each pending destination check was asked.
+        var checkEpochs: [Int: Int] = [:]
         /// Shutdowns waiting for their outcome, by waiter token.
         var shutdownWaiters: [Int: CheckedContinuation<InputGate.ShutdownOutcome?, Never>] = [:]
         var nextWaiterToken = 0
@@ -60,7 +66,7 @@ final class GateRunner: @unchecked Sendable {
 
     func key(
         keyCode: UInt16, isDown: Bool, isRepeat: Bool, modifiers: KeyModifiers, secureInput: Bool,
-        event: CGEvent, text: () -> String
+        event: CGEvent, targetsOwnApp: Bool = false, text: () -> String
     ) -> InputGate.KeyDecision {
         let copy = HeldCopy(event: event.copy() ?? event)
         return withoutActuallyEscaping(text) { text in
@@ -68,7 +74,10 @@ final class GateRunner: @unchecked Sendable {
             return state.withLock { state in
                 state.nextEventID += 1
                 let id = state.nextEventID
-                let keyEvent = KeyEvent(keyCode: keyCode, isDown: isDown, isRepeat: isRepeat, modifiers: modifiers, secureInput: secureInput, id: id)
+                let keyEvent = KeyEvent(
+                    keyCode: keyCode, isDown: isDown, isRepeat: isRepeat, modifiers: modifiers, secureInput: secureInput,
+                    id: id, targetsOwnApp: targetsOwnApp
+                )
                 let result = state.gate.key(keyEvent, text: decoder.decode)
                 if result.decision == .hold {
                     state.held[id] = copy
@@ -79,13 +88,13 @@ final class GateRunner: @unchecked Sendable {
         }
     }
 
-    func mouse(_ kind: MouseEventKind, at location: CGPoint, event: CGEvent) -> InputGate.KeyDecision {
+    func mouse(_ kind: MouseEventKind, at location: CGPoint, event: CGEvent, targetsOwnApp: Bool = false) -> InputGate.KeyDecision {
         let copy = HeldCopy(event: event.copy() ?? event)
         return state.withLock { state in
             state.nextEventID += 1
             let id = state.nextEventID
             let onPicker = state.gate.isPickerVisible && state.pickerFrame.contains(location)
-            let result = state.gate.mouse(kind, id: id, onPicker: onPicker)
+            let result = state.gate.mouse(kind, id: id, onPicker: onPicker, targetsOwnApp: targetsOwnApp)
             if result.decision == .hold {
                 state.held[id] = copy
             }
@@ -142,9 +151,27 @@ final class GateRunner: @unchecked Sendable {
         return await waitForShutdown() ?? .failed
     }
 
-    /// Answer to `MainEffect.checkDestination`.
+    /// Answer to `MainEffect.checkDestination`. A focus change since the
+    /// check was asked makes the answer stale: it counts as "changed".
     func destinationChecked(transaction id: Int, matches: Bool) {
-        state.withLock { state in dispatch(state.gate.destinationChecked(transaction: id, matches: matches), state: &state) }
+        state.withLock { state in
+            let stale = state.checkEpochs.removeValue(forKey: id) != state.focusEpoch
+            dispatch(state.gate.destinationChecked(transaction: id, matches: matches && !stale), state: &state)
+        }
+    }
+
+    /// The user chose to drop what is held instead of waiting for a replay
+    /// that does not run.
+    func discardHeldInput() {
+        state.withLock { state in dispatch(state.gate.discardHeld(), state: &state) }
+    }
+
+    private var focusEpoch: Int {
+        state.withLock { $0.focusEpoch }
+    }
+
+    private func inputLost(_ count: Int) {
+        mainHandler([.inputLost(eventCount: count)])
     }
 
     /// The outcome of a shutdown begun with `beginShutdown`, once the gate
@@ -206,7 +233,10 @@ final class GateRunner: @unchecked Sendable {
     // MARK: - Main thread inputs
 
     func focusMayHaveMoved() {
-        state.withLock { state in dispatch(state.gate.focusMayHaveMoved(), state: &state) }
+        state.withLock { state in
+            state.focusEpoch += 1
+            dispatch(state.gate.focusMayHaveMoved(), state: &state)
+        }
     }
 
     func probeResult(generation: Int, tokenID: Int?, _ result: FocusResult) {
@@ -226,7 +256,10 @@ final class GateRunner: @unchecked Sendable {
     }
 
     func focusTracking(active: Bool) {
-        state.withLock { state in dispatch(state.gate.focusTracking(active: active), state: &state) }
+        state.withLock { state in
+            state.focusEpoch += 1
+            dispatch(state.gate.focusTracking(active: active), state: &state)
+        }
     }
 
     func frontmostApp(excluded: Bool) {
@@ -271,6 +304,7 @@ final class GateRunner: @unchecked Sendable {
             case .transactionEnded(let transaction, let recordUse):
                 main.append(.transactionEnded(transaction: transaction, recordUse: recordUse))
             case .checkDestination(let transaction, let target):
+                state.checkEpochs[transaction] = state.focusEpoch
                 main.append(.checkDestination(transaction: transaction, target: target))
             case .inputLost(let eventCount):
                 main.append(.inputLost(eventCount: eventCount))
@@ -286,10 +320,20 @@ final class GateRunner: @unchecked Sendable {
                 }
             case .replay(let eventIDs):
                 let copies = eventIDs.compactMap { state.held.removeValue(forKey: $0) }
-                poster.replay(copies.map(\.event), completion: nil)
+                poster.replay(copies.map(\.event), guard: nil, completion: nil)
+            case .replayGuarded(let eventIDs, _):
+                // Checked again when the queue gets to it: the focus must not
+                // have moved since the destination was confirmed.
+                let copies = eventIDs.compactMap { state.held.removeValue(forKey: $0) }
+                let epoch = state.focusEpoch
+                let replayGuard = ReplayGuard(
+                    shouldPost: { [weak self] in self?.focusEpoch == epoch },
+                    dropped: { [weak self] count in self?.inputLost(count) }
+                )
+                poster.replay(copies.map(\.event), guard: replayGuard, completion: nil)
             case .confirmReplay(let transaction):
                 // Queued behind every replay above: runs once they were posted.
-                poster.replay([]) { [weak self] in
+                poster.replay([], guard: nil) { [weak self] in
                     self?.replayExecuted(transaction: transaction)
                 }
             case .drop(let eventIDs):

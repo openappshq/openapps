@@ -27,9 +27,17 @@ protocol EventPoster: Sendable {
     /// Posts the flush marker; `onFailure` if it could not be posted.
     func postFlush(transaction: Int, onFailure: @escaping @Sendable () -> Void)
     /// Re-posts held physical events in order; `completion` runs once they
-    /// have been posted (on the posting queue, after them).
-    func replay(_ events: [CGEvent], completion: (@Sendable () -> Void)?)
+    /// have been posted (on the posting queue, after them). With a `guard`,
+    /// `shouldPost` is asked on the queue right before posting: if it says
+    /// no, nothing is posted and `dropped` gets the count instead.
+    func replay(_ events: [CGEvent], guard: ReplayGuard?, completion: (@Sendable () -> Void)?)
     func repost(keyCode: UInt16)
+}
+
+/// Decides at execution time whether a delayed replay may still be posted.
+struct ReplayGuard: Sendable {
+    let shouldPost: @Sendable () -> Bool
+    let dropped: @Sendable (Int) -> Void
 }
 
 /// The app's poster: `TextInserter`.
@@ -42,8 +50,8 @@ struct LiveEventPoster: EventPoster {
         TextInserter.postFlush(transaction: transaction, onFailure: onFailure)
     }
 
-    func replay(_ events: [CGEvent], completion: (@Sendable () -> Void)?) {
-        TextInserter.replay(events, completion: completion)
+    func replay(_ events: [CGEvent], guard: ReplayGuard?, completion: (@Sendable () -> Void)?) {
+        TextInserter.replay(events, guard: `guard`, completion: completion)
     }
 
     func repost(keyCode: UInt16) {
@@ -84,13 +92,19 @@ enum TextInserter {
     }
 
     /// Re-posts physical events the tap held, tagged so it passes them
-    /// through; `completion` runs on the queue right after them.
-    static func replay(_ events: [CGEvent], completion: (@Sendable () -> Void)? = nil) {
+    /// through; `completion` runs on the queue right after them. A guard is
+    /// consulted right before posting, so a focus change after the replay
+    /// was queued still stops it.
+    static func replay(_ events: [CGEvent], guard: ReplayGuard? = nil, completion: (@Sendable () -> Void)? = nil) {
         let boxed = events.map(EventBox.init)
         queue.async {
-            for box in boxed {
-                box.event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
-                box.event.post(tap: .cgSessionEventTap)
+            if let `guard`, !boxed.isEmpty, !`guard`.shouldPost() {
+                `guard`.dropped(boxed.count)
+            } else {
+                for box in boxed {
+                    box.event.setIntegerValueField(.eventSourceUserData, value: KeyboardTap.Tag.userData(KeyboardTap.Tag.passthrough))
+                    box.event.post(tap: .cgSessionEventTap)
+                }
             }
             completion?()
         }

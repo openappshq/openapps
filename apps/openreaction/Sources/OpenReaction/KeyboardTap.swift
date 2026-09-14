@@ -43,6 +43,9 @@ final class KeyboardTap: @unchecked Sendable {
 
     var isRunning: Bool { machPort != nil }
 
+    /// Events the window server aims at this process (our own windows).
+    static let ownProcessID = ProcessInfo.processInfo.processIdentifier
+
     /// Installs the tap. Returns false when macOS refuses, typically because
     /// Accessibility or Input Monitoring access is missing or not yet applied.
     func start() -> Bool {
@@ -120,8 +123,9 @@ final class KeyboardTap: @unchecked Sendable {
         if tag == Tag.passthrough {
             return pass
         }
+        let targetsOwnApp = event.getIntegerValueField(.eventTargetUnixProcessID) == Int64(Self.ownProcessID)
         if let mouseKind {
-            return runner.mouse(mouseKind, at: event.location, event: event) == .pass ? pass : nil
+            return runner.mouse(mouseKind, at: event.location, event: event, targetsOwnApp: targetsOwnApp) == .pass ? pass : nil
         }
         if tag == Tag.flush {
             runner.flushAck(transaction: id)
@@ -142,6 +146,7 @@ final class KeyboardTap: @unchecked Sendable {
             modifiers: modifiers,
             secureInput: isSecureInputEnabled(),
             event: event,
+            targetsOwnApp: targetsOwnApp,
             text: { Self.typedText(event) }
         )
         switch decision {

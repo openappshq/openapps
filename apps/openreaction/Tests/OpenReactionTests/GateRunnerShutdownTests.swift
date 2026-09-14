@@ -13,12 +13,16 @@ struct GateRunnerShutdownTests {
     /// work until `runQueue`.
     final class FakePoster: EventPoster, @unchecked Sendable {
         enum Op: Equatable { case flush(Int), replay(Int), confirm, replacement(Int) }
+        /// What happened when a replay actually ran.
+        enum Run: Equatable { case posted(Int), dropped(Int) }
         private let lock = NSLock()
         private var _ops: [Op] = []
+        private var _runs: [Run] = []
         private var queue: [@Sendable () -> Void] = []
         var failsFlushes = false
 
         var ops: [Op] { lock.withLock { _ops } }
+        var runs: [Run] { lock.withLock { _runs } }
 
         private func enqueue(_ op: Op, _ work: @escaping @Sendable () -> Void) {
             lock.withLock {
@@ -51,8 +55,16 @@ struct GateRunnerShutdownTests {
             }
         }
 
-        func replay(_ events: [CGEvent], completion: (@Sendable () -> Void)?) {
-            enqueue(events.isEmpty && completion != nil ? .confirm : .replay(events.count)) { completion?() }
+        func replay(_ events: [CGEvent], guard: ReplayGuard?, completion: (@Sendable () -> Void)?) {
+            let count = events.count
+            enqueue(count == 0 && completion != nil ? .confirm : .replay(count)) { [self] in
+                if count > 0 {
+                    let posted = `guard`?.shouldPost() ?? true
+                    lock.withLock { _runs.append(posted ? .posted(count) : .dropped(count)) }
+                    if !posted { `guard`?.dropped(count) }
+                }
+                completion?()
+            }
         }
 
         func repost(keyCode: UInt16) {}
@@ -249,6 +261,76 @@ struct GateRunnerShutdownTests {
         fixture.poster.runQueue()
         #expect(await waiter.value == .interrupted)
         #expect(fixture.runner.isIdle)
+    }
+
+    // MARK: G4 — the destination is checked again when the replay runs
+
+    @Test func aFocusChangeAfterApprovalDropsTheQueuedReplayWhenItRuns() async {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        let waiter = Task { await fixture.runner.waitForShutdown() }
+        await Task.yield()
+        fixture.runner.tapInterrupted()
+        fixture.answerDestination() // approved: replay queued
+        #expect(fixture.poster.ops == [.flush(1), .replay(1), .confirm])
+        // Focus moves before the queue gets to it (the focus monitor keeps
+        // reporting during a shutdown).
+        fixture.runner.focusMayHaveMoved()
+        fixture.poster.runQueue()
+        #expect(fixture.poster.runs == [.dropped(1)])
+        #expect(fixture.main.lostInput == [1])
+        #expect(await waiter.value == .interrupted)
+        // Without a focus change the same replay is posted.
+        let steady = Fixture()
+        steady.holdColonAndBeginShutdown()
+        steady.runner.tapInterrupted()
+        steady.answerDestination()
+        steady.poster.runQueue()
+        #expect(steady.poster.runs == [.posted(1)])
+        #expect(steady.main.lostInput.isEmpty)
+    }
+
+    @Test func aFocusChangeWhileTheDestinationIsBeingLookedUpCountsAsChanged() async {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        fixture.runner.tapInterrupted()
+        #expect(fixture.main.destinationChecks.count == 1)
+        fixture.runner.focusMayHaveMoved() // between the question and the answer
+        fixture.answerDestination() // the lookup still says the original field
+        #expect(fixture.poster.ops == [.flush(1), .confirm]) // nothing replayed
+        #expect(fixture.main.lostInput == [1])
+    }
+
+    // MARK: G5 — own windows stay usable; discarding is the user's choice
+
+    @Test func inputAimedAtOurOwnWindowsPassesWhileShuttingDown() {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        fixture.runner.tapInterrupted()
+        let click = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: .zero, mouseButton: .left)!
+        #expect(fixture.runner.mouse(.down, at: .zero, event: click, targetsOwnApp: true) == .pass)
+        #expect(fixture.runner.mouse(.down, at: .zero, event: click, targetsOwnApp: false) == .hold)
+        let key = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(KeyCode.return), keyDown: true)!
+        #expect(fixture.runner.key(keyCode: KeyCode.return, isDown: true, isRepeat: false, modifiers: [], secureInput: false, event: key, targetsOwnApp: true) { "" } == .pass)
+        #expect(fixture.key(KeyCode.return) == .hold)
+    }
+
+    @Test func discardingHeldInputEndsAStuckStopWithoutTheQueue() async {
+        let fixture = Fixture()
+        fixture.holdColonAndBeginShutdown()
+        let stuck = Stuck()
+        let stop = Task {
+            await fixture.runner.awaitShutdown(acknowledgementBound: .milliseconds(20), replayBound: .milliseconds(40)) { stuck.fire() }
+        }
+        while fixture.main.destinationChecks.isEmpty { await Task.yield() }
+        fixture.answerDestination()
+        while !stuck.fired { await Task.yield() }
+        #expect(fixture.key(KeyCode.delete) == .hold)
+        // The user clicks "Discard held typing".
+        fixture.runner.discardHeldInput()
+        #expect(await stop.value == .failed)
+        #expect(fixture.runner.isIdle)
+        #expect(fixture.main.lostInput == [1]) // the Backspace held after the replay was queued
     }
 
     @Test func anAcknowledgementThatArrivesInTimeIsDelivered() async {

@@ -196,8 +196,19 @@ struct InputGateTests {
         effects.filter { if case .post = $0 { return true } else { return false } }
     }
 
+    /// Plain and guarded replays alike (a guarded one is a delayed replay
+    /// whose destination was confirmed).
     private func replays(_ effects: [Effect]) -> [[Int]] {
-        effects.compactMap { if case .replay(let ids) = $0 { return ids } else { return nil } }
+        effects.compactMap {
+            switch $0 {
+            case .replay(let ids), .replayGuarded(let ids, _): ids
+            default: nil
+            }
+        }
+    }
+
+    private func guardedReplays(_ effects: [Effect]) -> [[Int]] {
+        effects.compactMap { if case .replayGuarded(let ids, _) = $0 { return ids } else { return nil } }
     }
 
     private func ended(_ effects: [Effect], _ id: Int, recorded: Bool) -> Bool {
@@ -1199,6 +1210,68 @@ struct InputGateTests {
         #expect(!effects.contains(.replay(eventIDs: [x])))
         harness.run(harness.gate.replayExecuted(transaction: id))
         #expect(harness.gate.shutdownOutcome == .failed)
+    }
+
+    @Test func aConfirmedDelayedReplayIsGuardedSoTheAppLayerChecksAgainWhenItRuns() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        harness.run(harness.gate.tapInterrupted())
+        let effects = harness.answerDestination(matches: true)
+        #expect(guardedReplays(effects) == [Array(1...6)])
+        #expect(effects.contains(.replayGuarded(eventIDs: Array(1...6), transaction: 1)))
+        // Ordinary acknowledged drains are not guarded: the tap acknowledges them.
+        var acked = makeHarness()
+        acked.type(":ta")
+        acked.run(acked.gate.beginShutdown())
+        let drain = acked.ack()
+        #expect(guardedReplays(drain).isEmpty)
+        #expect(replays(drain) == [Array(1...6)])
+    }
+
+    // MARK: G5 — the app's own windows stay usable; the user can discard
+
+    @Test func inputAimedAtOurOwnWindowsIsNeverHeldWhileShuttingDown() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        harness.run(harness.gate.tapInterrupted())
+        #expect(harness.gate.isHolding)
+        // A click and a key press on the stuck-input panel pass straight through.
+        harness.nextID += 1
+        let click = harness.gate.mouse(.down, id: harness.nextID, onPicker: false, targetsOwnApp: true)
+        #expect(click.decision == .pass)
+        harness.nextID += 1
+        let own = KeyEvent(keyCode: KeyCode.return, isDown: true, id: harness.nextID, targetsOwnApp: true)
+        #expect(harness.gate.key(own) { "" }.decision == .pass)
+        // Everything aimed elsewhere still waits behind the replay.
+        #expect(harness.mouse(.down).decision == .hold)
+        #expect(harness.press(KeyCode.return).decision == .hold)
+        // Outside a shutdown our own windows go through the gate like any other
+        // (onboarding's practice field relies on it).
+        var normal = makeHarness()
+        normal.nextID += 1
+        let colon = KeyEvent(keyCode: 41, isDown: true, modifiers: .shift, id: normal.nextID, targetsOwnApp: true)
+        #expect(normal.gate.key(colon) { ":" }.decision == .hold)
+    }
+
+    @Test func discardingHeldInputEndsTheShutdownFailedAndTellsTheUser() {
+        var harness = makeHarness()
+        harness.type(":ta")
+        harness.run(harness.gate.beginShutdown())
+        harness.run(harness.gate.tapInterrupted())
+        harness.answerDestination(matches: true) // replay queued but never run
+        harness.press(KeyCode.delete)
+        let backspace = harness.nextID
+        // Outside a shutdown discarding means nothing.
+        var normal = harnessWithToken()
+        #expect(normal.run(normal.gate.discardHeld()).isEmpty)
+        // The user's choice: drop what is still held, stop now.
+        let effects = harness.run(harness.gate.discardHeld())
+        #expect(effects == [.drop(eventIDs: [backspace]), .inputLost(eventCount: 1), .transactionEnded(transaction: 1, recordUse: false), .dismissPicker])
+        #expect(!harness.gate.isHolding)
+        #expect(harness.gate.shutdownOutcome == .failed)
+        #expect(harness.run(harness.gate.replayExecuted(transaction: 1)).isEmpty) // the late confirmation is moot
     }
 
     @Test func aDelayedReplayWithNoKnownOriginIsDropped() {
