@@ -499,10 +499,16 @@ impl Controller {
         Ok(self.snapshot())
     }
 
+    /// Applies a licensing gate decision. Decisions carry a revision; an older one arriving late
+    /// is ignored, atomically with the check, so a stale unlock can never follow a block.
     #[cfg(feature = "licensing")]
-    pub fn set_license_blocked(&self, blocked: bool) {
+    pub fn set_license_blocked(&self, revision: u64, blocked: bool) {
         let changed = {
             let mut runtime = self.runtime.lock().unwrap();
+            if revision <= runtime.license_gate_revision {
+                return;
+            }
+            runtime.license_gate_revision = revision;
             std::mem::replace(&mut runtime.license_blocked, blocked) != blocked
         };
         if changed {

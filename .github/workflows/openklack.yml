@@ -42,8 +42,8 @@ jobs:
           OPENKLACK_LICENSE_ENV: test
           OPENKLACK_DODO_PAID_PRODUCT_ID: pdt_placeholder_openklack
           OPENKLACK_DODO_TRIAL_PRODUCT_ID: pdt_placeholder_openklack_trial
-          OPENKLACK_BUY_URL: https://openapps.space/OpenKlack/
-          OPENKLACK_TRIAL_URL: https://openapps.space/OpenKlack/
+          OPENKLACK_BUY_URL: https://checkout.dodopayments.com/buy/pdt_placeholder_openklack?quantity=1&redirect_url=https://openapps.space/OpenKlack/thanks/
+          OPENKLACK_TRIAL_URL: https://checkout.dodopayments.com/buy/pdt_placeholder_openklack_trial?quantity=1&redirect_url=https://openapps.space/OpenKlack/thanks/trial/
         run: |
           cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features licensing
           cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features licensing -- -D warnings

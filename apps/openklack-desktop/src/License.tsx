@@ -12,12 +12,14 @@ export type LicenseView = {
   daysLeft?: number;
   daysOffline?: number;
   coreFeature: boolean;
+  clockChanged: boolean;
   trialUsed: boolean;
   graceWarning: boolean;
   checking: boolean;
   lastSuccessAt: number | null;
   lastError: string | null;
   pendingKey: string | null;
+  pendingTrial: boolean;
   buyUrl: string;
   trialUrl: string;
   supportUrl: string;
@@ -67,6 +69,8 @@ export function License({
   // A deep link only pre-fills the key; the user confirms before anything is sent.
   const pendingKey = view?.pendingKey ?? null;
   const key = typed ?? pendingKey ?? "";
+  // The trial thanks page marks its key, so a second trial is refused without calling Dodo.
+  const trialKey = expectTrial || (!!pendingKey && key === pendingKey && !!view?.pendingTrial);
 
   async function run(
     task: () => Promise<LicenseView | void>,
@@ -127,12 +131,16 @@ export function License({
   const status: Record<LicenseView["state"], string> = {
     unlicensed: "Not licensed on this Mac.",
     trial: `Trial: about ${view.daysLeft ?? 0} ${view.daysLeft === 1 ? "day" : "days"} left`,
-    trialEnded: "Your trial has ended.",
+    trialEnded: view.clockChanged
+      ? "Clock changed — connect to the internet to verify your trial."
+      : "Your trial has ended.",
     licensed: "Licensed",
     grace: view.graceWarning
       ? `Connect to the internet within ${view.daysLeft ?? 0} ${view.daysLeft === 1 ? "day" : "days"} to keep using OpenKlack.`
       : "Licensed",
-    checkRequired: "Connect to the internet to verify your license.",
+    checkRequired: view.clockChanged
+      ? "Your Mac’s clock changed. Connect to the internet to verify your license."
+      : "Connect to the internet to verify your license.",
     revoked: "This license is no longer active on this Mac.",
   };
   const licensedLook = view.state === "licensed" || (view.state === "grace" && !view.graceWarning);
@@ -213,7 +221,7 @@ export function License({
               async () => {
                 const next = await invoke<LicenseView>("activate_license", {
                   key,
-                  expectTrial: expectTrial && view.state === "unlicensed",
+                  expectTrial: trialKey && view.state === "unlicensed",
                 });
                 setTyped(null);
                 setExpectTrial(false);
@@ -276,7 +284,20 @@ export function License({
         </div>
       )}
       {(view.state === "trial" || view.state === "trialEnded" || view.state === "revoked") && (
-        <div className="actions">{remove}</div>
+        <div className="actions">
+          {view.state === "trialEnded" && view.clockChanged && (
+            <Button
+              variant="secondary"
+              isDisabled={busy}
+              onPress={() =>
+                void run(() => invoke<LicenseView>("check_license_now"), "Trial verified.")
+              }
+            >
+              {view.checking ? "Checking…" : "Try again"}
+            </Button>
+          )}
+          {remove}
+        </div>
       )}
       {view.state === "checkRequired" && (
         <div className="actions">

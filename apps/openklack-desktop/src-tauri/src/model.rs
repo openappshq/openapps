@@ -353,6 +353,9 @@ pub struct Runtime {
     pub output_sample_rate: u32,
     /// Official builds without a valid license stop keyboard sounds and nothing else.
     pub license_blocked: bool,
+    /// The revision of the gate decision in effect; older decisions are ignored.
+    #[serde(skip)]
+    pub license_gate_revision: u64,
 }
 
 impl Runtime {

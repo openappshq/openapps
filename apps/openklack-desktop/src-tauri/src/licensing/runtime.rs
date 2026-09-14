@@ -1,10 +1,13 @@
 //! The licensed build's plumbing around `core`: the Keychain record, the Dodo HTTP client,
 //! the daily check scheduler, and the commands and events the settings window uses.
 //!
-//! Locking: `Service::mutate` orders every change to the stored record together with its
-//! Keychain write, so a slower writer can never put an older record back. `Service::engine`
-//! is only ever held for a pure step, never across the network or the Keychain, so reads for
-//! the window and the deep link never wait on I/O.
+//! Rules: lock first, persist after, and unlock only after the record is saved.
+//! `Service::mutate` orders every Keychain write, so a slower writer can never put an older
+//! record back. `Service::engine` is only ever held for a pure step, never across the network
+//! or the Keychain, so reads for the window and the deep link never wait on I/O. Every gate
+//! decision carries a revision issued under the engine lock, and the audio side applies only
+//! newer ones; a restrictive decision is published before any I/O, a permissive one after the
+//! save it depends on. While the record is unknown, playback stays gated.
 
 use super::core::Dodo;
 use super::core::{
@@ -14,7 +17,10 @@ use super::core::{
 use crate::engine::Controller;
 use serde::Serialize;
 use std::{
-    sync::{Arc, Condvar, Mutex, MutexGuard},
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 use tauri::{Emitter, Manager};
@@ -32,6 +38,8 @@ const SUPPORT_URL: &str = env!("OPENKLACK_SUPPORT_URL");
 const MAX_SLEEP: Duration = Duration::from_secs(3600);
 /// While checks fail, the network is probed this often so a check runs as soon as it is back.
 const REACHABILITY_POLL: Duration = Duration::from_secs(300);
+/// Owed deactivations are retried this often.
+const CLEANUP_RETRY: Duration = Duration::from_secs(300);
 
 /// Comma-separated IDs let a future bundle product join the paid list without code changes.
 pub fn products() -> Products {
@@ -174,7 +182,7 @@ impl HttpDodo {
             429 => DodoError::RateLimited {
                 retry_after: retry_after.unwrap_or(60),
             },
-            500..=599 => DodoError::Offline(format!("server error {status}")),
+            500..=599 => DodoError::ServerError(status),
             _ => DodoError::Unexpected(format!("unexpected response {status}")),
         }
     }
@@ -246,9 +254,11 @@ impl Dodo for HttpDodo {
 /// The app around the service: the settings window, the audio engine, and the network.
 pub trait Host: Send + Sync {
     fn publish(&self, view: &View);
-    /// Gate keyboard sound playback. Everything else in the app keeps working.
-    fn set_blocked(&self, blocked: bool);
-    /// A cheap connectivity probe, used only while checks are failing.
+    /// Gate keyboard sound playback. Decisions carry a revision issued under the engine lock;
+    /// the host must apply a decision only if its revision is newer than the last one applied,
+    /// atomically with applying it. Everything else in the app keeps working.
+    fn set_blocked(&self, revision: u64, blocked: bool);
+    /// A cheap connectivity probe, used only after network-level failures.
     fn reachable(&self) -> bool;
 }
 
@@ -261,14 +271,14 @@ impl Host for TauriHost {
         let _ = self.app.emit("license", view);
     }
 
-    fn set_blocked(&self, blocked: bool) {
+    fn set_blocked(&self, revision: u64, blocked: bool) {
         if let Some(controller) = self.app.try_state::<Arc<Controller>>() {
-            controller.set_license_blocked(blocked);
+            controller.set_license_blocked(revision, blocked);
         }
     }
 
     fn reachable(&self) -> bool {
-        // A TCP handshake with the license host: nothing is sent, and a failure costs seconds.
+        // A TCP handshake with the license host: no request is made, and a failure costs seconds.
         let host = HOST.trim_start_matches("https://");
         std::net::ToSocketAddrs::to_socket_addrs(&(host, 443))
             .ok()
@@ -290,12 +300,16 @@ pub struct View {
     #[serde(flatten)]
     pub state: State,
     pub core_feature: bool,
+    /// The clock was set back: a trial counts as ended and a paid license needs a check.
+    pub clock_changed: bool,
     pub trial_used: bool,
     pub grace_warning: bool,
     pub checking: bool,
     pub last_success_at: Option<i64>,
     pub last_error: Option<String>,
     pub pending_key: Option<String>,
+    /// The deep link said the pending key is a trial key, so a second trial is refused locally.
+    pub pending_trial: bool,
     pub buy_url: &'static str,
     pub trial_url: &'static str,
     pub support_url: &'static str,
@@ -308,7 +322,13 @@ struct Meta {
     checking: bool,
     last_error: Option<String>,
     pending_key: Option<String>,
+    pending_trial: bool,
     last_reachability_poll: Option<i64>,
+    /// A recovery check may run once after the network was seen down.
+    recovery_armed: bool,
+    /// A Keychain write failed; the record is written again every tick until it succeeds.
+    storage_dirty: bool,
+    last_cleanup_at: Option<i64>,
 }
 
 pub type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
@@ -317,12 +337,12 @@ pub struct Service<D: Dodo + Send + Sync, V: Vault, H: Host> {
     /// Held for pure steps only: never across the network or the Keychain.
     engine: Mutex<Engine>,
     meta: Mutex<Meta>,
-    /// Orders every change to the record together with its save. Network calls that lead to a
-    /// change run under it, but the background validation does not: its answer is matched to
-    /// the activation it was asked about when it is applied.
+    /// Orders every Keychain write, and the activation and removal sequences around theirs.
     mutate: Mutex<()>,
     /// One validation in flight at a time, from the scheduler or the window.
     check: Mutex<()>,
+    /// Issued under the engine lock with each gate decision; the host applies only newer ones.
+    gate_revision: AtomicU64,
     wake: (Mutex<bool>, Condvar),
     dodo: D,
     vault: V,
@@ -333,8 +353,8 @@ pub struct Service<D: Dodo + Send + Sync, V: Vault, H: Host> {
 pub type Live = Service<HttpDodo, Keychain, TauriHost>;
 
 impl Live {
-    /// Registers the service and starts its thread. The Keychain is read on that thread, so
-    /// launch is never delayed; until it is read, playback is not gated.
+    /// Registers the service, gates playback until the record is known, and starts the thread
+    /// that reads the Keychain. Launch is never delayed.
     pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         let service = Arc::new(Service::new(
             HttpDodo::new()?,
@@ -343,6 +363,7 @@ impl Live {
             Box::new(system_now),
         ));
         app.manage(service.clone());
+        service.apply();
         std::thread::Builder::new()
             .name("openklack-license".into())
             .spawn(move || service.run())
@@ -358,6 +379,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
             meta: Mutex::new(Meta::default()),
             mutate: Mutex::new(()),
             check: Mutex::new(()),
+            gate_revision: AtomicU64::new(0),
             wake: (Mutex::new(false), Condvar::new()),
             dodo,
             vault,
@@ -381,49 +403,54 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
 
     /// Reads the Keychain. A failure leaves the Mac unlicensed with the reason in Settings.
     pub fn load(&self) {
-        let ordered = self.mutate.lock().unwrap();
         let (stored, error) = match self.vault.load() {
             Ok(stored) => (stored, None),
             Err(error) => (Stored::default(), Some(error)),
         };
-        self.engine.lock().unwrap().stored = stored;
-        self.publish(|meta| {
-            meta.ready = true;
-            meta.last_error = error;
-        });
-        drop(ordered);
+        {
+            let ordered = self.mutate.lock().unwrap();
+            self.engine.lock().unwrap().stored = stored;
+            self.meta.lock().unwrap().ready = true;
+            drop(ordered);
+        }
+        self.publish(|meta| meta.last_error = error);
+        // The record is durable already, so it may unlock playback right away.
         self.apply();
         // The contract's launch check: in the background, whatever the last success time.
         let _ = self.check_once(true);
     }
 
-    /// One pass of the scheduler: due or recovered checks, stale slots, and time-only
-    /// transitions such as a trial ending or grace running out.
+    /// One pass of the scheduler. Deadlines are enforced first and without waiting on any
+    /// write; then due or recovered checks, stale slots, and the permissive re-evaluation.
     pub fn tick(&self) {
+        self.gate(false);
         let now = self.now();
-        {
-            // The high-water mark keeps a rolled-back clock from extending a trial.
+        // The high-water mark keeps a rolled-back clock from being trusted.
+        if self.engine.lock().unwrap().observe(now) {
             let ordered = self.mutate.lock().unwrap();
-            if self.engine.lock().unwrap().observe(now) {
-                self.persist(&ordered);
-            }
+            self.persist(&ordered);
         }
-        let (due, failing) = {
+        let (due, network_down) = {
             let engine = self.engine.lock().unwrap();
-            (engine.check_due(now), engine.schedule.failures > 0)
+            (engine.check_due(now), engine.schedule.network_down)
         };
         if due {
             let _ = self.check_once(false);
-        } else if failing && self.poll_reachability(now) {
+        } else if network_down && self.network_recovered(now) {
             let _ = self.check_once(true);
         }
-        self.release_stale();
+        self.release_cleanups(now);
+        if self.meta.lock().unwrap().storage_dirty {
+            let ordered = self.mutate.lock().unwrap();
+            self.persist(&ordered);
+        }
         self.apply();
     }
 
-    /// While checks fail, a cheap probe every few minutes runs the check as soon as the network
-    /// is back instead of waiting out the backoff.
-    fn poll_reachability(&self, now: i64) -> bool {
+    /// After a network-level failure, a cheap probe every few minutes notices the network
+    /// coming back and allows one check ahead of the backoff. It re-arms only after the probe
+    /// has seen the network down, so a reachable host that keeps failing stays on the backoff.
+    fn network_recovered(&self, now: i64) -> bool {
         let due = {
             let mut meta = self.meta.lock().unwrap();
             let due = meta
@@ -434,17 +461,26 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
             }
             due
         };
-        due && self.host.reachable()
+        if !due {
+            return false;
+        }
+        let reachable = self.host.reachable();
+        let mut meta = self.meta.lock().unwrap();
+        if !reachable {
+            meta.recovery_armed = true;
+            return false;
+        }
+        std::mem::take(&mut meta.recovery_armed)
     }
 
     fn sleep(&self) {
         let now = self.now();
-        let (next_check, next_transition, failing) = {
+        let (next_check, next_transition, probing) = {
             let engine = self.engine.lock().unwrap();
             (
                 engine.next_check_at(now),
                 engine.next_transition_at(now),
-                engine.schedule.failures > 0,
+                engine.schedule.network_down || !engine.stored.pending_cleanups.is_empty(),
             )
         };
         let mut wait = [next_check, next_transition]
@@ -453,8 +489,8 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
             .map(|due| Duration::from_secs((due - now).max(0) as u64))
             .min()
             .unwrap_or(MAX_SLEEP);
-        if failing {
-            wait = wait.min(REACHABILITY_POLL);
+        if probing || self.meta.lock().unwrap().storage_dirty {
+            wait = wait.min(REACHABILITY_POLL.min(CLEANUP_RETRY));
         }
         let wait = wait.clamp(Duration::from_secs(1), MAX_SLEEP);
         let (flag, condvar) = &self.wake;
@@ -472,8 +508,9 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
         condvar.notify_all();
     }
 
-    /// Runs one validation. The network call holds neither lock; the answer is applied to the
-    /// activation it was asked about, in order with every other change.
+    /// Runs one validation. The network call holds no lock; the answer is applied to the
+    /// activation it was asked about, a restriction is published before the save, and the
+    /// permissive re-evaluation waits for it.
     pub fn check_once(&self, forced: bool) -> Result<State, LicenseError> {
         let Ok(_running) = self.check.try_lock() else {
             return Ok(self.state());
@@ -487,33 +524,61 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
         };
         self.publish(|meta| meta.checking = true);
         let answer = self.dodo.validate(&probe.license_key, &probe.instance_id);
-        let result = {
-            let ordered = self.mutate.lock().unwrap();
-            let result = self
-                .engine
-                .lock()
-                .unwrap()
-                .finish_check(&probe, answer, self.now());
-            self.persist(&ordered);
-            result
+        let (result, network_down) = {
+            let mut engine = self.engine.lock().unwrap();
+            let result = engine.finish_check(&probe, answer, self.now());
+            (result, engine.schedule.network_down)
         };
+        self.gate(false);
+        if network_down {
+            self.meta.lock().unwrap().recovery_armed = true;
+        }
+        {
+            let ordered = self.mutate.lock().unwrap();
+            self.persist(&ordered);
+        }
         self.publish(|meta| {
             meta.checking = false;
-            meta.last_error = result.as_ref().err().map(LicenseError::message);
+            match &result {
+                Err(error) => meta.last_error = Some(error.message()),
+                Ok(_) if !meta.storage_dirty => meta.last_error = None,
+                Ok(_) => {}
+            }
         });
+        self.apply();
         result
     }
 
-    /// Frees slots this Mac gave up while Dodo was unreachable.
-    fn release_stale(&self) {
+    /// Delivers owed deactivations every few minutes, stopping at the first rate limit.
+    fn release_cleanups(&self, now: i64) {
+        {
+            let mut meta = self.meta.lock().unwrap();
+            if meta
+                .last_cleanup_at
+                .is_some_and(|last| now - last < CLEANUP_RETRY.as_secs() as i64)
+            {
+                return;
+            }
+            meta.last_cleanup_at = Some(now);
+        }
         let ordered = self.mutate.lock().unwrap();
-        let pending = self.engine.lock().unwrap().take_stale(self.now());
+        let pending = self.engine.lock().unwrap().take_cleanups(self.now());
         if pending.is_empty() {
             return;
         }
-        for probe in pending {
+        let mut pending = pending.into_iter();
+        for probe in pending.by_ref() {
+            if self.engine.lock().unwrap().is_held(self.now()) {
+                self.engine.lock().unwrap().remember_cleanup(probe);
+                break;
+            }
             self.release(&ordered, probe);
         }
+        let mut engine = self.engine.lock().unwrap();
+        for probe in pending {
+            engine.remember_cleanup(probe);
+        }
+        drop(engine);
         self.persist(&ordered);
     }
 
@@ -530,8 +595,19 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
     /// changes were made and a slower writer can never restore an older record.
     fn persist(&self, _ordered: &MutexGuard<'_, ()>) {
         let stored = self.engine.lock().unwrap().stored.clone();
-        if let Err(error) = self.vault.save(&stored) {
-            self.publish(|meta| meta.last_error = Some(error));
+        match self.vault.save(&stored) {
+            Ok(()) => {
+                let was_dirty = std::mem::take(&mut self.meta.lock().unwrap().storage_dirty);
+                if was_dirty {
+                    self.publish(|meta| meta.last_error = None);
+                }
+            }
+            Err(error) => {
+                self.publish(|meta| {
+                    meta.storage_dirty = true;
+                    meta.last_error = Some(error);
+                });
+            }
         }
     }
 
@@ -539,12 +615,27 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
         self.engine.lock().unwrap().state(self.now())
     }
 
-    /// Reflects the state on the audio engine: only keyboard sound playback is gated, and only
-    /// once the record has been read.
-    fn apply(&self) {
+    /// Decides the gate under the engine lock and stamps it with the next revision.
+    fn decide(&self) -> (u64, bool) {
+        let engine = self.engine.lock().unwrap();
         let ready = self.meta.lock().unwrap().ready;
-        let enabled = !ready || self.engine.lock().unwrap().core_feature(self.now());
-        self.host.set_blocked(!enabled);
+        let blocked = !ready || !engine.core_feature(self.now());
+        let revision = self.gate_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        (revision, blocked)
+    }
+
+    /// Publishes the gate: a restriction always, a permission only when the caller says the
+    /// record it depends on is saved.
+    fn gate(&self, allow_unlock: bool) {
+        let (revision, blocked) = self.decide();
+        if blocked || allow_unlock {
+            self.host.set_blocked(revision, blocked);
+        }
+    }
+
+    /// Re-evaluates the gate in both directions and tells the window.
+    pub fn apply(&self) {
+        self.gate(true);
         self.publish(|_| {});
     }
 
@@ -559,17 +650,17 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
             environment: ENVIRONMENT,
             state,
             core_feature: state.core_feature(),
+            clock_changed: engine.clock_changed(now),
             trial_used: engine.stored.trial_used,
             grace_warning: matches!(state, State::Grace { .. })
                 && engine
-                    .stored
-                    .license
-                    .as_ref()
-                    .is_some_and(|record| now - record.last_success_at >= GRACE_WARNING_AFTER),
+                    .offline_for(now)
+                    .is_some_and(|age| age >= GRACE_WARNING_AFTER),
             checking: meta.checking,
             last_success_at: engine.stored.license.as_ref().map(|r| r.last_success_at),
             last_error: meta.last_error.clone(),
             pending_key: meta.pending_key.clone(),
+            pending_trial: meta.pending_trial,
             buy_url: BUY_URL,
             trial_url: TRIAL_URL,
             support_url: SUPPORT_URL,
@@ -599,6 +690,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
             meta.last_error = None;
             if outcome.is_ok() {
                 meta.pending_key = None;
+                meta.pending_trial = false;
             }
         });
         self.apply();
@@ -654,6 +746,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
             let replaced = engine.commit_activation(activated);
             (engine.state(now), replaced)
         };
+        self.gate(false);
         if let Some(replaced) = replaced {
             self.release(ordered, replaced);
             self.persist(ordered);
@@ -661,7 +754,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
         Ok(state)
     }
 
-    /// Settings → License → Remove this Mac.
+    /// Settings → License → Remove this Mac. Playback stops before the cleared record is saved.
     pub fn remove(&self) -> Result<View, String> {
         let outcome = {
             let ordered = self.mutate.lock().unwrap();
@@ -674,6 +767,7 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
                     .lock()
                     .unwrap()
                     .finish_remove(&probe, answer, now);
+                self.gate(false);
                 self.persist(&ordered);
                 result
             })
@@ -685,21 +779,15 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
         outcome.map(|_| self.view())
     }
 
-    /// `openklack://activate?key=…` only pre-fills the key; the user confirms before activating.
+    /// `openklack://activate?key=…[&kind=trial]` only pre-fills the key; the user confirms
+    /// before activating. Unknown parameters are ignored.
     pub fn opened(&self, urls: &[url::Url]) {
-        let key = urls.iter().find_map(|url| {
-            if url.scheme() != "openklack" || url.host_str() != Some("activate") {
-                return None;
-            }
-            url.query_pairs()
-                .find(|(name, _)| name == "key")
-                .map(|(_, value)| value.trim().to_string())
-                .filter(|key| {
-                    !key.is_empty() && key.len() <= 200 && key.bytes().all(|b| b.is_ascii_graphic())
-                })
-        });
-        if let Some(key) = key {
-            self.publish(|meta| meta.pending_key = Some(key));
+        let link = urls.iter().find_map(parse_activation_link);
+        if let Some((key, trial)) = link {
+            self.publish(|meta| {
+                meta.pending_key = Some(key);
+                meta.pending_trial = trial;
+            });
         }
     }
 
@@ -708,8 +796,36 @@ impl<D: Dodo + Send + Sync, V: Vault, H: Host> Service<D, V, H> {
     }
 
     pub fn dismiss_key(&self) -> View {
-        self.publish(|meta| meta.pending_key = None)
+        self.publish(|meta| {
+            meta.pending_key = None;
+            meta.pending_trial = false;
+        })
     }
+}
+
+/// The key and whether the link marks it as a trial key, for `openklack://activate` links.
+fn parse_activation_link(url: &url::Url) -> Option<(String, bool)> {
+    if url.scheme() != "openklack" || url.host_str() != Some("activate") {
+        return None;
+    }
+    let mut key = None;
+    let mut trial = false;
+    for (name, value) in url.query_pairs() {
+        match &*name {
+            "key" => {
+                let value = value.trim();
+                if !value.is_empty()
+                    && value.len() <= 200
+                    && value.bytes().all(|b| b.is_ascii_graphic())
+                {
+                    key = Some(value.to_string());
+                }
+            }
+            "kind" => trial = value.eq_ignore_ascii_case("trial"),
+            _ => {}
+        }
+    }
+    key.map(|key| (key, trial))
 }
 
 /// Called from the audio engine when the Mac wakes: checks again if the last one is a day old.
@@ -765,7 +881,6 @@ pub async fn check_license_now(state: tauri::State<'_, Arc<Live>>) -> Result<Vie
     let service = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let result = service.check_once(true).map_err(|error| error.message());
-        service.apply();
         service.poke();
         result.map(|_| service.view())
     })
@@ -815,12 +930,12 @@ pub fn start_license_trial(state: tauri::State<'_, Arc<Live>>) -> Result<View, S
 #[cfg(test)]
 mod tests {
     //! The service with a scripted Dodo, an in-memory vault and a fake app, driven by threads so
-    //! the lock ordering itself is under test.
+    //! the lock ordering and gate ordering themselves are under test.
     use super::super::core::{Kind, Record};
     use super::*;
     use std::{
         sync::{
-            atomic::{AtomicBool, AtomicI64, Ordering},
+            atomic::{AtomicBool, AtomicI64},
             mpsc,
         },
         thread,
@@ -846,6 +961,9 @@ mod tests {
         }
         fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
+        }
+        fn answer(&self, answer: Result<Validation, DodoError>) {
+            self.validate.lock().unwrap().push(answer);
         }
     }
 
@@ -887,32 +1005,64 @@ mod tests {
         }
     }
 
-    /// An in-memory Keychain whose writes can be paused so an older writer can be raced.
+    /// A one-shot pause: the next entry blocks until `open`.
     #[derive(Default)]
-    struct FakeVault {
-        stored: Mutex<Stored>,
-        writes: Mutex<Vec<Stored>>,
-        pause_writes: AtomicBool,
+    struct Pause {
+        armed: AtomicBool,
+        entered: AtomicBool,
         gate: (Mutex<bool>, Condvar),
     }
 
-    impl FakeVault {
+    impl Pause {
+        fn arm(&self) {
+            *self.gate.0.lock().unwrap() = false;
+            self.entered.store(false, Ordering::SeqCst);
+            self.armed.store(true, Ordering::SeqCst);
+        }
+        fn enter(&self) {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.entered.store(true, Ordering::SeqCst);
+                let mut open = self.gate.0.lock().unwrap();
+                while !*open {
+                    open = self.gate.1.wait(open).unwrap();
+                }
+            }
+        }
+        fn wait_entered(&self) {
+            let deadline = std::time::Instant::now() + TIMEOUT;
+            while !self.entered.load(Ordering::SeqCst) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the pause was never reached"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
         fn open(&self) {
             *self.gate.0.lock().unwrap() = true;
             self.gate.1.notify_all();
         }
     }
 
+    /// An in-memory Keychain whose reads and writes can be paused so slow I/O can be raced.
+    #[derive(Default)]
+    struct FakeVault {
+        stored: Mutex<Stored>,
+        writes: Mutex<Vec<Stored>>,
+        save_error: Mutex<Option<String>>,
+        read_pause: Pause,
+        write_pause: Pause,
+    }
+
     impl Vault for FakeVault {
         fn load(&self) -> Result<Stored, String> {
+            self.read_pause.enter();
             Ok(self.stored.lock().unwrap().clone())
         }
         fn save(&self, stored: &Stored) -> Result<(), String> {
-            if self.pause_writes.swap(false, Ordering::SeqCst) {
-                let mut open = self.gate.0.lock().unwrap();
-                while !*open {
-                    open = self.gate.1.wait(open).unwrap();
-                }
+            self.write_pause.enter();
+            if let Some(error) = self.save_error.lock().unwrap().clone() {
+                return Err(error);
             }
             *self.stored.lock().unwrap() = stored.clone();
             self.writes.lock().unwrap().push(stored.clone());
@@ -920,16 +1070,30 @@ mod tests {
         }
     }
 
+    /// The audio side: applies only newer gate revisions, atomically, like the controller.
     #[derive(Default)]
     struct FakeHost {
-        blocked: AtomicBool,
+        gate: Mutex<(u64, bool)>,
         reachable: AtomicBool,
+        unlock_pause: Pause,
+    }
+
+    impl FakeHost {
+        fn blocked(&self) -> bool {
+            self.gate.lock().unwrap().1
+        }
     }
 
     impl Host for FakeHost {
         fn publish(&self, _: &View) {}
-        fn set_blocked(&self, blocked: bool) {
-            self.blocked.store(blocked, Ordering::SeqCst);
+        fn set_blocked(&self, revision: u64, blocked: bool) {
+            if !blocked {
+                self.unlock_pause.enter();
+            }
+            let mut gate = self.gate.lock().unwrap();
+            if revision > gate.0 {
+                *gate = (revision, blocked);
+            }
         }
         fn reachable(&self) -> bool {
             self.reachable.load(Ordering::SeqCst)
@@ -946,7 +1110,8 @@ mod tests {
             kind: Kind::Paid,
             activated_at: NOW - 30 * DAY,
             last_success_at: NOW - last_success_ago,
-            seen_at: NOW - last_success_ago,
+            last_success_local: NOW - last_success_ago,
+            last_observed_at: NOW - last_success_ago,
             revoked: false,
         }
     }
@@ -959,7 +1124,8 @@ mod tests {
             kind: Kind::Trial,
             activated_at: NOW - activated_ago,
             last_success_at: NOW - activated_ago,
-            seen_at: NOW - activated_ago,
+            last_success_local: NOW - activated_ago,
+            last_observed_at: NOW - activated_ago,
             revoked: false,
         }
     }
@@ -967,12 +1133,30 @@ mod tests {
     fn service(stored: Stored, clock: Arc<AtomicI64>) -> Arc<TestService> {
         let vault = FakeVault::default();
         *vault.stored.lock().unwrap() = stored;
-        Arc::new(Service::new(
+        let service = Arc::new(Service::new(
             FakeDodo::paid(),
             vault,
             FakeHost::default(),
             Box::new(move || clock.load(Ordering::SeqCst)),
-        ))
+        ));
+        // As `Live::start` does: gated until the record is read.
+        service.apply();
+        service
+    }
+
+    fn with_trial() -> Stored {
+        Stored {
+            license: Some(trial_record(DAY)),
+            trial_used: true,
+            ..Stored::default()
+        }
+    }
+
+    fn with_paid(last_success_ago: i64) -> Stored {
+        Stored {
+            license: Some(paid_record("KEY-PAID", last_success_ago)),
+            ..Stored::default()
+        }
     }
 
     /// Runs `task` on its own thread and fails instead of hanging if it never returns.
@@ -988,17 +1172,9 @@ mod tests {
 
     #[test]
     fn a_check_with_nothing_due_releases_the_engine() {
-        // P0 regression: the scheduler decides a check is due, an activation lands first, and the
-        // scheduler's `begin_check` finds nothing due. The service must stay usable.
-        let clock = Arc::new(AtomicI64::new(NOW));
-        let service = service(
-            Stored {
-                license: Some(trial_record(DAY)),
-                trial_used: true,
-                ..Stored::default()
-            },
-            clock,
-        );
+        // The scheduler decides a check is due, an activation lands first, and the scheduler's
+        // `begin_check` finds nothing due. The service must stay usable.
+        let service = service(with_trial(), Arc::new(AtomicI64::new(NOW)));
         within_timeout({
             let service = service.clone();
             move || {
@@ -1010,7 +1186,7 @@ mod tests {
                 assert_eq!(service.view().state, State::Licensed);
                 assert_eq!(service.state(), State::Licensed);
                 service.tick();
-                assert!(!service.host.blocked.load(Ordering::SeqCst));
+                assert!(!service.host.blocked());
             }
         });
         assert_eq!(
@@ -1021,27 +1197,19 @@ mod tests {
 
     #[test]
     fn a_slow_writer_cannot_restore_a_replaced_record() {
-        // P0 regression: a scheduler write of trial A pauses mid-save while paid B activates.
-        // Every write is ordered, so B waits for A's write and lands last.
+        // A scheduler write of trial A pauses mid-save while paid B activates. Every write is
+        // ordered, so B waits for A's write and lands last.
         let clock = Arc::new(AtomicI64::new(NOW));
-        let service = service(
-            Stored {
-                license: Some(trial_record(DAY)),
-                trial_used: true,
-                ..Stored::default()
-            },
-            clock.clone(),
-        );
+        let service = service(with_trial(), clock.clone());
         service.load();
         service.vault.writes.lock().unwrap().clear();
-        service.vault.pause_writes.store(true, Ordering::SeqCst);
+        service.vault.write_pause.arm();
+        clock.store(NOW + 10, Ordering::SeqCst);
         let ticker = {
             let service = service.clone();
-            clock.store(NOW + 10, Ordering::SeqCst);
             thread::spawn(move || service.tick())
         };
-        // The tick is now paused inside the Keychain write of trial A.
-        thread::sleep(Duration::from_millis(100));
+        service.vault.write_pause.wait_entered();
         let activator = {
             let service = service.clone();
             thread::spawn(move || {
@@ -1055,7 +1223,7 @@ mod tests {
             !activator.is_finished(),
             "activation waits for the older write"
         );
-        service.vault.open();
+        service.vault.write_pause.open();
         ticker.join().unwrap();
         assert_eq!(activator.join().unwrap(), Ok(State::Licensed));
         let writes = service.vault.writes.lock().unwrap();
@@ -1078,17 +1246,9 @@ mod tests {
 
     #[test]
     fn a_late_answer_for_a_removed_record_is_not_written_back() {
-        let clock = Arc::new(AtomicI64::new(NOW));
-        let service = service(
-            Stored {
-                license: Some(paid_record("KEY-PAID", 25 * HOUR)),
-                ..Stored::default()
-            },
-            clock,
-        );
+        let service = service(with_paid(25 * HOUR), Arc::new(AtomicI64::new(NOW)));
         service.load();
-        // A revocation must never be undone by an older writer either.
-        service.dodo.validate.lock().unwrap().push(Ok(Validation {
+        service.dodo.answer(Ok(Validation {
             valid: false,
             server_time: Some(NOW),
         }));
@@ -1101,21 +1261,138 @@ mod tests {
     }
 
     #[test]
-    fn launch_checks_regardless_of_recency_and_the_network_coming_back_checks_again() {
+    fn sound_is_gated_until_the_record_has_been_read() {
+        // A pending Keychain read must not leave an unknown entitlement audible, however long
+        // it takes; the settings window shows a loading state meanwhile.
         let clock = Arc::new(AtomicI64::new(NOW));
-        let service = service(
-            Stored {
-                license: Some(paid_record("KEY-PAID", HOUR)),
-                ..Stored::default()
-            },
-            clock.clone(),
-        );
-        service
-            .dodo
-            .validate
-            .lock()
-            .unwrap()
-            .push(Err(DodoError::Offline("down".into())));
+        let service = service(with_paid(HOUR), clock.clone());
+        assert!(service.host.blocked());
+        service.dodo.answer(Err(DodoError::Offline("down".into())));
+        service.vault.read_pause.arm();
+        let loading = {
+            let service = service.clone();
+            thread::spawn(move || service.load())
+        };
+        service.vault.read_pause.wait_entered();
+        clock.store(NOW + 30 * DAY, Ordering::SeqCst);
+        service.apply();
+        assert!(!service.view().ready);
+        assert!(service.host.blocked());
+        service.vault.read_pause.open();
+        loading.join().unwrap();
+        assert!(service.view().ready);
+        // Thirty days without a successful check: the saved paid record needs one.
+        assert_eq!(service.view().state, State::CheckRequired);
+        assert!(service.host.blocked());
+        // The backoff retry succeeds and anchors time again: the next tick unlocks.
+        clock.store(NOW + 30 * DAY + 61, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.view().state, State::Licensed);
+        assert!(!service.host.blocked());
+    }
+
+    #[test]
+    fn a_revocation_stops_sound_before_its_save_finishes() {
+        let service = service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
+        service.dodo.answer(Ok(Validation {
+            valid: false,
+            server_time: Some(NOW),
+        }));
+        service.vault.write_pause.arm();
+        let worker = {
+            let service = service.clone();
+            thread::spawn(move || service.load())
+        };
+        service.vault.write_pause.wait_entered();
+        assert_eq!(service.view().state, State::Revoked);
+        assert!(service.host.blocked(), "blocked before the save completes");
+        service.vault.write_pause.open();
+        worker.join().unwrap();
+        assert!(service.host.blocked());
+        assert!(service.vault.load().unwrap().license.unwrap().revoked);
+    }
+
+    #[test]
+    fn an_expired_trial_stops_sound_before_its_observation_is_saved() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_trial(), clock.clone());
+        service.load();
+        assert!(!service.host.blocked());
+        clock.store(NOW + 3 * DAY, Ordering::SeqCst);
+        service.vault.write_pause.arm();
+        let worker = {
+            let service = service.clone();
+            thread::spawn(move || service.tick())
+        };
+        service.vault.write_pause.wait_entered();
+        assert_eq!(service.view().state, State::TrialEnded);
+        assert!(service.host.blocked(), "blocked before the save completes");
+        service.vault.write_pause.open();
+        worker.join().unwrap();
+        assert!(service.host.blocked());
+    }
+
+    #[test]
+    fn a_stale_gate_update_cannot_reenable_a_removed_license() {
+        // An old permissive decision, delayed on its way to the audio engine, arrives after
+        // Remove this Mac has blocked playback. Its revision is older, so it is ignored.
+        let service = service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
+        service.load();
+        assert!(!service.host.blocked());
+        service.host.unlock_pause.arm();
+        let old = {
+            let service = service.clone();
+            thread::spawn(move || service.apply())
+        };
+        service.host.unlock_pause.wait_entered();
+        service.remove().expect("removed");
+        assert!(service.host.blocked());
+        service.host.unlock_pause.open();
+        old.join().unwrap();
+        assert_eq!(service.view().state, State::Unlicensed);
+        assert!(service.host.blocked(), "the stale unlock was ignored");
+        // A stale unlock cannot undo a revocation either.
+        let revoked = self::service(with_paid(HOUR), Arc::new(AtomicI64::new(NOW)));
+        revoked.load();
+        revoked.host.unlock_pause.arm();
+        let old = {
+            let revoked = revoked.clone();
+            thread::spawn(move || revoked.apply())
+        };
+        revoked.host.unlock_pause.wait_entered();
+        revoked.dodo.answer(Ok(Validation {
+            valid: false,
+            server_time: Some(NOW),
+        }));
+        assert_eq!(revoked.check_once(true), Ok(State::Revoked));
+        revoked.host.unlock_pause.open();
+        old.join().unwrap();
+        assert!(revoked.host.blocked());
+    }
+
+    #[test]
+    fn an_unlock_waits_for_the_save_that_justifies_it() {
+        // CheckRequired → Licensed: playback resumes only once the fresh record is durable.
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_paid(8 * DAY), clock);
+        service.vault.write_pause.arm();
+        let worker = {
+            let service = service.clone();
+            thread::spawn(move || service.load())
+        };
+        service.vault.write_pause.wait_entered();
+        assert_eq!(service.view().state, State::Licensed);
+        assert!(service.host.blocked(), "not yet saved");
+        service.vault.write_pause.open();
+        worker.join().unwrap();
+        assert!(!service.host.blocked());
+    }
+
+    #[test]
+    fn launch_checks_regardless_of_recency_and_recovery_runs_once_per_outage() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_paid(HOUR), clock.clone());
+        service.dodo.answer(Err(DodoError::Offline("down".into())));
         service.load();
         assert_eq!(service.dodo.calls().len(), 1, "the launch check ran");
         assert_eq!(
@@ -1123,11 +1400,11 @@ mod tests {
             State::Licensed,
             "a network failure never revokes"
         );
-        // Backoff is a minute away; the network is still down, so nothing is called.
+        // Backoff is a minute away and the probe says the network is still down.
         clock.store(NOW + 10, Ordering::SeqCst);
         service.tick();
         assert_eq!(service.dodo.calls().len(), 1);
-        // The network is back: the poll notices and the check runs before the backoff ends.
+        // Back: the next poll runs the check ahead of the backoff, once.
         service.host.reachable.store(true, Ordering::SeqCst);
         clock.store(NOW + 20, Ordering::SeqCst);
         service.tick();
@@ -1136,37 +1413,45 @@ mod tests {
             1,
             "polled at most every five minutes"
         );
-        clock.store(
-            NOW + REACHABILITY_POLL.as_secs() as i64 + 1,
-            Ordering::SeqCst,
-        );
+        service
+            .dodo
+            .answer(Err(DodoError::Offline("still down".into())));
+        let poll = REACHABILITY_POLL.as_secs() as i64;
+        clock.store(NOW + poll + 1, Ordering::SeqCst);
         service.tick();
         assert_eq!(service.dodo.calls().len(), 2);
+        // Reachable but the check failed again: no further recovery checks until the probe has
+        // seen the network down again; the backoff (now two minutes) decides.
+        clock.store(NOW + 2 * poll + 2, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.dodo.calls().len(), 3, "the backoff retry ran");
         assert_eq!(service.engine.lock().unwrap().schedule.failures, 0);
     }
 
     #[test]
-    fn a_record_that_cannot_be_saved_leaves_the_old_activation_and_frees_the_slot() {
-        struct FailingVault;
-        impl Vault for FailingVault {
-            fn load(&self) -> Result<Stored, String> {
-                Ok(Stored {
-                    license: Some(trial_record(DAY)),
-                    trial_used: true,
-                    ..Stored::default()
-                })
-            }
-            fn save(&self, _: &Stored) -> Result<(), String> {
-                Err("keychain locked".into())
-            }
-        }
-        let service: Service<FakeDodo, FailingVault, FakeHost> = Service::new(
-            FakeDodo::paid(),
-            FailingVault,
-            FakeHost::default(),
-            Box::new(|| NOW),
-        );
+    fn server_errors_never_trigger_recovery_checks() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_paid(HOUR), clock.clone());
+        service.dodo.answer(Err(DodoError::ServerError(503)));
         service.load();
+        assert_eq!(service.dodo.calls().len(), 1);
+        service.host.reachable.store(true, Ordering::SeqCst);
+        for step in 1..=3 {
+            clock.store(
+                NOW + step * REACHABILITY_POLL.as_secs() as i64 / 2,
+                Ordering::SeqCst,
+            );
+            service.tick();
+        }
+        // Only the backoff retry (one minute after the failure) ran.
+        assert_eq!(service.dodo.calls().len(), 2);
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_saved_leaves_the_old_activation_and_frees_the_slot() {
+        let service = service(with_trial(), Arc::new(AtomicI64::new(NOW)));
+        service.load();
+        *service.vault.save_error.lock().unwrap() = Some("keychain locked".into());
         let error = service.activate("KEY-PAID", KeyHint::Any).unwrap_err();
         assert!(error.contains("keychain locked"), "{error}");
         assert_eq!(service.state(), State::Trial { days_left: 2 });
@@ -1177,17 +1462,119 @@ mod tests {
                 "deactivate KEY-PAID lki_KEY-PAID".to_string()
             ]
         );
+        assert!(!service.host.blocked(), "the trial keeps playing");
     }
 
     #[test]
-    fn the_record_is_not_gated_before_it_is_read() {
-        let service = service(Stored::default(), Arc::new(AtomicI64::new(NOW)));
-        service.apply();
-        assert!(!service.host.blocked.load(Ordering::SeqCst));
-        assert!(!service.view().ready);
+    fn owed_cleanups_stop_at_the_first_rate_limit_and_retry_every_five_minutes() {
+        struct LimitedDodo(FakeDodo);
+        impl Dodo for LimitedDodo {
+            fn activate(&self, key: &str, name: &str) -> Result<Activation, DodoError> {
+                self.0.activate(key, name)
+            }
+            fn validate(&self, key: &str, instance: &str) -> Result<Validation, DodoError> {
+                self.0.validate(key, instance)
+            }
+            fn deactivate(&self, key: &str, instance: &str) -> Result<(), DodoError> {
+                self.0.deactivate(key, instance)?;
+                Err(DodoError::RateLimited { retry_after: 60 })
+            }
+        }
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let clock_copy = clock.clone();
+        let limited: Service<LimitedDodo, FakeVault, FakeHost> = Service::new(
+            LimitedDodo(FakeDodo::paid()),
+            FakeVault::default(),
+            FakeHost::default(),
+            Box::new(move || clock_copy.load(Ordering::SeqCst)),
+        );
+        limited.load();
+        {
+            let mut engine = limited.engine.lock().unwrap();
+            for id in ["a", "b", "c"] {
+                engine.remember_cleanup(Probe {
+                    license_key: "K".into(),
+                    instance_id: id.into(),
+                });
+            }
+        }
+        limited.tick();
+        assert_eq!(limited.dodo.0.calls(), vec!["deactivate K a".to_string()]);
+        assert_eq!(
+            limited.engine.lock().unwrap().stored.pending_cleanups.len(),
+            3
+        );
+        assert_eq!(
+            limited.vault.load().unwrap().pending_cleanups.len(),
+            3,
+            "owed deactivations survive a restart"
+        );
+        let retry = CLEANUP_RETRY.as_secs() as i64;
+        clock.store(NOW + 61, Ordering::SeqCst);
+        limited.tick();
+        assert_eq!(
+            limited.dodo.0.calls().len(),
+            1,
+            "retried every five minutes"
+        );
+        clock.store(NOW + retry, Ordering::SeqCst);
+        limited.tick();
+        assert_eq!(limited.dodo.0.calls().len(), 2, "one more, then held again");
+    }
+
+    #[test]
+    fn a_failed_save_is_retried_every_tick_and_shown_as_a_storage_error() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_paid(HOUR), clock.clone());
         service.load();
-        assert!(service.view().ready);
-        assert!(service.host.blocked.load(Ordering::SeqCst));
+        *service.vault.save_error.lock().unwrap() = Some("keychain locked".into());
+        service.dodo.answer(Ok(Validation {
+            valid: false,
+            server_time: Some(NOW),
+        }));
+        assert_eq!(service.check_once(true), Ok(State::Revoked));
+        assert!(service.host.blocked(), "revoked in memory at once");
+        assert!(!service.vault.load().unwrap().license.unwrap().revoked);
+        assert!(
+            service
+                .view()
+                .last_error
+                .unwrap()
+                .contains("keychain locked")
+        );
+        clock.store(NOW + 5, Ordering::SeqCst);
+        service.tick();
+        assert!(!service.vault.load().unwrap().license.unwrap().revoked);
+        *service.vault.save_error.lock().unwrap() = None;
+        clock.store(NOW + 10, Ordering::SeqCst);
+        service.tick();
+        assert!(service.vault.load().unwrap().license.unwrap().revoked);
+        assert_eq!(service.view().last_error, None);
+    }
+
+    #[test]
+    fn activation_links_carry_the_key_and_an_optional_trial_marker() {
+        let parse = |link: &str| parse_activation_link(&url::Url::parse(link).unwrap());
+        assert_eq!(
+            parse("openklack://activate?key=ABCD-1234"),
+            Some(("ABCD-1234".into(), false))
+        );
+        assert_eq!(
+            parse("openklack://activate?key=%20ABCD-1234%20&kind=trial&utm=x"),
+            Some(("ABCD-1234".into(), true))
+        );
+        assert_eq!(parse("openklack://activate?kind=trial"), None);
+        assert_eq!(parse("openklack://activate?key=bad%20key"), None);
+        assert_eq!(parse("openklack://settings?key=ABCD"), None);
+        assert_eq!(parse("https://activate/?key=ABCD"), None);
+        let service = service(Stored::default(), Arc::new(AtomicI64::new(NOW)));
+        service.opened(&[url::Url::parse("openklack://activate?key=K1&kind=trial").unwrap()]);
+        let view = service.view();
+        assert_eq!(view.pending_key.as_deref(), Some("K1"));
+        assert!(view.pending_trial);
+        let view = service.dismiss_key();
+        assert_eq!(view.pending_key, None);
+        assert!(!view.pending_trial);
     }
 
     #[test]

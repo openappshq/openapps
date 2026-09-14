@@ -34,10 +34,15 @@ pub struct Record {
     pub activated_at: i64,
     /// Time of the last `valid: true` or activation, from the response `Date` header.
     pub last_success_at: i64,
-    /// The latest local time seen while this record was active; a rolled-back clock cannot
-    /// extend a trial past it.
+    /// The local clock at that moment. Time since then is measured from here and added to the
+    /// server's time, so the local clock only ever adds elapsed time.
     #[serde(default)]
-    pub seen_at: i64,
+    pub last_success_local: i64,
+    /// The latest moment seen: the server's `Date` on a successful check, otherwise the clock
+    /// as anchored above, raised every tick and never lowered by the clock. A clock earlier
+    /// than this is not trusted until Dodo answers again.
+    #[serde(default)]
+    pub last_observed_at: i64,
     /// Set by `valid: false` for this activation; only a new activation clears it.
     #[serde(default)]
     pub revoked: bool,
@@ -50,9 +55,10 @@ pub struct Stored {
     pub trial_used: bool,
     #[serde(default)]
     pub license: Option<Record>,
-    /// Activations this Mac gave up but could not yet deactivate; retried until Dodo answers.
+    /// Deactivations this Mac owes but could not deliver; retried until Dodo answers, kept
+    /// across restarts and even without a record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stale: Vec<Probe>,
+    pub pending_cleanups: Vec<Probe>,
 }
 
 /// The product IDs this app accepts for the current Dodo environment.
@@ -84,8 +90,10 @@ pub enum DodoError {
     LimitReached,
     /// `429`; seconds from `Retry-After`.
     RateLimited { retry_after: i64 },
-    /// `5xx`, timeout or no network: grace rules apply and state never gets worse.
+    /// Timeout or no network: grace rules apply and state never gets worse.
     Offline(String),
+    /// `5xx`: Dodo is reachable but failing; treated like being offline.
+    ServerError(u16),
     /// A response the app does not understand; treated like being offline.
     Unexpected(String),
 }
@@ -209,7 +217,9 @@ impl From<DodoError> for LicenseError {
             DodoError::KeyDisabled => LicenseError::KeyDisabled,
             DodoError::LimitReached => LicenseError::LimitReached,
             DodoError::RateLimited { retry_after } => LicenseError::RateLimited { retry_after },
-            DodoError::Offline(_) | DodoError::Unexpected(_) => LicenseError::Unreachable,
+            DodoError::Offline(_) | DodoError::ServerError(_) | DodoError::Unexpected(_) => {
+                LicenseError::Unreachable
+            }
         }
     }
 }
@@ -221,6 +231,8 @@ pub struct Schedule {
     pub failures: u32,
     pub retry_at: Option<i64>,
     pub hold_until: Option<i64>,
+    /// The last failure was at the network level, so a reachability probe is worth running.
+    pub network_down: bool,
 }
 
 impl Schedule {
@@ -238,10 +250,11 @@ impl Schedule {
         }
     }
 
-    /// Dodo could not be reached: retry with backoff.
-    fn failed(&mut self, now: i64) {
+    /// Dodo did not answer: retry with backoff.
+    fn failed(&mut self, now: i64, network_down: bool) {
         self.failures += 1;
         self.retry_at = Some(now + Self::backoff(self.failures));
+        self.network_down = network_down;
     }
 
     /// `429`: no call of any kind until `Retry-After` has passed. Not a failure, so the state
@@ -286,10 +299,37 @@ impl Engine {
         }
     }
 
-    /// The clock the trial is measured against: never earlier than any moment already seen, so
-    /// rolling the clock back cannot add days.
-    fn trial_clock(record: &Record, now: i64) -> i64 {
-        now.max(record.seen_at)
+    fn local_anchor(record: &Record) -> i64 {
+        if record.last_success_local > 0 {
+            record.last_success_local
+        } else {
+            record.last_success_at
+        }
+    }
+
+    /// The current moment on the server's clock: its time at the last answer plus the local
+    /// time elapsed since. Rolling the local clock back moves this back too.
+    fn anchored_now(record: &Record, now: i64) -> i64 {
+        record.last_success_at + (now - Self::local_anchor(record))
+    }
+
+    /// Whether the clock can be trusted: not materially earlier than the latest moment seen.
+    fn clock_trusted(record: &Record, now: i64) -> bool {
+        Self::anchored_now(record, now) >= record.last_observed_at - CLOCK_ROLLBACK_TOLERANCE
+    }
+
+    /// The trial's clock, or `None` while a rolled-back clock cannot be trusted.
+    fn trial_now(record: &Record, now: i64) -> Option<i64> {
+        Self::clock_trusted(record, now).then(|| Self::anchored_now(record, now))
+    }
+
+    /// Whether the record is unusable because the clock was set back: a trial counts as ended
+    /// and a paid license needs a check until Dodo's answer anchors time again.
+    pub fn clock_changed(&self, now: i64) -> bool {
+        self.stored
+            .license
+            .as_ref()
+            .is_some_and(|record| !record.revoked && !Self::clock_trusted(record, now))
     }
 
     pub fn state(&self, now: i64) -> State {
@@ -298,9 +338,15 @@ impl Engine {
         };
         match record.kind {
             Kind::Trial => {
-                let now = Self::trial_clock(record, now);
+                if record.revoked {
+                    return State::TrialEnded;
+                }
+                let Some(now) = Self::trial_now(record, now) else {
+                    // The clock changed: the trial counts as ended until Dodo anchors time again.
+                    return State::TrialEnded;
+                };
                 let expires_at = record.activated_at + TRIAL_LENGTH;
-                if record.revoked || now >= expires_at {
+                if now >= expires_at {
                     State::TrialEnded
                 } else {
                     State::Trial {
@@ -312,8 +358,8 @@ impl Engine {
                 if record.revoked {
                     return State::Revoked;
                 }
-                let age = now - record.last_success_at;
-                if !(-CLOCK_ROLLBACK_TOLERANCE..=GRACE_PERIOD).contains(&age) {
+                let age = Self::anchored_now(record, now) - record.last_success_at;
+                if !Self::clock_trusted(record, now) || age > GRACE_PERIOD {
                     State::CheckRequired
                 } else if age > CHECK_INTERVAL && self.schedule.failures > 0 {
                     State::Grace {
@@ -331,27 +377,38 @@ impl Engine {
         self.state(now).core_feature()
     }
 
+    /// How long a paid license has gone without a successful check, by the trusted clock.
+    pub fn offline_for(&self, now: i64) -> Option<i64> {
+        self.stored
+            .license
+            .as_ref()
+            .filter(|record| record.kind == Kind::Paid)
+            .map(|record| Self::anchored_now(record, now) - record.last_success_at)
+    }
+
     /// Notes that `now` has been reached. Returns whether the record changed and should be saved.
     pub fn observe(&mut self, now: i64) -> bool {
         match self.stored.license.as_mut() {
-            Some(record) if now > record.seen_at => {
-                record.seen_at = now;
+            Some(record) if Self::anchored_now(record, now) > record.last_observed_at => {
+                record.last_observed_at = Self::anchored_now(record, now);
                 true
             }
             _ => false,
         }
     }
 
-    /// The record that daily checks apply to: an activation that is not already ended or revoked.
+    /// The record that daily checks apply to: any activation whose trial has not run out. A
+    /// revoked one keeps checking, since `valid: true` for the same activation clears it.
     fn checkable(&self, now: i64) -> Option<&Record> {
-        self.stored
-            .license
-            .as_ref()
-            .filter(|record| !record.revoked)
-            .filter(|record| {
-                record.kind == Kind::Paid
-                    || Self::trial_clock(record, now) < record.activated_at + TRIAL_LENGTH
-            })
+        self.stored.license.as_ref().filter(|record| {
+            record.kind == Kind::Paid
+                || Self::trial_now(record, now)
+                    .is_none_or(|trial_now| trial_now < record.activated_at + TRIAL_LENGTH)
+        })
+    }
+
+    pub fn is_held(&self, now: i64) -> bool {
+        self.held(now).is_err()
     }
 
     fn held(&self, now: i64) -> Result<(), LicenseError> {
@@ -369,7 +426,7 @@ impl Engine {
         // After a failure the backoff decides; otherwise the daily schedule does.
         let mut due = match self.schedule.retry_at {
             Some(retry_at) => retry_at,
-            None if now < record.last_success_at - CLOCK_ROLLBACK_TOLERANCE => now,
+            None if !Self::clock_trusted(record, now) => now,
             None => record.last_success_at + CHECK_INTERVAL,
         };
         if let Some(hold_until) = self.schedule.hold_until {
@@ -385,15 +442,16 @@ impl Engine {
     /// The next moment the state changes by time alone: a trial's estimated expiry, the grace
     /// warning, or the end of grace. Independent of any network schedule.
     pub fn next_transition_at(&self, now: i64) -> Option<i64> {
-        let record = self.checkable(now)?;
+        let record = self.checkable(now).filter(|record| !record.revoked)?;
         let candidates = match record.kind {
-            Kind::Trial => {
-                vec![record.activated_at + TRIAL_LENGTH - (Self::trial_clock(record, now) - now)]
+            Kind::Trial => match Self::trial_now(record, now) {
+                Some(trial_now) => vec![now + (record.activated_at + TRIAL_LENGTH - trial_now)],
+                None => vec![],
+            },
+            Kind::Paid => {
+                let anchor = Self::local_anchor(record);
+                vec![anchor + GRACE_WARNING_AFTER, anchor + GRACE_PERIOD]
             }
-            Kind::Paid => vec![
-                record.last_success_at + GRACE_WARNING_AFTER,
-                record.last_success_at + GRACE_PERIOD,
-            ],
         };
         candidates.into_iter().filter(|at| *at > now).min()
     }
@@ -467,7 +525,8 @@ impl Engine {
             kind,
             activated_at: activation.created_at,
             last_success_at: activation.server_time.unwrap_or(now),
-            seen_at: now,
+            last_success_local: now,
+            last_observed_at: activation.server_time.unwrap_or(now),
             revoked: false,
         });
         next.trial_used |= kind == Kind::Trial;
@@ -487,7 +546,7 @@ impl Engine {
     }
 
     /// Records the outcome of deactivating an activation this Mac no longer uses. A failure is
-    /// remembered in `Stored::stale` and retried through `take_stale`, so a slot is never lost.
+    /// remembered in `Stored::stale` and retried through `take_cleanups`, so a slot is never lost.
     pub fn apply_release(&mut self, probe: Probe, answer: Result<(), DodoError>, now: i64) {
         match answer {
             Ok(()) | Err(DodoError::KeyNotFound) | Err(DodoError::KeyDisabled) => {}
@@ -495,24 +554,24 @@ impl Engine {
                 if let DodoError::RateLimited { retry_after } = error {
                     self.schedule.hold(now, retry_after);
                 }
-                self.remember_stale(probe);
+                self.remember_cleanup(probe);
             }
         }
     }
 
-    pub fn remember_stale(&mut self, probe: Probe) {
-        if !self.stored.stale.contains(&probe) {
-            self.stored.stale.push(probe);
+    pub fn remember_cleanup(&mut self, probe: Probe) {
+        if !self.stored.pending_cleanups.contains(&probe) {
+            self.stored.pending_cleanups.push(probe);
         }
     }
 
     /// Deactivations to retry now; empty while a rate limit holds. Each answer goes back through
     /// `apply_release`.
-    pub fn take_stale(&mut self, now: i64) -> Vec<Probe> {
+    pub fn take_cleanups(&mut self, now: i64) -> Vec<Probe> {
         if self.held(now).is_err() {
             return Vec::new();
         }
-        std::mem::take(&mut self.stored.stale)
+        std::mem::take(&mut self.stored.pending_cleanups)
     }
 
     /// Starts a validation. `Ok(None)` when there is nothing to check, or the check is not due and
@@ -550,7 +609,14 @@ impl Engine {
         match answer {
             Ok(validation) => {
                 if validation.valid {
+                    // Dodo's answer anchors time again, and clears a revocation of this
+                    // activation.
                     record.last_success_at = validation.server_time.unwrap_or(now);
+                    record.last_success_local = now;
+                    // The server's time is authoritative: local observations only ever raise
+                    // this, but an answer from Dodo sets it.
+                    record.last_observed_at = record.last_success_at;
+                    record.revoked = false;
                 } else {
                     record.revoked = true;
                 }
@@ -561,8 +627,9 @@ impl Engine {
                 self.schedule.hold(now, retry_after);
                 Err(LicenseError::RateLimited { retry_after })
             }
-            Err(_) => {
-                self.schedule.failed(now);
+            Err(error) => {
+                self.schedule
+                    .failed(now, matches!(error, DodoError::Offline(_)));
                 Err(LicenseError::Unreachable)
             }
         }
@@ -662,20 +729,20 @@ impl Engine {
 
     fn release(&mut self, probe: Probe, dodo: &dyn Dodo, now: i64) {
         if self.held(now).is_err() {
-            self.remember_stale(probe);
+            self.remember_cleanup(probe);
             return;
         }
         let answer = dodo.deactivate(&probe.license_key, &probe.instance_id);
         self.apply_release(probe, answer, now);
     }
 
-    pub fn release_stale(&mut self, dodo: &dyn Dodo, now: i64) -> bool {
-        let pending = self.take_stale(now);
+    pub fn release_cleanups(&mut self, dodo: &dyn Dodo, now: i64) -> bool {
+        let pending = self.take_cleanups(now);
         let before = pending.len();
         for probe in pending {
             self.release(probe, dodo, now);
         }
-        before > 0 && self.stored.stale.len() != before
+        before > 0 && self.stored.pending_cleanups.len() != before
     }
 
     pub fn check(&mut self, dodo: &dyn Dodo, now: i64) -> Result<State, LicenseError> {
@@ -839,10 +906,11 @@ pub(crate) mod tests {
                     kind: Kind::Paid,
                     activated_at: NOW - 30 * DAY,
                     last_success_at: NOW - last_success_ago,
-                    seen_at: NOW - last_success_ago,
+                    last_success_local: NOW - last_success_ago,
+                    last_observed_at: NOW - last_success_ago,
                     revoked: false,
                 }),
-                stale: vec![],
+                pending_cleanups: vec![],
             },
             products(),
         )
@@ -859,10 +927,11 @@ pub(crate) mod tests {
                     kind: Kind::Trial,
                     activated_at: NOW - activated_ago,
                     last_success_at: NOW - activated_ago,
-                    seen_at: NOW - activated_ago,
+                    last_success_local: NOW - activated_ago,
+                    last_observed_at: NOW - activated_ago,
                     revoked: false,
                 }),
-                stale: vec![],
+                pending_cleanups: vec![],
             },
             products(),
         )
@@ -1032,7 +1101,13 @@ pub(crate) mod tests {
         assert_eq!(engine.check(&dodo, NOW), Ok(State::Revoked));
         assert!(!engine.core_feature(NOW));
         assert!(engine.stored.license.as_ref().unwrap().revoked);
-        assert_eq!(engine.next_check_at(NOW), None);
+        // Checks continue daily: `valid: true` for this activation clears the revocation.
+        assert_eq!(engine.next_check_at(NOW), Some(NOW - HOUR + DAY));
+        assert_eq!(
+            engine.check(&Fake::validating(true), NOW + DAY),
+            Ok(State::Licensed)
+        );
+        assert!(!engine.stored.license.as_ref().unwrap().revoked);
     }
 
     #[test]
@@ -1308,8 +1383,8 @@ pub(crate) mod tests {
         // Well inside what would have been the grace window, and with no network.
         assert_eq!(restarted.state(NOW + DAY), State::Revoked);
         assert!(!restarted.core_feature(NOW + DAY));
-        assert_eq!(restarted.next_check_at(NOW + DAY), None);
-        assert_eq!(restarted.begin_check(NOW + DAY, true), Ok(None));
+        assert_eq!(restarted.next_transition_at(NOW + DAY), None);
+        assert!(restarted.begin_check(NOW + DAY, true).unwrap().is_some());
         // Only a new activation clears it, and the new record starts clean.
         let mut restarted = restarted;
         assert_eq!(
@@ -1352,24 +1427,91 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn trial_days_never_exceed_three_and_a_rolled_back_clock_adds_none() {
+    fn trial_days_never_exceed_three_and_a_rolled_back_clock_fails_closed() {
         let mut engine = trial(DAY);
         assert!(engine.observe(NOW));
         assert!(!engine.observe(NOW - 1), "earlier times are not recorded");
-        // Rolling the clock back two days still leaves about two days.
-        assert_eq!(engine.state(NOW - 2 * DAY), State::Trial { days_left: 2 });
-        assert_eq!(engine.next_transition_at(NOW - 2 * DAY), Some(NOW));
+        // Within the tolerance the clock is trusted; a real rollback stops the trial until Dodo
+        // answers, and waiting it out offline adds nothing.
+        assert!(matches!(engine.state(NOW - HOUR / 2), State::Trial { .. }));
+        assert!(!engine.clock_changed(NOW - HOUR / 2));
+        assert_eq!(engine.state(NOW - 30 * DAY), State::TrialEnded);
+        assert!(engine.clock_changed(NOW - 30 * DAY));
+        assert!(!engine.core_feature(NOW - 30 * DAY));
+        assert_eq!(engine.state(NOW - 27 * DAY), State::TrialEnded);
+        assert_eq!(engine.next_transition_at(NOW - 27 * DAY), None);
+        assert!(
+            engine.check_due(NOW - 27 * DAY),
+            "a check is wanted right away"
+        );
+        // Dodo's answer re-anchors the trial to the server's time: three real days have passed.
+        let dodo = Fake::default();
+        dodo.validate.borrow_mut().push(Ok(Validation {
+            valid: true,
+            server_time: Some(NOW + 3 * DAY),
+        }));
+        assert_eq!(engine.check(&dodo, NOW - 27 * DAY), Ok(State::TrialEnded));
+        // Re-anchored on day two instead: the trial continues from the server's time.
+        let mut engine = trial(DAY);
+        engine.observe(NOW);
+        let dodo = Fake::default();
+        dodo.validate.borrow_mut().push(Ok(Validation {
+            valid: true,
+            server_time: Some(NOW + DAY),
+        }));
+        assert_eq!(
+            engine.check(&dodo, NOW - 30 * DAY),
+            Ok(State::Trial { days_left: 1 })
+        );
+        assert_eq!(engine.state(NOW - 30 * DAY + DAY), State::TrialEnded);
         // A record with a bad `activated_at` in the future is clamped to the trial length.
         let mut future = trial(0);
         future.stored.license.as_mut().unwrap().activated_at = NOW + 10 * DAY;
         assert_eq!(future.state(NOW), State::Trial { days_left: 3 });
-        // Once the high-water mark has passed the expiry, no clock setting brings it back.
+        // The high-water mark survives a restart.
+        let mut engine = trial(DAY);
         assert!(engine.observe(NOW + TRIAL_LENGTH));
-        assert_eq!(engine.state(NOW - 10 * DAY), State::TrialEnded);
-        assert_eq!(engine.next_check_at(NOW - 10 * DAY), None);
         let json = serde_json::to_string(&engine.stored).unwrap();
         let restarted = Engine::new(serde_json::from_str(&json).unwrap(), products());
+        assert_eq!(restarted.state(NOW + TRIAL_LENGTH), State::TrialEnded);
         assert_eq!(restarted.state(NOW), State::TrialEnded);
+        assert!(restarted.clock_changed(NOW));
+        // Records saved before the local anchor existed still work.
+        let mut legacy = trial(DAY);
+        legacy.stored.license.as_mut().unwrap().last_success_local = 0;
+        assert_eq!(legacy.state(NOW), State::Trial { days_left: 2 });
+    }
+
+    #[test]
+    fn a_server_error_backs_off_without_calling_the_network_down() {
+        let mut engine = licensed(25 * HOUR);
+        assert!(
+            engine
+                .check(&Fake::failing(DodoError::ServerError(503)), NOW)
+                .is_err()
+        );
+        assert!(!engine.schedule.network_down);
+        assert_eq!(
+            engine.state(NOW),
+            State::Grace {
+                days_offline: 1,
+                days_left: 6
+            }
+        );
+        assert!(
+            engine
+                .check(
+                    &Fake::failing(DodoError::Offline("timed out".into())),
+                    NOW + 60
+                )
+                .is_err()
+        );
+        assert!(engine.schedule.network_down);
+        assert_eq!(
+            engine.check(&Fake::validating(true), NOW + 180),
+            Ok(State::Licensed)
+        );
+        assert!(!engine.schedule.network_down);
     }
 
     #[test]
@@ -1408,9 +1550,9 @@ pub(crate) mod tests {
         let down = Fake::failing(DodoError::Offline("down".into()));
         engine.abandon_activation(activated, &down, NOW);
         assert_eq!(engine.stored.license, before.license);
-        assert_eq!(engine.stored.stale.len(), 1);
-        assert!(engine.release_stale(&Fake::default(), NOW + 60));
-        assert!(engine.stored.stale.is_empty());
+        assert_eq!(engine.stored.pending_cleanups.len(), 1);
+        assert!(engine.release_cleanups(&Fake::default(), NOW + 60));
+        assert!(engine.stored.pending_cleanups.is_empty());
     }
 
     #[test]
@@ -1433,18 +1575,20 @@ pub(crate) mod tests {
             Call::Deactivate("KEY-PAID".into(), "lki_paid".into())
         );
         assert_eq!(
-            engine.stored.stale,
+            engine.stored.pending_cleanups,
             vec![Probe {
                 license_key: "KEY-PAID".into(),
                 instance_id: "lki_paid".into()
             }]
         );
         // Still offline: nothing is dropped. Back online: freed and forgotten.
-        assert!(!engine.release_stale(&Fake::failing(DodoError::Offline("down".into())), NOW + 60));
-        assert_eq!(engine.stored.stale.len(), 1);
+        assert!(
+            !engine.release_cleanups(&Fake::failing(DodoError::Offline("down".into())), NOW + 60)
+        );
+        assert_eq!(engine.stored.pending_cleanups.len(), 1);
         let later = Fake::default();
-        assert!(engine.release_stale(&later, NOW + 120));
-        assert!(engine.stored.stale.is_empty());
+        assert!(engine.release_cleanups(&later, NOW + 120));
+        assert!(engine.stored.pending_cleanups.is_empty());
         assert_eq!(
             later.calls(),
             vec![Call::Deactivate("KEY-PAID".into(), "lki_paid".into())]
@@ -1457,7 +1601,10 @@ pub(crate) mod tests {
             .push(Err(DodoError::Offline("down".into())));
         assert!(engine.activate("KEY-X", KeyHint::Any, &dodo, NOW).is_err());
         assert!(engine.stored.license.is_none());
-        assert_eq!(engine.stored.stale[0].instance_id, "lki_pdt_openreaction");
+        assert_eq!(
+            engine.stored.pending_cleanups[0].instance_id,
+            "lki_pdt_openreaction"
+        );
         // The stored shape keeps the list.
         let json = serde_json::to_string(&engine.stored).unwrap();
         assert_eq!(
@@ -1491,7 +1638,7 @@ pub(crate) mod tests {
         );
         assert!(dodo.calls().is_empty());
         assert!(engine.stored.license.is_some());
-        assert!(!engine.release_stale(&dodo, NOW + 70));
+        assert!(!engine.release_cleanups(&dodo, NOW + 70));
         assert_eq!(engine.remove(&dodo, NOW + 121), Ok(State::Unlicensed));
     }
 
@@ -1505,7 +1652,7 @@ pub(crate) mod tests {
         // The old slot's deactivation is rate limited: remembered, and nothing else is called
         // until the hold passes, including a refused key's slot.
         assert_eq!(engine.commit(activated, &limited, NOW), State::Licensed);
-        assert_eq!(engine.stored.stale.len(), 1);
+        assert_eq!(engine.stored.pending_cleanups.len(), 1);
         assert_eq!(engine.schedule.hold_until, Some(NOW + 120));
         let refused = Fake::activating(X);
         assert!(
@@ -1517,11 +1664,11 @@ pub(crate) mod tests {
             refused.calls().is_empty(),
             "held: not even the activation call"
         );
-        assert!(!engine.release_stale(&refused, NOW + 10));
+        assert!(!engine.release_cleanups(&refused, NOW + 10));
         assert!(refused.calls().is_empty());
-        assert_eq!(engine.stored.stale.len(), 1);
-        assert!(engine.release_stale(&Fake::default(), NOW + 120));
-        assert!(engine.stored.stale.is_empty());
+        assert_eq!(engine.stored.pending_cleanups.len(), 1);
+        assert!(engine.release_cleanups(&Fake::default(), NOW + 120));
+        assert!(engine.stored.pending_cleanups.is_empty());
         // A hold never exceeds a day, and never rounds down to nothing.
         engine.note_rate_limit(NOW, 10 * DAY);
         assert_eq!(engine.schedule.hold_until, Some(NOW + DAY));
@@ -1580,10 +1727,11 @@ pub(crate) mod tests {
                 kind: Kind::Paid,
                 activated_at: NOW,
                 last_success_at: NOW,
-                seen_at: NOW,
+                last_success_local: NOW,
+                last_observed_at: NOW,
                 revoked: false,
             }),
-            stale: vec![],
+            pending_cleanups: vec![],
         };
         let json = serde_json::to_string(&stored).unwrap();
         assert_eq!(serde_json::from_str::<Stored>(&json).unwrap(), stored);

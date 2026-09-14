@@ -228,7 +228,10 @@ pnpm --filter @openapps/openklack-desktop tauri dev --features licensing
 
 The Dodo products are not created yet, so no real IDs exist; the workflow's checks job uses placeholders to compile and test the licensed flavour, and the release job requires `OPENKLACK_DODO_PAID_PRODUCT_ID`, `OPENKLACK_DODO_TRIAL_PRODUCT_ID`, `OPENKLACK_BUY_URL` and `OPENKLACK_TRIAL_URL` as variables in the `openklack-release` environment before it builds with `OPENKLACK_LICENSE_ENV=live`.
 The license record lives in the Keychain item `space.openapps.openklack.license`; a development build signed with a different identity than an installed copy asks for Keychain access on first launch.
-`openklack://activate?key=…` (registered in `Info.plist`) opens Settings with the key pre-filled; the user confirms before anything is sent. Source builds only open Settings.
+Keyboard sounds stay off until that record has been read, and the service follows the contract's write order: losing access takes effect in memory first and is then saved (a failed save is retried every tick and shown as a storage error), while gaining access is saved first.
+Every gate decision carries a revision, and the audio engine ignores older ones, so a delayed unlock can never follow a block.
+Time is anchored to Dodo's `Date` header at the last successful check; a clock set back more than an hour before the latest moment seen ends a trial and asks a paid license to check again until Dodo answers.
+`openklack://activate?key=…` (registered in `Info.plist`) opens Settings with the key pre-filled; the user confirms before anything is sent. The trial thanks page adds `&kind=trial`, which lets the app refuse a second trial without calling Dodo; other parameters are ignored. Source builds only open Settings.
 
 Public distribution requires Developer ID signing and notarization.
 The [desktop workflow](../.github/workflows/openklack.yml) runs checks on an Apple Silicon Mac runner and can produce a signed release candidate through manual dispatch.
