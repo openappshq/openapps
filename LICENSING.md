@@ -118,7 +118,7 @@ One Keychain item per app, service `space.openapps.<app>.license`. Never store i
 | `product_id`, `kind` | Activation response and the product check |
 | `activated_at` | Activation `created_at` (server time) |
 | `last_success_at` | Time of the last `valid: true`, from the response `Date` header, falling back to the local clock |
-| `last_observed_at` | The latest moment the app has seen: server `Date` from a successful check, otherwise the local clock, raised on every scheduler tick and never lowered |
+| `last_observed_at` | The latest trustworthy time the app has seen. Local-clock observations on each scheduler tick only raise it; a successful check sets it to the server `Date`, even if that is lower, so a local clock that had run ahead doesn't leave the record permanently untrusted |
 | `revoked` | Set when Dodo answers `valid: false` for this activation; cleared only by `valid: true` for the same activation or a new activation |
 | `trial_used` | Set when a trial key is first activated on this Mac; kept after removal |
 | `pending_cleanups` | Activations the app still owes a deactivation for (replaced, refused or abandoned); kept even with no record |
