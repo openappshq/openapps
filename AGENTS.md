@@ -1,0 +1,5 @@
+# OpenApps
+
+- UI, branding, copy, motion, or new products: start with [design/README.md](design/README.md), then read only relevant references.
+- Architecture, commands, and releases: [development guide](docs/development.md).
+- Documentation: keep each rule in one authoritative file; link to details, omit generic advice, and query large snapshots selectively.

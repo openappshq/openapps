@@ -1,0 +1,2565 @@
+{
+  "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio",
+  "exportedOn": "2026-09-14",
+  "purpose": "Read-only Figma snapshot. Approved rules and superseded interactions are documented in design/README.md.",
+  "collections": [
+    {
+      "id": "VariableCollectionId:2:2",
+      "name": "Palette",
+      "modes": [
+        {
+          "name": "Palette",
+          "modeId": "2:0"
+        }
+      ]
+    },
+    {
+      "id": "VariableCollectionId:2:31",
+      "name": "Color",
+      "modes": [
+        {
+          "name": "Light",
+          "modeId": "2:1"
+        },
+        {
+          "name": "Dark",
+          "modeId": "2:2"
+        }
+      ]
+    },
+    {
+      "id": "VariableCollectionId:2:53",
+      "name": "Metrics",
+      "modes": [
+        {
+          "name": "Metrics",
+          "modeId": "2:3"
+        }
+      ]
+    },
+    {
+      "id": "VariableCollectionId:2:72",
+      "name": "Typography",
+      "modes": [
+        {
+          "name": "Typography",
+          "modeId": "2:4"
+        }
+      ]
+    }
+  ],
+  "variables": [
+    {
+      "id": "VariableID:2:3",
+      "name": "white",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 1,
+          "g": 1,
+          "b": 1,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:4",
+      "name": "neutral/0",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.9725490212440491,
+          "g": 0.9725490212440491,
+          "b": 0.9725490212440491,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:5",
+      "name": "neutral/50",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.9529411792755127,
+          "g": 0.9529411792755127,
+          "b": 0.9529411792755127,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:6",
+      "name": "neutral/100",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.9215686321258545,
+          "g": 0.9215686321258545,
+          "b": 0.9215686321258545,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:7",
+      "name": "neutral/200",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.8509804010391235,
+          "g": 0.8509804010391235,
+          "b": 0.8509804010391235,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:8",
+      "name": "neutral/400",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.729411780834198,
+          "g": 0.729411780834198,
+          "b": 0.729411780834198,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:9",
+      "name": "neutral/500",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.5215686559677124,
+          "g": 0.5215686559677124,
+          "b": 0.5215686559677124,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:10",
+      "name": "neutral/600",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.3843137323856354,
+          "g": 0.3843137323856354,
+          "b": 0.3843137323856354,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:11",
+      "name": "neutral/700",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.2823529541492462,
+          "g": 0.2823529541492462,
+          "b": 0.2823529541492462,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:12",
+      "name": "neutral/800",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.1725490242242813,
+          "g": 0.1725490242242813,
+          "b": 0.1725490242242813,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:13",
+      "name": "neutral/850",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.125490203499794,
+          "g": 0.125490203499794,
+          "b": 0.125490203499794,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:14",
+      "name": "neutral/950",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.0784313753247261,
+          "g": 0.0784313753247261,
+          "b": 0.0784313753247261,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:15",
+      "name": "cobalt/50",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.929411768913269,
+          "g": 0.9411764740943909,
+          "b": 1,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:16",
+      "name": "cobalt/200",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.7568627595901489,
+          "g": 0.7882353067398071,
+          "b": 1,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:17",
+      "name": "cobalt/300",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.6509804129600525,
+          "g": 0.6980392336845398,
+          "b": 1,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:18",
+      "name": "cobalt/600",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.1882352977991104,
+          "g": 0.29411765933036804,
+          "b": 1,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:19",
+      "name": "cobalt/700",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.125490203499794,
+          "g": 0.21960784494876862,
+          "b": 0.8470588326454163,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:20",
+      "name": "cobalt/950",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.1411764770746231,
+          "g": 0.16862745583057404,
+          "b": 0.3333333432674408,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:21",
+      "name": "yellow/400",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 1,
+          "g": 0.8352941274642944,
+          "b": 0.1568627506494522,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:22",
+      "name": "orchid/300",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.9529411792755127,
+          "g": 0.6274510025978088,
+          "b": 0.8627451062202454,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:23",
+      "name": "green/50",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.929411768913269,
+          "g": 0.9725490212440491,
+          "b": 0.9450980424880981,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:24",
+      "name": "green/300",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.5686274766921997,
+          "g": 0.8627451062202454,
+          "b": 0.7058823704719543,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:25",
+      "name": "green/700",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.13725490868091583,
+          "g": 0.41960784792900085,
+          "b": 0.2823529541492462,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:26",
+      "name": "green/950",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.08627451211214066,
+          "g": 0.22745098173618317,
+          "b": 0.16078431904315948,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:27",
+      "name": "red/50",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 1,
+          "g": 0.9411764740943909,
+          "b": 0.9490196108818054,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:28",
+      "name": "red/300",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 1,
+          "g": 0.6745098233222961,
+          "b": 0.7215686440467834,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:29",
+      "name": "red/700",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.6745098233222961,
+          "g": 0.1411764770746231,
+          "b": 0.23529411852359772,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:30",
+      "name": "red/950",
+      "collectionId": "VariableCollectionId:2:2",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:0": {
+          "r": 0.29411765933036804,
+          "g": 0.125490203499794,
+          "b": 0.1568627506494522,
+          "a": 1
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:32",
+      "name": "bg/canvas",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:3"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:14"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:33",
+      "name": "bg/surface",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:5"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:13"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:34",
+      "name": "bg/hover",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:6"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:12"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:35",
+      "name": "bg/inverse",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:14"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:3"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:36",
+      "name": "text/primary",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:14"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:4"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:37",
+      "name": "text/secondary",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:10"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:8"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:38",
+      "name": "border/subtle",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:7"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:11"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:39",
+      "name": "border/control",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:9"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:9"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:40",
+      "name": "accent/solid",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:18"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:17"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:41",
+      "name": "accent/hover",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:19"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:16"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:42",
+      "name": "accent/subtle",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:15"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:20"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:43",
+      "name": "accent/text",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:19"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:16"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:44",
+      "name": "accent/on",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:3"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:14"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:45",
+      "name": "focus/ring",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:18"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:17"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:46",
+      "name": "brand/hq",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:21"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:21"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:47",
+      "name": "brand/klack",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:18"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:18"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:48",
+      "name": "brand/orchid",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:22"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:22"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:49",
+      "name": "success/solid",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:25"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:24"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:50",
+      "name": "success/subtle",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:23"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:26"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:51",
+      "name": "danger/solid",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:29"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:28"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:52",
+      "name": "danger/subtle",
+      "collectionId": "VariableCollectionId:2:31",
+      "type": "COLOR",
+      "valuesByMode": {
+        "2:1": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:27"
+        },
+        "2:2": {
+          "type": "VARIABLE_ALIAS",
+          "id": "VariableID:2:30"
+        }
+      }
+    },
+    {
+      "id": "VariableID:2:54",
+      "name": "space/4",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 4
+      }
+    },
+    {
+      "id": "VariableID:2:55",
+      "name": "space/8",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 8
+      }
+    },
+    {
+      "id": "VariableID:2:56",
+      "name": "space/12",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 12
+      }
+    },
+    {
+      "id": "VariableID:2:57",
+      "name": "space/16",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 16
+      }
+    },
+    {
+      "id": "VariableID:2:58",
+      "name": "space/24",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 24
+      }
+    },
+    {
+      "id": "VariableID:2:59",
+      "name": "space/32",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 32
+      }
+    },
+    {
+      "id": "VariableID:2:60",
+      "name": "space/48",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 48
+      }
+    },
+    {
+      "id": "VariableID:2:61",
+      "name": "space/64",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 64
+      }
+    },
+    {
+      "id": "VariableID:2:62",
+      "name": "space/96",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 96
+      }
+    },
+    {
+      "id": "VariableID:2:63",
+      "name": "radius/small",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 4
+      }
+    },
+    {
+      "id": "VariableID:2:64",
+      "name": "radius/control",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 8
+      }
+    },
+    {
+      "id": "VariableID:2:65",
+      "name": "radius/panel",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 16
+      }
+    },
+    {
+      "id": "VariableID:2:66",
+      "name": "radius/pill",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 999
+      }
+    },
+    {
+      "id": "VariableID:2:67",
+      "name": "control/compact",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 32
+      }
+    },
+    {
+      "id": "VariableID:2:68",
+      "name": "control/default",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 40
+      }
+    },
+    {
+      "id": "VariableID:2:69",
+      "name": "target/touch",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 44
+      }
+    },
+    {
+      "id": "VariableID:2:70",
+      "name": "layout/compact",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 760
+      }
+    },
+    {
+      "id": "VariableID:2:71",
+      "name": "layout/wide",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 1280
+      }
+    },
+    {
+      "id": "VariableID:2:73",
+      "name": "family/display",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "STRING",
+      "valuesByMode": {
+        "2:4": "Bricolage Grotesque"
+      }
+    },
+    {
+      "id": "VariableID:2:74",
+      "name": "family/body",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "STRING",
+      "valuesByMode": {
+        "2:4": "Instrument Sans"
+      }
+    },
+    {
+      "id": "VariableID:2:75",
+      "name": "family/mono",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "STRING",
+      "valuesByMode": {
+        "2:4": "IBM Plex Mono"
+      }
+    },
+    {
+      "id": "VariableID:2:76",
+      "name": "size/caption",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 14
+      }
+    },
+    {
+      "id": "VariableID:2:77",
+      "name": "size/body",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 16
+      }
+    },
+    {
+      "id": "VariableID:2:78",
+      "name": "size/title",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 24
+      }
+    },
+    {
+      "id": "VariableID:2:79",
+      "name": "size/section",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 40
+      }
+    },
+    {
+      "id": "VariableID:2:80",
+      "name": "size/display",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 64
+      }
+    },
+    {
+      "id": "VariableID:2:81",
+      "name": "size/hero",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 112
+      }
+    },
+    {
+      "id": "VariableID:2:82",
+      "name": "line/caption",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 20
+      }
+    },
+    {
+      "id": "VariableID:2:83",
+      "name": "line/body",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 24
+      }
+    },
+    {
+      "id": "VariableID:2:84",
+      "name": "line/title",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 28
+      }
+    },
+    {
+      "id": "VariableID:2:85",
+      "name": "line/section",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 44
+      }
+    },
+    {
+      "id": "VariableID:2:86",
+      "name": "line/display",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 68
+      }
+    },
+    {
+      "id": "VariableID:2:87",
+      "name": "line/hero",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 108
+      }
+    },
+    {
+      "id": "VariableID:2:88",
+      "name": "weight/regular",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 400
+      }
+    },
+    {
+      "id": "VariableID:2:89",
+      "name": "weight/semibold",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 600
+      }
+    },
+    {
+      "id": "VariableID:2:90",
+      "name": "weight/heavy",
+      "collectionId": "VariableCollectionId:2:72",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:4": 800
+      }
+    },
+    {
+      "id": "VariableID:2:677",
+      "name": "motion/instant",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 0
+      }
+    },
+    {
+      "id": "VariableID:2:678",
+      "name": "motion/fast",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 100
+      }
+    },
+    {
+      "id": "VariableID:2:679",
+      "name": "motion/standard",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 180
+      }
+    },
+    {
+      "id": "VariableID:2:680",
+      "name": "motion/expressive",
+      "collectionId": "VariableCollectionId:2:53",
+      "type": "FLOAT",
+      "valuesByMode": {
+        "2:3": 260
+      }
+    }
+  ],
+  "textStyles": [
+    {
+      "id": "S:41e9adb512f445b4eb57c8ae2853e96cf1993421,",
+      "name": "Display/Hero",
+      "fontName": {
+        "family": "Bricolage Grotesque",
+        "style": "ExtraBold",
+        "variationSettings": {
+          "wght": 800,
+          "wdth": 100,
+          "opsz": 14
+        }
+      },
+      "fontSize": 112,
+      "lineHeight": {
+        "unit": "PIXELS",
+        "value": 108
+      },
+      "letterSpacing": {
+        "unit": "PERCENT",
+        "value": -4.5
+      }
+    },
+    {
+      "id": "S:96bba3ea4269e9371d290473e943fd3e8ba6cbf9,",
+      "name": "Display/Large",
+      "fontName": {
+        "family": "Bricolage Grotesque",
+        "style": "ExtraBold",
+        "variationSettings": {
+          "wght": 800,
+          "wdth": 100,
+          "opsz": 14
+        }
+      },
+      "fontSize": 64,
+      "lineHeight": {
+        "unit": "PIXELS",
+        "value": 68
+      },
+      "letterSpacing": {
+        "unit": "PERCENT",
+        "value": -4.5
+      }
+    },
+    {
+      "id": "S:cc032730eab9e332e81350bf7beebc7dc08035f2,",
+      "name": "Display/Section",
+      "fontName": {
+        "family": "Bricolage Grotesque",
+        "style": "ExtraBold",
+        "variationSettings": {
+          "wght": 800,
+          "wdth": 100,
+          "opsz": 14
+        }
+      },
+      "fontSize": 40,
+      "lineHeight": {
+        "unit": "PIXELS",
+        "value": 44
+      },
+      "letterSpacing": {
+        "unit": "PERCENT",
+        "value": -3
+      }
+    },
+    {
+      "id": "S:c6d04a0b5808058583dce907b7598d880060e0c5,",
+      "name": "UI/Title",
+      "fontName": {
+        "family": "Instrument Sans",
+        "style": "SemiBold",
+        "variationSettings": {
+          "wght": 600,
+          "wdth": 100
+        }
+      },
+      "fontSize": 24,
+      "lineHeight": {
+        "unit": "PIXELS",
+        "value": 28
+      },
+      "letterSpacing": {
+        "unit": "PERCENT",
+        "value": -2
+      }
+    },
+    {
+      "id": "S:93bd8ce2d807429cc8e517977b43d8abfb95b4ff,",
+      "name": "UI/Body",
+      "fontName": {
+        "family": "Instrument Sans",
+        "style": "Regular",
+        "variationSettings": {
+          "wght": 400,
+          "wdth": 100
+        }
+      },
+      "fontSize": 16,
+      "lineHeight": {
+        "unit": "PIXELS",
+        "value": 24
+      },
+      "letterSpacing": {
+        "unit": "PERCENT",
+        "value": 0
+      }
+    },
+    {
+      "id": "S:73c31dd1601734a556f78344d5a8716a6b7bdf01,",
+      "name": "UI/Strong",
+      "fontName": {
+        "family": "Instrument Sans",
+        "style": "SemiBold",
+        "variationSettings": {
+          "wght": 600,
+          "wdth": 100
+        }
+      },
+      "fontSize": 16,
+      "lineHeight": {
+        "unit": "PIXELS",
+        "value": 24
+      },
+      "letterSpacing": {
+        "unit": "PERCENT",
+        "value": 0
+      }
+    },
+    {
+      "id": "S:5d520fdced54e02b18ed6f8f41b45636023a4507,",
+      "name": "UI/Small",
+      "fontName": {
+        "family": "Instrument Sans",
+        "style": "Regular",
+        "variationSettings": {
+          "wght": 400,
+          "wdth": 100
+        }
+      },
+      "fontSize": 14,
+      "lineHeight": {
+        "unit": "PIXELS",
+        "value": 20
+      },
+      "letterSpacing": {
+        "unit": "PERCENT",
+        "value": 0
+      }
+    },
+    {
+      "id": "S:8936428d9c355ec22227158165815b34a66df7ba,",
+      "name": "Label/Mono",
+      "fontName": {
+        "family": "IBM Plex Mono",
+        "style": "Regular"
+      },
+      "fontSize": 14,
+      "lineHeight": {
+        "unit": "PIXELS",
+        "value": 20
+      },
+      "letterSpacing": {
+        "unit": "PERCENT",
+        "value": 4
+      }
+    }
+  ],
+  "effects": [
+    {
+      "id": "S:7127ef1af7bc365facff00183126664cdcec573a,",
+      "name": "Elevation/Floating",
+      "effects": [
+        {
+          "type": "DROP_SHADOW",
+          "visible": true,
+          "radius": 32,
+          "boundVariables": {},
+          "color": {
+            "r": 0,
+            "g": 0,
+            "b": 0,
+            "a": 0.1599999964237213
+          },
+          "offset": {
+            "x": 0,
+            "y": 12
+          },
+          "spread": -8,
+          "blendMode": "NORMAL",
+          "showShadowBehindNode": true
+        }
+      ]
+    },
+    {
+      "id": "S:c578683c6265234de3fa5e6df19778de9e659a9e,",
+      "name": "Elevation/Control",
+      "effects": [
+        {
+          "type": "DROP_SHADOW",
+          "visible": true,
+          "radius": 3,
+          "boundVariables": {},
+          "color": {
+            "r": 0,
+            "g": 0,
+            "b": 0,
+            "a": 0.07999999821186066
+          },
+          "offset": {
+            "x": 0,
+            "y": 2
+          },
+          "spread": 0,
+          "blendMode": "NORMAL",
+          "showShadowBehindNode": true
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "id": "0:1",
+      "name": "00 · Brand sheet",
+      "children": [
+        {
+          "id": "2:137",
+          "name": "Tactile Studio · Brand sheet",
+          "type": "FRAME",
+          "width": 1440,
+          "height": 1040,
+          "exportSettings": []
+        },
+        {
+          "id": "3:769",
+          "name": "OpenKlack - GitHub cover",
+          "type": "FRAME",
+          "width": 1440,
+          "height": 640,
+          "exportSettings": [
+            {
+              "format": "PNG",
+              "suffix": "",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "constraint": {
+                "type": "SCALE",
+                "value": 1
+              }
+            }
+          ]
+        }
+      ],
+      "components": []
+    },
+    {
+      "id": "2:91",
+      "name": "01 · Foundations",
+      "children": [
+        {
+          "id": "2:178",
+          "name": "Light · Color system",
+          "type": "FRAME",
+          "width": 720,
+          "height": 900,
+          "exportSettings": []
+        },
+        {
+          "id": "2:182",
+          "name": "Dark · Color system",
+          "type": "FRAME",
+          "width": 720,
+          "height": 900,
+          "exportSettings": []
+        },
+        {
+          "id": "2:266",
+          "name": "Typography · Voice and rhythm",
+          "type": "FRAME",
+          "width": 1520,
+          "height": 980,
+          "exportSettings": []
+        },
+        {
+          "id": "2:681",
+          "name": "03 · Space, form & motion",
+          "type": "FRAME",
+          "width": 1520,
+          "height": 1000,
+          "exportSettings": []
+        }
+      ],
+      "components": []
+    },
+    {
+      "id": "2:92",
+      "name": "02 · Logos",
+      "children": [
+        {
+          "id": "2:123",
+          "name": "Brand/OpenApps HQ/App icon",
+          "type": "COMPONENT",
+          "width": 256,
+          "height": 256,
+          "exportSettings": [
+            {
+              "format": "SVG",
+              "suffix": "-openapps-hq-app-icon",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "svgOutlineText": true,
+              "svgIdAttribute": false,
+              "svgSimplifyStroke": true
+            },
+            {
+              "format": "PNG",
+              "suffix": "-openapps-hq-app-icon-1024",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "constraint": {
+                "type": "SCALE",
+                "value": 4
+              }
+            }
+          ]
+        },
+        {
+          "id": "2:130",
+          "name": "Brand/OpenKlack/App icon",
+          "type": "COMPONENT",
+          "width": 256,
+          "height": 256,
+          "exportSettings": [
+            {
+              "format": "SVG",
+              "suffix": "-openklack-app-icon",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "svgOutlineText": true,
+              "svgIdAttribute": false,
+              "svgSimplifyStroke": true
+            },
+            {
+              "format": "PNG",
+              "suffix": "-openklack-app-icon-1024",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "constraint": {
+                "type": "SCALE",
+                "value": 4
+              }
+            }
+          ]
+        },
+        {
+          "id": "2:1437",
+          "name": "Identity rules · OpenApps family",
+          "type": "FRAME",
+          "width": 1440,
+          "height": 1056,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1558",
+          "name": "Brand/OpenApps HQ/Symbol · Ink and Paper",
+          "type": "FRAME",
+          "width": 336,
+          "height": 176,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1560",
+          "name": "Brand/OpenKlack/Symbol · Ink and Paper",
+          "type": "FRAME",
+          "width": 336,
+          "height": 176,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1562",
+          "name": "Brand/OpenApps HQ/Wordmark · Ink and Paper",
+          "type": "FRAME",
+          "width": 580,
+          "height": 208,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1564",
+          "name": "Brand/OpenKlack/Wordmark · Ink and Paper",
+          "type": "FRAME",
+          "width": 580,
+          "height": 208,
+          "exportSettings": []
+        }
+      ],
+      "components": [
+        {
+          "id": "2:123",
+          "name": "Brand/OpenApps HQ/App icon",
+          "type": "COMPONENT",
+          "description": "Original 256-unit app icon. A solid keycap face, machined edge and the master symbol. Use the symbol alone below 32 px.",
+          "properties": {}
+        },
+        {
+          "id": "2:130",
+          "name": "Brand/OpenKlack/App icon",
+          "type": "COMPONENT",
+          "description": "Original 256-unit app icon. A solid keycap face, machined edge and the master symbol. Use the symbol alone below 32 px.",
+          "properties": {}
+        },
+        {
+          "id": "2:111",
+          "name": "Brand/OpenApps HQ/Symbol",
+          "type": "COMPONENT_SET",
+          "description": "",
+          "properties": {
+            "Tone": {
+              "type": "VARIANT",
+              "defaultValue": "Ink",
+              "variantOptions": [
+                "Ink",
+                "Paper"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:103",
+          "name": "Tone=Ink",
+          "type": "COMPONENT",
+          "description": "OpenApps HQ master mark. The detached corner makes an open loop. Keep clear space equal to the 24-unit band; minimum digital size 16 px."
+        },
+        {
+          "id": "2:107",
+          "name": "Tone=Paper",
+          "type": "COMPONENT",
+          "description": "OpenApps HQ master mark. The detached corner makes an open loop. Keep clear space equal to the 24-unit band; minimum digital size 16 px."
+        },
+        {
+          "id": "2:120",
+          "name": "Brand/OpenKlack/Symbol",
+          "type": "COMPONENT_SET",
+          "description": "",
+          "properties": {
+            "Tone": {
+              "type": "VARIANT",
+              "defaultValue": "Ink",
+              "variantOptions": [
+                "Ink",
+                "Paper"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:112",
+          "name": "Tone=Ink",
+          "type": "COMPONENT",
+          "description": "OpenKlack master mark. A separated stem and a crisp strike form the K. Keep a 24-unit clear space; minimum digital size 16 px."
+        },
+        {
+          "id": "2:116",
+          "name": "Tone=Paper",
+          "type": "COMPONENT",
+          "description": "OpenKlack master mark. A separated stem and a crisp strike form the K. Keep a 24-unit clear space; minimum digital size 16 px."
+        },
+        {
+          "id": "2:172",
+          "name": "Brand/OpenApps HQ/Wordmark",
+          "type": "COMPONENT_SET",
+          "description": "",
+          "properties": {
+            "Tone": {
+              "type": "VARIANT",
+              "defaultValue": "Ink",
+              "variantOptions": [
+                "Ink",
+                "Paper"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:168",
+          "name": "Tone=Ink",
+          "type": "COMPONENT",
+          "description": "Bricolage Grotesque ExtraBold wordmark. Use the master symbol as the compact signature; preserve these letter shapes and tracking."
+        },
+        {
+          "id": "2:170",
+          "name": "Tone=Paper",
+          "type": "COMPONENT",
+          "description": "Bricolage Grotesque ExtraBold wordmark. Use the master symbol as the compact signature; preserve these letter shapes and tracking."
+        },
+        {
+          "id": "2:177",
+          "name": "Brand/OpenKlack/Wordmark",
+          "type": "COMPONENT_SET",
+          "description": "",
+          "properties": {
+            "Tone": {
+              "type": "VARIANT",
+              "defaultValue": "Ink",
+              "variantOptions": [
+                "Ink",
+                "Paper"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:173",
+          "name": "Tone=Ink",
+          "type": "COMPONENT",
+          "description": "Bricolage Grotesque ExtraBold wordmark. Use the master symbol as the compact signature; preserve these letter shapes and tracking."
+        },
+        {
+          "id": "2:175",
+          "name": "Tone=Paper",
+          "type": "COMPONENT",
+          "description": "Bricolage Grotesque ExtraBold wordmark. Use the master symbol as the compact signature; preserve these letter shapes and tracking."
+        }
+      ]
+    },
+    {
+      "id": "2:93",
+      "name": "03 · Components",
+      "children": [
+        {
+          "id": "2:308",
+          "name": "Control/Button",
+          "type": "COMPONENT_SET",
+          "width": 1000,
+          "height": 300,
+          "exportSettings": []
+        },
+        {
+          "id": "2:309",
+          "name": "Buttons · Documentation",
+          "type": "FRAME",
+          "width": 680,
+          "height": 72,
+          "exportSettings": []
+        },
+        {
+          "id": "2:312",
+          "name": "Icon/Play",
+          "type": "COMPONENT",
+          "width": 24,
+          "height": 24,
+          "exportSettings": []
+        },
+        {
+          "id": "2:315",
+          "name": "Icon/Pause",
+          "type": "COMPONENT",
+          "width": 24,
+          "height": 24,
+          "exportSettings": []
+        },
+        {
+          "id": "2:318",
+          "name": "Icon/Sound",
+          "type": "COMPONENT",
+          "width": 24,
+          "height": 24,
+          "exportSettings": []
+        },
+        {
+          "id": "2:321",
+          "name": "Icon/Search",
+          "type": "COMPONENT",
+          "width": 24,
+          "height": 24,
+          "exportSettings": []
+        },
+        {
+          "id": "2:325",
+          "name": "Icon/Chevron",
+          "type": "COMPONENT",
+          "width": 24,
+          "height": 24,
+          "exportSettings": []
+        },
+        {
+          "id": "2:328",
+          "name": "Icon/Favorite",
+          "type": "COMPONENT",
+          "width": 24,
+          "height": 24,
+          "exportSettings": []
+        },
+        {
+          "id": "2:331",
+          "name": "Icon/Settings",
+          "type": "COMPONENT",
+          "width": 24,
+          "height": 24,
+          "exportSettings": []
+        },
+        {
+          "id": "2:353",
+          "name": "Control/Icon button",
+          "type": "COMPONENT_SET",
+          "width": 360,
+          "height": 104,
+          "exportSettings": []
+        },
+        {
+          "id": "2:366",
+          "name": "Control/Switch",
+          "type": "COMPONENT_SET",
+          "width": 368,
+          "height": 112,
+          "exportSettings": []
+        },
+        {
+          "id": "2:387",
+          "name": "Control/Slider",
+          "type": "COMPONENT_SET",
+          "width": 960,
+          "height": 192,
+          "exportSettings": []
+        },
+        {
+          "id": "2:418",
+          "name": "Control/Search",
+          "type": "COMPONENT_SET",
+          "width": 1216,
+          "height": 192,
+          "exportSettings": []
+        },
+        {
+          "id": "2:425",
+          "name": "Navigation/Tab",
+          "type": "COMPONENT_SET",
+          "width": 600,
+          "height": 104,
+          "exportSettings": []
+        },
+        {
+          "id": "2:465",
+          "name": "Library/Sound pack",
+          "type": "COMPONENT_SET",
+          "width": 1160,
+          "height": 288,
+          "exportSettings": []
+        },
+        {
+          "id": "2:481",
+          "name": "Feedback/Status",
+          "type": "COMPONENT_SET",
+          "width": 1160,
+          "height": 256,
+          "exportSettings": []
+        },
+        {
+          "id": "2:488",
+          "name": "Keyboard/Keycap",
+          "type": "COMPONENT_SET",
+          "width": 200,
+          "height": 108,
+          "exportSettings": []
+        },
+        {
+          "id": "2:489",
+          "name": "Keyboard/OpenKlack 60",
+          "type": "COMPONENT",
+          "width": 680,
+          "height": 278,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1535",
+          "name": "Icons",
+          "type": "TEXT",
+          "width": 59,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1536",
+          "name": "Icon buttons",
+          "type": "TEXT",
+          "width": 137,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1537",
+          "name": "Switches",
+          "type": "TEXT",
+          "width": 100,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1538",
+          "name": "Volume sliders",
+          "type": "TEXT",
+          "width": 160,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1539",
+          "name": "Search inputs",
+          "type": "TEXT",
+          "width": 150,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1540",
+          "name": "Navigation",
+          "type": "TEXT",
+          "width": 118,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1541",
+          "name": "Sound packs",
+          "type": "TEXT",
+          "width": 140,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1542",
+          "name": "Status & recovery",
+          "type": "TEXT",
+          "width": 193,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1543",
+          "name": "Keycaps",
+          "type": "TEXT",
+          "width": 92,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1544",
+          "name": "Original keyboard",
+          "type": "TEXT",
+          "width": 193,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1555",
+          "name": "Feedback/Empty state",
+          "type": "COMPONENT_SET",
+          "width": 1240,
+          "height": 344,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1556",
+          "name": "Empty states",
+          "type": "TEXT",
+          "width": 266,
+          "height": 28,
+          "exportSettings": []
+        },
+        {
+          "id": "2:1557",
+          "name": "Search error help",
+          "type": "TEXT",
+          "width": 243,
+          "height": 20,
+          "exportSettings": []
+        }
+      ],
+      "components": [
+        {
+          "id": "2:308",
+          "name": "Control/Button",
+          "type": "COMPONENT_SET",
+          "description": "Use one primary action per view. Secondary supports nearby actions; Quiet is for low-emphasis actions. Five states, 40 px height, visible focus. Label is editable.",
+          "properties": {
+            "Label#2:0": {
+              "type": "TEXT",
+              "defaultValue": "Apply preset"
+            },
+            "Kind": {
+              "type": "VARIANT",
+              "defaultValue": "Primary",
+              "variantOptions": [
+                "Primary",
+                "Secondary",
+                "Quiet"
+              ]
+            },
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Default",
+              "variantOptions": [
+                "Default",
+                "Hover",
+                "Pressed",
+                "Focus",
+                "Disabled"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:278",
+          "name": "Kind=Primary, State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:280",
+          "name": "Kind=Primary, State=Hover",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:282",
+          "name": "Kind=Primary, State=Pressed",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:284",
+          "name": "Kind=Primary, State=Focus",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:286",
+          "name": "Kind=Primary, State=Disabled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:288",
+          "name": "Kind=Secondary, State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:290",
+          "name": "Kind=Secondary, State=Hover",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:292",
+          "name": "Kind=Secondary, State=Pressed",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:294",
+          "name": "Kind=Secondary, State=Focus",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:296",
+          "name": "Kind=Secondary, State=Disabled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:298",
+          "name": "Kind=Quiet, State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:300",
+          "name": "Kind=Quiet, State=Hover",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:302",
+          "name": "Kind=Quiet, State=Pressed",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:304",
+          "name": "Kind=Quiet, State=Focus",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:306",
+          "name": "Kind=Quiet, State=Disabled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:312",
+          "name": "Icon/Play",
+          "type": "COMPONENT",
+          "description": "",
+          "properties": {}
+        },
+        {
+          "id": "2:315",
+          "name": "Icon/Pause",
+          "type": "COMPONENT",
+          "description": "",
+          "properties": {}
+        },
+        {
+          "id": "2:318",
+          "name": "Icon/Sound",
+          "type": "COMPONENT",
+          "description": "",
+          "properties": {}
+        },
+        {
+          "id": "2:321",
+          "name": "Icon/Search",
+          "type": "COMPONENT",
+          "description": "",
+          "properties": {}
+        },
+        {
+          "id": "2:325",
+          "name": "Icon/Chevron",
+          "type": "COMPONENT",
+          "description": "",
+          "properties": {}
+        },
+        {
+          "id": "2:328",
+          "name": "Icon/Favorite",
+          "type": "COMPONENT",
+          "description": "",
+          "properties": {}
+        },
+        {
+          "id": "2:331",
+          "name": "Icon/Settings",
+          "type": "COMPONENT",
+          "description": "",
+          "properties": {}
+        },
+        {
+          "id": "2:353",
+          "name": "Control/Icon button",
+          "type": "COMPONENT_SET",
+          "description": "Compact 40 px action. Swap the icon property and supply an accessible label in implementation. Preview plays a short sample without changing the active preset.",
+          "properties": {
+            "Icon#2:16": {
+              "type": "INSTANCE_SWAP",
+              "defaultValue": "2:312",
+              "preferredValues": []
+            },
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Default",
+              "variantOptions": [
+                "Default",
+                "Hover",
+                "Focus",
+                "Disabled"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:337",
+          "name": "State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:341",
+          "name": "State=Hover",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:345",
+          "name": "State=Focus",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:349",
+          "name": "State=Disabled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:366",
+          "name": "Control/Switch",
+          "type": "COMPONENT_SET",
+          "description": "Use beside a persistent text label. 48 by 44 hit area. Space toggles. Disabled controls remain readable and do not accept input.",
+          "properties": {
+            "Value": {
+              "type": "VARIANT",
+              "defaultValue": "On",
+              "variantOptions": [
+                "On",
+                "Off"
+              ]
+            },
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Default",
+              "variantOptions": [
+                "Default",
+                "Disabled"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:354",
+          "name": "Value=On, State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:357",
+          "name": "Value=Off, State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:360",
+          "name": "Value=On, State=Disabled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:363",
+          "name": "Value=Off, State=Disabled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:387",
+          "name": "Control/Slider",
+          "type": "COMPONENT_SET",
+          "description": "Volume from 0 to 100. Pair with visible value. Arrow keys change by 1, Shift + arrow by 10. 44 px hit height. Values are illustrative Figma variants.",
+          "properties": {
+            "Value": {
+              "type": "VARIANT",
+              "defaultValue": "25",
+              "variantOptions": [
+                "25",
+                "60",
+                "100"
+              ]
+            },
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Default",
+              "variantOptions": [
+                "Default",
+                "Focus",
+                "Disabled"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:367",
+          "name": "Value=25, State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:371",
+          "name": "Value=60, State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:375",
+          "name": "Value=100, State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:379",
+          "name": "Value=60, State=Focus",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:383",
+          "name": "Value=60, State=Disabled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:418",
+          "name": "Control/Search",
+          "type": "COMPONENT_SET",
+          "description": "Persistent accessible label: Search sound library. Empty, filled, focused, error and disabled states. Pair error state with explanatory text; do not rely on red alone.",
+          "properties": {
+            "Value#2:21": {
+              "type": "TEXT",
+              "defaultValue": "Cherry MX"
+            },
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Empty",
+              "variantOptions": [
+                "Empty",
+                "Filled",
+                "Focus",
+                "Error",
+                "Disabled"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:388",
+          "name": "State=Empty",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:394",
+          "name": "State=Filled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:400",
+          "name": "State=Focus",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:406",
+          "name": "State=Error",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:412",
+          "name": "State=Disabled",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:425",
+          "name": "Navigation/Tab",
+          "type": "COMPONENT_SET",
+          "description": "Selected state uses weight and surface in addition to color. Arrow keys move between tabs. Keep labels visible.",
+          "properties": {
+            "Label#2:27": {
+              "type": "TEXT",
+              "defaultValue": "Sound library"
+            },
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Default",
+              "variantOptions": [
+                "Default",
+                "Selected",
+                "Focus"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:419",
+          "name": "State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:421",
+          "name": "State=Selected",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:423",
+          "name": "State=Focus",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:465",
+          "name": "Library/Sound pack",
+          "type": "COMPONENT_SET",
+          "description": "Selecting a row shows details. The play button previews a fixed comparison sample. Apply preset is a separate explicit action. Missing audio exposes a repair action in the details pane.",
+          "properties": {
+            "Name#2:31": {
+              "type": "TEXT",
+              "defaultValue": "Cherry MX Brown"
+            },
+            "Character#2:35": {
+              "type": "TEXT",
+              "defaultValue": "Tactile · warm · balanced"
+            },
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Default",
+              "variantOptions": [
+                "Default",
+                "Selected",
+                "Unavailable"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:426",
+          "name": "State=Default",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:439",
+          "name": "State=Selected",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:452",
+          "name": "State=Unavailable",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:481",
+          "name": "Feedback/Status",
+          "type": "COMPONENT_SET",
+          "description": "Always explain why sound is paused. Resume is visible beside an automatic pause. Error includes a recovery action. Status is conveyed by text as well as color.",
+          "properties": {
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Active",
+              "variantOptions": [
+                "Active",
+                "Paused",
+                "Error"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:466",
+          "name": "State=Active",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:471",
+          "name": "State=Paused",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:476",
+          "name": "State=Error",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:488",
+          "name": "Keyboard/Keycap",
+          "type": "COMPONENT_SET",
+          "description": "Original OpenKlack keycap. Subtle physical travel, no scale bounce. Press state uses accent and a shorter lower edge. Resize horizontally for logical keys.",
+          "properties": {
+            "Legend#2:39": {
+              "type": "TEXT",
+              "defaultValue": "K"
+            },
+            "State": {
+              "type": "VARIANT",
+              "defaultValue": "Rest",
+              "variantOptions": [
+                "Rest",
+                "Pressed"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:482",
+          "name": "State=Rest",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:485",
+          "name": "State=Pressed",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:489",
+          "name": "Keyboard/OpenKlack 60",
+          "type": "COMPONENT",
+          "description": "Original keyboard illustration built from linked keycap instances. Visual reference for the native 3D keyboard. Animate only while the settings view is visible.",
+          "properties": {}
+        },
+        {
+          "id": "2:1555",
+          "name": "Feedback/Empty state",
+          "type": "COMPONENT_SET",
+          "description": "One clear next action. Explain the permission purpose without implying access has already been granted. Empty search preserves the query and offers a reset.",
+          "properties": {
+            "Reason": {
+              "type": "VARIANT",
+              "defaultValue": "Permission",
+              "variantOptions": [
+                "Permission",
+                "No results"
+              ]
+            }
+          }
+        },
+        {
+          "id": "2:1545",
+          "name": "Reason=Permission",
+          "type": "COMPONENT",
+          "description": ""
+        },
+        {
+          "id": "2:1550",
+          "name": "Reason=No results",
+          "type": "COMPONENT",
+          "description": ""
+        }
+      ]
+    },
+    {
+      "id": "2:94",
+      "name": "04 · OpenKlack",
+      "children": [
+        {
+          "id": "2:737",
+          "name": "OpenKlack · Sound library · Light",
+          "type": "FRAME",
+          "width": 1160,
+          "height": 920,
+          "exportSettings": [
+            {
+              "format": "PNG",
+              "suffix": "-openklack-settings-light",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "constraint": {
+                "type": "SCALE",
+                "value": 1
+              }
+            }
+          ]
+        },
+        {
+          "id": "2:1045",
+          "name": "OpenKlack · Sound library · Dark",
+          "type": "FRAME",
+          "width": 1160,
+          "height": 920,
+          "exportSettings": [
+            {
+              "format": "PNG",
+              "suffix": "-openklack-settings-dark",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "constraint": {
+                "type": "SCALE",
+                "value": 1
+              }
+            }
+          ]
+        },
+        {
+          "id": "2:1353",
+          "name": "OpenKlack · Menu bar · Active",
+          "type": "FRAME",
+          "width": 368,
+          "height": 560,
+          "exportSettings": [
+            {
+              "format": "PNG",
+              "suffix": "-openklack-menu-active",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "constraint": {
+                "type": "SCALE",
+                "value": 1
+              }
+            }
+          ]
+        },
+        {
+          "id": "2:1393",
+          "name": "OpenKlack · Menu bar · Auto-paused",
+          "type": "FRAME",
+          "width": 368,
+          "height": 560,
+          "exportSettings": [
+            {
+              "format": "PNG",
+              "suffix": "-openklack-menu-paused",
+              "contentsOnly": true,
+              "colorProfile": "DOCUMENT",
+              "constraint": {
+                "type": "SCALE",
+                "value": 1
+              }
+            }
+          ]
+        }
+      ],
+      "components": []
+    }
+  ]
+}

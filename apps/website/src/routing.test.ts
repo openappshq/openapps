@@ -6,9 +6,10 @@ describe("classifyPath", () => {
     for (const path of [
       "/",
       "/index.html",
-      "/home/",
-      "/home",
-      "/home/index.html",
+      "/OpenKlack/",
+      "/openklack",
+      "/OpenKlack/download/",
+      "/OpenKlack/download/index.html",
       "/openreaction/",
       "/openreaction",
     ]) {
@@ -21,7 +22,7 @@ describe("classifyPath", () => {
     for (const path of [
       "/brand/openreaction/app-icon.svg",
       "/brand/missing.svg",
-      "/data/openreaction/emoji.json",
+      "/openreaction/data/emoji.json",
       "/sounds/pack.mp3",
       "/openreaction/og.png",
       "/favicon.svg",
@@ -33,7 +34,16 @@ describe("classifyPath", () => {
   });
 
   it("flags unknown pages, including stray .html requests", () => {
-    for (const path of ["/abc", "/abc/", "/openreaction/nope", "/foo/bar.html", "/home/extra/"]) {
+    for (const path of [
+      "/abc",
+      "/abc/",
+      "/openreaction/nope",
+      "/foo/bar.html",
+      "/home",
+      "/home/",
+      "/home/index.html",
+      "/download/",
+    ]) {
       expect(classifyPath(path), path).toBe("unknown");
     }
   });

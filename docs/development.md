@@ -1,6 +1,7 @@
 # Development and release guide
 
-A free, open-source keyboard sound utility for Mac, with an interactive marketing website and 18 recorded switch packs.
+OpenApps HQ is one workspace for independent desktop apps and their marketing pages.
+OpenKlack and [OpenReaction](../apps/openreaction/README.md) have independent native apps.
 
 ## Run
 
@@ -24,28 +25,71 @@ Tailwind supplies HeroUI’s styles; both apps use the shared Figma tokens.
 
 ```text
 apps/
-  website/          Marketing page and interactive browser playground
-  desktop/          Mac utility, React settings, and native input/audio
+  website/                    One OpenApps website and static build
+    src/catalog.ts            App cards, URLs, metadata, and asset sources
+    src/apps/openklack/        OpenKlack marketing, download, and playground
+      pages/                  Lazy-loaded page entries
+    src/apps/openreaction/     OpenReaction marketing and emoji demo
+  openklack-desktop/           OpenKlack's Tauri app and native input/audio
+  openreaction/               OpenReaction's Swift app
 packages/
-  keyboard-layout/  Shared logical keys, layout data, and input state
-  ui/               Interactive 3D keyboard, website typing test, and motion
-  soundpacks/       Shared recorded catalog, audio, and credits
+  ui/                         @openapps/ui: shared theme and motion
+  openklack-ui/                @openklack/ui: keyboard, sound browser, typing
+  keyboard-layout/            @openklack/keyboard-layout: logical key data
+  soundpacks/                 @openklack/soundpacks: recordings and credits
 design/
-  assets/           Exact Figma logo and interface exports
-  tokens.json       Figma palette, semantic modes, metrics, and typography
-  tokens.css        Generated CSS token bindings
+  README.md                   Design entry point and source authority
+  system.md                   Organization-wide visual and interaction rules
+  components.md               Figma specimens mapped to current HeroUI code
+  products/                   Current product contracts
+  references/                 Figma foundations, component sheets, and snapshot
+  archive/                    Superseded proposals and external research
+  assets/                     Brand masters and current captures, grouped by app
+  tokens.json                 Shared Figma design system
+  tokens.css                  Generated tokens, exported by @openapps/ui
 ```
 
-The pnpm workspace and Vite+ scripts cover the two apps without another task runner.
-Run `pnpm dev` for the website or `pnpm desktop` for the native utility.
-The website builds to root `dist/` for the existing static hosting configuration; the desktop frontend builds to its own directory.
-The website copies shared audio and brand assets into ignored public directories before dev and build, keeping one source of truth.
-Run `pnpm theme` after updating the Figma token export; do not edit generated `design/tokens.css` directly.
-The [design index](../design/README.md) links the Figma system, exported logos, and [complete desktop UI specification](../design/openklack-app-ui.md).
+The workspace remains pnpm + Vite+, with no additional task runner.
+`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/OpenKlack/`, its download page at `/OpenKlack/download/`, and OpenReaction at `/openreaction/`.
+`pnpm openklack:dev` runs the native utility.
+`pnpm build` emits one static `dist/` with a real HTML entry for each catalog page and a `404.html` fallback.
+The website loads each product's code and styles only when its route opens.
+Models and sounds live under `/OpenKlack/`; logos remain in `/brand/<app-id>/`.
+Catalog HTML and copied assets are generated during dev/build; authored social images remain tracked.
+The desktop bundle identifier and saved-settings format are unchanged by the directory move.
+
+### Add another app
+
+Start with the [design checklist](../design/system.md#adding-a-product) so the new product has a documented purpose, identity, and interaction contract.
+
+1. Add its desktop project in `apps/<app-id>-desktop/` with a unique workspace package name, such as `@openapps/<app-id>-desktop`.
+2. Put its marketing entry in `apps/website/src/apps/<app-id>/pages/Home.tsx`, exporting a React component as default.
+   Keep its components and styles beside that folder; use product-specific class names.
+3. Add one product to `apps/website/src/catalog.ts` with its id, route (for example `/another_route`), description, platform, status, brand imagery, asset sources, and pages.
+   Every product needs a home page with `path: ""`; optional subpages use `path: "download"` or another segment.
+   `entry: "Home"` resolves to `pages/Home.tsx`; optional `template` preserves product-specific HTML metadata.
+4. Set `brandSource` to its exported brand directory and reference `/brand/<app-id>/` URLs in the catalog.
+   Add any product-specific public assets through that product's `assets` list; destinations are relative to its route.
+5. Restart `pnpm dev`, or run `pnpm build`.
+   The app card, page metadata, static routes, and asset copies come from the catalog automatically.
+
+New desktop apps can have their own native stack and release workflow.
+Do not copy OpenKlack's signing identifier, preference storage, or keyboard dependencies into an unrelated app.
+Use app-specific release tags and updater channels so one app's release cannot become another app's update.
+The existing GitHub repository URL is retained; this change does not rename the remote repository.
+
+### Shared styling
+
+Both frontends use Tailwind CSS v4, HeroUI v3, and custom CSS for layouts and the 3D experience.
+Import `@openapps/ui/theme.css` for the Figma tokens and `@openapps/ui/motion` for reduced-motion-aware transitions.
+Reusable brand foundations belong in `packages/ui`; product-specific components belong with their app or in a product package.
+Run `pnpm theme` after changing the Figma token export; never edit generated `design/tokens.css` directly.
+Start with the [design index](../design/README.md) for organization-wide rules, component mappings, product contracts, and local Figma references.
+Run `pnpm design:check` to verify tokens against the saved Figma snapshot and validate export checksums.
 
 ## Behavior
 
-The website’s primary Download for Mac links open `/download/`, a separate static HTML entry. Without `VITE_MAC_DOWNLOAD_URL`, this page shows the unreleased state and never attempts a download. Once a signed public installer is available, set that variable in `apps/website/.env.local` (see `.env.example`) and rebuild. The page then attempts the download once and exposes the same URL as a manual retry link. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
+The website’s primary Download for Mac links open `/OpenKlack/download/`, a separate static HTML entry. Without `VITE_OPENKLACK_MAC_DOWNLOAD_URL`, this page shows the unreleased state and never attempts a download. Once a signed public installer is available, set that variable in `apps/website/.env.local` (see `.env.example`) and rebuild. The page then attempts the download once and exposes the same URL as a manual retry link. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
 
 - Type in the playground or click the interactive 3D keyboard.
   Each key has damped travel and a radial lighting pulse.
@@ -60,7 +104,7 @@ The website’s primary Download for Mac links open `/download/`, a separate sta
 
 ## Sound library
 
-The MIT-declared recordings come from [Thock soundpacks](https://github.com/kamillobinski/thock-soundpacks), originally Mechvibes and kbsim. Full notices ship in `packages/soundpacks/sounds/NOTICE.txt`; source revisions, original IDs, and licenses are retained in `packages/soundpacks/catalog.json`. The [research](../design/thock-sound-architecture.md) records the source format and provenance.
+The MIT-declared recordings come from [Thock soundpacks](https://github.com/kamillobinski/thock-soundpacks), originally Mechvibes and kbsim. Full notices ship in `packages/soundpacks/sounds/NOTICE.txt`; source revisions, original IDs, and licenses are retained in `packages/soundpacks/catalog.json`. The [research](../design/archive/thock-sound-architecture.md) records the source format and provenance.
 
 Each pack has OGG and MP3 audio sprites, decoded on demand with Web Audio.
 Mappings preserve per-key samples, alternate samples, and genuine press/release pairs.
@@ -82,12 +126,12 @@ python3 scripts/import-soundpacks.py /tmp/thock-soundpacks
 
 ## Keyboard assets
 
-Both apps use `packages/ui/Keyboard3D.tsx` and the same local model and textures.
+Both apps use `packages/openklack-ui/Keyboard3D.tsx` and the same local model and textures.
 The current prototype uses the supplied Raycast reference, with fixed framing and an ivory/graphite/cobalt material and lighting bake.
 Untouched originals and their source hashes live in `design/keyboard/source`.
 Run `pnpm keyboard:assets` with Blender available after editing `scripts/bake-keyboard.py`.
 The build preserves the reference geometry and UV bytes and regenerates both lighting atlases.
-See the [asset workflow](../design/keyboard/README.md) and [provenance](../packages/ui/assets/keyboard/PROVENANCE.md).
+See the [asset workflow](../design/keyboard/README.md) and [provenance](../packages/openklack-ui/assets/keyboard/PROVENANCE.md).
 These reference assets need permission or replacement before public redistribution.
 
 The browser demo neither records typed text nor intercepts typing outside its page.
@@ -95,13 +139,13 @@ System-wide sound is implemented in the development desktop application below; p
 
 ## Desktop application (in development)
 
-The Mac utility lives in `apps/desktop` and uses Tauri 2, React, and a native Rust audio engine with a macOS input bridge.
-The website above remains its browser demo.
+The Mac utility lives in `apps/openklack-desktop` and uses Tauri 2, React, and a native Rust audio engine with a macOS input bridge.
+Its marketing pages and browser demo live in `apps/website/src/apps/openklack/`.
 
 ```sh
-pnpm desktop
-pnpm desktop:test
-pnpm desktop:build
+pnpm openklack:dev
+pnpm openklack:test
+pnpm openklack:build
 ```
 
 Global keyboard sound requires macOS Input Monitoring permission for OpenKlack.
@@ -125,14 +169,14 @@ Non-neutral tuning needs this version or newer to import.
 For a locally signed development bundle, use an identity already installed in your keychain:
 
 ```sh
-APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openklack/desktop tauri build --debug --bundles app
-codesign --verify --deep --strict apps/desktop/src-tauri/target/debug/bundle/macos/OpenKlack.app
+APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openapps/openklack-desktop tauri build --debug --bundles app
+codesign --verify --deep --strict apps/openklack-desktop/src-tauri/target/debug/bundle/macos/OpenKlack.app
 ```
 
 Regenerate the packaged macOS icon from the exact Figma export after changing the brand asset:
 
 ```sh
-pnpm desktop:icons
+pnpm openklack:icons
 ```
 
 The monochrome menu-bar template and the app icon are separate assets.
@@ -148,7 +192,7 @@ App bundles do not contain your saved sound preferences; those remain in Applica
 For a local release app and DMG without requiring Finder automation:
 
 ```sh
-CI=true APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openklack/desktop tauri build --bundles app,dmg
+CI=true APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openapps/openklack-desktop tauri build --bundles app,dmg
 ```
 
 Tauri's `CI=true` bundling mode skips Finder decoration while retaining the app and Applications link in the disk image.
@@ -156,22 +200,25 @@ The `--ci` CLI flag alone does not select that behavior; the bundler checks the 
 See the [Tauri DMG bundler](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-bundler/src/bundle/macos/dmg/mod.rs).
 
 Public distribution requires Developer ID signing and notarization.
-The [desktop workflow](../.github/workflows/desktop.yml) runs checks on an Apple Silicon Mac runner and can produce a signed release candidate through manual dispatch.
+The [desktop workflow](../.github/workflows/openklack.yml) runs checks on an Apple Silicon Mac runner and can produce a signed release candidate through manual dispatch.
 It does not publish a GitHub release or deploy the website.
-Configure the `desktop-release` environment with `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID` before running the notarization job.
+Configure the `openklack-release` environment with `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID` before running the notarization job.
 Use [Tauri's signing instructions](https://v2.tauri.app/distribute/sign/macos/) for the certificate and notarization setup.
 The workflow uses GitHub's documented [macOS ARM64 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 The same environment needs the `TAURI_UPDATER_PUBLIC_KEY` variable and `TAURI_SIGNING_PRIVATE_KEY` secret, plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key is encrypted.
 Use a matching key pair generated with the [Tauri updater signing instructions](https://v2.tauri.app/plugin/updater/#signing-updates); these keys are separate from the Apple signing certificate.
 Keep the private key outside the repository and retain it for future releases.
-The workflow embeds its own GitHub repository's HTTPS release endpoint and produces the DMG, signed `.app.tar.gz`, `.sig`, and `latest.json` as candidate artifacts.
-After verification, publish those exact files together on a stable GitHub release tagged `v<app-version>`; the manifest points to that tag and its archive filename.
+The workflow embeds the app-specific `/releases/download/openklack-latest/latest.json` HTTPS endpoint and produces the DMG, signed `.app.tar.gz`, `.sig`, and `latest.json` as candidate artifacts.
+After verification, publish those exact files together on a stable GitHub release tagged `openklack-v<app-version>`; the manifest points to that tag and its archive filename.
+After approving a release, also attach its `latest.json` to the `openklack-latest` channel release.
+Other apps must use their own channel tags.
 Publishing is a separate action and has not been performed from this checkout.
 The app verifies update signatures before installation, permits HTTPS only, and limits archives to 128 MiB.
 Test an actual upgrade on a separate Mac before offering the release to installed users.
 
-The [desktop plan](../design/desktop-plan.md) records the agreed product scope.
+The [current product contract](../design/products/openklack.md) records approved behavior.
+The [original desktop plan](../design/archive/desktop-plan.md) preserves the interview and initial architecture proposal.
 The [verification record](../design/desktop-verification.md) distinguishes tested behavior from remaining work.
 
 OpenKlack source is MIT licensed.

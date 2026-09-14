@@ -1,48 +1,33 @@
 <div align="center">
 
-<img src="design/assets/openklack/github-cover.png" alt="OpenKlack. Your keyboard, with character." width="100%" />
+<img src="design/assets/openapps-hq/symbol-ink.svg" alt="" width="72" />
+<img src="design/assets/openapps-hq/wordmark-ink.svg" alt="OpenApps HQ" width="280" />
 
-**Mechanical keyboard sounds for the keyboard you already own.**
+**Small apps. Big personality.**
 
-Free & open source · Mac first · No account · No telemetry
+Free & open source desktop tools, built in one workspace.
 
-[Get started](#get-started) · [Design system](design/README.md) · [Report a bug](https://github.com/openappshq/openklack/issues)
+[Development guide](docs/development.md) · [Design system](design/README.md) · [Issues](https://github.com/openappshq/openklack/issues)
 
 </div>
 
-| Make it yours | A closer look |
+| Our apps | A closer look |
 | :--- | :---: |
-| **Play your keyboard.** Live 3D keys and reactive lighting. | <img src="design/assets/openklack/features/keyboard.svg" alt="Original OpenKlack keyboard illustration" width="380" /> |
-| **Find your sound.** 18 packs, starred favorites, and optional per-key sounds. | <img src="design/assets/openklack/features/sounds.svg" alt="Sound choices and favorites illustration" width="380" /> |
-| **Try it on the website.** A basic typing test with your chosen sound. | <img src="design/assets/openklack/features/typing.svg" alt="Typing playground illustration" width="380" /> |
+| **OpenKlack** · Mechanical keyboard sounds for the keyboard you already own.<br />Mac app in development · [App source](apps/openklack-desktop) · [Marketing pages](apps/website/src/apps/openklack) | <img src="design/assets/openklack/features/keyboard.svg" alt="OpenKlack keyboard illustration" width="380" /> |
+| **OpenReaction** · Emoji shortcodes everywhere on your Mac.<br />[App source](apps/openreaction) · [Marketing pages](apps/website/src/apps/openreaction) | <img src="apps/openreaction/design/assets/app-icon.svg" alt="OpenReaction app icon" width="120" /> |
 
-<sub>Feature illustrations. The Mac app keeps mute, volume, favorites, and pause reasons in a native menu.</sub>
+## Run locally
 
-## Get started
-
-**In development:** macOS 14+ on Apple Silicon; no public notarized download yet.
-Requires Node.js 24, pnpm 12.4.1, Rust, and Xcode Command Line Tools.
+Requires Node.js 24 and pnpm 12.4.1; the Mac app also needs Rust and Xcode Command Line Tools.
 
 ```sh
-git clone https://github.com/openappshq/openklack.git
-cd openklack
 pnpm install
-pnpm desktop  # Mac app
-# pnpm dev   # Website
+pnpm dev              # OpenApps website, including /OpenKlack/
+pnpm openklack:dev    # OpenKlack desktop app
 ```
 
-[Setup & installation](docs/development.md) · [App UI](design/openklack-app-ui.md) · [Verification](design/desktop-verification.md)
+`apps/website` hosts all product pages; desktop projects live alongside it, including `apps/openklack-desktop` and `apps/openreaction`.
+`packages/ui` shares the design system and motion; product packages stay independent.
+Add a product through the [app catalog](apps/website/src/catalog.ts) using the [onboarding guide](docs/development.md#add-another-app).
 
----
-
-**More apps:** [OpenReaction](apps/openreaction) — emoji shortcodes everywhere on your Mac. Its page lives at `/openreaction/` on this website.
-
-[MIT](LICENSE) · [Prototype model provenance](packages/ui/assets/keyboard/PROVENANCE.md) · [Sound credits](packages/soundpacks/sounds/NOTICE.txt)
-
-<div align="center">
-
-<img src="design/assets/openapps-hq/app-icon.svg" alt="OpenApps HQ" width="56" />
-
-**An [OpenApps HQ](https://github.com/openappshq) original.**
-
-</div>
+[MIT](LICENSE) · [Model provenance](packages/openklack-ui/assets/keyboard/PROVENANCE.md) · [Sound credits](packages/soundpacks/sounds/NOTICE.txt)

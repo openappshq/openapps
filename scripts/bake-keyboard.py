@@ -9,7 +9,7 @@ from mathutils import Vector
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / 'packages/ui/assets/keyboard'
+ASSETS = ROOT / 'packages/openklack-ui/assets/keyboard'
 DESIGN = ROOT / 'design/keyboard'
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=str(ASSETS / 'openklack.glb'))

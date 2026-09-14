@@ -1,20 +1,21 @@
 {
-  "name": "openklack",
+  "name": "openapps",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @openklack/website dev",
-    "build": "pnpm --filter @openklack/website build",
-    "preview": "pnpm --filter @openklack/website preview",
+    "dev": "pnpm --filter @openapps/website dev",
+    "build": "pnpm --filter @openapps/website build",
+    "preview": "pnpm --filter @openapps/website preview",
     "lint": "vp lint",
     "test": "vp test run",
-    "desktop": "pnpm --filter @openklack/desktop dev",
-    "desktop:build": "pnpm --filter @openklack/desktop build",
-    "desktop:test": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "theme": "node scripts/generate-theme.mjs",
-    "desktop:icons": "node scripts/generate-desktop-icons.mjs",
-    "keyboard:assets": "node scripts/build-keyboard-assets.mjs"
+    "design:check": "node scripts/check-design.mjs",
+    "keyboard:assets": "node scripts/build-keyboard-assets.mjs",
+    "openklack:dev": "pnpm --filter @openapps/openklack-desktop dev",
+    "openklack:build": "pnpm --filter @openapps/openklack-desktop build",
+    "openklack:test": "cargo test --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml",
+    "openklack:icons": "node scripts/generate-desktop-icons.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

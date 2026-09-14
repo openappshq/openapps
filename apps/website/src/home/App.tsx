@@ -2,7 +2,8 @@ import { ArrowUpRight, Code2, Gift, Laptop, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import StarButton from "../shared/StarButton";
 import { GITHUB_URL } from "../shared/github";
-import { apps, type AppEntry } from "./apps";
+import { products, type Product } from "../catalog";
+import "./styles.css";
 
 const principles: { icon: ReactNode; title: string; body: string }[] = [
   { icon: <Gift size={20} />, title: "Free", body: "No trials, no upsells, no accounts." },
@@ -42,13 +43,13 @@ function ThemedMark({
   );
 }
 
-function AppCard({ app }: { app: AppEntry }) {
+function AppCard({ app }: { app: Product }) {
   return (
     <li>
-      <a className="app-card" data-accent={app.accent} href={app.href}>
+      <a className="app-card" data-accent={app.accent} href={`${app.route}/`}>
         <img className="app-tile" src={app.icon} alt="" width="72" height="72" />
         <h3>{app.name}</h3>
-        <p>{app.tagline}</p>
+        <p>{app.description}</p>
         <dl className="app-meta">
           <div>
             <dt className="sr-only">Platform</dt>
@@ -56,7 +57,7 @@ function AppCard({ app }: { app: AppEntry }) {
           </div>
           <div>
             <dt className="sr-only">Price</dt>
-            <dd>{app.price}</dd>
+            <dd>Free & open source</dd>
           </div>
           <div>
             <dt className="sr-only">Status</dt>
@@ -80,7 +81,7 @@ export default function App() {
         Skip to the apps
       </a>
       <header className="site-header page-width">
-        <a className="brand" href="/home/" aria-label="OpenApps HQ home">
+        <a className="brand" href="/" aria-label="OpenApps HQ home">
           <img src="/brand/openapps-hq/app-icon.svg" alt="" width="40" height="40" />
           <ThemedMark name="wordmark" alt="OpenApps HQ" width={150} height={27} />
         </a>
@@ -105,11 +106,11 @@ export default function App() {
         <section className="apps-section page-width" id="apps" aria-labelledby="apps-title">
           <div className="section-heading">
             <h2 id="apps-title">The apps</h2>
-            <span className="eyebrow">{apps.length} and counting</span>
+            <span className="eyebrow">{products.length} and counting</span>
           </div>
           <ul className="app-grid">
-            {apps.map((app) => (
-              <AppCard key={app.slug} app={app} />
+            {products.map((app) => (
+              <AppCard key={app.id} app={app} />
             ))}
           </ul>
         </section>
@@ -138,8 +139,8 @@ export default function App() {
           </p>
         </div>
         <div className="footer-links">
-          {apps.map((app) => (
-            <a key={app.slug} href={app.href}>
+          {products.map((app) => (
+            <a key={app.id} href={`${app.route}/`}>
               {app.name}
             </a>
           ))}

@@ -10,12 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-apps/website/public/brand/
-apps/website/public/sounds/
-apps/website/public/data/
 .sites-runtime/
 target/
-apps/desktop/src-tauri/gen/
+apps/*-desktop/src-tauri/gen/
 *.local
 
 # Editor directories and files
@@ -29,9 +26,11 @@ apps/desktop/src-tauri/gen/
 *.sln
 *.sw?
 
-# Shared keyboard preview assets are copied into the website public directory.
-apps/website/public/keyboard/
-apps/website/public/draco/
+# Product assets and route entries are generated from the website catalog.
+apps/website/public/*/
+apps/website/*/index.html
+apps/website/*/*/index.html
+apps/website/404.html
 
 # Blender authoring backups.
 design/keyboard/*.blend[0-9]

@@ -1,0 +1,20 @@
+@import "../../design/tokens.css";
+
+:root,
+:root[data-theme] {
+  --font-sans: "Instrument Sans Variable", var(--font-body), sans-serif;
+  --font-heading: "Bricolage Grotesque Variable", var(--font-display), sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+  --background: var(--color-bg-canvas);
+  --foreground: var(--color-text-primary);
+  --surface: var(--color-bg-surface);
+  --surface-foreground: var(--color-text-primary);
+  --accent: var(--color-accent-solid);
+  --accent-foreground: var(--color-accent-on);
+  --focus: var(--color-focus-ring);
+  --muted: var(--color-text-secondary);
+  --border: var(--color-border-subtle);
+  --default: var(--color-bg-hover);
+  --default-foreground: var(--color-text-primary);
+  --radius: var(--radius-control);
+}

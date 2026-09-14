@@ -97,5 +97,222 @@
       "scale": 1
     },
     "sha256": "f1d05a091254c0263edfb4ce1146bfe87302e9e798afe651d42aaa5bd867bb30"
+  },
+  "references": [
+    {
+      "nodeId": "2:137",
+      "file": "../references/brand-sheet.png",
+      "status": "foundation",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-137",
+      "sha256": "a98e277934bcb0de5236d260e90647d2519d7fa4c625fe1fcf6a505eb18f6997",
+      "width": 1440,
+      "height": 1040
+    },
+    {
+      "nodeId": "2:178",
+      "file": "../references/color-light.png",
+      "status": "foundation",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-178",
+      "sha256": "beae8de9534b6724cb19b7e632ebd1f05308cddb3fccccc6ff4a5fc2f73197e4",
+      "width": 720,
+      "height": 900
+    },
+    {
+      "nodeId": "2:182",
+      "file": "../references/color-dark.png",
+      "status": "foundation",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-182",
+      "sha256": "1b35382f14c20e62ce1a6d93bb3fdb7a289d18e146ab3263dc49ba860dc480bc",
+      "width": 720,
+      "height": 900
+    },
+    {
+      "nodeId": "2:266",
+      "file": "../references/typography.png",
+      "status": "foundation",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-266",
+      "sha256": "4760e9c09737c8a15d508b29f027b91a41b21e829c1b950ec63659b68fd21f33",
+      "width": 1520,
+      "height": 980
+    },
+    {
+      "nodeId": "2:681",
+      "file": "../references/space-form-motion.png",
+      "status": "foundation",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-681",
+      "sha256": "6fa6ccf8e1d5494fa8488201d45926f87f0b1bf8efca7a9df8f0d13a7e0b15d7",
+      "width": 1520,
+      "height": 1000
+    },
+    {
+      "nodeId": "2:1437",
+      "file": "../references/identity-rules.png",
+      "status": "foundation",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-1437",
+      "sha256": "ed5beac8d4894f8a62d72a8c2ada19f0b8463f576195e70046d2ac1973cda57e",
+      "width": 1440,
+      "height": 1056
+    },
+    {
+      "nodeId": "2:308",
+      "file": "../references/components/buttons.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-308",
+      "sha256": "b436b59fd5f350c8caec1cd551a7a98c47d10943e323e2fd7ebbe83e016b7d1c",
+      "width": 1000,
+      "height": 300
+    },
+    {
+      "nodeId": "2:353",
+      "file": "../references/components/icon-buttons.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-353",
+      "sha256": "7ec59fdb284538dee77bb37c0be3970cd8a71921202694396bba53acd9053a07",
+      "width": 360,
+      "height": 104
+    },
+    {
+      "nodeId": "2:366",
+      "file": "../references/components/switches.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-366",
+      "sha256": "a47847883eeeb8534e9ba6561fc1d18f9cbbc792f6c17f34b0f43cb35431ec34",
+      "width": 368,
+      "height": 112
+    },
+    {
+      "nodeId": "2:387",
+      "file": "../references/components/sliders.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-387",
+      "sha256": "ba554d5dd9999edf1b334f89c70600b2aecfbb2a815e1a8381d661af4a52d704",
+      "width": 960,
+      "height": 192
+    },
+    {
+      "nodeId": "2:418",
+      "file": "../references/components/search.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-418",
+      "sha256": "737a2b2a685101c2d8a03f6fcb3098a41a653e52836a8fd8ef17c8013c164e67",
+      "width": 1216,
+      "height": 192
+    },
+    {
+      "nodeId": "2:425",
+      "file": "../references/components/tabs.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-425",
+      "sha256": "04583d67f653626ba60fd8ec3d17ae7de0606f1c99088a8490dee22c82578f86",
+      "width": 600,
+      "height": 104
+    },
+    {
+      "nodeId": "2:465",
+      "file": "../references/components/sound-rows.png",
+      "status": "visual-only-superseded-interaction",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-465",
+      "sha256": "a9a921b22506c166cc8c708fef46101c650cc6891c698d72f0a498724b2649a6",
+      "width": 1160,
+      "height": 288
+    },
+    {
+      "nodeId": "2:481",
+      "file": "../references/components/status.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-481",
+      "sha256": "72b96dc460fc8c6785ffddf81bd4023b41aa8fb8ecd05e8ff9e1a0ad8d2cda7f",
+      "width": 1160,
+      "height": 256
+    },
+    {
+      "nodeId": "2:488",
+      "file": "../references/components/keycaps.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-488",
+      "sha256": "58dbfcf8dff96356619439280297eed998fa5d422fa783fa512a1028e7ab71e8",
+      "width": 200,
+      "height": 108
+    },
+    {
+      "nodeId": "2:489",
+      "file": "../archive/figma/keyboard-illustration.png",
+      "status": "historical-2d-proposal",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-489",
+      "sha256": "2a8d3a814556bd9069ab9bd7426c3dda3d50e13f105850b2acb711d49ce0cc87",
+      "width": 680,
+      "height": 278
+    },
+    {
+      "nodeId": "2:1555",
+      "file": "../references/components/empty-states.png",
+      "status": "component",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-1555",
+      "sha256": "8bdce979e4ce00469d0feedcae971b31e65c214f1bed90513a36b60ee0b2a7b2",
+      "width": 1240,
+      "height": 344
+    },
+    {
+      "nodeId": "2:737",
+      "file": "../archive/figma/openklack-light.png",
+      "status": "superseded-layout",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-737",
+      "sha256": "4a8c91fa5653d500c700444ea995c27fc3fb96175dfcf6339e50b32ad1091564",
+      "width": 1208,
+      "height": 968
+    },
+    {
+      "nodeId": "2:1045",
+      "file": "../archive/figma/openklack-dark.png",
+      "status": "superseded-layout",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-1045",
+      "sha256": "641c48a1b7a9b671f5d05ce4a0453e65999e2ee956a5d8ee9e1f79d7ff499cd1",
+      "width": 1208,
+      "height": 968
+    },
+    {
+      "nodeId": "2:1353",
+      "file": "../archive/figma/menu-active.png",
+      "status": "superseded-layout",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-1353",
+      "sha256": "08d90118120e68573308f6b1c057393e6e255cdc1b7a0d35e6a1564f6209720d",
+      "width": 416,
+      "height": 608
+    },
+    {
+      "nodeId": "2:1393",
+      "file": "../archive/figma/menu-paused.png",
+      "status": "superseded-layout",
+      "exportedOn": "2026-09-14",
+      "source": "https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-1393",
+      "sha256": "6956c9bdfc7b25e218826a4a138946dfe960f612676dd05445463c79dd33e899",
+      "width": 416,
+      "height": 608
+    }
+  ],
+  "snapshot": {
+    "file": "../references/figma-system.json",
+    "exportedOn": "2026-09-14",
+    "sha256": "4e8b7e41797ff9b2764ea52e72340a04a7094086501c370fc49d05f3c4fbade9"
   }
 }

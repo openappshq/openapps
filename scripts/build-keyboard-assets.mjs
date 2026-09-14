@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 
 const source = new URL("../design/keyboard/source/", import.meta.url);
-const output = new URL("../packages/ui/assets/keyboard/", import.meta.url);
+const output = new URL("../packages/openklack-ui/assets/keyboard/", import.meta.url);
 await mkdir(output, { recursive: true });
 
 const glb = await readFile(new URL("keyboard.glb", source));

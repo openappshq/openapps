@@ -2,11 +2,12 @@
 
 Updated September 14, 2026.
 The desktop goal remains incomplete pending physical-Mac validation and release setup.
-The agreed product scope is in [desktop-plan.md](desktop-plan.md).
+Approved behavior is in [the current product contract](products/openklack.md).
+The [original desktop plan](archive/desktop-plan.md) is historical.
 
 ## Current interface verification — September 14, 2026
 
-This section supersedes the interface descriptions in the chronological records below. See the [separate desktop audit](desktop-interface-review.md) and [current UI specification](openklack-app-ui.md).
+This section supersedes the interface descriptions in the chronological records below. See the [separate desktop audit](archive/desktop-interface-review.md) and [current UI specification](products/openklack.md).
 
 - One automatically saved setup, current sound, volume, and a fixed keyboard. No desktop typing test, preset workspace, sound inspector, or tuning panel.
 - HeroUI buttons, sliders, switches, search, animated type tabs, Select popovers, and Accordion panels. Native macOS menu and file sheets remain native.
@@ -99,7 +100,7 @@ This is a short local baseline amid other machine activity, not a controlled bat
 After updater integration, the final optimized build was sampled again with settings closed over 30 seconds.
 The native process reported 42–50 MB memory and three successive 0.2% CPU samples after the initial reading.
 The same measurement limits apply; settings were reopened afterward with the saved preset intact.
-The scoped interface review is in [desktop-interface-review.md](desktop-interface-review.md).
+The scoped interface review is in [desktop-interface-review.md](archive/desktop-interface-review.md).
 
 ## Still required before public release
 
@@ -142,37 +143,37 @@ Its app data was separate from `com.openklack.desktop`; the user's settings were
 The native UI exported a known-good preset bundle before the QA audio was intentionally damaged on disk.
 Reopening, muting, and importing that original bundle exercised the packaged startup, error display, settings persistence, archive validation, repair, and engine reload paths together.
 The QA app was quit after testing and no Input Monitoring permission or login item was enabled for it.
-The source fixture lives at `apps/desktop/fixtures/preferences-v1.json` and is consumed by both the Rust and TypeScript checks.
+The source fixture lives at `apps/openklack-desktop/fixtures/preferences-v1.json` and is consumed by both the Rust and TypeScript checks.
 
 ## Reproduction
 
 ```sh
 vp install
-pnpm desktop
-pnpm --filter @openklack/desktop web:build
+pnpm openklack:dev
+pnpm --filter @openapps/openklack-desktop web:build
 pnpm test
-pnpm desktop:test
-cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openklack/desktop tauri build --debug --bundles app
+pnpm openklack:test
+cargo clippy --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openapps/openklack-desktop tauri build --debug --bundles app
 ```
 
 The opt-in hardware audio test plays a quiet sample and waits 30 seconds:
 
 ```sh
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml native_output_starts_after_idle -- --ignored --nocapture
+cargo test --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml native_output_starts_after_idle -- --ignored --nocapture
 ```
 
-Bundles are under `apps/desktop/src-tauri/target/{debug,release}/bundle/macos/OpenKlack.app`.
+Bundles are under `apps/openklack-desktop/src-tauri/target/{debug,release}/bundle/macos/OpenKlack.app`.
 Build output is ignored by Git.
 App data is under `~/Library/Application Support/com.openklack.desktop/`.
 The test imports are local artifacts; the user's subsequently chosen Brown PBT preset and 52% volume were preserved.
 
 ## Brand and workspace pass, September 14
 
-The marketing site now lives in `apps/website`, alongside `apps/desktop`.
+The marketing site now lives in `apps/website`, alongside `apps/openklack-desktop`.
 Both consume `packages/soundpacks`; their logical-key data remains in `packages/keyboard-layout`.
 The exact Figma logo exports, light/dark tokens, UI previews, and branded README cover are preserved in `design/assets` and `design/tokens.json`.
-The initial branding pass documented the target desktop UI in `design/openklack-app-ui.md`.
+The initial branding pass documented the target desktop UI in a document now maintained as [the product contract](products/openklack.md).
 The later desktop settings redesign below records its implementation.
 
 Motion now supplies website disclosures, theme-preview fades, button feedback, and entry transitions, plus desktop navigation, card, favorite, and inline-form transitions.

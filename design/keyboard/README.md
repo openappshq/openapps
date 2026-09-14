@@ -5,7 +5,7 @@ The supplied HAR contains Raycast’s published GLB models, baked textures, ligh
 - `source/`: untouched reference assets, with URLs and SHA-256 hashes in `manifest.json`.
 - `openklack-keyboard.blend`: the editable OpenKlack material and lighting scene, using the reference geometry and UVs.
 - `legends.svg` and `legends.png`: the generated OpenKlack legend atlas.
-- `../../packages/ui/assets/keyboard/`: derived `openklack.glb`, `base.png`, and `rgb.png` used by both apps.
+- `../../packages/openklack-ui/assets/keyboard/`: derived `openklack.glb`, `base.png`, and `rgb.png` used by both apps.
 - `../../target/reference/raycast/`: captured compiled code, outside the tracked application source.
 
 ```sh
@@ -21,4 +21,4 @@ The editable scene is saved before joining meshes for the bake, so individual ke
 Change materials and lighting in the Python authoring script for reproducible builds. Regeneration overwrites the generated Blender scene and legend files.
 
 The renderer handles key travel and radial blending of the baked textures. It stops rendering when settled or hidden.
-The reference audio is not used in OpenKlack. See [provenance](../../packages/ui/assets/keyboard/PROVENANCE.md) for ownership and redistribution status.
+The reference audio is not used in OpenKlack. See [provenance](../../packages/openklack-ui/assets/keyboard/PROVENANCE.md) for ownership and redistribution status.

@@ -1,9 +1,9 @@
-import { routes } from "./home/apps.ts";
+import { findPage } from "./catalog.ts";
 
 export type PathKind = "page" | "asset" | "unknown";
 
 /** Where visitors land when they ask for a page this site does not have. */
-export const FALLBACK_PAGE = "/home/";
+export const FALLBACK_PAGE = "/";
 
 /**
  * Sorts a request path into a known page, a static asset (anything with a
@@ -15,5 +15,5 @@ export function classifyPath(pathname: string): PathKind {
   const extension = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase();
   if (extension && extension !== "html") return "asset";
   const page = path.replace(/index\.html$/, "").replace(/\/?$/, "/");
-  return (routes as readonly string[]).includes(page) ? "page" : "unknown";
+  return page === "/" || findPage(path) ? "page" : "unknown";
 }

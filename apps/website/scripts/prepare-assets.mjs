@@ -1,44 +1,23 @@
 import { cp, mkdir } from "node:fs/promises";
-import { basename } from "node:path";
+import { products } from "../src/catalog.ts";
 import { writeGithubStars } from "./github-stars.mjs";
-import { openreactionFiles, openreactionSourceDir } from "./openreaction-source.mjs";
 
 const publicDir = new URL("../public/", import.meta.url);
+const root = new URL("../../../", import.meta.url);
 await mkdir(publicDir, { recursive: true });
-await Promise.all([
-  cp(new URL("../../../packages/ui/assets/", import.meta.url), publicDir, { recursive: true }),
-  cp(
-    new URL("../../../packages/soundpacks/sounds/", import.meta.url),
-    new URL("sounds/", publicDir),
-    { recursive: true },
-  ),
-  cp(
-    new URL("../../../design/assets/openklack/", import.meta.url),
-    new URL("brand/openklack/", publicDir),
-    { recursive: true },
-  ),
-  cp(
-    new URL("../../../design/assets/openapps-hq/", import.meta.url),
-    new URL("brand/openapps-hq/", publicDir),
-    { recursive: true },
-  ),
-]);
-
-// The /openreaction/ page needs the app's brand marks and its vendored emoji database.
-const openreaction = openreactionSourceDir();
-if (!openreaction) {
-  throw new Error("OpenReaction sources not found: expected apps/openreaction.");
+await cp(new URL("design/assets/openapps-hq/", root), new URL("brand/openapps-hq/", publicDir), {
+  recursive: true,
+});
+for (const product of products) {
+  await cp(new URL(`${product.brandSource}/`, root), new URL(`brand/${product.id}/`, publicDir), {
+    recursive: true,
+  });
+  for (const asset of product.assets) {
+    await cp(
+      new URL(`${asset.source}/`, root),
+      new URL(`${product.route.slice(1)}/${asset.destination}/`, publicDir),
+      { recursive: true },
+    );
+  }
 }
 await writeGithubStars("openappshq/openklack", new URL("data/github.json", publicDir));
-
-await mkdir(new URL("brand/openreaction/", publicDir), { recursive: true });
-await mkdir(new URL("data/openreaction/", publicDir), { recursive: true });
-await Promise.all([
-  ...openreactionFiles.brand.map((file) =>
-    cp(new URL(file, openreaction), new URL(`brand/openreaction/${basename(file)}`, publicDir)),
-  ),
-  cp(
-    new URL(openreactionFiles.emoji, openreaction),
-    new URL("data/openreaction/emoji.json", publicDir),
-  ),
-]);

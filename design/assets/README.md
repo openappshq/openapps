@@ -1,32 +1,27 @@
 # Brand assets
 
-Exported directly from [OpenApps HQ · Tactile Studio in Figma](https://www.figma.com/design/2fvzpabR06HanNwQIxxtm1/OpenApps-HQ-%C2%B7-Tactile-Studio?node-id=2-92) on 14 September 2026.
-The exported vector paths are preserved without redrawing or optimization.
+Direct Figma exports, September 14, 2026; preserve vector paths and outlined wordmarks.
+[Manifest](figma-export.json): original names, node IDs, dates, dimensions, status, checksums; file paths are relative to this directory.
+For refresh/check commands, see [design updates](../README.md#updates).
 
-Each brand directory contains:
+| Per-brand file | Use |
+| --- | --- |
+| `symbol-{ink,paper}.svg` | Flat mark; minimum 16px, preferred below 32px and in menus |
+| `wordmark-{ink,paper}.svg` | Outlined lettering; preserve tracking |
+| `app-icon.svg` | Tactile tile with shadow |
+| `app-icon-1120.png` | 4× export including shadow padding around a 1024px frame; not an `.icns` bundle |
 
-- `symbol-ink.svg` and `symbol-paper.svg`: flat marks for light and dark grounds.
-- `wordmark-ink.svg` and `wordmark-paper.svg`: outlined lettering, requiring no font installation.
-- `app-icon.svg`: the tactile application tile with its original shadow.
-- `app-icon-1120.png`: the native 4× export, including transparent shadow padding around the 1024-pixel frame.
+Keep 24 units clear around the 128-unit symbol.
+Use Ink on white/HQ yellow, Paper on cobalt/charcoal; preserve proportions and split geometry, with effects only on tiles.
+The website copies masters to ignored public assets during dev/build.
 
-`figma-export.json` records original export names and SHA-256 checksums.
-The PNG dimensions are 1120 × 1120; these are presentation assets, not ready-made macOS `.icns` bundles.
-In `openklack/ui`, `settings-light.png` and `settings-dark.png` are captures of the installed Mac app from September 14, 2026. Other UI PNGs are historical Figma proposals. The website uses the current app captures and the code-generated `features/menu.svg` illustration. These are not part of the original Figma export checksum manifest.
+## OpenKlack files
 
-Keep a clear space of 24 units around the flat 128-unit symbol.
-Use the flat mark at small sizes, with a minimum of 16 pixels.
-Use Ink on white or HQ yellow, and Paper on cobalt or charcoal.
-Preserve proportions and the detached geometry.
+- `menu-template@2x.png`: 36px template used at 18pt, separate from the application icon.
+- `github-cover.png`: Figma cover.
+- `ui/settings-{light,dark}.png`: installed-app captures, September 14; remaining menu PNGs are historical Figma proposals.
+- `features/*.svg`: code-generated illustrations, not screenshots or Figma exports.
 
-The website copies these originals into its ignored public asset directory before development and builds.
-Make identity changes in Figma, export again, and update the provenance manifest.
-
-`openklack/menu-template@2x.png` is a native 36 × 36 Figma export of node `2:112`, used as an 18-point macOS template image.
-`openklack/github-cover.png` is the 1440 × 640 cover authored in Figma at node `3:769` for the repository README.
-
-The macOS application icon resources are generated from `openklack/app-icon-1120.png` with `pnpm desktop:icons`.
-The generator uses the Tauri icon command and retains the five resources used by the Mac build.
-
-The `openklack/features` SVGs are code-generated README illustrations, not Figma exports or application screenshots.
-Regenerate them with `node scripts/generate-readme-visuals.mjs`.
+Captures/illustrations are outside the Figma checksum manifest.
+Use the labeled [archive](../archive/README.md) for obsolete layouts.
+Generate Mac icons with `pnpm openklack:icons`; illustrations with `node scripts/generate-readme-visuals.mjs`.
