@@ -17,6 +17,8 @@ pnpm test
 pnpm build
 ```
 
+The production site and the trial registry run as one Cloudflare Worker. After `pnpm build`, `pnpm site:dev` serves `dist/` and `/api/trial` with a local D1 database at `http://127.0.0.1:8787`; `pnpm site:test` runs the Worker's tests in the Workers runtime. Deploys, setup and the DNS cutover are in [cloudflare.md](cloudflare.md).
+
 React + TypeScript, HeroUI v3, Three.js / React Three Fiber, Motion, and the browser’s Web Audio API.
 Vite+ handles development, bundling, formatting, linting, and Vitest.
 Tailwind supplies HeroUI’s styles; both apps use the shared Figma tokens.
@@ -30,6 +32,7 @@ apps/
     src/apps/openklack/        OpenKlack marketing, download, and playground
       pages/                  Lazy-loaded page entries
     src/apps/openreaction/     OpenReaction marketing and emoji demo
+  site-worker/                Cloudflare Worker: serves the site, runs /api/trial on D1
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
   openreaction/               OpenReaction's Swift app
 packages/
@@ -103,11 +106,11 @@ The website’s primary Download for Mac links open `/openklack/download/`, a se
 
 ## Checkout return pages
 
-`/<app>/thanks/`, `/<app>/thanks/trial/` and the site-wide `/thanks/` are where Dodo Payments sends customers back, with `license_key`, `email`, `status` and `payment_id` in the query string. Each generated page starts its `<head>` with `<meta name="referrer" content="no-referrer">` and an inline script that moves those parameters into memory and replaces the URL before any stylesheet or script is requested, so the key never appears in a Referer header, in history, or in a bookmark. The page keeps the key only in memory and never stores or sends it.
+`/<app>/thanks/` and the site-wide `/thanks/` are where Dodo Payments sends customers back, with `license_key`, `email`, `status` and `payment_id` in the query string. Each generated page starts its `<head>` with `<meta name="referrer" content="no-referrer">` and an inline script that moves those parameters into memory and replaces the URL before any stylesheet or script is requested, so the key never appears in a Referer header, in history, or in a bookmark. The page keeps the key only in memory and never stores or sends it.
 
-What no page code can prevent: the host that serves the thanks page receives the initial request, query string included, and may write it to its access logs. Configure the host to redact or drop query strings for `*/thanks/*` in its logs, and add a `Referrer-Policy: no-referrer` response header for those paths if the host supports per-path headers. The repository has no hosting configuration file today, so this is a hosting-side setting.
+What no page code can prevent: the host that serves the thanks page receives the initial request, query string included. The build emits `dist/_headers` from the catalog (`apps/website/headers.ts`): every `noindex` page is served with `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex` and `Cache-Control: no-store`. On Cloudflare those pages are plain static asset requests that never run Worker code, and the Worker keeps Workers Logs off; don't enable Logpush or Workers Logs for it.
 
-Buy and trial buttons stay disabled (“Coming soon”) until `officialBuilds` in `apps/website/src/shared/licensing.ts` marks the app as having an official build to license.
+App pages offer Download for Mac (the official build, with its 3-day trial and no signup) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buy shows “Temporarily unavailable” while the app's paid product ID is unset or `officialBuilds` in `apps/website/src/shared/licensing.ts` takes it off sale.
 
 ## Sound library
 

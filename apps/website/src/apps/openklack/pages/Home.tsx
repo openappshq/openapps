@@ -37,7 +37,7 @@ const questions = [
   ],
   [
     "What does the official build send anywhere?",
-    "Official builds of OpenKlack check your license with Dodo Payments, our payment provider. The license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use the app are never sent. Builds from source never contact the license service.",
+    `Official builds of OpenKlack include a ${TRIAL_DAYS}-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use the app are never sent. Builds from source never contact the license service.`,
   ],
   [
     `What does the ${PRICE} buy?`,
@@ -45,7 +45,7 @@ const questions = [
   ],
   [
     "How does the free trial work?",
-    `The trial gives you a ${TRIAL_DAYS}-day license key for one Mac, with nothing but an email address at checkout. When it ends, OpenKlack goes quiet until you buy or build from source; nothing is charged automatically.`,
+    `Download OpenKlack and it works right away for ${TRIAL_DAYS} days on that Mac. No signup, no email, no card. When the trial ends, OpenKlack goes quiet until you buy a license or build from source; nothing is charged. There’s one trial per Mac.`,
   ],
   [
     "Does it work offline?",

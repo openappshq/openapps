@@ -12,19 +12,17 @@ test("each product owns its routes and adding another product cannot shadow Open
     "/openklack/",
     "/openklack/download/",
     "/openklack/thanks/",
-    "/openklack/thanks/trial/",
     "/openreaction/",
     "/openreaction/download/",
     "/openreaction/thanks/",
-    "/openreaction/thanks/trial/",
     "/another_route/",
     "/another_route/download/",
     "/another_route/thanks/",
-    "/another_route/thanks/trial/",
   ]);
-  expect(combined[8]?.productId).toBe("another-app");
+  expect(combined[6]?.productId).toBe("another-app");
   expect(findPage("/openklack/download/")?.productId).toBe("openklack");
-  expect(combined[8]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(combined[6]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(findPage("/openklack/thanks/trial/")).toBeUndefined();
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
   for (const path of ["/openklack", "/openklack/", "/openklack/index.html"])
     expect(findPage(path)?.entry).toBe("Home");
@@ -63,12 +61,7 @@ test("catalog routes emit separate static HTML entries with product metadata", (
       'name="robots" content="noindex"',
     );
     expect(readFileSync(join(root, "openreaction/index.html"), "utf8")).not.toContain("noindex");
-    for (const file of [
-      "thanks",
-      "openreaction/thanks",
-      "openklack/thanks",
-      "openklack/thanks/trial",
-    ]) {
+    for (const file of ["thanks", "openreaction/thanks", "openklack/thanks"]) {
       const html = readFileSync(join(root, `${file}/index.html`), "utf8");
       const head = html.slice(html.indexOf("<head>") + 6);
       // The referrer policy and capture script must precede every other head tag.

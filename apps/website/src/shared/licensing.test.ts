@@ -10,9 +10,7 @@ import {
 
 const liveEnv = {
   VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
-  VITE_OPENREACTION_DODO_TRIAL_PRODUCT_ID: "pdt_orTrial",
   VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
-  VITE_OPENKLACK_DODO_TRIAL_PRODUCT_ID: "pdt_okTrial",
 };
 import { activateUrl, cleanedUrl, parseCheckoutReturn, readCheckoutReturn } from "./thanks";
 import { CHECKOUT_GLOBAL } from "./checkoutCapture";
@@ -36,12 +34,12 @@ describe("checkoutUrl", () => {
 });
 
 describe("dodoConfigFrom", () => {
-  it("reads both product IDs per app and defaults to live checkout", () => {
+  it("reads the paid product ID per app and defaults to live checkout", () => {
     const config = dodoConfigFrom(liveEnv);
     expect(config.checkoutOrigin).toBe(DODO_CHECKOUT_ORIGINS.live);
     expect(config.products).toEqual({
-      openreaction: { paid: "pdt_orPaid", trial: "pdt_orTrial" },
-      openklack: { paid: "pdt_okPaid", trial: "pdt_okTrial" },
+      openreaction: { paid: "pdt_orPaid" },
+      openklack: { paid: "pdt_okPaid" },
     });
   });
 
@@ -61,13 +59,13 @@ describe("dodoConfigFrom", () => {
     expect(dodoConfigFrom({ ...liveEnv, VITE_DODO_CHECKOUT_ORIGIN: "///" }).products).toEqual({});
   });
 
-  it("skips an app unless both of its IDs are present and well formed", () => {
+  it("sells an app on its paid ID alone, skipping missing or malformed IDs", () => {
     const config = dodoConfigFrom({
       VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
-      VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
-      VITE_OPENKLACK_DODO_TRIAL_PRODUCT_ID: "not-an-id",
+      VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "not-an-id",
+      VITE_OPENKLACK_DODO_TRIAL_PRODUCT_ID: "pdt_okTrial",
     });
-    expect(config.products).toEqual({});
+    expect(config.products).toEqual({ openreaction: { paid: "pdt_orPaid" } });
     expect(dodoConfigFrom({}).products).toEqual({});
   });
 });
@@ -75,21 +73,19 @@ describe("dodoConfigFrom", () => {
 describe("licensingFor", () => {
   const dodo = dodoConfigFrom(liveEnv);
 
-  it("sells every catalogued app, and disables both buttons for one taken off sale", () => {
+  it("sells every catalogued app, and disables buying one taken off sale", () => {
     for (const product of products) {
       expect(officialBuilds[product.id], product.id).toBe(true);
       const licensing = licensingFor(product.id, { dodo });
       expect(licensing.officialBuildAvailable, product.id).toBe(true);
       expect(licensing.buyUrl, product.id).not.toBeNull();
-      expect(licensing.trialUrl, product.id).not.toBeNull();
 
       const offSale = licensingFor(product.id, { dodo, officialBuildAvailable: false });
       expect(offSale.buyUrl).toBeNull();
-      expect(offSale.trialUrl).toBeNull();
     }
   });
 
-  it("keeps both buttons disabled when product IDs are not configured", () => {
+  it("keeps buying disabled when the product ID is not configured", () => {
     for (const product of products) {
       const licensing = licensingFor(product.id, {
         officialBuildAvailable: true,
@@ -97,28 +93,26 @@ describe("licensingFor", () => {
       });
       expect(licensing.officialBuildAvailable).toBe(false);
       expect(licensing.buyUrl).toBeNull();
-      expect(licensing.trialUrl).toBeNull();
     }
   });
 
-  it("links configured product IDs to the configured checkout", () => {
+  it("links the configured product ID to the configured checkout", () => {
     const test = dodoConfigFrom({ ...liveEnv, VITE_DODO_CHECKOUT_ORIGIN: DODO_CHECKOUT_ORIGINS.test });
     const licensing = licensingFor("openreaction", { officialBuildAvailable: true, dodo: test });
     expect(licensing.buyUrl).toMatch(/^https:\/\/test\.checkout\.dodopayments\.com\/buy\/pdt_orPaid\?/);
-    expect(licensing.trialUrl).toMatch(/^https:\/\/test\.checkout\.dodopayments\.com\/buy\/pdt_orTrial\?/);
   });
 
-  it("links product IDs to kind-specific return pages once a build is available", () => {
+  it("returns paid checkout to the thanks page and offers no trial checkout", () => {
     for (const product of products) {
       const licensing = licensingFor(product.id, { officialBuildAvailable: true, dodo });
       const ids = dodo.products[product.id];
       expect(ids, product.id).toBeDefined();
       expect(licensing.buyUrl, product.id).toContain(`${DODO_CHECKOUT_ORIGINS.live}/buy/${ids!.paid}?`);
-      expect(licensing.trialUrl, product.id).toContain(`${DODO_CHECKOUT_ORIGINS.live}/buy/${ids!.trial}?`);
       expect(licensing.thanksUrl).toBe(`https://openapps.space${product.route}/thanks/`);
-      expect(licensing.trialThanksUrl).toBe(`https://openapps.space${product.route}/thanks/trial/`);
       expect(licensing.buyUrl).toContain(encodeURIComponent(licensing.thanksUrl));
-      expect(licensing.trialUrl).toContain(encodeURIComponent(licensing.trialThanksUrl));
+      expect(licensing.downloadPageUrl).toBe(`${product.route}/download/`);
+      expect(licensing).not.toHaveProperty("trialUrl");
+      expect(licensing).not.toHaveProperty("trialThanksUrl");
     }
   });
 
@@ -160,12 +154,6 @@ describe("activateUrl", () => {
     expect(activateUrl("openreaction", "LK-001")).toBe("openreaction://activate?key=LK-001");
     expect(activateUrl("openklack", "a b&c=d/é")).toBe(
       "openklack://activate?key=a%20b%26c%3Dd%2F%C3%A9",
-    );
-  });
-
-  it("marks trial keys for the app", () => {
-    expect(activateUrl("openreaction", "LK-T", "trial")).toBe(
-      "openreaction://activate?key=LK-T&kind=trial",
     );
   });
 });

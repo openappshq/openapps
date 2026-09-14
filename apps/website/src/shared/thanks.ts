@@ -49,12 +49,9 @@ export function readCheckoutReturn(
   return result;
 }
 
-export type LicenseKind = "paid" | "trial";
-
 /** The app's deep link, which only pre-fills the key; the user confirms before activating. */
-export function activateUrl(scheme: string, key: string, kind: LicenseKind = "paid"): string {
-  const suffix = kind === "trial" ? "&kind=trial" : "";
-  return `${scheme}://activate?key=${encodeURIComponent(key)}${suffix}`;
+export function activateUrl(scheme: string, key: string): string {
+  return `${scheme}://activate?key=${encodeURIComponent(key)}`;
 }
 
 /** The URL to leave in the address bar: same page, checkout details removed. */

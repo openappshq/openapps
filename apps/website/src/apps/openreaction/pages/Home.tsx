@@ -41,7 +41,7 @@ const questions = [
   ],
   [
     "How do licenses and trials work?",
-    `Pay ${PRICE} once for the official build on ${MACS_PER_LICENSE} Macs, forever. No subscription or account. The free ${TRIAL_DAYS}-day trial needs only an email and covers one Mac; it stops when it expires, with no automatic charge. Remove a Mac in Settings › License to free a seat, or contact support if you no longer have it.`,
+    `Download OpenReaction and it works right away for ${TRIAL_DAYS} days on that Mac, with no signup. To keep it, pay ${PRICE} once for ${MACS_PER_LICENSE} Macs, forever. No subscription or account, and nothing is charged when the trial ends. Remove a Mac in Settings › License to free a seat, or contact support if you no longer have it.`,
   ],
   [
     "Can I use it offline?",
@@ -53,7 +53,11 @@ const questions = [
   ],
   [
     "Does it store what I type?",
-    "No. Shortcodes are matched in memory on your Mac, never logged or sent. Official builds send only the license key and activation ID to Dodo Payments at activation and daily checks — no Mac name, typing, or usage data. No telemetry.",
+    "No. Shortcodes are matched in memory on your Mac, never logged or sent. No telemetry.",
+  ],
+  [
+    "What does the official build send anywhere?",
+    `Official builds of OpenReaction include a ${TRIAL_DAYS}-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use the app are never sent. Builds from source never contact the license service.`,
   ],
   [
     "What about Slack and Discord?",

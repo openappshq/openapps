@@ -16,8 +16,8 @@ export const OFFLINE_GRACE = "a week";
 
 export interface DodoConfig {
   checkoutOrigin: string;
-  /** Product IDs per app; an app without both IDs renders "Coming soon". */
-  products: Record<string, { paid: string; trial: string }>;
+  /** Paid product ID per app; an app without one can't be bought. */
+  products: Record<string, { paid: string }>;
 }
 
 type Env = Record<string, string | boolean | undefined>;
@@ -32,9 +32,9 @@ const envValue = (env: Env, name: string) => {
 /**
  * Reads Dodo settings from build-time environment variables:
  * `VITE_DODO_CHECKOUT_ORIGIN` (live checkout when unset) and, per app,
- * `VITE_<APP>_DODO_PAID_PRODUCT_ID` and `VITE_<APP>_DODO_TRIAL_PRODUCT_ID`.
- * Malformed values are treated as unset, so a typo disables the buttons
- * instead of linking to a broken checkout.
+ * `VITE_<APP>_DODO_PAID_PRODUCT_ID`. Malformed values are treated as unset,
+ * so a typo disables the button instead of linking to a broken checkout.
+ * Trials start in the app, so there is no trial product.
  */
 export function dodoConfigFrom(env: Env): DodoConfig {
   const raw = envValue(env, "VITE_DODO_CHECKOUT_ORIGIN");
@@ -49,12 +49,8 @@ export function dodoConfigFrom(env: Env): DodoConfig {
     return config;
   }
   for (const product of products) {
-    const prefix = `VITE_${product.id.toUpperCase()}_DODO`;
-    const paid = envValue(env, `${prefix}_PAID_PRODUCT_ID`);
-    const trial = envValue(env, `${prefix}_TRIAL_PRODUCT_ID`);
-    if (PRODUCT_ID.test(paid) && PRODUCT_ID.test(trial)) {
-      config.products[product.id] = { paid, trial };
-    }
+    const paid = envValue(env, `VITE_${product.id.toUpperCase()}_DODO_PAID_PRODUCT_ID`);
+    if (PRODUCT_ID.test(paid)) config.products[product.id] = { paid };
   }
   return config;
 }
@@ -62,8 +58,8 @@ export function dodoConfigFrom(env: Env): DodoConfig {
 export const dodoConfig = dodoConfigFrom(import.meta.env);
 
 /**
- * Whether an app is on sale. Set false to pull one: the buy and trial buttons
- * go quiet even when product IDs are configured, because a key with nothing to
+ * Whether an app is on sale. Set false to pull one: the buy button goes quiet
+ * even when its product ID is configured, because a key with nothing to
  * activate helps no one.
  */
 export const officialBuilds: Record<string, boolean> = {
@@ -96,13 +92,12 @@ export interface AppLicensing {
   price: string;
   /** Where paid checkout returns. */
   thanksUrl: string;
-  /** Where trial checkout returns; a separate path so the page knows the kind. */
-  trialThanksUrl: string;
+  /** The app's download page on this site, e.g. `/openreaction/download/`. */
+  downloadPageUrl: string;
   /** False only while an app is off sale. */
   officialBuildAvailable: boolean;
-  /** Null while product IDs are not configured or the app is off sale. */
+  /** Null while the product ID is not configured or the app is off sale. */
   buyUrl: string | null;
-  trialUrl: string | null;
   supportUrl: string;
 }
 
@@ -122,7 +117,6 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
   const ids = dodo.products[appId];
   const available = (options.officialBuildAvailable ?? officialBuilds[appId] ?? false) && !!ids;
   const thanksUrl = `${origin}${product.route}/thanks/`;
-  const trialThanksUrl = `${origin}${product.route}/thanks/trial/`;
   return {
     id: appId,
     name: product.name,
@@ -130,10 +124,9 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
     pageUrl: `${product.route}/`,
     price: product.price,
     thanksUrl,
-    trialThanksUrl,
+    downloadPageUrl: `${product.route}/download/`,
     officialBuildAvailable: available,
     buyUrl: available ? checkoutUrl(ids?.paid, thanksUrl, dodo.checkoutOrigin) : null,
-    trialUrl: available ? checkoutUrl(ids?.trial, trialThanksUrl, dodo.checkoutOrigin) : null,
     supportUrl: SUPPORT_URL,
   };
 }
