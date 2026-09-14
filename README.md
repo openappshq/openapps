@@ -10,13 +10,13 @@ Free & open source · Mac first · No account · No telemetry
 
 </div>
 
-| A little daily delight | Design preview |
+| Make it yours | A closer look |
 | :--- | :---: |
-| **Find your sound.** 18 recorded switch packs, with preview before Apply. | <img src="design/assets/openklack/ui/settings-light.png" alt="Sound library with a live keyboard and selected sound inspector" width="440" /> |
-| **Keep it close.** Mute, volume, and favorite presets in your menu bar. | <img src="design/assets/openklack/ui/menu-active.png" alt="Menu-bar controls for playback, volume, and favorite presets" width="210" /> |
-| **Make yourself at home.** Light, dark, or your Mac’s appearance. | <img src="design/assets/openklack/ui/settings-dark.png" alt="OpenKlack sound library in dark mode" width="440" /> |
+| **Play your keyboard.** Live 3D keys and reactive lighting. | <img src="design/assets/openklack/features/keyboard.svg" alt="Original OpenKlack keyboard illustration" width="380" /> |
+| **Find your sound.** 18 packs, starred favorites, and optional per-key sounds. | <img src="design/assets/openklack/features/sounds.svg" alt="Sound choices and favorites illustration" width="380" /> |
+| **Try it on the website.** A basic typing test with your chosen sound. | <img src="design/assets/openklack/features/typing.svg" alt="Typing playground illustration" width="380" /> |
 
-<sub>Figma design previews; the current menu uses native macOS controls.</sub>
+<sub>Feature illustrations. The Mac app keeps mute, volume, favorites, and pause reasons in a native menu.</sub>
 
 ## Get started
 
@@ -35,7 +35,7 @@ pnpm desktop  # Mac app
 
 ---
 
-[MIT](LICENSE) · [Sound credits](packages/soundpacks/sounds/NOTICE.txt) · [Reference asset credits](apps/website/public/keyboard/PROVENANCE.md)
+[MIT](LICENSE) · [Prototype model provenance](packages/ui/assets/keyboard/PROVENANCE.md) · [Sound credits](packages/soundpacks/sounds/NOTICE.txt)
 
 <div align="center">
 

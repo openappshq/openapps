@@ -1,0 +1,15 @@
+.original-keyboard {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  min-height: 160px;
+}
+.original-keyboard canvas {
+  touch-action: pan-y;
+}
+.model-error {
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--muted);
+}

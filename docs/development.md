@@ -16,7 +16,9 @@ pnpm test
 pnpm build
 ```
 
-React + TypeScript, HeroUI v3, Three.js / React Three Fiber, Drei, maath, and Howler. Vite+ handles development, bundling, formatting, linting, and Vitest. Tailwind supplies HeroUI's styles; the page theme is in `apps/website/src/styles.css`.
+React + TypeScript, HeroUI v3, Three.js / React Three Fiber, Motion, and the browser’s Web Audio API.
+Vite+ handles development, bundling, formatting, linting, and Vitest.
+Tailwind supplies HeroUI’s styles; both apps use the shared Figma tokens.
 
 ## Repository layout
 
@@ -25,7 +27,8 @@ apps/
   website/          Marketing page and interactive browser playground
   desktop/          Mac utility, React settings, and native input/audio
 packages/
-  keyboard-layout/  Shared logical-key labels and keyboard geometry
+  keyboard-layout/  Shared logical keys, layout data, and input state
+  ui/               Interactive 3D keyboard, website typing test, and motion
   soundpacks/       Shared recorded catalog, audio, and credits
 design/
   assets/           Exact Figma logo and interface exports
@@ -42,19 +45,32 @@ The [design index](../design/README.md) links the Figma system, exported logos, 
 
 ## Behavior
 
-- Type or click/drag across the 3D keyboard. Each key has damped travel and a local RGB pulse.
-- Enable sound or choose a pack. Sound requires a user gesture and works while the interactive keyboard is focused.
-- Search and filter 18 packs: Cherry MX Black/Blue/Brown/Red in ABS and PBT, Alps, Holy Panda, Alpaca, Gateron, Box Navy, Cream, Topre, and Buckling Spring. Preview buttons do not change assignments.
-- Select and preview a pack, then explicitly Apply it to the whole keyboard or an individual key, with master, per-key, and release volume. Sample variation uses each pack's supplied alternatives.
-- Finish, playback settings, and assignments persist in localStorage. Older Deep/Crisp/Clicky preferences migrate to recorded packs. Sound starts off on every visit.
-- Reduced motion removes RGB animation and makes key movement immediate. Browser shortcuts and form controls keep their normal behavior.
-- The accessible key selector and preview button offer an alternative to selecting keys on the canvas.
+The website’s primary Download for Mac links open `/download/`, a separate static HTML entry. Without `VITE_MAC_DOWNLOAD_URL`, this page shows the unreleased state and never attempts a download. Once a signed public installer is available, set that variable in `apps/website/.env.local` (see `.env.example`) and rebuild. The page then attempts the download once and exposes the same URL as a manual retry link. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
+
+- Type in the playground or click the interactive 3D keyboard.
+  Each key has damped travel and a radial lighting pulse.
+  The renderer sleeps between interactions and unmounts when hidden.
+- Enable sound or choose a pack. Sound requires a user gesture and works while the playground or interactive keyboard is focused.
+- Browse and search 18 sounds. Click a sound to apply it; Preview plays a short sample without changing the active sound.
+- Star sounds to pin them to the top. The desktop also shows those favorites in its native menu bar.
+- The website has free typing and 15/30/60-second tests. Switching sounds preserves the passage; text and results remain in memory only.
+- Browser sound, volume, and stars persist in localStorage. Legacy sound choices migrate, with old tuning and key overrides left out of the simple demo. Sound starts off on every visit.
+- Reduced motion removes lighting animation and key travel. Browser shortcuts and form controls keep their normal behavior.
+- Desktop per-key customization has an accessible key selector and explicit physical-key selection mode.
 
 ## Sound library
 
 The MIT-declared recordings come from [Thock soundpacks](https://github.com/kamillobinski/thock-soundpacks), originally Mechvibes and kbsim. Full notices ship in `packages/soundpacks/sounds/NOTICE.txt`; source revisions, original IDs, and licenses are retained in `packages/soundpacks/catalog.json`. The [research](../design/thock-sound-architecture.md) records the source format and provenance.
 
-Each pack has OGG and MP3 audio sprites. Howler loads packs on demand and overlaps voices; mappings preserve per-key samples, alternate samples, and genuine press/release pairs. Packs without release recordings remain silent on key-up. The 793 source clips occupy about 7 MB across both formats. OpenKlack applies no pitch/EQ presets; some source alternatives were pitch-adjusted by kbsim.
+Each pack has OGG and MP3 audio sprites, decoded on demand with Web Audio.
+Mappings preserve per-key samples, alternate samples, and genuine press/release pairs.
+Packs without release recordings remain silent on key-up.
+The 793 source clips occupy about 7 MB across both formats.
+Browser and native playback match median clip RMS with a peak ceiling, then apply the user’s tuning.
+Tone is a 1.5 kHz high shelf with up to ±6 dB gain and headroom compensation.
+Pitch ranges from -6 to +6 semitones; stereo placement follows the shared ANSI layout.
+Neutral settings preserve the original recording’s stereo image.
+Some source alternatives were already pitch-adjusted by kbsim.
 
 To regenerate from the reviewed checkout (requires Python 3 and ffmpeg):
 
@@ -64,11 +80,15 @@ git -C /tmp/thock-soundpacks checkout 213e1443c5005a99d5e51b46e31e17f30e4d752a
 python3 scripts/import-soundpacks.py /tmp/thock-soundpacks
 ```
 
-## Keyboard reference assets
+## Keyboard assets
 
-The supplied HAR's Raycast model and texture atlases are included with [provenance](../apps/website/public/keyboard/PROVENANCE.md). They retain the reference's key legends. Chalk and Sage recolor the base atlas. The earlier Raycast audio has been replaced by the recorded switch library above.
-
-The original reference analysis is in [design/raycast-implementation.md](../design/raycast-implementation.md). Scene calibration is centralized in `apps/website/src/KeyboardScene.tsx`.
+Both apps use `packages/ui/Keyboard3D.tsx` and the same local model and textures.
+The current prototype uses the supplied Raycast reference, with fixed framing and an ivory/graphite/cobalt material and lighting bake.
+Untouched originals and their source hashes live in `design/keyboard/source`.
+Run `pnpm keyboard:assets` with Blender available after editing `scripts/bake-keyboard.py`.
+The build preserves the reference geometry and UV bytes and regenerates both lighting atlases.
+See the [asset workflow](../design/keyboard/README.md) and [provenance](../packages/ui/assets/keyboard/PROVENANCE.md).
+These reference assets need permission or replacement before public redistribution.
 
 The browser demo neither records typed text nor intercepts typing outside its page.
 System-wide sound is implemented in the development desktop application below; public release verification is still pending.
@@ -85,21 +105,22 @@ pnpm desktop:build
 ```
 
 Global keyboard sound requires macOS Input Monitoring permission for OpenKlack.
-Settings include a curated/searchable library, per-key sounds, presets, favorites, app rules, microphone pause, optional launch at login, and reviewable local diagnostics.
+The home screen offers sound selection, starred favorites, one volume slider, and optional per-key customization. Settings contain muted apps, microphone pause, launch at login, appearance, file imports/exports, and local diagnostics. There is no desktop typing test or user-facing preset editor.
 App updates are checked manually and require a separate download-and-install action.
-Builds without a configured release service explain that in General settings.
+Builds without a configured release service explain that under Settings → About & help.
 The native engine plays predecoded audio independently of the settings window.
 Closing settings destroys its WebView; typing sound continues in the menu bar.
 
-Import reviewed Thock-format ZIPs, individual WAV/MP3/OGG/FLAC recordings, or self-contained `.openklack` presets.
+Import reviewed Thock-format ZIPs, individual WAV/MP3/OGG/FLAC recordings, or self-contained `.openklack` settings bundles.
 Individual recordings are limited to five seconds; archives are limited to 128 MB expanded, 4,096 entries, and 1 MB manifests.
 Installed versions are content-addressed and presets stay pinned until the user applies another version.
-Preset export includes the required recordings and credits.
+Export settings includes the required recordings and credits; importing a settings bundle makes it active.
 Corrupt pack files are preserved during repair, and malformed settings receive a recovery copy.
 
-The desktop keyboard uses original CSS perspective and raised keycaps with transient RGB feedback.
-It does not include the Raycast reference model used by the browser demo.
-The shared keyboard layout and labels live in `packages/keyboard-layout`.
+The desktop and website share the 3D renderer, keyboard layout, audio catalog, theme, and motion helpers. The typing playground is website-only. The compatible internal preset/tuning model remains for existing desktop settings; the UI exposes one autosaved setup.
+The native listener and audio callback never depend on React or WebView animation frames.
+Old presets load with neutral tuning; neutral fields are omitted on export for compatibility.
+Non-neutral tuning needs this version or newer to import.
 
 For a locally signed development bundle, use an identity already installed in your keychain:
 
@@ -154,4 +175,4 @@ The [desktop plan](../design/desktop-plan.md) records the agreed product scope.
 The [verification record](../design/desktop-verification.md) distinguishes tested behavior from remaining work.
 
 OpenKlack source is MIT licensed.
-Third-party recordings and reference assets retain the separate notices described above.
+Third-party recordings retain the separate notices described above.

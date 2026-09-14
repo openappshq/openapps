@@ -27,3 +27,10 @@ apps/desktop/src-tauri/gen/
 *.njsproj
 *.sln
 *.sw?
+
+# Shared keyboard preview assets are copied into the website public directory.
+apps/website/public/keyboard/
+apps/website/public/draco/
+
+# Blender authoring backups.
+design/keyboard/*.blend[0-9]

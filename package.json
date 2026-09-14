@@ -13,15 +13,16 @@
     "desktop:build": "pnpm --filter @openklack/desktop build",
     "desktop:test": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "theme": "node scripts/generate-theme.mjs",
-    "desktop:icons": "node scripts/generate-desktop-icons.mjs"
+    "desktop:icons": "node scripts/generate-desktop-icons.mjs",
+    "keyboard:assets": "node scripts/build-keyboard-assets.mjs"
   },
   "devDependencies": {
-    "@types/howler": "^2.2.13",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "sharp": "^0.35.4",
     "typescript": "~6.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"

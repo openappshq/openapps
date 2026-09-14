@@ -24,6 +24,7 @@ zip = { version = "8.6", default-features = false, features = ["deflate-flate2-z
 sha2 = "0.10"
 tauri-plugin-updater = "~2.11.0"
 tokio = { version = "1", features = ["macros", "sync"] }
+biquad = "0.6.0"
 
 [profile.release]
 lto = "thin"

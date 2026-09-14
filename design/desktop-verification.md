@@ -4,7 +4,28 @@ Updated September 14, 2026.
 The desktop goal remains incomplete pending physical-Mac validation and release setup.
 The agreed product scope is in [desktop-plan.md](desktop-plan.md).
 
-## Implemented
+## Current interface verification — September 14, 2026
+
+This section supersedes the interface descriptions in the chronological records below. See the [separate desktop audit](desktop-interface-review.md) and [current UI specification](openklack-app-ui.md).
+
+- One automatically saved setup, current sound, volume, and a fixed keyboard. No desktop typing test, preset workspace, sound inspector, or tuning panel.
+- HeroUI buttons, sliders, switches, search, animated type tabs, Select popovers, and Accordion panels. Native macOS menu and file sheets remain native.
+- Four starting sound choices; stars move sounds to the top and into the menu. The complete library is scroll bounded and combines search with All/Linear/Tactile/Clicky filters.
+- Native QA: Tactile plus “brown” showed only the two Brown recordings; stars and the Red PBT selection survived relaunch. Appearance dropdown selection, Escape dismissal, file accordion expansion, and key selection with Down/Return passed. Key selection alone did not change its sound.
+- The latest development-signed app is installed at `/Applications/OpenKlack.app`; strict signature verification passed. Existing sound, 77% displayed volume, assignments, stars, and Input Monitoring were preserved. Temporary appearance changes were restored to Light.
+- Light/dark home captures now replace the old website proposals. The menu illustration is identified as an illustration.
+- Website QA: 15-second completion, aligned WPM/accuracy, retry focus, combined sound filters, and responsive controls at 390 × 844 passed. Both measured viewport widths (814 and 390) had zero horizontal overflow. The temporary viewport override was reset.
+- Latest checks: `pnpm lint`, `pnpm test` (8 tests), `pnpm build`, desktop frontend build, and Rust tests (14 passed; 1 hardware test ignored in this run). The development-signed `.app` bundle succeeded. An earlier optional DMG packaging attempt failed; a distributable installer and notarization are not verified.
+- Native menu contents were inspected through accessibility, including stars, More sounds, and the volume slider. This does not establish physical slider interaction or a visual capture of the tray icon.
+- Full VoiceOver, zoom, runtime reduced-motion settings, current hardware sleep/call recovery, battery use, and end-to-end acoustic latency were not retested in this interface pass.
+- No commit, push, deployment, or publication was performed. Local application backups are under `/tmp/openklack-before-refactor`.
+- Generated debug/release app bundles were unregistered and archived with non-app directory names. Spotlight returned only `/Applications/OpenKlack.app`; the installed bundle was registered again and its strict signature check passed.
+
+## Historical implementation record
+
+The sections below describe earlier stages; their preset/tuning interfaces and check counts are historical.
+
+### Implemented
 
 - Tauri 2, React/HeroUI settings, Rust/Rodio audio, and a small macOS Objective-C bridge.
 - Global listen-only input, layout-derived logical keys, modifier handling, repeat suppression, secure-input status, sleep/session observation, microphone activity observation without capture, and output-route recovery.
@@ -20,7 +41,7 @@ The agreed product scope is in [desktop-plan.md](desktop-plan.md).
 - Manual mute can be saved even when the active recording is unavailable; changing mute alone preserves the existing playback state and its recovery warning.
 - A version-one settings fixture is checked by Rust serialization/validation and TypeScript compilation, including Unicode logical keys and app-rule targets.
 - Native app selection for rules, human-readable app names, and Undo after rule removal.
-- Original CSS perspective keyboard with raised keys and RGB feedback; shared layout/labels in `packages/keyboard-layout`.
+- Shared Three.js keyboard with raised keys, per-key selection, and radial lighting; shared layout/labels in `packages/keyboard-layout`.
 - Choose by typing selects logical keys outside the pictured layout; capture cancels on blur, hidden view, or native input reset.
 - Keyboard event forwarding stops when the keyboard view is hidden or unmounted; closing settings destroys the WebView.
 - Native menu-bar controls, including an NSSlider for effective-preset volume and labels distinguishing the default preset from an app-rule override.
@@ -86,7 +107,7 @@ The scoped interface review is in [desktop-interface-review.md](desktop-interfac
 - Verify sleep/wake, lock/unlock, permission revocation/regrant, microphone transitions, and output changes including AirPods on supported hardware.
 - Measure an optimized release with settings open/closed and establish CPU, wakeup, memory, and acoustic-latency budgets.
 - Verify native tray slider and live app-rule interactions, complete keyboard-only operation, VoiceOver, and reduced motion.
-- Review the original desktop keyboard's final visual fidelity; it currently uses CSS perspective, not a freely rotatable WebGL model.
+- Complete the native visual pass of the original shared 3D keyboard after unlocking the Mac.
 - Configure the official update destination for openappshq/openklack with its updater signing key, then verify explicit update installation and rollback behavior.
 - Run the GitHub workflow in the actual repository; it has been authored locally but not executed remotely.
 - Supply Developer ID signing/notarization credentials and verify download, installation, launch, and updates on the supported Macs.
@@ -191,3 +212,28 @@ The debug, QA, and temporary installation-check bundles were archived under the 
 Obsolete build, installer-volume, and temporary app registrations were removed.
 Spotlight now returns only `/Applications/OpenKlack.app` for OpenKlack application bundles.
 The installed application retains the saved presets, per-key assignments, and Input Monitoring permission.
+
+## Local refactor review, September 14
+
+The website retains its original contrasting Tactile Studio marketing design, with the new typing playground below the hero.
+Sound selection and per-key editing are separate interactions.
+Both frontends use the same reference geometry and fixed camera framing. The new OpenKlack material/lighting scene bakes ivory keycaps, gray modifiers, cobalt accents, and a graphite case into base/RGB textures.
+Shared tuning controls expose tone, pitch, stereo placement, release level, and recorded variations.
+The browser now decodes and mixes through Web Audio; native shaping uses Rodio and biquad.
+The native listener, repeat suppression, pause precedence, output recovery, and pack storage stay independent of React.
+
+The JavaScript suite has nine passing checks, including score calculation, recording-level matching, input/render notifications, and tuning persistence.
+The native suite has thirteen passing checks, with the hardware test separately passing.
+The direct device test at 48 kHz observed 5.242 ms to the first nonzero callback initially and 0.307 ms after 30 seconds idle.
+These measurements exclude the global input hook, acoustic output, and Bluetooth latency.
+They are not a battery or end-to-end latency benchmark.
+
+Chrome was visually checked at its desktop viewport and at 390 × 844.
+Typing, 15-second completion, pack preview, tuning, persistent text, and stable Space selection were exercised.
+The mobile page measured 390 px wide with no horizontal overflow.
+Three.js reports an upstream Clock deprecation through React Three Fiber; no application errors were captured in that browser pass.
+
+A development-signed local build was installed at `/Applications/OpenKlack.app` with the existing identity and preserved settings.
+The prior app and settings were backed up under `/tmp/openklack-before-refactor`.
+The installed native window was subsequently raised and visually inspected; the reference model and RGB pulses loaded successfully with the packaged CSP. The final light-colorway installation check is recorded below when complete.
+No commit, push, deployment, or publication was performed for this refactor.

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Button } from "@heroui/react";
+import { Button, ProgressBar } from "@heroui/react";
+import { Disclosure } from "./controls";
 import { Download, RefreshCw } from "lucide-react";
 
 type UpdateStatus = {
@@ -62,10 +63,10 @@ export function Updates({
     status &&
     ["checking", "downloading", "verifying", "installing", "restarting"].includes(status.phase);
   const messages: Record<string, string> = {
-    idle: "Check when you want. Updates are never installed automatically.",
+    idle: "",
     checking: "Checking for updates…",
     current: "You have the latest version.",
-    available: "OpenKlack will restart after installation. Your saved presets stay on this Mac.",
+    available: "OpenKlack will restart. Your settings are kept.",
     downloading: `Downloading ${((status?.received ?? 0) / 1_000_000).toFixed(1)} MB…`,
     verifying: "Verifying the download…",
     installing: "Installing the update…",
@@ -75,43 +76,39 @@ export function Updates({
       : "Could not check for updates.",
   };
   return (
-    <>
-      <div className="section-heading">
-        <div>
-          <h2>App updates</h2>
-          <p>
-            {status ? `OpenKlack ${status.currentVersion}` : "Check manually. Install when ready."}
-          </p>
-        </div>
-      </div>
-      <section className="settings-panel diagnostics-panel" aria-label="App updates">
-        {status?.available && <h3>Version {status.available.version} is available</h3>}
-        <p role="status">
-          {!status
-            ? "Loading update settings…"
-            : status.configured
-              ? messages[status.phase]
-              : "This build does not include an update service."}
+    <section className="app-updates" aria-label="App updates">
+      {status?.available && <h3>Version {status.available.version} is available</h3>}
+      <p role="status">
+        {!status
+          ? "Loading update settings…"
+          : status.configured
+            ? messages[status.phase]
+            : "Updates aren’t available in this development build."}
+      </p>
+      {status?.phase === "downloading" && (
+        <ProgressBar
+          className="update-progress"
+          aria-label="Update download"
+          isIndeterminate={!status.total}
+          maxValue={status.total ?? 100}
+          value={status.total ? Math.min(status.received, status.total) : 0}
+        >
+          <ProgressBar.Track>
+            <ProgressBar.Fill />
+          </ProgressBar.Track>
+        </ProgressBar>
+      )}
+      {status?.error && (
+        <p className="inline-error" role="alert">
+          {status.error}
         </p>
-        {status?.phase === "downloading" && (
-          <progress
-            className="update-progress"
-            aria-label="Update download"
-            max={status.total ?? undefined}
-            value={status.total ? Math.min(status.received, status.total) : undefined}
-          />
-        )}
-        {status?.error && (
-          <p className="inline-error" role="alert">
-            {status.error}
-          </p>
-        )}
-        {status?.available?.notes && (
-          <details>
-            <summary>What’s new</summary>
-            <p className="update-notes">{status.available.notes}</p>
-          </details>
-        )}
+      )}
+      {status?.available?.notes && (
+        <Disclosure title="What’s new">
+          <p className="update-notes">{status.available.notes}</p>
+        </Disclosure>
+      )}
+      {status?.configured && (
         <div className="actions">
           <Button
             variant="secondary"
@@ -138,7 +135,7 @@ export function Updates({
             </Button>
           )}
         </div>
-      </section>
-    </>
+      )}
+    </section>
   );
 }

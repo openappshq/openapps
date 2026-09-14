@@ -1,8 +1,7 @@
 import { Button } from "@heroui/react";
-import { Play, Square } from "lucide-react";
 import { Level } from "./controls";
 import { KeyboardPreview } from "./KeyboardPreview";
-import { packLabel, type Desktop, type Preset, type Pack } from "./useDesktop";
+import { type Desktop, type Preset, type Pack } from "./useDesktop";
 
 export function CurrentPreset({
   desktop,
@@ -10,43 +9,30 @@ export function CurrentPreset({
   pack,
   selected,
   onSelect,
-  compact,
+  editing,
+  onEdit,
 }: {
   desktop: Desktop;
   preset: Preset;
   pack: Pack;
   selected: string;
   onSelect: (key: string) => void;
-  compact: boolean;
+  editing: boolean;
+  onEdit: () => void;
 }) {
   return (
-    <section
-      className={`current-preset ${compact ? "compact-preset" : ""}`}
-      aria-label="Current preset"
-    >
-      <div className="preset-overview">
-        <span className="eyebrow">Current preset</span>
-        <h2>{preset.name}</h2>
-        <p>
-          {packLabel(pack)} · {pack.kind.toLowerCase()}
-        </p>
-        <div className="preset-playback">
-          <Button
-            isIconOnly
-            variant="ghost"
-            isDisabled={desktop.busy}
-            aria-label={desktop.preview === pack.id ? "Stop preview" : "Preview current preset"}
-            onPress={() => void desktop.audition(pack.id)}
-          >
-            {desktop.preview === pack.id ? <Square size={18} /> : <Play size={18} />}
-          </Button>
-          <Level
-            label="Volume"
-            value={preset.volume}
-            disabled={desktop.busy}
-            onChange={(volume) => void desktop.changePreset(preset.id, { volume })}
-          />
+    <section className="current-sound" aria-label="Current sound">
+      <div className="current-sound-heading">
+        <div>
+          <p>{pack.brand}</p>
+          <h1>{pack.name === "Unknown" ? "Classic" : pack.name}</h1>
         </div>
+        <Level
+          label="Volume"
+          value={preset.volume}
+          disabled={desktop.busy}
+          onChange={(volume) => void desktop.changePreset(preset.id, { volume })}
+        />
       </div>
       <KeyboardPreview
         onError={desktop.setError}
@@ -56,8 +42,13 @@ export function CurrentPreset({
         selected={selected}
         assignments={Object.keys(preset.overrides)}
         onSelect={onSelect}
-        compact={compact}
+        compact={!editing}
       />
+      <div className="keyboard-actions">
+        <Button variant="ghost" aria-pressed={editing} onPress={onEdit}>
+          {editing ? "Done" : "Customize a key"}
+        </Button>
+      </div>
     </section>
   );
 }

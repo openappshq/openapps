@@ -4,6 +4,7 @@ mod engine;
 mod library;
 mod model;
 mod pack_io;
+mod shaping;
 mod updates;
 
 use engine::{Controller, Message, Snapshot};
@@ -232,9 +233,9 @@ async fn import_sounds(
     let controller = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let Some(file) = settings_dialog(&app)?
-            .set_title("Import sounds or a preset")
+            .set_title("Import sounds or settings")
             .add_filter(
-                "Sound packs, presets, and recordings",
+                "Sound packs, settings, and recordings",
                 &["openklack", "zip", "wav", "mp3", "ogg", "flac"],
             )
             .blocking_pick_file()
@@ -244,7 +245,10 @@ async fn import_sounds(
         let path = file.into_path().map_err(|e| e.to_string())?;
         let imported = controller.library.import(&path)?;
         if let Some(preset) = &imported.preset {
-            controller.update_preferences(|prefs| prefs.presets.push(preset.clone()))?;
+            controller.update_preferences(|prefs| {
+                prefs.presets.push(preset.clone());
+                prefs.active_preset_id = preset.id.clone();
+            })?;
         }
         Ok(Some(imported))
     })
@@ -267,9 +271,9 @@ async fn export_preset(
             .find(|p| p.id == preset_id)
             .ok_or("This preset no longer exists.")?;
         let Some(file) = settings_dialog(&app)?
-            .set_title("Export preset with sounds and credits")
+            .set_title("Export settings with sounds and credits")
             .set_file_name("My keyboard.openklack")
-            .add_filter("OpenKlack preset", &["openklack"])
+            .add_filter("OpenKlack settings", &["openklack"])
             .blocking_save_file()
         else {
             return Ok(false);
@@ -419,42 +423,46 @@ fn tray_menu(app: &tauri::AppHandle, state: &Snapshot) -> tauri::Result<Menu<tau
     }
     menu.append(&volume)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    if state.effective_preset_id != state.preferences.active_preset_id {
-        menu.append(&MenuItem::with_id(
+    let mut packs = app.state::<Arc<Controller>>().library.catalog();
+    packs.sort_by_key(|pack| format!("{} {}", pack.brand, pack.name).to_lowercase());
+    let sounds = Submenu::new(app, "More sounds", true)?;
+    for pack in &packs {
+        let item = CheckMenuItem::with_id(
             app,
-            "effective",
-            format!("App rule: {}", preset.name),
-            false,
-            None::<&str>,
-        )?)?;
-    }
-    menu.append(&MenuItem::with_id(
-        app,
-        "defaults",
-        "Default preset",
-        false,
-        None::<&str>,
-    )?)?;
-    for preset in state
-        .preferences
-        .presets
-        .iter()
-        .filter(|p| p.favorite || p.id == state.effective_preset_id)
-    {
-        menu.append(&CheckMenuItem::with_id(
-            app,
-            format!("preset:{}", preset.id),
-            &preset.name,
+            format!("sound:{}", pack.id),
+            format!(
+                "{} {}{}",
+                pack.brand,
+                if pack.name == "Unknown" {
+                    "Classic"
+                } else {
+                    &pack.name
+                },
+                if pack.source.is_empty() {
+                    " (Imported)"
+                } else {
+                    ""
+                }
+            )
+            .trim(),
             true,
-            preset.id == state.preferences.active_preset_id,
+            pack.id == preset.pack_id,
             None::<&str>,
-        )?)?;
+        )?;
+        if state.preferences.favorite_pack_ids.contains(&pack.id) {
+            menu.append(&item)?;
+        } else {
+            sounds.append(&item)?;
+        }
+    }
+    if !sounds.items()?.is_empty() {
+        menu.append(&sounds)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(
         app,
         "settings",
-        "Open settings…",
+        "Open OpenKlack…",
         true,
         Some("CmdOrCtrl+,"),
     )?)?;
@@ -563,8 +571,11 @@ pub fn run() {
                                 {
                                     preset.volume = value;
                                 }
-                            } else if let Some(preset) = id.strip_prefix("preset:") {
-                                preferences.active_preset_id = preset.into();
+                            } else if let Some(pack_id) = id.strip_prefix("sound:")
+                                && let Some(preset) =
+                                    preferences.presets.iter_mut().find(|p| p.id == effective)
+                            {
+                                preset.pack_id = pack_id.into();
                             }
                         }) {
                             report_tray_error(&app, error);

@@ -18,17 +18,12 @@
     "@heroui/styles": "^3.2.5",
     "@openklack/keyboard-layout": "workspace:*",
     "@openklack/soundpacks": "workspace:*",
-    "@react-three/drei": "^10.7.8",
-    "@react-three/fiber": "^9.7.0",
+    "@openklack/ui": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
-    "howler": "^2.2.4",
     "lucide-react": "^1.45.0",
-    "maath": "^0.10.8",
     "motion": "^13.2.0",
     "react": "~19.2.8",
     "react-dom": "~19.2.8",
-    "tailwindcss": "^4.3.3",
-    "three": "^0.186.0",
-    "@openklack/ui": "workspace:*"
+    "tailwindcss": "^4.3.3"
   }
 }

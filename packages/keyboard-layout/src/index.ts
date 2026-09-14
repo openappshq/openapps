@@ -1,58 +1,6 @@
 export type Key = [code: string, legend: string, width?: number];
-export const rows: Key[][] = [
-  [
-    ["Escape", "esc"],
-    ...Array.from({ length: 12 }, (_, n): Key => [`F${n + 1}`, `F${n + 1}`]),
-    ["Delete", "del"],
-    ["Home", "home"],
-  ],
-  [
-    ["Backquote", "`"],
-    ...Array.from("1234567890", (n): Key => [`Digit${n}`, n]),
-    ["Minus", "−"],
-    ["Equal", "="],
-    ["Backspace", "delete", 2],
-    ["PageUp", "pg up"],
-  ],
-  [
-    ["Tab", "tab", 1.5],
-    ...Array.from("QWERTYUIOP", (n): Key => [`Key${n}`, n]),
-    ["BracketLeft", "["],
-    ["BracketRight", "]"],
-    ["Backslash", "\\", 1.5],
-    ["PageDown", "pg dn"],
-  ],
-  [
-    ["CapsLock", "caps", 1.75],
-    ...Array.from("ASDFGHJKL", (n): Key => [`Key${n}`, n]),
-    ["Semicolon", ";"],
-    ["Quote", "'"],
-    ["Enter", "return", 2.25],
-    ["End", "end"],
-  ],
-  [
-    ["ShiftLeft", "shift", 2.25],
-    ...Array.from("ZXCVBNM", (n): Key => [`Key${n}`, n]),
-    ["Comma", ","],
-    ["Period", "."],
-    ["Slash", "/"],
-    ["ShiftRight", "shift", 1.75],
-    ["ArrowUp", "↑"],
-    ["Fn", "fn"],
-  ],
-  [
-    ["ControlLeft", "ctrl", 1.25],
-    ["AltLeft", "⌥", 1.25],
-    ["MetaLeft", "⌘", 1.25],
-    ["Space", "", 6.25],
-    ["MetaRight", "⌘"],
-    ["AltRight", "⌥"],
-    ["ControlRight", "ctrl"],
-    ["ArrowLeft", "←"],
-    ["ArrowDown", "↓"],
-    ["ArrowRight", "→"],
-  ],
-];
+import layout from "./layout.json";
+export const rows = layout as Key[][];
 const positions = rows.flatMap((row, y) => {
   let x = 0;
   const total = row.reduce((sum, key) => sum + (key[2] ?? 1), 0);
@@ -154,3 +102,57 @@ export const keyLabel = (key: string) =>
     .replace("Meta", "Command ")
     .replace("Alt", "Option ")
     .replace(/(Shift|Control)(Left|Right)/, "$1 $2");
+
+export const keyPan = (code: string) => (positions.find((p) => p.code === code)?.x ?? 0.5) * 2 - 1;
+
+export type InputSource = "keyboard" | "pointer" | "preview";
+export function createInput() {
+  const sources = {
+    keyboard: new Set<string>(),
+    pointer: new Set<string>(),
+    preview: new Set<string>(),
+  };
+  const pressed = new Set<string>();
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  const pulses: string[] = [];
+  return {
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    pressed,
+    pulses,
+    press(code: string, source: InputSource) {
+      sources[source].add(code);
+      if (pressed.has(code)) return false;
+      pressed.add(code);
+      if (pulses.length === 10) pulses.shift();
+      pulses.push(code);
+      notify();
+      return true;
+    },
+    release(code: string, source: InputSource) {
+      sources[source].delete(code);
+      if (Object.values(sources).some((keys) => keys.has(code))) return false;
+      const released = pressed.delete(code);
+      if (released) notify();
+      return released;
+    },
+    clear(source?: InputSource) {
+      if (source) {
+        for (const code of sources[source]) this.release(code, source);
+      } else {
+        sources.keyboard.clear();
+        sources.pointer.clear();
+        sources.preview.clear();
+        pressed.clear();
+        pulses.length = 0;
+        notify();
+      }
+    },
+  };
+}
+export type KeyboardInput = ReturnType<typeof createInput>;

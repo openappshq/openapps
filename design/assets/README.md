@@ -12,7 +12,7 @@ Each brand directory contains:
 
 `figma-export.json` records original export names and SHA-256 checksums.
 The PNG dimensions are 1120 × 1120; these are presentation assets, not ready-made macOS `.icns` bundles.
-OpenKlack interface previews are in `openklack/ui` and show the proposed desktop design.
+In `openklack/ui`, `settings-light.png` and `settings-dark.png` are captures of the installed Mac app from September 14, 2026. Other UI PNGs are historical Figma proposals. The website uses the current app captures and the code-generated `features/menu.svg` illustration. These are not part of the original Figma export checksum manifest.
 
 Keep a clear space of 24 units around the flat 128-unit symbol.
 Use the flat mark at small sizes, with a minimum of 16 pixels.
@@ -27,3 +27,6 @@ Make identity changes in Figma, export again, and update the provenance manifest
 
 The macOS application icon resources are generated from `openklack/app-icon-1120.png` with `pnpm desktop:icons`.
 The generator uses the Tauri icon command and retains the five resources used by the Mac build.
+
+The `openklack/features` SVGs are code-generated README illustrations, not Figma exports or application screenshots.
+Regenerate them with `node scripts/generate-readme-visuals.mjs`.

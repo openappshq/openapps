@@ -139,6 +139,12 @@ pub struct Preset {
     pub pack_id: String,
     pub volume: f32,
     pub release_volume: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tone: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pitch: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub width: f32,
     pub variation: bool,
     pub favorite: bool,
     pub overrides: BTreeMap<String, Assignment>,
@@ -163,6 +169,12 @@ pub struct Preferences {
     pub active_preset_id: String,
     pub presets: Vec<Preset>,
     pub app_rules: Vec<AppRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favorite_pack_ids: Vec<String>,
+}
+
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
 }
 
 impl Default for Preferences {
@@ -178,11 +190,15 @@ impl Default for Preferences {
                 pack_id: "cherry-mx-brown-pbt".into(),
                 volume: 45.0,
                 release_volume: 65.0,
+                tone: 0.0,
+                pitch: 0.0,
+                width: 0.0,
                 variation: true,
                 favorite: true,
                 overrides: BTreeMap::new(),
             }],
             app_rules: vec![],
+            favorite_pack_ids: vec![],
         }
     }
 }
@@ -200,6 +216,13 @@ impl Preferences {
     pub fn validate(&self, catalog: &[Pack]) -> Result<(), String> {
         self.validate_shape()?;
         let packs: HashSet<_> = catalog.iter().map(|p| p.id.as_str()).collect();
+        if self
+            .favorite_pack_ids
+            .iter()
+            .any(|id| !packs.contains(id.as_str()))
+        {
+            return Err("A favorite sound is not installed.".into());
+        }
         for preset in &self.presets {
             if !packs.contains(preset.pack_id.as_str())
                 || preset
@@ -220,6 +243,15 @@ impl Preferences {
         if self.presets.is_empty() || self.presets.len() > 100 || self.app_rules.len() > 200 {
             return Err("Use 1 to 100 presets and at most 200 app rules.".into());
         }
+        let mut favorites = HashSet::new();
+        if self.favorite_pack_ids.len() > 512
+            || self
+                .favorite_pack_ids
+                .iter()
+                .any(|id| id.is_empty() || id.len() > 160 || !favorites.insert(id))
+        {
+            return Err("Favorite sounds must have unique, valid identifiers.".into());
+        }
         let mut ids = HashSet::new();
         for preset in &self.presets {
             if preset.id.is_empty() || preset.id.len() > 80 || !ids.insert(preset.id.as_str()) {
@@ -234,6 +266,16 @@ impl Preferences {
             }
             percent(preset.volume)?;
             percent(preset.release_volume)?;
+            percent(preset.width)?;
+            if !preset.tone.is_finite()
+                || !(-100.0..=100.0).contains(&preset.tone)
+                || !preset.pitch.is_finite()
+                || !(-6.0..=6.0).contains(&preset.pitch)
+            {
+                return Err(
+                    "Tone must be between -100 and 100; pitch between -6 and 6 semitones.".into(),
+                );
+            }
             if preset.overrides.len() > 256 {
                 return Err("Too many key assignments.".into());
             }
@@ -376,6 +418,18 @@ mod tests {
         changed.muted = true;
         changed.app_rules[0].mute = true;
         assert!(!changed.only_mute_changed(&prefs));
+    }
+
+    #[test]
+    fn favorite_sounds_survive_restart_and_reject_duplicates() {
+        let mut prefs = Preferences::default();
+        prefs.favorite_pack_ids.push("cherry-mx-brown-pbt".into());
+        prefs.validate_shape().unwrap();
+        let saved = serde_json::to_string(&prefs).unwrap();
+        let restored: Preferences = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.favorite_pack_ids, prefs.favorite_pack_ids);
+        prefs.favorite_pack_ids.push("cherry-mx-brown-pbt".into());
+        assert!(prefs.validate_shape().is_err());
     }
 
     #[test]
