@@ -1451,7 +1451,8 @@ kbd {
   }
   .code-block pre {
     font-size: 13px;
-    padding: 20px 56px 20px 16px;
+    /* The copy button gets its own band above the code, so long lines scroll under nothing. */
+    padding: 60px 16px 20px;
   }
   .faq-trigger {
     font-size: 16px;
