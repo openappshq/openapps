@@ -35,6 +35,8 @@ pnpm desktop  # Mac app
 
 ---
 
+**More apps:** [OpenReaction](apps/openreaction) — emoji shortcodes everywhere on your Mac. Its page lives at `/openreaction/` on this website.
+
 [MIT](LICENSE) · [Sound credits](packages/soundpacks/sounds/NOTICE.txt) · [Reference asset credits](apps/website/public/keyboard/PROVENANCE.md)
 
 <div align="center">
