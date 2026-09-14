@@ -19,17 +19,13 @@ flowchart LR
 
 **Active, session-level `CGEventTap`.** A listen-only tap (or `NSEvent` global monitor) can observe keys but cannot remove them. While the picker is open, arrows, Return, Tab and Esc must not reach the host app, so the tap is created with `.defaultTap` and returns `nil` for those events. A swallowed press stays *owned* until its key-up: repeats and the release are swallowed too, so the host never sees an orphaned key-up or a stray repeat after the picker closed. Only unmodified keys count; ⌘, ⌃ and ⌥ chords belong to the host and reset typing.
 
-**Text is decoded only when it may be.** The tap reads typed characters (`CGEventKeyboardGetUnicodeString`) only while `capturesText` is on, which the controller sets from the focus state below. In a password field or an unknown field, keystrokes pass through without being decoded at all.
+**The tap is thin.** It turns each event into a `KeyEvent` (key code, up/down, repeat, modifiers, whether secure input is on) and asks the gate what to do. Typed characters are decoded only when the gate calls the decoder, which it does only while capture is open, secure input is off and no modifier is held. In a password field or an unknown field, keystrokes pass through without being read.
 
-**The callback stays trivial.** macOS disables a tap whose callback is slow (`tapDisabledByTimeout`). The callback runs on a dedicated thread with its own run loop, reads key code, flags and typed characters, checks a lock-protected `pickerVisible` flag, and posts a `TapEvent` to the main queue. Matching, Accessibility calls and UI never run there. When macOS disables the tap anyway (timeout or `tapDisabledByUserInput`), the callback re-enables it and sends a reset, since keystrokes may have been missed.
+**Ordering is by construction.** Every input — tap events, mouse downs, focus notifications, probe answers, verification results, flush acknowledgements, watchdog timeouts — goes through one lock into the pure `InputGate`, so the gate sees one ordered stream regardless of thread. Effects that post events are enqueued on the single insertion queue while that lock is still held, so they reach the event stream in the order the gate decided.
 
-There is a small race: the main thread updates `pickerVisible` asynchronously. A swallowed key is acted on only if the picker is still open; otherwise the controller reposts it so no keystroke is lost. Conversely, a picker key that already passed through to the host is never acted on, even if the picker opened a moment later.
+**Replacement transactions.** A replacement is a transaction with an id. Physical keys are held from the moment it begins; verification runs; on success the deletes, the emoji and a *flush* marker carrying the id are posted; when the marker comes back through the tap everything before it has reached the host, so held keys are fed through the gate once (history sees them) and those that pass are replayed, followed by another flush; this repeats until nothing new arrived, then the gate reopens. The watchdog stays armed until that point; a lost flush is retried once and then the transaction is abandoned with a best-effort replay.
 
-Events OpenReaction posts itself carry a tag in `eventSourceUserData`, and the tap passes them through untouched.
-
-**Replacement transactions.** Deleting the token and typing the emoji takes several events, and the user may keep typing meanwhile. From `beginHold` until a *flush* marker posted after the last synthetic event reaches the tap, physical keyboard events are held and then replayed in order (repeating if more arrived during the replay). Typing during a replacement lands after the emoji, never between the deletes. A 1 s deadline releases the hold if the flush never arrives.
-
-## 2. Trigger state machine — `TriggerMachine`
+## 2. Trigger state machine## 2. Trigger state machine — `TriggerMachine`
 
 The machine never sees the host's text. It mirrors a short tail of typed characters (64) and derives the active token from that tail after every input:
 
@@ -42,15 +38,41 @@ The machine never sees the host's text. It mirrors a short tail of typed charact
 
 The picker opens once the query has two characters and at least one result.
 
-### Coordinator and safety rules — `TypingCoordinator`
+### The gate — `InputGate`
 
-Every keystroke decision is made by a pure, tested coordinator that returns effects for the app layer to run:
+Every decision about an event is made by one pure, single-threaded state machine (`OpenReactionCore/InputGate.swift`), tested with scripted event sequences.
 
-- **Focus gate.** Text is captured only while the focused element is known to be editable. `FocusMonitor` watches the frontmost app with an `AXObserver` (focused-element and window changes) and app activation; each change marks focus unknown and re-probes it. Unknown, unavailable (timeout, no focus, no Accessibility) and secure focus capture nothing, and moving focus forgets whatever was typed.
-- **Per-token check.** At the colon the focused element is probed again for the caret position; insertion and the picker need that answer to be editable. The answer names the target element.
-- **Verified replacement.** Before deleting, the app confirms the same element (by `CFEqual` and pid) still has focus, is not secure, has no selection, and — when the app exposes its text — that the characters before the caret are exactly the typed token. Any mismatch cancels the insertion.
-- **Swallowed keys only.** Picker commands act only on keys the tap actually removed from the stream.
-- **Secure input** (`IsSecureEventInputEnabled`) drops everything, including mid-token.
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Closed: keys pass undecoded / mouse / focus event
+    Closed --> Open: probeResult(gen == current, editable)
+    Open --> Closed: mouse down · Tab/Return/chord passes · activation · secure input · probe not editable
+    Open --> Open: typed text → TriggerMachine → picker
+    state Transaction {
+        [*] --> Verifying: closing colon / confirm / click (keys held)
+        Verifying --> Posting: verifyResult keystrokes (still authorized)
+        Verifying --> Draining: verifyResult replaced · refused · cancel (mouse, focus, timeout, secure)
+        Posting --> Draining: flushAck
+        Draining --> Draining: flushAck with new held keys → replay + flush
+        Draining --> [*]: flushAck, nothing held → reopen
+        Posting --> Posting: first timeout → re-flush
+        Posting --> [*]: second timeout / tap interrupted → replay, reopen
+    }
+    Open --> Transaction
+    Transaction --> Open
+```
+
+Rules the gate enforces:
+
+- **Fail closed.** Text is captured only in `Open`. Anything that may move focus — a mouse down, Tab or Return reaching the host, a ⌘/⌃/⌥ chord, app activation, an Accessibility focus notification — closes the gate *before* the event passes and bumps the focus generation; a probe answer reopens it only if it carries the current generation and says editable. Secure input drops the event and forgets typing.
+- **Ownership.** A swallowed key press stays owned until released: its repeats and its key-up are swallowed whatever else happens, so the host never sees an orphaned release or a stray repeat.
+- **Transactions.** A replacement may post only after its own verification succeeded, while it is still the current transaction, the gate is still open on the same focus generation, and it was not cancelled. Held keys are fed through the gate once when drained, in order, so history stays exact; keys that pass are replayed after the replacement's events; a drained closing colon can start the next transaction, which holds the rest.
+- **Picker keys.** Arrows, Return, Tab and Esc act on the picker only when the tap actually swallowed them; a swallowed key the picker can no longer use is re-sent synthetically.
+
+**Verification (`CaretLocator.verify`)** runs while keys are held and fails closed: the focused element must be the remembered one (`CFEqual`, same pid) and answer that it is not secure; the selection must be readable and empty with room for the token; then either the text before the caret is readable and equals the typed token (delete with key events), or — if the app cannot report text but lets the selection be set — the token is selected, read back through `AXSelectedText`, replaced by setting `AXSelectedText`, and confirmed by reading the selection again. Anything else refuses; nothing is deleted on an assumption. Apps that expose no selection or text through Accessibility (most terminals, some Java/Qt/game windows) therefore get no insertion.
+
+`FocusMonitor` reports activation immediately and registers an `AXObserver` for the frontmost app on a worker queue with a bounded messaging timeout, generation-checked, closing the gate before registration starts.
 
 ## 3. Emoji data and search — `AppleEmojiData`, `EmojiCatalog`, `EmojiSearch`
 
