@@ -183,9 +183,12 @@ The corrupt journal is never overwritten before a replacement has been written. 
 
 ### Trial
 - **Starting:** on launch of an official build with no license record, if the trial record is positively absent, create a provisional one (`started_at = last_seen_at = now`, `registered = false`), save it, turn the core feature on, and ask the registry in the background. No button, no prompt, and launch never waits for the network. If the save fails, show a storage error, keep the core off and retry; don't run an unsaved trial.
-- **Registering:** while `registered` is `false`, ask the registry on launch, on every scheduler tick with backoff (1 minute up to 1 hour, honoring `Retry-After`), on wake and when the network comes back. On an answer, convert the registry's start to local time (`local_now − (registry_now − registry_started_at)`), keep the **earlier** of that and the provisional start, set `registered = true` and save. A registered trial never contacts the registry again.
+- **Registering:** while `registered` is `false`, ask the registry on launch, on every scheduler tick with backoff (1 minute up to 1 hour, honoring `Retry-After`), on wake and when the network comes back. On an answer, convert the registry's start to local time (`local_now − (registry_now − registry_started_at)`), keep the **earlier** of that and the provisional start, set `registered = true` and save. Registration follows the write order: if it extends access (the 24-hour offline limit no longer applies, or the trial is back on), save first and extend only once the save succeeds, keeping the provisional limit in memory until then. If it restricts access (an earlier start shortens or ends the trial), apply it in memory first, then save. A registered trial never contacts the registry again.
+- **Fallback device ID:** when the hardware UUID can't be read, the random fallback ID must be saved in the trial Keychain item before **every** registry request that uses it, so the registry never sees an ID that a restart could lose.
 - **Offline limit:** an unregistered trial runs for at most 24 hours of elapsed time. After that the core turns off with "Connect to the internet to continue your free trial" until the registry answers; the answer then decides how much trial is left. This stops a Mac that blocks the registry from getting a fresh trial after every Keychain wipe.
-- **Elapsed time never goes backwards:** `elapsed = max(now, last_seen_at) − started_at`. Setting the clock back can't add trial time; the trial simply keeps the time it had already used. A clock set far ahead and then corrected ends the trial early; that's accepted.
+- **Elapsed time never goes backwards:** `elapsed = last_seen_at − started_at`, where `last_seen_at` only ever rises. Setting the clock back can't add trial time. A clock set far ahead and then corrected ends the trial early; that's accepted.
+- **Elapsed time never stops while the app runs:** on every tick, `last_seen_at = max(last_seen_at + monotonic time since the previous tick, now)`, using a monotonic clock that keeps counting through sleep (for example `mach_continuous_time`). A wall clock that's frozen or set back therefore doesn't pause the trial.
+- **Clock behind at launch or wake:** if `now` is more than 1 hour earlier than `last_seen_at` when the app launches or wakes, and there's no license record, the core turns off with "Your Mac's clock is behind. Set the correct date and time to keep using your free trial" until `now` is within 1 hour of `last_seen_at` again. The trial isn't ended and no time is added; nothing is saved. This closes the gap where a Mac kept at a past date would never reach the trial end across restarts.
 - **Ending:** the trial ends when `elapsed` reaches 3 days. The deadline timer switches the core off on time from memory (see "Deadlines don't wait on I/O").
 - **Keeping `last_seen_at`:** raise it in memory on every scheduler tick and on wake; save it at most once an hour, when the trial ends, and on quit. A failed save is retried and never blocks the core feature or the trial deadline.
 - **Remaining time shown:** "N days left", rounded up, from `3 days − elapsed`; "less than a day left" in the final 24 hours.
@@ -254,7 +257,7 @@ Every app implements these against a fake Dodo client, a fake Keychain and an in
 | 11 | Licensed, last success 3 days ago | local clock 2 days before `last_success_at` | Check required; grace not extended |
 | 12 | Fresh Mac | launch; registry → new start | Provisional record saved, core on before the answer; then registered with 3 days left |
 | 13 | Registered trial started 3 days + 1 min ago | launch (offline or online) | TrialEnded; core off; no network calls |
-| 14 | Registered trial, 2 days elapsed | clock set back 5 days, relaunch | Still Trial with 1 day left; elapsed never decreases |
+| 14 | Registered trial, 2 days elapsed | clock set back 5 days, relaunch | Core off with "clock is behind"; nothing saved; once the clock is corrected, Trial with 1 day left |
 | 15 | Trial, 2 days 23 h 59 min elapsed | app keeps running 2 min | Core switches off on time without waiting for any save or network call |
 | 16 | Fresh Mac, trial record save fails | launch | Storage error; core off; retried; no trial running |
 | 17 | Trial record unreadable (not "not found") | launch | Storage error; core off; no new trial created; registry not called; existing data not overwritten |
@@ -268,6 +271,10 @@ Every app implements these against a fake Dodo client, a fake Keychain and an in
 | 25 | Any | Dodo `429` with `Retry-After: 60` | No Dodo call for 60 s; state unchanged |
 | 26 | Source build | launch | No License UI, no trial, no registry or license calls, core feature on |
 | 27 | Same Mac, two apps | compute device hashes | Different hashes; neither equals the raw hardware UUID |
+| 28 | Trial, 1 day elapsed, app running | wall clock frozen (or set back) while 2 days of monotonic time pass | TrialEnded on time; elapsed advanced by the monotonic time |
+| 29 | Unregistered trial at 23 h | registry answers, then the save blocks past 24 h | Core off at 24 h; back on only after the save succeeds |
+| 30 | Fallback device ID, Keychain saves failing | registry tick | No registry request until the fallback ID is saved |
+| 31 | Keychain holds a license record from the old trial keys (`kind: trial` or a non-paid product) | launch | Not a license; the trial rules apply |
 
 ## Adding licensing to a new app
 
