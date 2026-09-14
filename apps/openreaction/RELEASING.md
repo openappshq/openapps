@@ -89,12 +89,11 @@ approve both.
 | `OPENAPPS_DODO_PAID_PRODUCT_ID` | yes | The live-mode `OpenReaction` product ID, `pdt_…` |
 | `OPENAPPS_BUY_URL` | no | The `https://checkout.dodopayments.com/buy/<paid id>?quantity=1&redirect_url=https://openapps.space/openreaction/thanks/` link; the Buy button says "coming soon" without it |
 | `OPENAPPS_SUPPORT_URL` | no | `https://` or `mailto:` link for Contact support |
-| `OPENAPPS_DODO_TRIAL_PRODUCT_ID` | no | The live-mode trial product ID, if trial keys are still sold; leave unset otherwise |
-| `OPENAPPS_TRIAL_URL` | no | The trial checkout link, if trial keys are still sold |
 
 `OPENAPPS_DODO_ENV` is always `live` in the release job; it is not a variable.
-The trial variables exist only for builds that still accept Dodo trial keys;
-the in-app trial does not need them.
+The trial lives in the app and needs no configuration: release builds
+register trials with `https://openapps.space/api/trial` (`env: "live"`), and
+there is no trial product.
 
 The release job checks every secret and the paid product ID before it
 touches the certificate, and fails naming what is missing. There is no

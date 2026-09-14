@@ -180,9 +180,7 @@ jobs:
           RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
           PUBLISH: ${{ steps.version.outputs.publish }}
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
-          OPENAPPS_DODO_TRIAL_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_TRIAL_PRODUCT_ID }}
           OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
-          OPENAPPS_TRIAL_URL: ${{ vars.OPENAPPS_TRIAL_URL }}
           OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
         run: |
           missing=0
@@ -205,14 +203,8 @@ jobs:
             pdt_*) ;;
             *) echo "::error::OPENAPPS_DODO_PAID_PRODUCT_ID must be a Dodo product ID (pdt_…)."; exit 1 ;;
           esac
-          if [ -n "$OPENAPPS_DODO_TRIAL_PRODUCT_ID" ]; then
-            case "$OPENAPPS_DODO_TRIAL_PRODUCT_ID" in
-              pdt_*) ;;
-              *) echo "::error::OPENAPPS_DODO_TRIAL_PRODUCT_ID must be a Dodo product ID (pdt_…) or unset."; exit 1 ;;
-            esac
-          fi
           # The generator validates the URLs' shape; this only reports what is configured.
-          for name in OPENAPPS_DODO_TRIAL_PRODUCT_ID OPENAPPS_BUY_URL OPENAPPS_TRIAL_URL OPENAPPS_SUPPORT_URL; do
+          for name in OPENAPPS_BUY_URL OPENAPPS_SUPPORT_URL; do
             if [ -n "${!name}" ]; then echo "$name: set"; else echo "$name: not set (optional)"; fi
           done
       - name: Import the Developer ID certificate
@@ -247,9 +239,7 @@ jobs:
           OPENAPPS_LICENSING: "1"
           OPENAPPS_DODO_ENV: live
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
-          OPENAPPS_DODO_TRIAL_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_TRIAL_PRODUCT_ID }}
           OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
-          OPENAPPS_TRIAL_URL: ${{ vars.OPENAPPS_TRIAL_URL }}
           OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
         run: scripts/bundle.sh
       - name: Notarize and staple the app
