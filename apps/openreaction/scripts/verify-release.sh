@@ -62,10 +62,13 @@ done
 test -f "$APP/Contents/Resources/AppIcon.icns"
 test -f "$APP/Contents/Resources/emoji.json"
 codesign --verify --deep --strict --verbose=2 "$APP"
-codesign --display --verbose=2 "$APP" 2>&1 | grep -E '^(Authority|Identifier|TeamIdentifier|Timestamp|CodeDirectory)' || true
-codesign --display --verbose=2 "$APP" 2>&1 | grep -q 'flags=.*runtime' || { echo "error: hardened runtime is off" >&2; exit 1; }
+# Captured once: piping codesign straight into `grep -q` lets grep close the
+# pipe early, and under pipefail codesign's SIGPIPE then reads as a failure.
+signature="$(codesign --display --verbose=2 "$APP" 2>&1)"
+grep -E '^(Authority|Identifier|TeamIdentifier|Timestamp|CodeDirectory)' <<< "$signature" || true
+grep -q 'flags=.*runtime' <<< "$signature" || { echo "error: hardened runtime is off" >&2; exit 1; }
 if [[ "$REQUIRE_NOTARIZED" == "1" ]]; then
-    codesign --display --verbose=2 "$APP" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+    grep -q 'Authority=Developer ID Application:' <<< "$signature" \
         || { echo "error: not signed with a Developer ID Application identity" >&2; exit 1; }
 fi
 check "app Gatekeeper assessment" spctl --assess --type execute -vv "$APP"

@@ -170,8 +170,13 @@ fi
 codesign "${SIGN_FLAGS[@]}" --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 if [[ "${UNIVERSAL:-0}" == "1" ]]; then
-    lipo -archs "$APP/Contents/MacOS/$APP_NAME" | grep -q 'x86_64' || { echo "error: not a universal binary" >&2; exit 1; }
-    lipo -archs "$APP/Contents/MacOS/$APP_NAME" | grep -q 'arm64' || { echo "error: not a universal binary" >&2; exit 1; }
+    archs="$(lipo -archs "$APP/Contents/MacOS/$APP_NAME")"
+    for arch in arm64 x86_64; do
+        case " $archs " in
+            *" $arch "*) ;;
+            *) echo "error: not a universal binary, ${arch} is missing (got '${archs}')" >&2; exit 1 ;;
+        esac
+    done
 fi
 
 echo "==> Done: ${APP} (${VERSION}, build ${BUILD_NUMBER})"
