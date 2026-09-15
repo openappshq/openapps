@@ -225,9 +225,12 @@ impl RecordStore {
         Ok(bytes)
     }
 
-    /// Removes `name`; an entry that is already gone is fine, one that is not a regular file
-    /// is left alone. After the unlink only the directory sync can fail, which leaves the
-    /// removal in place but unconfirmed.
+    /// Removes `name`; an entry that is not a regular file is left alone. After the unlink
+    /// only the directory sync can fail, which leaves the removal in place but unconfirmed.
+    /// An entry that is already gone is synced all the same: the caller retries a delete
+    /// exactly because an earlier unlink was not confirmed, and `Ok` must mean the absence is
+    /// durable, not merely visible. Only a store whose directories never existed has nothing
+    /// to confirm.
     pub fn delete(&self, name: &str) -> Result<(), SaveError> {
         let failed = |error: io::Error| SaveError::Failed(error.to_string());
         let Some(dir) = self.records(false).map_err(failed)? else {
@@ -236,7 +239,7 @@ impl RecordStore {
         dir.expect_regular_or_absent(name).map_err(failed)?;
         match dir.unlink(name) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(failed(error)),
         }
         (self.directory_sync)(&dir.0).map_err(|error| SaveError::Indeterminate(error.to_string()))
@@ -399,10 +402,13 @@ impl Vault for RecordStore {
     }
 
     /// The cleanups first, then the license (deleted when the Mac has been removed). A crash
-    /// between the two leaves the old license beside the new cleanup list. An unconfirmed
-    /// cleanups write is reported as an ordinary failure: the license file is untouched at
-    /// that point, and the retry rewrites the cleanups from memory either way. Only the
-    /// license file's own unconfirmed write is indeterminate.
+    /// between the two leaves the old license beside the new cleanup list.
+    ///
+    /// `Failed` from here guarantees only that the license file is untouched: the cleanups
+    /// file may already hold the new list (its own write failed after the rename, or it
+    /// succeeded and the license step failed). That is safe because the caller keeps the
+    /// same list in memory and rewrites it on the retry. Only the license file's own
+    /// unconfirmed write or removal is reported as `Indeterminate`.
     fn save(&self, stored: &Stored) -> Result<(), SaveError> {
         let cleanups = if stored.pending_cleanups.is_empty() {
             self.delete(CLEANUPS_FILE)
@@ -436,7 +442,13 @@ impl Vault for RecordStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::{
+        os::unix::fs::{PermissionsExt, symlink},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+    };
 
     const APP: &str = "openklack";
     const UUID: &str = "5B7E2C1A-0F3D-4E8A-9C21-7D6F5A4B3C2D";
@@ -904,8 +916,12 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec![TRIAL_FILE.to_string()]);
-        // The license's own unconfirmed write is indeterminate too; an unconfirmed cleanups
-        // write is an ordinary failure, since the license file has not been touched yet.
+        // The license's own unconfirmed write is indeterminate too (the cleanups step, a
+        // delete of an absent file, is let through); an unconfirmed cleanups write is an
+        // ordinary failure, since the license file has not been touched yet.
+        let (sync, flaky) = FlakySync::new();
+        let unconfirmed = store(dir.path(), Some(UUID)).with_directory_sync(sync);
+        flaky.pass.store(1, Ordering::SeqCst);
         let outcome = unconfirmed.save(&Stored {
             license: Some(record()),
             pending_cleanups: vec![],
@@ -914,9 +930,14 @@ mod tests {
             matches!(outcome, Err(SaveError::Indeterminate(_))),
             "{outcome:?}"
         );
+        assert_eq!(flaky.calls(), 2);
         assert_eq!(vault.load().unwrap().license, Some(record()));
         let outcome = unconfirmed.save(&stored());
-        assert!(matches!(outcome, Err(SaveError::Failed(_))), "{outcome:?}");
+        assert!(
+            matches!(&outcome, Err(SaveError::Failed(reason)) if reason.contains("cleanups")),
+            "{outcome:?}"
+        );
+        assert_eq!(flaky.calls(), 3, "the license step was never reached");
         assert_eq!(
             vault.load().unwrap().pending_cleanups,
             stored().pending_cleanups
@@ -924,20 +945,95 @@ mod tests {
         assert_eq!(vault.load().unwrap().license, Some(record()));
     }
 
+    /// A directory sync that fails while `failing` is set, except for the next `pass` calls,
+    /// and counts every call.
+    struct FlakySync {
+        failing: Arc<AtomicBool>,
+        pass: Arc<AtomicUsize>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl FlakySync {
+        fn new() -> (DirectorySync, FlakySync) {
+            let flaky = FlakySync {
+                failing: Arc::new(AtomicBool::new(true)),
+                pass: Arc::new(AtomicUsize::new(0)),
+                calls: Arc::new(AtomicUsize::new(0)),
+            };
+            let (failing, pass, calls) = (
+                flaky.failing.clone(),
+                flaky.pass.clone(),
+                flaky.calls.clone(),
+            );
+            let sync: DirectorySync = Box::new(move |file: &fs::File| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let let_through = pass
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok();
+                if failing.load(Ordering::SeqCst) && !let_through {
+                    Err(io::Error::other("disk gone"))
+                } else {
+                    file.sync_all()
+                }
+            });
+            (sync, flaky)
+        }
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
     #[test]
-    fn a_failed_directory_sync_after_the_unlink_is_indeterminate_and_the_retry_is_a_no_op() {
+    fn a_failed_directory_sync_after_the_unlink_stays_indeterminate_until_a_sync_confirms_it() {
         let dir = tempfile::tempdir().unwrap();
-        let vault = store(dir.path(), Some(UUID));
-        vault.save(&stored()).unwrap();
-        let unconfirmed = store(dir.path(), Some(UUID))
-            .with_directory_sync(Box::new(|_| Err(io::Error::other("disk gone"))));
-        let outcome = unconfirmed.delete(LICENSE_FILE);
+        store(dir.path(), Some(UUID)).save(&stored()).unwrap();
+        let (sync, flaky) = FlakySync::new();
+        let vault = store(dir.path(), Some(UUID)).with_directory_sync(sync);
+        let outcome = vault.delete(LICENSE_FILE);
         assert!(
             matches!(outcome, Err(SaveError::Indeterminate(_))),
             "{outcome:?}"
         );
         assert!(!vault.directory().join(LICENSE_FILE).exists());
+        assert_eq!(flaky.calls(), 1);
+        // The entry is gone from view, but the retry still has to confirm it.
+        let outcome = vault.delete(LICENSE_FILE);
+        assert!(
+            matches!(outcome, Err(SaveError::Indeterminate(_))),
+            "{outcome:?}"
+        );
+        assert_eq!(flaky.calls(), 2, "synced again");
+        // The whole save never confirms either: the cleanups step (a delete of an already
+        // absent file) fails to confirm first, and with it let through, the license step
+        // is the unconfirmed one.
+        let outcome = vault.save(&Stored::default());
+        assert!(
+            matches!(&outcome, Err(SaveError::Failed(reason)) if reason.contains("cleanups")),
+            "{outcome:?}"
+        );
+        assert_eq!(flaky.calls(), 3);
+        flaky.pass.store(1, Ordering::SeqCst);
+        let outcome = vault.save(&Stored::default());
+        assert!(
+            matches!(outcome, Err(SaveError::Indeterminate(_))),
+            "{outcome:?}"
+        );
+        assert_eq!(flaky.calls(), 5);
+        // Confirmed at last.
+        flaky.failing.store(false, Ordering::SeqCst);
         assert_eq!(vault.delete(LICENSE_FILE), Ok(()));
+        assert_eq!(vault.save(&Stored::default()), Ok(()));
+        assert_eq!(flaky.calls(), 8);
         assert_eq!(vault.load().unwrap().license, None);
+        // A store whose directories never existed has nothing to confirm.
+        let empty = tempfile::tempdir().unwrap();
+        let (sync, flaky) = FlakySync::new();
+        let vault = store(empty.path(), Some(UUID)).with_directory_sync(sync);
+        assert_eq!(vault.delete(LICENSE_FILE), Ok(()));
+        assert_eq!(vault.save(&Stored::default()), Ok(()));
+        assert_eq!(flaky.calls(), 0);
+        assert!(!empty.path().join(VENDOR_DIRECTORY).exists());
     }
 }

@@ -154,7 +154,9 @@ fn random_uuid() -> Result<String, String> {
 /// Why a record could not be saved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SaveError {
-    /// Nothing changed: the record on disk is still the one from before.
+    /// The record itself is untouched: what was saved before is still what is saved. For the
+    /// license, the cleanups file beside it may nevertheless have changed (see
+    /// `store::RecordStore`'s `Vault::save`); the caller's retry rewrites it either way.
     Failed(String),
     /// The new record replaced the old one but could not be confirmed durable. The caller
     /// keeps the new record as the one in effect, grants nothing on its strength, and repeats
@@ -4189,6 +4191,56 @@ mod tests {
             3,
             "no deactivation of the new slot"
         );
+    }
+
+    /// Remove this Mac whose record removal is unconfirmed: the tombstone and the storage
+    /// error stay through every unconfirmed retry, and go only once a retry is confirmed.
+    #[test]
+    fn an_unconfirmed_removal_keeps_the_tombstone_until_a_retry_is_confirmed() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_paid(0), clock.clone());
+        service.load();
+        *service.vault.unconfirmed.lock().unwrap() = Some("disk gone".into());
+        service.remove().unwrap();
+        let hash = instance_hash("lki_KEY-PAID");
+        let seq = service.journal.entry(&hash).unwrap().expect("tombstone");
+        assert_eq!(
+            service.vault.load().unwrap().license,
+            None,
+            "removed on disk"
+        );
+        assert!(service.view().last_error.unwrap().contains("disk gone"));
+        for step in 1..=3 {
+            clock.store(NOW + step * 10, Ordering::SeqCst);
+            service.tick();
+            assert_eq!(
+                service.journal.entry(&hash),
+                Ok(Some(seq)),
+                "still unconfirmed"
+            );
+            assert!(service.view().last_error.unwrap().contains("disk gone"));
+        }
+        // An offline restart in that state stays off: the tombstone outranks a record that
+        // an unconfirmed removal might give back.
+        let rolled_back = service.vault.reopen();
+        *rolled_back.stored.lock().unwrap() = with_paid(0);
+        let restarted = service_with(
+            rolled_back,
+            service.journal.clone(),
+            Arc::new(AtomicI64::new(NOW + 40)),
+        );
+        restarted
+            .dodo
+            .answer(Err(DodoError::Offline("offline".into())));
+        restarted.load();
+        assert!(restarted.host.blocked());
+        assert_eq!(restarted.view().state, State::Revoked);
+        // Confirmed: the tombstone has done its job.
+        *service.vault.unconfirmed.lock().unwrap() = None;
+        clock.store(NOW + 50, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.journal.entry(&hash), Ok(None));
+        assert_eq!(service.view().last_error, None);
     }
 
     /// A provisional trial whose save is unconfirmed is the trial from now on, but grants
