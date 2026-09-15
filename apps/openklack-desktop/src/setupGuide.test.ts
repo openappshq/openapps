@@ -4,7 +4,10 @@ import {
   guideLicenseLine,
   guideLoginLine,
   offersSetupGuide,
+  SETUP_GUIDE_STEPS,
+  setupGuideStep,
   withSetupGuideCompleted,
+  withSetupGuideStep,
 } from "./setupGuide";
 import type { LicenseView } from "./licenseState";
 import type { Preferences } from "./useDesktop";
@@ -30,6 +33,43 @@ test("completing the guide is saved in the preferences without touching anything
     onboardingCompleted: undefined,
   });
   expect(preferences.onboardingCompleted).toBeUndefined();
+});
+
+test("the guide starts at Welcome until a step has been saved", () => {
+  expect(setupGuideStep(preferences)).toBe(0);
+  expect(setupGuideStep({ onboardingStep: undefined })).toBe(0);
+});
+
+test("moving through the guide is saved without touching anything else", () => {
+  const midway = withSetupGuideStep(preferences, 1);
+  expect(midway.onboardingStep).toBe(1);
+  expect({ ...midway, onboardingStep: undefined }).toEqual({
+    ...preferences,
+    onboardingStep: undefined,
+  });
+  expect(preferences.onboardingStep).toBeUndefined();
+  // The relaunch macOS asks for after Input Monitoring is granted comes back to that step.
+  expect(setupGuideStep(midway)).toBe(1);
+  // Back to Welcome is the default again, kept off the wire like an untouched setting.
+  expect(withSetupGuideStep(midway, 0)).toEqual(preferences);
+  expect("onboardingStep" in withSetupGuideStep(midway, 0)).toBe(false);
+});
+
+test("a saved step never lands past the last step or on nonsense", () => {
+  const last = SETUP_GUIDE_STEPS.length - 1;
+  expect(setupGuideStep({ onboardingStep: 99 })).toBe(last);
+  expect(withSetupGuideStep(preferences, 99).onboardingStep).toBe(last);
+  expect(setupGuideStep({ onboardingStep: -1 })).toBe(0);
+  expect(setupGuideStep({ onboardingStep: 1.5 })).toBe(0);
+  expect(setupGuideStep({ onboardingStep: Number.NaN })).toBe(0);
+});
+
+test("finishing the guide forgets the step, so Settings shows it again from Welcome", () => {
+  const completed = withSetupGuideCompleted(withSetupGuideStep(preferences, 2));
+  expect(completed.onboardingCompleted).toBe(true);
+  expect("onboardingStep" in completed).toBe(false);
+  expect(setupGuideStep(completed)).toBe(0);
+  expect(setupGuideStep({ onboardingCompleted: true, onboardingStep: 2 })).toBe(0);
 });
 
 const view = (patch: Partial<LicenseView>): LicenseView => ({

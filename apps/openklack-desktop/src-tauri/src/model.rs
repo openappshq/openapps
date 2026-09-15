@@ -174,6 +174,10 @@ pub struct Preferences {
     /// The setup guide was finished or skipped; official builds show it once, on first launch.
     #[serde(default, skip_serializing_if = "is_false")]
     pub onboarding_completed: bool,
+    /// The setup guide's current step while it is unfinished, so a relaunch (macOS asks for one
+    /// after Input Monitoring is granted) resumes where the user was. The guide clamps it.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub onboarding_step: u8,
     /// "Open at login" has been turned on by default once, on the first launch of an official
     /// build. After that the user's own choice, in Settings or in System Settings, stands.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -186,6 +190,10 @@ fn is_zero(value: &f32) -> bool {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero_u8(value: &u8) -> bool {
+    *value == 0
 }
 
 /// What the launch does about "Open at login" being on by default. Only official builds
@@ -284,6 +292,7 @@ impl Default for Preferences {
             app_rules: vec![],
             favorite_pack_ids: vec![],
             onboarding_completed: false,
+            onboarding_step: 0,
             login_item_defaulted: false,
         }
     }
@@ -542,6 +551,7 @@ mod tests {
         // Untouched settings keep the 0.1.0 wire shape.
         let saved = serde_json::to_value(&fresh).unwrap();
         assert!(saved.get("onboardingCompleted").is_none());
+        assert!(saved.get("onboardingStep").is_none());
         assert!(saved.get("loginItemDefaulted").is_none());
         let mut done = fresh.clone();
         done.onboarding_completed = true;
@@ -549,6 +559,27 @@ mod tests {
         let restored: Preferences = serde_json::from_str(&saved).unwrap();
         assert!(restored.onboarding_completed);
         assert!(!restored.only_mute_changed(&fresh));
+    }
+
+    #[test]
+    fn the_setup_guide_step_survives_the_input_monitoring_relaunch() {
+        let fresh = Preferences::default();
+        assert_eq!(
+            fresh.onboarding_step, 0,
+            "a fresh install starts at Welcome"
+        );
+        let mut midway = fresh.clone();
+        midway.onboarding_step = 1;
+        let saved = serde_json::to_string(&midway).unwrap();
+        assert!(saved.contains("\"onboardingStep\":1"));
+        let restored: Preferences = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.onboarding_step, 1);
+        assert!(!restored.onboarding_completed);
+        assert!(!restored.only_mute_changed(&fresh));
+        // Settings written before the step existed still load, at Welcome.
+        let older: Preferences =
+            serde_json::from_str(include_str!("../../fixtures/preferences-v1.json")).unwrap();
+        assert_eq!(older.onboarding_step, 0);
     }
 
     #[test]

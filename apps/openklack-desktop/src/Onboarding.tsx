@@ -4,9 +4,7 @@ import { Button } from "@heroui/react";
 import { KeyRound, Menu, Power, ShieldCheck, Volume2 } from "lucide-react";
 import klackMark from "../../../design/assets/openklack/symbol-paper.svg";
 import type { LicenseView } from "./licenseState";
-import { guideLicenseLine, guideLoginLine } from "./setupGuide";
-
-const STEPS = ["Welcome", "Keyboard access", "Tips"] as const;
+import { guideLicenseLine, guideLoginLine, SETUP_GUIDE_STEPS as STEPS } from "./setupGuide";
 
 const step = {
   initial: { opacity: 0, transform: "translateY(8px)" },
@@ -17,14 +15,17 @@ const step = {
 /**
  * The setup guide: three short steps over the settings window. Skippable at any point, and
  * never in the way of the menu bar. Input Monitoring is read live from the snapshot, which the
- * native bridge refreshes every second while the app runs.
+ * native bridge refreshes every second while the app runs. The step is the caller's to remember,
+ * so the relaunch macOS asks for after the permission is granted comes back to the same step.
  */
 export function Onboarding({
   license,
   openAtLogin,
   inputPermission,
   busy,
+  initialStep,
   onRequestPermission,
+  onStep,
   onDone,
 }: {
   /** The license view; absent in a source build, which has no trial to explain. */
@@ -33,11 +34,19 @@ export function Onboarding({
   openAtLogin: boolean | undefined;
   inputPermission: boolean;
   busy: boolean;
+  /** Where to start: the step saved on an earlier launch, already clamped by the caller. */
+  initialStep: number;
   onRequestPermission: () => void;
+  /** The user moved to another step; the caller remembers it. */
+  onStep: (step: number) => void;
   /** Finished or skipped; the caller remembers it. */
   onDone: () => void;
 }) {
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(initialStep);
+  function moveTo(step: number) {
+    setIndex(step);
+    onStep(step);
+  }
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     panel.current?.focus();
@@ -155,11 +164,11 @@ export function Onboarding({
         </AnimatePresence>
         <div className="onboarding-actions">
           {index > 0 && (
-            <Button variant="ghost" onPress={() => setIndex(index - 1)}>
+            <Button variant="ghost" onPress={() => moveTo(index - 1)}>
               Back
             </Button>
           )}
-          <Button variant="primary" onPress={() => (last ? onDone() : setIndex(index + 1))}>
+          <Button variant="primary" onPress={() => (last ? onDone() : moveTo(index + 1))}>
             {last ? "Done" : "Continue"}
           </Button>
         </div>

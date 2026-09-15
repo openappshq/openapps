@@ -18,7 +18,12 @@ import {
 import { useDesktop } from "./useDesktop";
 import { useLicense } from "./useLicense";
 import { licensePill } from "./licenseState";
-import { offersSetupGuide, withSetupGuideCompleted } from "./setupGuide";
+import {
+  offersSetupGuide,
+  setupGuideStep,
+  withSetupGuideCompleted,
+  withSetupGuideStep,
+} from "./setupGuide";
 import { KeyAssignments } from "./KeyAssignments";
 import { CurrentPreset } from "./CurrentPreset";
 import klackMark from "../../../design/assets/openklack/symbol-paper.svg";
@@ -110,6 +115,12 @@ export default function App() {
     setPage("general");
     setLicenseRequests((count) => count + 1);
   }
+  // The step is remembered only while the guide is unfinished: that is when a relaunch (macOS
+  // asks for one after Input Monitoring is granted) has to come back to it. Shown again from
+  // Settings, the guide always starts at Welcome.
+  function moveGuide(step: number) {
+    if (!prefs?.onboardingCompleted) void desktop.save((p) => withSetupGuideStep(p, step));
+  }
   function finishGuide() {
     setGuide(false);
     if (!prefs?.onboardingCompleted) void desktop.save(withSetupGuideCompleted);
@@ -140,7 +151,9 @@ export default function App() {
           openAtLogin={openAtLogin}
           inputPermission={snapshot.runtime.inputPermission}
           busy={busy}
+          initialStep={setupGuideStep(prefs)}
           onRequestPermission={() => void desktop.perform(() => invoke("request_input_permission"))}
+          onStep={moveGuide}
           onDone={finishGuide}
         />
       )}

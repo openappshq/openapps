@@ -1,6 +1,9 @@
-/** When the setup guide opens on its own, and how finishing it is remembered. */
+/** When the setup guide opens on its own, where it resumes, and how finishing it is remembered. */
 import { trialLeft, type LicenseView } from "./licenseState";
 import type { Preferences, Snapshot } from "./useDesktop";
+
+/** The guide's steps, in order. A saved step is only ever one of these. */
+export const SETUP_GUIDE_STEPS = ["Welcome", "Keyboard access", "Tips"] as const;
 
 /**
  * Official builds show the guide once, on first launch, until it is finished or skipped. A
@@ -13,9 +16,37 @@ export function offersSetupGuide(
   return snapshot.licensingEnabled && !snapshot.preferences.onboardingCompleted;
 }
 
-/** The preferences to save once the guide is finished or skipped; everything else is kept. */
+/**
+ * Where the guide starts: the step saved while it was unfinished, so the relaunch macOS asks for
+ * after Input Monitoring is granted comes back to the same step. Welcome once the guide has been
+ * finished or skipped, or when nothing usable was saved. Never past the last step.
+ */
+export function setupGuideStep(
+  preferences: Pick<Preferences, "onboardingCompleted" | "onboardingStep">,
+): number {
+  if (preferences.onboardingCompleted) return 0;
+  return clampStep(preferences.onboardingStep);
+}
+
+/** The preferences to save as the user moves through the guide; everything else is kept. */
+export function withSetupGuideStep(preferences: Preferences, step: number): Preferences {
+  const next: Preferences = { ...preferences, onboardingStep: clampStep(step) };
+  // Welcome is the default, kept off the wire like every other untouched setting.
+  if (next.onboardingStep === 0) delete next.onboardingStep;
+  return next;
+}
+
+/**
+ * The preferences to save once the guide is finished or skipped; everything else is kept. The
+ * step is forgotten, so showing the guide again from Settings starts at Welcome.
+ */
 export function withSetupGuideCompleted(preferences: Preferences): Preferences {
-  return { ...preferences, onboardingCompleted: true };
+  return withSetupGuideStep({ ...preferences, onboardingCompleted: true }, 0);
+}
+
+function clampStep(step: number | undefined): number {
+  if (typeof step !== "number" || !Number.isInteger(step) || step < 0) return 0;
+  return Math.min(step, SETUP_GUIDE_STEPS.length - 1);
 }
 
 /**
