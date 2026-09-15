@@ -13,24 +13,37 @@
 //! info; nothing about it is stored. That keeps the files from casual reading, editing and
 //! copying to another Mac, not from a determined local user: the source is public.
 //!
-//! Read outcomes keep the storage semantics the engine relies on: a missing file is positively
+//! Every path below the Application Support directory is walked one component at a time
+//! through directory descriptors, never following a symlink: a link, or anything but a regular
+//! file, where a record or one of the store's directories should be is *unavailable*, not
+//! absent, and nothing is written through it.
+//!
+//! Read outcomes keep the storage semantics the engine relies on: a missing entry is positively
 //! absent, a directory or file that cannot be read is unavailable, and a file that fails the
 //! magic, the authentication tag or JSON decoding is corrupt. Unavailable and corrupt are
 //! storage errors: no new trial, no registry call, and the file is left in place.
+//!
+//! A write is a temporary file in the records directory, `fsync`, a rename over the old file,
+//! then `fsync` of the directory. Everything up to the rename can fail with the old record
+//! intact (`SaveError::Failed`). After the rename only the directory sync is left; when it
+//! fails, the new record is in place but not known to be durable, which is reported as
+//! `SaveError::Indeterminate` so the caller keeps the new record and repeats the write.
 //!
 //! Old Keychain items from releases before 0.1.2 are never read, written or deleted; touching
 //! them is what prompts.
 
 use super::core::{Probe, Record, Stored, TrialRecord};
-use super::runtime::Vault;
+use super::runtime::{SaveError, Vault};
 use aes_gcm::{
     Aes256Gcm, Key, KeyInit, Nonce,
     aead::{Aead, Payload},
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
+    ffi::CString,
     fs,
-    io::Write,
+    io::{self, Read, Write},
+    os::fd::{AsRawFd, FromRawFd},
     path::{Path, PathBuf},
 };
 
@@ -44,12 +57,16 @@ const NO_HARDWARE_UUID: &str = "no-hardware-uuid";
 pub const LICENSE_FILE: &str = "license";
 pub const TRIAL_FILE: &str = "trial";
 pub const CLEANUPS_FILE: &str = "cleanups";
+/// The store's directories under Application Support, outermost first.
+const VENDOR_DIRECTORY: &str = "OpenApps";
+const RECORDS_DIRECTORY: &str = "records";
 
 /// Why a record could not be read. Both are storage errors to the engine; the distinction is
 /// for the message and the tests.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReadError {
-    /// The directory or the file exists but could not be read.
+    /// The directory or the file exists but could not be read, or is not what it should be
+    /// (a symlink, something other than a regular file or a directory).
     Unavailable(String),
     /// The file was read but is not a record this Mac wrote: wrong format, wrong key, edited
     /// bytes, or JSON the app does not understand.
@@ -65,52 +82,78 @@ impl std::fmt::Display for ReadError {
     }
 }
 
+/// How a directory's changes are made durable; tests replace it to fail after the rename.
+type DirectorySync = Box<dyn Fn(&fs::File) -> io::Result<()> + Send + Sync>;
+
 /// The encrypted files under one records directory.
 pub struct RecordStore {
-    directory: PathBuf,
+    /// The user's Application Support directory, the one path the store follows links in.
+    application_support: PathBuf,
     app_id: String,
     key: [u8; KEY_LEN],
+    directory_sync: DirectorySync,
 }
 
 impl RecordStore {
-    /// A store over `directory`, keyed by this Mac's hardware UUID. The directory is created on
-    /// the first write, never on a read.
-    pub fn new(directory: PathBuf, app_id: &str, hardware_uuid: Option<&str>) -> Self {
+    /// A store under `application_support/OpenApps/<app id>/records`, keyed by this Mac's
+    /// hardware UUID. The directories are created on the first write, never on a read.
+    pub fn new(application_support: PathBuf, app_id: &str, hardware_uuid: Option<&str>) -> Self {
         Self {
-            directory,
+            application_support,
             app_id: app_id.to_string(),
             key: derive_key(app_id, hardware_uuid),
+            directory_sync: Box::new(fs::File::sync_all),
         }
     }
 
-    /// The contract's location under the user's Application Support directory.
-    pub fn directory_under(application_support: &Path, app_id: &str) -> PathBuf {
-        application_support
-            .join("OpenApps")
-            .join(app_id)
-            .join("records")
-    }
-
     #[cfg(test)]
-    fn directory(&self) -> &Path {
-        &self.directory
+    fn with_directory_sync(mut self, sync: DirectorySync) -> Self {
+        self.directory_sync = sync;
+        self
     }
 
-    fn path(&self, name: &str) -> PathBuf {
-        self.directory.join(name)
+    /// The records directory's path; every access goes through descriptors instead.
+    #[cfg(test)]
+    fn directory(&self) -> PathBuf {
+        self.application_support
+            .join(VENDOR_DIRECTORY)
+            .join(&self.app_id)
+            .join(RECORDS_DIRECTORY)
     }
 
     fn aad(&self, name: &str) -> Vec<u8> {
         format!("{}:{name}", self.app_id).into_bytes()
     }
 
-    /// The record in `name`, `None` when the file positively does not exist.
-    pub fn read<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, ReadError> {
-        let bytes = match fs::read(self.path(name)) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(ReadError::Unavailable(error.to_string())),
+    /// The records directory, `None` while none of the store's directories exist yet. With
+    /// `create`, missing ones are made (`0700`); an existing entry that is not a real
+    /// directory is an error either way.
+    fn records(&self, create: bool) -> io::Result<Option<Dir>> {
+        let mut dir = match Dir::open_root(&self.application_support) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !create => return Ok(None),
+            Err(error) => return Err(error),
         };
+        for name in [VENDOR_DIRECTORY, self.app_id.as_str(), RECORDS_DIRECTORY] {
+            dir = match dir.child(name, create)? {
+                Some(child) => child,
+                None => return Ok(None),
+            };
+        }
+        Ok(Some(dir))
+    }
+
+    /// The record in `name`, `None` when the entry positively does not exist.
+    pub fn read<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, ReadError> {
+        let unavailable = |error: io::Error| ReadError::Unavailable(error.to_string());
+        let Some(dir) = self.records(false).map_err(unavailable)? else {
+            return Ok(None);
+        };
+        let Some(mut file) = dir.open_record(name).map_err(unavailable)? else {
+            return Ok(None);
+        };
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(unavailable)?;
         let json = self.open(name, &bytes)?;
         serde_json::from_slice(&json)
             .map(Some)
@@ -136,26 +179,36 @@ impl RecordStore {
             .map_err(|_| ReadError::Corrupt("the record was not written by this Mac".into()))
     }
 
-    /// Replaces `name` atomically: the sealed bytes go to a temporary file in the same
-    /// directory, are synced, and are renamed over the old file, which stays intact until then.
-    pub fn write<T: Serialize>(&self, name: &str, record: &T) -> Result<(), String> {
-        let json = serde_json::to_vec(record).map_err(|error| error.to_string())?;
+    /// Replaces `name`: the sealed bytes go to a temporary file in the records directory, are
+    /// synced, and are renamed over the old file, which stays intact until then. An entry at
+    /// `name` that is not a regular file is never replaced.
+    pub fn write<T: Serialize>(&self, name: &str, record: &T) -> Result<(), SaveError> {
+        let failed = |error: io::Error| SaveError::Failed(error.to_string());
+        let json =
+            serde_json::to_vec(record).map_err(|error| SaveError::Failed(error.to_string()))?;
         let bytes = self.seal(name, &json)?;
-        self.create_directory()?;
-        let staging = self.path(&format!(".{name}.{}.tmp", crate::library::unique_suffix()));
-        let written = write_private(&staging, &bytes)
-            .and_then(|()| fs::rename(&staging, self.path(name)))
-            .and_then(|()| sync_directory(&self.directory));
+        let dir = self
+            .records(true)
+            .map_err(failed)?
+            .expect("created on demand");
+        dir.expect_regular_or_absent(name).map_err(failed)?;
+        let staging = format!(".{name}.{}.tmp", crate::library::unique_suffix());
+        let written = dir
+            .create_private(&staging)
+            .and_then(|mut file| file.write_all(&bytes).and_then(|()| file.sync_all()))
+            .and_then(|()| dir.rename(&staging, name));
         if let Err(error) = written {
-            let _ = fs::remove_file(&staging);
-            return Err(error.to_string());
+            let _ = dir.unlink(&staging);
+            return Err(failed(error));
         }
-        Ok(())
+        // The new record is in place; only its durability is in question from here on.
+        (self.directory_sync)(&dir.0).map_err(|error| SaveError::Indeterminate(error.to_string()))
     }
 
-    fn seal(&self, name: &str, json: &[u8]) -> Result<Vec<u8>, String> {
+    fn seal(&self, name: &str, json: &[u8]) -> Result<Vec<u8>, SaveError> {
         let mut nonce = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce).map_err(|error| format!("no randomness: {error}"))?;
+        getrandom::fill(&mut nonce)
+            .map_err(|error| SaveError::Failed(format!("no randomness: {error}")))?;
         let ciphertext = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key))
             .encrypt(
                 Nonce::from_slice(&nonce),
@@ -164,7 +217,7 @@ impl RecordStore {
                     aad: &self.aad(name),
                 },
             )
-            .map_err(|_| "the record could not be sealed".to_string())?;
+            .map_err(|_| SaveError::Failed("the record could not be sealed".to_string()))?;
         let mut bytes = Vec::with_capacity(MAGIC.len() + NONCE_LEN + ciphertext.len());
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&nonce);
@@ -172,27 +225,21 @@ impl RecordStore {
         Ok(bytes)
     }
 
-    /// Removes `name`; a file that is already gone is fine.
-    pub fn delete(&self, name: &str) -> Result<(), String> {
-        match fs::remove_file(self.path(name)) {
-            Ok(()) => sync_directory(&self.directory).map_err(|error| error.to_string()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.to_string()),
+    /// Removes `name`; an entry that is already gone is fine, one that is not a regular file
+    /// is left alone. After the unlink only the directory sync can fail, which leaves the
+    /// removal in place but unconfirmed.
+    pub fn delete(&self, name: &str) -> Result<(), SaveError> {
+        let failed = |error: io::Error| SaveError::Failed(error.to_string());
+        let Some(dir) = self.records(false).map_err(failed)? else {
+            return Ok(());
+        };
+        dir.expect_regular_or_absent(name).map_err(failed)?;
+        match dir.unlink(name) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(failed(error)),
         }
-    }
-
-    /// The records directory and its parents, only this user can enter.
-    fn create_directory(&self) -> Result<(), String> {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder
-            .create(&self.directory)
-            .map_err(|error| error.to_string())
+        (self.directory_sync)(&dir.0).map_err(|error| SaveError::Indeterminate(error.to_string()))
     }
 }
 
@@ -206,23 +253,132 @@ fn derive_key(app_id: &str, hardware_uuid: Option<&str>) -> [u8; KEY_LEN] {
     key
 }
 
-/// A new file only this user can read, fully written and synced.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
+/// An open directory. Every operation is relative to its descriptor and never follows a
+/// symlink, so a link swapped in after the directory was opened changes nothing.
+struct Dir(fs::File);
+
+fn c_name(name: &str) -> io::Result<CString> {
+    CString::new(name).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "name with NUL"))
 }
 
-/// Makes a rename or removal in `directory` durable.
-fn sync_directory(directory: &Path) -> std::io::Result<()> {
-    fs::File::open(directory)?.sync_all()
+fn last_error() -> io::Error {
+    io::Error::last_os_error()
+}
+
+impl Dir {
+    /// The Application Support directory itself: the one path that may be a link.
+    fn open_root(path: &Path) -> io::Result<Dir> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(path)?;
+        Ok(Dir(file))
+    }
+
+    /// The subdirectory `name`, never through a link: `None` when there is no such entry, an
+    /// error when the entry is a link or not a directory. With `create`, a missing one is made
+    /// with mode `0700` (and opened the same strict way afterwards).
+    fn child(&self, name: &str, create: bool) -> io::Result<Option<Dir>> {
+        match self.open_at(name, libc::O_RDONLY | libc::O_DIRECTORY, 0) {
+            Ok(file) => return Ok(Some(Dir(file))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound && create => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        let name_c = c_name(name)?;
+        // SAFETY: a valid descriptor and a NUL-terminated name.
+        if unsafe { libc::mkdirat(self.0.as_raw_fd(), name_c.as_ptr(), 0o700) } != 0 {
+            let error = last_error();
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+        }
+        self.open_at(name, libc::O_RDONLY | libc::O_DIRECTORY, 0)
+            .map(|file| Some(Dir(file)))
+    }
+
+    /// `openat` with `O_NOFOLLOW | O_CLOEXEC` added.
+    fn open_at(&self, name: &str, flags: libc::c_int, mode: libc::c_uint) -> io::Result<fs::File> {
+        let name_c = c_name(name)?;
+        let flags = flags | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: a valid descriptor and a NUL-terminated name; the returned descriptor is
+        // owned by the `File` from here on.
+        let fd = unsafe { libc::openat(self.0.as_raw_fd(), name_c.as_ptr(), flags, mode) };
+        if fd < 0 {
+            return Err(last_error());
+        }
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
+    }
+
+    /// The record `name` for reading: `None` when there is no such entry, an error when it is a
+    /// link or anything but a regular file.
+    fn open_record(&self, name: &str) -> io::Result<Option<fs::File>> {
+        // O_NONBLOCK so an entry that is a FIFO fails the check below instead of blocking.
+        let file = match self.open_at(name, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other(format!("{name} is not a regular file")));
+        }
+        Ok(Some(file))
+    }
+
+    /// Fails unless the entry `name` is absent or a regular file.
+    fn expect_regular_or_absent(&self, name: &str) -> io::Result<()> {
+        let name_c = c_name(name)?;
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: a valid descriptor, a NUL-terminated name and a properly sized buffer that
+        // is only read after the call succeeded.
+        let status = unsafe {
+            libc::fstatat(
+                self.0.as_raw_fd(),
+                name_c.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if status != 0 {
+            let error = last_error();
+            return if error.kind() == io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(error)
+            };
+        }
+        let stat = unsafe { stat.assume_init() };
+        if stat.st_mode & libc::S_IFMT == libc::S_IFREG {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!("{name} is not a regular file")))
+        }
+    }
+
+    /// A new file `name` only this user can read.
+    fn create_private(&self, name: &str) -> io::Result<fs::File> {
+        self.open_at(name, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, 0o600)
+    }
+
+    fn rename(&self, from: &str, to: &str) -> io::Result<()> {
+        let (from_c, to_c) = (c_name(from)?, c_name(to)?);
+        let fd = self.0.as_raw_fd();
+        // SAFETY: valid descriptors and NUL-terminated names.
+        if unsafe { libc::renameat(fd, from_c.as_ptr(), fd, to_c.as_ptr()) } != 0 {
+            return Err(last_error());
+        }
+        Ok(())
+    }
+
+    fn unlink(&self, name: &str) -> io::Result<()> {
+        let name_c = c_name(name)?;
+        // SAFETY: a valid descriptor and a NUL-terminated name.
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), name_c.as_ptr(), 0) } != 0 {
+            return Err(last_error());
+        }
+        Ok(())
+    }
 }
 
 impl Vault for RecordStore {
@@ -242,20 +398,28 @@ impl Vault for RecordStore {
         })
     }
 
-    /// The cleanups first, so a deactivation this Mac owes is never lost to a crash between
-    /// the two files; then the license, deleted when the Mac has been removed.
-    fn save(&self, stored: &Stored) -> Result<(), String> {
+    /// The cleanups first, then the license (deleted when the Mac has been removed). A crash
+    /// between the two leaves the old license beside the new cleanup list. An unconfirmed
+    /// cleanups write is reported as an ordinary failure: the license file is untouched at
+    /// that point, and the retry rewrites the cleanups from memory either way. Only the
+    /// license file's own unconfirmed write is indeterminate.
+    fn save(&self, stored: &Stored) -> Result<(), SaveError> {
         let cleanups = if stored.pending_cleanups.is_empty() {
             self.delete(CLEANUPS_FILE)
         } else {
             self.write(CLEANUPS_FILE, &stored.pending_cleanups)
         };
-        cleanups.map_err(|error| format!("The license cleanups could not be saved: {error}"))?;
+        if let Err(error) = cleanups {
+            return Err(SaveError::Failed(format!(
+                "The license cleanups could not be saved: {}",
+                error.reason()
+            )));
+        }
         match &stored.license {
             Some(record) => self.write(LICENSE_FILE, record),
             None => self.delete(LICENSE_FILE),
         }
-        .map_err(|error| format!("The license could not be saved: {error}"))
+        .map_err(|error| error.described("The license"))
     }
 
     fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
@@ -263,22 +427,22 @@ impl Vault for RecordStore {
             .map_err(|error| format!("The saved free trial {error}"))
     }
 
-    fn save_trial(&self, trial: &TrialRecord) -> Result<(), String> {
+    fn save_trial(&self, trial: &TrialRecord) -> Result<(), SaveError> {
         self.write(TRIAL_FILE, trial)
-            .map_err(|error| format!("The free trial could not be saved: {error}"))
+            .map_err(|error| error.described("The free trial"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     const APP: &str = "openklack";
     const UUID: &str = "5B7E2C1A-0F3D-4E8A-9C21-7D6F5A4B3C2D";
 
     fn store(root: &Path, uuid: Option<&str>) -> RecordStore {
-        RecordStore::new(root.join("records"), APP, uuid)
+        RecordStore::new(root.to_path_buf(), APP, uuid)
     }
 
     fn record() -> Record {
@@ -512,7 +676,10 @@ mod tests {
             ..trial()
         });
         fs::set_permissions(vault.directory(), fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(outcome.unwrap_err().contains("could not be saved"));
+        assert!(
+            matches!(&outcome, Err(SaveError::Failed(reason)) if reason.contains("could not be saved")),
+            "{outcome:?}"
+        );
         assert_eq!(fs::read(&path).unwrap(), before);
         assert_eq!(vault.load_trial().unwrap(), Some(trial()));
         let names: Vec<String> = fs::read_dir(vault.directory())
@@ -562,7 +729,7 @@ mod tests {
         let vault = store(dir.path(), Some(UUID));
         vault.save(&stored()).unwrap();
         vault.save_trial(&trial()).unwrap();
-        assert_eq!(mode(vault.directory()), 0o700);
+        assert_eq!(mode(&vault.directory()), 0o700);
         for name in [LICENSE_FILE, TRIAL_FILE, CLEANUPS_FILE] {
             assert_eq!(mode(&vault.directory().join(name)), 0o600, "{name}");
         }
@@ -584,9 +751,193 @@ mod tests {
 
     #[test]
     fn the_directory_follows_the_contract() {
+        let vault = RecordStore::new(
+            PathBuf::from("/Users/x/Library/Application Support"),
+            APP,
+            Some(UUID),
+        );
         assert_eq!(
-            RecordStore::directory_under(Path::new("/Users/x/Library/Application Support"), APP),
+            vault.directory(),
             PathBuf::from("/Users/x/Library/Application Support/OpenApps/openklack/records")
         );
+    }
+
+    #[test]
+    fn a_dangling_link_where_a_record_should_be_is_unavailable_not_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store(dir.path(), Some(UUID));
+        vault.save(&stored()).unwrap();
+        let path = vault.directory().join(TRIAL_FILE);
+        symlink("nowhere", &path).unwrap();
+        assert!(matches!(
+            vault.read::<TrialRecord>(TRIAL_FILE),
+            Err(ReadError::Unavailable(_))
+        ));
+        let error = vault.load_trial().unwrap_err();
+        assert!(error.contains("could not be read"), "{error}");
+        // No write goes through the link, not even a provisional trial.
+        assert!(matches!(
+            vault.save_trial(&trial()),
+            Err(SaveError::Failed(_))
+        ));
+        assert_eq!(fs::read_link(&path).unwrap(), PathBuf::from("nowhere"));
+        assert!(!dir.path().join("nowhere").exists());
+        assert_eq!(
+            vault.load().unwrap(),
+            stored(),
+            "the other records still read"
+        );
+    }
+
+    #[test]
+    fn a_link_to_a_valid_record_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store(dir.path(), Some(UUID));
+        vault.save_trial(&trial()).unwrap();
+        let path = vault.directory().join(TRIAL_FILE);
+        let aside = dir.path().join("trial-elsewhere");
+        fs::rename(&path, &aside).unwrap();
+        symlink(&aside, &path).unwrap();
+        assert!(matches!(
+            vault.read::<TrialRecord>(TRIAL_FILE),
+            Err(ReadError::Unavailable(_))
+        ));
+        assert!(matches!(
+            vault.save_trial(&trial()),
+            Err(SaveError::Failed(_))
+        ));
+        assert!(matches!(
+            vault.delete(TRIAL_FILE),
+            Err(SaveError::Failed(_))
+        ));
+        assert_eq!(fs::read_link(&path).unwrap(), aside);
+        // The target still opens directly, untouched.
+        fs::rename(&aside, &path).unwrap();
+        assert_eq!(vault.load_trial().unwrap(), Some(trial()));
+    }
+
+    #[test]
+    fn a_dangling_link_where_the_records_directory_should_be_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store(dir.path(), Some(UUID));
+        let parent = dir.path().join(VENDOR_DIRECTORY).join(APP);
+        fs::create_dir_all(&parent).unwrap();
+        symlink("nowhere", parent.join(RECORDS_DIRECTORY)).unwrap();
+        assert!(matches!(
+            vault.read::<TrialRecord>(TRIAL_FILE),
+            Err(ReadError::Unavailable(_))
+        ));
+        assert!(vault.load().is_err());
+        assert!(vault.load_trial().is_err());
+        assert!(matches!(
+            vault.save_trial(&trial()),
+            Err(SaveError::Failed(_))
+        ));
+        assert_eq!(
+            fs::read_link(parent.join(RECORDS_DIRECTORY)).unwrap(),
+            PathBuf::from("nowhere")
+        );
+        assert!(
+            !parent.join("nowhere").exists(),
+            "nothing was created through the link"
+        );
+    }
+
+    #[test]
+    fn a_linked_ancestor_is_unavailable_even_when_it_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        symlink(&elsewhere, dir.path().join(VENDOR_DIRECTORY)).unwrap();
+        let vault = store(dir.path(), Some(UUID));
+        assert!(matches!(
+            vault.read::<TrialRecord>(TRIAL_FILE),
+            Err(ReadError::Unavailable(_))
+        ));
+        assert!(matches!(
+            vault.save_trial(&trial()),
+            Err(SaveError::Failed(_))
+        ));
+        assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_directory_replaced_by_a_file_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store(dir.path(), Some(UUID));
+        fs::create_dir_all(dir.path().join(VENDOR_DIRECTORY).join(APP)).unwrap();
+        fs::write(vault.directory(), b"not a directory").unwrap();
+        assert!(matches!(
+            vault.read::<TrialRecord>(TRIAL_FILE),
+            Err(ReadError::Unavailable(_))
+        ));
+        assert!(matches!(
+            vault.save_trial(&trial()),
+            Err(SaveError::Failed(_))
+        ));
+        assert_eq!(fs::read(vault.directory()).unwrap(), b"not a directory");
+    }
+
+    #[test]
+    fn a_failed_directory_sync_after_the_rename_is_indeterminate_and_the_record_is_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store(dir.path(), Some(UUID));
+        vault.save_trial(&trial()).unwrap();
+        let unconfirmed = store(dir.path(), Some(UUID))
+            .with_directory_sync(Box::new(|_| Err(io::Error::other("disk gone"))));
+        let newer = TrialRecord {
+            last_seen_at: 1_700_010_000,
+            ..trial()
+        };
+        let outcome = unconfirmed.save_trial(&newer);
+        assert!(
+            matches!(&outcome, Err(SaveError::Indeterminate(reason)) if reason.contains("could not be confirmed")),
+            "{outcome:?}"
+        );
+        // A restart finds the new record, and no temporary file is left behind.
+        assert_eq!(
+            store(dir.path(), Some(UUID)).load_trial().unwrap(),
+            Some(newer)
+        );
+        let names: Vec<String> = fs::read_dir(vault.directory())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec![TRIAL_FILE.to_string()]);
+        // The license's own unconfirmed write is indeterminate too; an unconfirmed cleanups
+        // write is an ordinary failure, since the license file has not been touched yet.
+        let outcome = unconfirmed.save(&Stored {
+            license: Some(record()),
+            pending_cleanups: vec![],
+        });
+        assert!(
+            matches!(outcome, Err(SaveError::Indeterminate(_))),
+            "{outcome:?}"
+        );
+        assert_eq!(vault.load().unwrap().license, Some(record()));
+        let outcome = unconfirmed.save(&stored());
+        assert!(matches!(outcome, Err(SaveError::Failed(_))), "{outcome:?}");
+        assert_eq!(
+            vault.load().unwrap().pending_cleanups,
+            stored().pending_cleanups
+        );
+        assert_eq!(vault.load().unwrap().license, Some(record()));
+    }
+
+    #[test]
+    fn a_failed_directory_sync_after_the_unlink_is_indeterminate_and_the_retry_is_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store(dir.path(), Some(UUID));
+        vault.save(&stored()).unwrap();
+        let unconfirmed = store(dir.path(), Some(UUID))
+            .with_directory_sync(Box::new(|_| Err(io::Error::other("disk gone"))));
+        let outcome = unconfirmed.delete(LICENSE_FILE);
+        assert!(
+            matches!(outcome, Err(SaveError::Indeterminate(_))),
+            "{outcome:?}"
+        );
+        assert!(!vault.directory().join(LICENSE_FILE).exists());
+        assert_eq!(vault.delete(LICENSE_FILE), Ok(()));
+        assert_eq!(vault.load().unwrap().license, None);
     }
 }

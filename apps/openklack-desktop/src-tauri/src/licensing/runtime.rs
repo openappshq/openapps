@@ -151,6 +151,37 @@ fn random_uuid() -> Result<String, String> {
     ))
 }
 
+/// Why a record could not be saved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SaveError {
+    /// Nothing changed: the record on disk is still the one from before.
+    Failed(String),
+    /// The new record replaced the old one but could not be confirmed durable. The caller
+    /// keeps the new record as the one in effect, grants nothing on its strength, and repeats
+    /// the same write until one succeeds; the rewrite is idempotent.
+    Indeterminate(String),
+}
+
+impl SaveError {
+    pub fn reason(&self) -> &str {
+        match self {
+            SaveError::Failed(reason) | SaveError::Indeterminate(reason) => reason,
+        }
+    }
+
+    /// The same outcome with a sentence for the window in front of the reason.
+    pub fn described(self, what: &str) -> SaveError {
+        match self {
+            SaveError::Failed(reason) => {
+                SaveError::Failed(format!("{what} could not be saved: {reason}"))
+            }
+            SaveError::Indeterminate(reason) => SaveError::Indeterminate(format!(
+                "{what} was written but could not be confirmed: {reason}"
+            )),
+        }
+    }
+}
+
 /// Where the records live. The real ones are the encrypted files of `store::RecordStore`;
 /// tests use memory.
 pub trait Vault: Send + Sync {
@@ -159,10 +190,10 @@ pub trait Vault: Send + Sync {
     fn load(&self) -> Result<Stored, String>;
     /// Saves the license record, or deletes it when `stored.license` is `None`, and the owed
     /// cleanups with it.
-    fn save(&self, stored: &Stored) -> Result<(), String>;
+    fn save(&self, stored: &Stored) -> Result<(), SaveError>;
     /// `Ok(None)` only when the store positively reports that the record does not exist.
     fn load_trial(&self) -> Result<Option<TrialRecord>, String>;
-    fn save_trial(&self, trial: &TrialRecord) -> Result<(), String>;
+    fn save_trial(&self, trial: &TrialRecord) -> Result<(), SaveError>;
 }
 
 /// A small non-secret note, outside the record store, that an activation was revoked or removed:
@@ -758,10 +789,7 @@ impl Live {
         // keyed by this Mac's hardware UUID: never in the Keychain, whose items from releases
         // before 0.1.2 are left alone.
         let records = super::store::RecordStore::new(
-            super::store::RecordStore::directory_under(
-                &app.path().data_dir().map_err(|e| e.to_string())?,
-                APP_ID,
-            ),
+            app.path().data_dir().map_err(|e| e.to_string())?,
             APP_ID,
             platform_uuid().as_deref(),
         );
@@ -1163,7 +1191,20 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 self.generation.fetch_add(1, Ordering::SeqCst);
                 self.publish(Meta::trial_recovered);
             }
-            Err(error) => {
+            Err(SaveError::Indeterminate(error)) => {
+                // The record is in place but not confirmed: it is the trial from now on, but
+                // grants nothing until a repeated write confirms it. The saved slot stays
+                // absent, so the gate waits, and the dirty flag rewrites it every tick.
+                self.engine.lock().unwrap().commit_trial(trial, self.now());
+                self.generation.fetch_add(1, Ordering::SeqCst);
+                self.publish(|meta| {
+                    meta.trial_recovered();
+                    meta.trial_dirty = true;
+                    meta.last_error =
+                        Some(format!("Your free trial could not be started. {error}"));
+                });
+            }
+            Err(SaveError::Failed(error)) => {
                 self.publish(|meta| {
                     meta.trial_failed(
                         now.wall,
@@ -1250,10 +1291,15 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 }
                 true
             }
+            // An unconfirmed write is retried like a failed one; the saved slot only moves on
+            // a confirmed write, so nothing is granted on an unconfirmed record.
             Err(error) => {
                 self.publish(|meta| {
                     meta.trial_dirty = true;
-                    meta.last_error = Some(format!("Your free trial could not be saved. {error}"));
+                    meta.last_error = Some(format!(
+                        "Your free trial could not be saved. {}",
+                        error.reason()
+                    ));
                 });
                 false
             }
@@ -1726,10 +1772,12 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                     });
                 }
             }
+            // Failed or unconfirmed: the saved record is not known to have changed, so the
+            // same record is written again every tick until a write is confirmed.
             Err(error) => {
                 self.publish(|meta| {
                     meta.storage_dirty = true;
-                    meta.last_error = Some(error);
+                    meta.last_error = Some(error.reason().to_string());
                 });
             }
         }
@@ -1820,7 +1868,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             core_feature: playable,
             clock_changed: engine.clock_changed(now),
             journal_unreadable: meta.journal_unreadable,
-            trial_storage_error: meta.trial_failures > 0,
+            trial_storage_error: meta.trial_failures > 0 || meta.trial_dirty,
             grace_warning: matches!(state, State::Grace { .. })
                 && engine
                     .offline_for(now)
@@ -1903,27 +1951,54 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
                 return Err(error);
             }
         };
-        if let Err(error) = self.vault.save(&activated.next) {
-            // Not in effect: give the new slot back so the customer keeps all three Macs.
-            self.release(ordered, activated.probe);
-            self.persist(ordered);
-            self.publish(|meta| meta.last_error = Some(error.clone()));
-            return Err(LicenseError::NotSaved(error));
-        }
+        let confirmed = match self.vault.save(&activated.next) {
+            Ok(()) => true,
+            Err(SaveError::Failed(error)) => {
+                // Not in effect: give the new slot back so the customer keeps all three Macs.
+                self.release(ordered, activated.probe);
+                self.persist(ordered);
+                self.publish(|meta| meta.last_error = Some(error.clone()));
+                return Err(LicenseError::NotSaved(error));
+            }
+            Err(SaveError::Indeterminate(error)) => {
+                // The new record replaced the old one on disk but is not confirmed durable. It
+                // is the activation in effect (the slot is used, the old record is gone), but
+                // nothing is granted on its strength: the saved record stays the old one until
+                // the dirty flag has it written again and confirmed.
+                self.publish(|meta| {
+                    meta.storage_dirty = true;
+                    meta.last_error = Some(error);
+                });
+                false
+            }
+        };
         let (state, replaced) = {
             let mut engine = self.engine.lock().unwrap();
             let committed = self.now();
             let next = activated.next.clone();
             let replaced = engine.commit_activation(activated, committed);
-            // The record just saved is the one now in effect.
-            *self.durable.lock().unwrap() = Some(next);
+            if confirmed {
+                // The record just saved is the one now in effect.
+                *self.durable.lock().unwrap() = Some(next);
+            }
             self.generation.fetch_add(1, Ordering::SeqCst);
             (engine.state(committed), replaced)
         };
         self.gate(false);
         if let Some(replaced) = replaced {
-            // The new record is already saved, so any note about the old activation is stale.
-            self.journal_clear(instance_hash(&replaced.instance_id), u64::MAX);
+            let hash = instance_hash(&replaced.instance_id);
+            if confirmed {
+                // The new record is already saved, so any note about the old activation is
+                // stale.
+                self.journal_clear(hash, u64::MAX);
+            } else {
+                // Only once the new record is confirmed may the old activation's note go.
+                self.meta
+                    .lock()
+                    .unwrap()
+                    .clear_after_save
+                    .push((hash, u64::MAX));
+            }
             self.release(ordered, replaced);
             self.persist(ordered);
         }
@@ -2283,13 +2358,16 @@ mod tests {
         stored: Mutex<Stored>,
         writes: Mutex<Vec<Stored>>,
         save_error: Mutex<Option<String>>,
+        /// Writes land but come back `Indeterminate` with this reason.
+        unconfirmed: Mutex<Option<String>>,
         load_error: Mutex<Option<String>>,
         read_pause: Pause,
         write_pause: Pause,
-        /// The trial item; `None` is positively absent.
+        /// The trial record; `None` is positively absent.
         trial: Mutex<Option<TrialRecord>>,
         trial_writes: Mutex<Vec<TrialRecord>>,
         trial_save_error: Mutex<Option<String>>,
+        trial_unconfirmed: Mutex<Option<String>>,
         trial_load_error: Mutex<Option<String>>,
         trial_write_pause: Pause,
     }
@@ -2318,13 +2396,17 @@ mod tests {
             }
             Ok(self.stored.lock().unwrap().clone())
         }
-        fn save(&self, stored: &Stored) -> Result<(), String> {
+        fn save(&self, stored: &Stored) -> Result<(), SaveError> {
             self.write_pause.enter();
             if let Some(error) = self.save_error.lock().unwrap().clone() {
-                return Err(error);
+                return Err(SaveError::Failed(error));
             }
             *self.stored.lock().unwrap() = stored.clone();
             self.writes.lock().unwrap().push(stored.clone());
+            if let Some(error) = self.unconfirmed.lock().unwrap().clone() {
+                // Written, like a rename that landed, but not confirmed durable.
+                return Err(SaveError::Indeterminate(error));
+            }
             Ok(())
         }
         fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
@@ -2333,13 +2415,16 @@ mod tests {
             }
             Ok(self.trial.lock().unwrap().clone())
         }
-        fn save_trial(&self, trial: &TrialRecord) -> Result<(), String> {
+        fn save_trial(&self, trial: &TrialRecord) -> Result<(), SaveError> {
             self.trial_write_pause.enter();
             if let Some(error) = self.trial_save_error.lock().unwrap().clone() {
-                return Err(error);
+                return Err(SaveError::Failed(error));
             }
             *self.trial.lock().unwrap() = Some(trial.clone());
             self.trial_writes.lock().unwrap().push(trial.clone());
+            if let Some(error) = self.trial_unconfirmed.lock().unwrap().clone() {
+                return Err(SaveError::Indeterminate(error));
+            }
             Ok(())
         }
     }
@@ -4009,6 +4094,147 @@ mod tests {
         assert!(!service.host.blocked(), "the trial keeps playing");
     }
 
+    /// The store renamed the new record into place but could not confirm it durable: the
+    /// activation is in effect and its slot is kept, nothing is deactivated or restored, the
+    /// saved records still decide what is granted, and the same record is written again every
+    /// tick until a write is confirmed.
+    #[test]
+    fn an_unconfirmed_activation_save_keeps_the_new_record_and_is_retried_without_a_deactivation() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = trial_service(trial_record(4 * DAY, true), clock.clone());
+        service.load();
+        assert!(service.host.blocked(), "the trial has ended");
+        *service.vault.unconfirmed.lock().unwrap() = Some("disk gone".into());
+        let view = service.activate("KEY-PAID").unwrap();
+        assert_eq!(service.dodo.calls(), ["activate KEY-PAID Mac".to_string()]);
+        assert_eq!(
+            service.vault.load().unwrap().license.unwrap().license_key,
+            "KEY-PAID",
+            "the record landed on disk"
+        );
+        assert_eq!(service.state(), State::Licensed, "in effect in memory");
+        assert_eq!(
+            view.state,
+            State::TrialEnded,
+            "granted only what the confirmed records grant"
+        );
+        assert!(!view.core_feature);
+        assert!(view.last_error.unwrap().contains("disk gone"));
+        assert!(service.host.blocked());
+        // Still unconfirmed: written again, nothing deactivated.
+        clock.store(NOW + 5, Ordering::SeqCst);
+        service.tick();
+        assert!(service.vault.writes.lock().unwrap().len() >= 2);
+        assert!(service.view().last_error.unwrap().contains("disk gone"));
+        assert_eq!(service.view().state, State::TrialEnded);
+        assert!(service.host.blocked());
+        // A restart meanwhile finds the new record.
+        let restarted = service_with(
+            service.vault.reopen(),
+            service.journal.clone(),
+            Arc::new(AtomicI64::new(NOW + 5)),
+        );
+        restarted.load();
+        assert_eq!(restarted.view().state, State::Licensed);
+        assert_eq!(restarted.view().last_error, None);
+        // Confirmed: the grant follows, with no further Dodo call.
+        *service.vault.unconfirmed.lock().unwrap() = None;
+        clock.store(NOW + 10, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.view().state, State::Licensed);
+        assert!(service.view().core_feature);
+        assert_eq!(service.view().last_error, None);
+        assert_eq!(service.dodo.calls(), ["activate KEY-PAID Mac".to_string()]);
+    }
+
+    /// Replacing an activation whose new record is unconfirmed: the old slot is still freed,
+    /// but the old activation's journal note goes only once the new record is confirmed.
+    #[test]
+    fn an_unconfirmed_replacement_clears_the_old_note_only_once_confirmed() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(with_paid(HOUR), clock.clone());
+        service.load();
+        let old = instance_hash("lki_KEY-PAID");
+        service.journal.revoke(&old, 1).unwrap();
+        *service.vault.unconfirmed.lock().unwrap() = Some("disk gone".into());
+        service.activate("KEY-NEW").unwrap();
+        assert_eq!(
+            service.dodo.calls()[1..],
+            [
+                "activate KEY-NEW Mac".to_string(),
+                "deactivate KEY-PAID lki_KEY-PAID".to_string()
+            ]
+        );
+        assert_eq!(
+            service.journal.entry(&old),
+            Ok(Some(1)),
+            "kept until confirmed"
+        );
+        assert_eq!(
+            service.vault.load().unwrap().license.unwrap().license_key,
+            "KEY-NEW"
+        );
+        assert!(
+            !service.host.blocked(),
+            "the confirmed record still grants, as it did before the activation"
+        );
+        *service.vault.unconfirmed.lock().unwrap() = None;
+        clock.store(NOW + 5, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.journal.entry(&old), Ok(None));
+        assert_eq!(service.view().state, State::Licensed);
+        assert!(!service.host.blocked());
+        assert_eq!(
+            service.dodo.calls().len(),
+            3,
+            "no deactivation of the new slot"
+        );
+    }
+
+    /// A provisional trial whose save is unconfirmed is the trial from now on, but grants
+    /// nothing until the retried write is confirmed.
+    #[test]
+    fn an_unconfirmed_trial_start_grants_nothing_until_the_retried_save_is_confirmed() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let service = service(Stored::default(), clock.clone());
+        *service.vault.trial_unconfirmed.lock().unwrap() = Some("disk gone".into());
+        service.registry.started(NOW, NOW);
+        service.load();
+        let view = service.view();
+        assert!(view.ready);
+        assert_eq!(view.state, State::Unlicensed);
+        assert!(view.trial_storage_error);
+        assert!(!view.core_feature);
+        assert!(view.last_error.unwrap().contains("disk gone"));
+        assert!(service.host.blocked());
+        assert_eq!(
+            service.vault.saved_trial().unwrap().started_at,
+            NOW,
+            "the record landed"
+        );
+        assert_eq!(service.dodo.calls().len(), 0);
+        // Written again every tick, never started twice.
+        let writes = service.vault.trial_writes().len();
+        clock.store(NOW + 5, Ordering::SeqCst);
+        service.tick();
+        assert_eq!(service.vault.trial_writes().len(), writes + 1);
+        assert!(service.host.blocked());
+        assert_eq!(
+            service.vault.saved_trial().unwrap().started_at,
+            NOW,
+            "the same trial"
+        );
+        *service.vault.trial_unconfirmed.lock().unwrap() = None;
+        clock.store(NOW + 10, Ordering::SeqCst);
+        service.tick();
+        let view = service.view();
+        assert_eq!(view.state, State::Trial { days_left: 3 });
+        assert!(view.core_feature);
+        assert!(!view.trial_storage_error);
+        assert_eq!(view.last_error, None);
+        assert!(!service.host.blocked());
+    }
+
     #[test]
     fn owed_cleanups_stop_at_the_first_rate_limit_and_retry_every_five_minutes() {
         struct LimitedDodo(FakeDodo);
@@ -4622,13 +4848,13 @@ mod tests {
                 self.pause.enter();
                 Ok(snapshot)
             }
-            fn save(&self, stored: &Stored) -> Result<(), String> {
+            fn save(&self, stored: &Stored) -> Result<(), SaveError> {
                 self.inner.save(stored)
             }
             fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
                 self.inner.load_trial()
             }
-            fn save_trial(&self, trial: &TrialRecord) -> Result<(), String> {
+            fn save_trial(&self, trial: &TrialRecord) -> Result<(), SaveError> {
                 self.inner.save_trial(trial)
             }
         }

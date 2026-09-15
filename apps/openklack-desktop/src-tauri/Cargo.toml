@@ -46,7 +46,7 @@ tempfile = "=3.27.0"
 [features]
 # Off by default: builds from source have no License UI and never contact the license service.
 # Official builds enable it and provide OPENKLACK_LICENSE_ENV plus the Dodo product IDs at build time (see build.rs).
-licensing = ["dep:reqwest", "dep:rustls", "dep:chrono", "dep:url", "dep:aes-gcm", "dep:hkdf", "dep:getrandom"]
+licensing = ["dep:reqwest", "dep:rustls", "dep:chrono", "dep:url", "dep:aes-gcm", "dep:hkdf", "dep:getrandom", "dep:libc"]
 # Off by default: builds from source never check, download or install app updates.
 # Official builds enable it; the update public key comes from release/updater-public-key.txt (see build.rs).
 updater = ["dep:tauri-plugin-updater", "dep:reqwest", "dep:rustls", "dep:url", "dep:minisign-verify", "dep:base64", "dep:semver", "dep:libc", "dep:tar", "dep:flate2"]
