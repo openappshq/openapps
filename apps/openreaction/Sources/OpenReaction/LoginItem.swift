@@ -1,16 +1,21 @@
 import AppKit
+import OpenReactionCore
 import ServiceManagement
 
-/// "Open at login" through `SMAppService.mainApp`. Off until the user turns it
-/// on; the status is always re-read from the system, since the user can remove
-/// the item in System Settings at any time.
+/// "Open at login" through `SMAppService.mainApp`. Official builds turn it
+/// on once, on the first launch (`applyDefaultIfNeeded`); the Settings
+/// toggle decides from then on. The status is always re-read from the
+/// system, since the user can remove the item in System Settings at any
+/// time.
 @MainActor
 @Observable
 final class LoginItem {
     private(set) var status: SMAppService.Status = .notRegistered
     private(set) var errorMessage: String?
+    @ObservationIgnored private let flags: any FlagStore
 
-    init() {
+    init(flags: any FlagStore = UserDefaults.standard) {
+        self.flags = flags
         refresh()
     }
 
@@ -26,7 +31,22 @@ final class LoginItem {
         if current != status { status = current }
     }
 
+    /// The user's choice in Settings or onboarding.
     func setOn(_ on: Bool) {
+        register(on)
+    }
+
+    /// The default, once: registers on the first launch that finds the item
+    /// unregistered. A registration macOS refuses is reported in Settings
+    /// like any other.
+    func applyDefaultIfNeeded() {
+        guard isAvailable else { return }
+        refresh()
+        guard LoginItemDefault.shouldRegister(store: flags, isRegistered: isOn) else { return }
+        register(true)
+    }
+
+    private func register(_ on: Bool) {
         errorMessage = nil
         do {
             if on {

@@ -34,16 +34,21 @@ final class OnboardingModel {
     var showHow: Set<PermissionKind> = []
 
     private(set) var hasStarted: Bool {
-        didSet { UserDefaults.standard.set(hasStarted, forKey: Keys.started) }
+        didSet { defaults.set(hasStarted, forKey: Keys.started) }
     }
     private(set) var practiceFinished: Bool {
-        didSet { UserDefaults.standard.set(practiceFinished, forKey: Keys.practiceFinished) }
+        didSet { defaults.set(practiceFinished, forKey: Keys.practiceFinished) }
     }
+    /// `--preview-setup` pins a step regardless of permissions.
+    var previewStep: OnboardingStep? {
+        didSet { sync() }
+    }
+    @ObservationIgnored private let defaults: UserDefaults
 
     @ObservationIgnored var onRequest: ((PermissionKind) -> Void)?
-    /// Opens Settings (License), for the practice step when the license
-    /// keeps the picker off.
-    @ObservationIgnored var onOpenSettings: (() -> Void)?
+    /// Opens Settings → License: from the trial pill on the welcome step,
+    /// and from the practice step when the license keeps the picker off.
+    @ObservationIgnored var onOpenLicense: (() -> Void)?
     @ObservationIgnored var onStepChange: ((OnboardingStep) -> Void)?
     @ObservationIgnored var onClose: (() -> Void)?
     @ObservationIgnored private var advanceTask: Task<Void, Never>?
@@ -51,20 +56,23 @@ final class OnboardingModel {
     enum Keys {
         static let started = "onboarding.started"
         static let practiceFinished = "onboarding.practiceFinished"
-        static let shown = "onboarding.shown"
-        static let resumeAfterRelaunch = "onboarding.resumeAfterRelaunch"
     }
 
-    init(controller: AppController, loginItem: LoginItem) {
+    /// The trial's remaining time or the license's short reason, in
+    /// official builds; nil while licensed or without licensing.
+    var licenseBadge: LicenseBadge.Label? { controller.licenseBadge }
+
+    init(controller: AppController, loginItem: LoginItem, defaults: UserDefaults = .standard) {
         self.controller = controller
         self.permissions = controller.permissions
         self.loginItem = loginItem
-        hasStarted = UserDefaults.standard.bool(forKey: Keys.started)
-        practiceFinished = UserDefaults.standard.bool(forKey: Keys.practiceFinished)
+        self.defaults = defaults
+        hasStarted = defaults.bool(forKey: Keys.started)
+        practiceFinished = defaults.bool(forKey: Keys.practiceFinished)
     }
 
     var derivedStep: OnboardingStep {
-        permissions.onboardingStep(hasStarted: hasStarted, practiceFinished: practiceFinished)
+        previewStep ?? permissions.onboardingStep(hasStarted: hasStarted, practiceFinished: practiceFinished)
     }
 
     // MARK: - Visibility
@@ -100,7 +108,7 @@ final class OnboardingModel {
     }
 
     func relaunch() {
-        UserDefaults.standard.set(true, forKey: Keys.resumeAfterRelaunch)
+        OnboardingLaunch.markResumeAfterRelaunch(store: defaults)
         controller.relaunch()
     }
 
@@ -110,6 +118,12 @@ final class OnboardingModel {
     }
 
     func finish() {
+        onClose?()
+    }
+
+    /// Closes the window at any step. Progress is kept, so "Show setup
+    /// guide" resumes where the user left off.
+    func skip() {
         onClose?()
     }
 
@@ -177,10 +191,12 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private let guide: GuidePanelController
     private let menuBarHint = MenuBarHintController()
     private let statusItemFrame: () -> CGRect?
+    private let defaults: UserDefaults
     private var window: NSWindow?
 
-    init(controller: AppController, loginItem: LoginItem, statusItemFrame: @escaping () -> CGRect?) {
-        model = OnboardingModel(controller: controller, loginItem: loginItem)
+    init(controller: AppController, loginItem: LoginItem, defaults: UserDefaults = .standard, statusItemFrame: @escaping () -> CGRect?) {
+        self.defaults = defaults
+        model = OnboardingModel(controller: controller, loginItem: loginItem, defaults: defaults)
         guide = GuidePanelController(permissions: controller.permissions)
         self.statusItemFrame = statusItemFrame
         super.init()
@@ -194,13 +210,11 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// First launch, a missing or broken permission, or a relaunch started
-    /// from onboarding. Consumes the relaunch marker.
-    static func shouldShowOnLaunch(permissions: PermissionMonitor) -> Bool {
-        let defaults = UserDefaults.standard
-        let resume = defaults.bool(forKey: OnboardingModel.Keys.resumeAfterRelaunch)
-        defaults.removeObject(forKey: OnboardingModel.Keys.resumeAfterRelaunch)
-        return resume || !defaults.bool(forKey: OnboardingModel.Keys.shown) || !permissions.snapshot.isComplete
+    /// The first launch, or a relaunch started from onboarding. Consumes the
+    /// relaunch marker. An unfinished setup does not reopen the window by
+    /// itself: the status item's badge and "Finish Setup…" carry it.
+    static func shouldShowOnLaunch() -> Bool {
+        OnboardingLaunch.shouldShow(store: UserDefaults.standard)
     }
 
     var isVisible: Bool { window?.isVisible ?? false }
@@ -224,7 +238,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
             window.center()
             self.window = window
         }
-        UserDefaults.standard.set(true, forKey: OnboardingModel.Keys.shown)
+        OnboardingLaunch.markShown(store: defaults)
         model.permissions.setFastPolling(true, reason: "onboarding")
         model.didShow()
         NSApp.activate()

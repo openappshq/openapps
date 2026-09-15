@@ -71,6 +71,13 @@ To check the picker's look without permissions or the event tap:
 swift run OpenReaction --preview-picker   # ← → move the selection
 ```
 
+The setup guide, the settings window and every license pill, the same way (no tap, no storage, no network; ⌘] and ⌘[ move the guide between steps). With a directory it renders each window in light and dark appearance as PNGs and quits:
+
+```sh
+swift run OpenReaction --preview-setup            # interactive
+swift run OpenReaction --preview-setup /tmp/shots  # PNGs, then quits
+```
+
 Regenerate the app icon and menu-bar image from the SVG masters in `design/assets` with `scripts/make-icons.sh`.
 
 ## Architecture

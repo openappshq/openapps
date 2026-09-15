@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: SettingsWindowController?
     private var loginItem: LoginItem?
     private var preview: PreviewHarness?
+    private var setupPreview: SetupPreviewHarness?
     #if OPENAPPS_LICENSING
     private var license: LicenseController?
     #endif
@@ -43,6 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preview = PreviewHarness(provider: provider, dataSourceSummary: emojiData.summary)
             return
         }
+        if let index = CommandLine.arguments.firstIndex(of: "--preview-setup") {
+            installMainMenu()
+            let directory = CommandLine.arguments.indices.contains(index + 1) ? CommandLine.arguments[index + 1] : nil
+            setupPreview = SetupPreviewHarness(provider: provider, dataSourceSummary: emojiData.summary, outputDirectory: directory)
+            return
+        }
 
         installMainMenu()
         registerURLHandler()
@@ -52,7 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let statusMenu = StatusMenuController(
             controller: controller,
             showOnboarding: { [weak self] in self?.onboarding?.show() },
-            showSettings: { [weak self] in self?.settings?.show() }
+            showSettings: { [weak self] in self?.settings?.show() },
+            showLicense: { [weak self] in self?.settings?.showLicense() }
         )
         let onboarding = OnboardingWindowController(controller: controller, loginItem: loginItem) { [weak statusMenu] in
             statusMenu?.buttonScreenFrame
@@ -71,12 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.license = license
         license.onChange = { [weak controller, weak license] in
             guard let controller, let license else { return }
-            controller.setLicense(allowsFeature: license.isFeatureEnabled, statusLine: license.statusLine)
+            controller.setLicense(allowsFeature: license.isFeatureEnabled, badge: license.badge)
         }
         // From the manager's thread, before storage: the gate stops
         // authorizing at once; the tap's stop and the UI follow on main.
         license.lockFeature = controller.featureLock()
-        controller.setLicense(allowsFeature: license.isFeatureEnabled, statusLine: license.statusLine)
+        controller.setLicense(allowsFeature: license.isFeatureEnabled, badge: license.badge)
         let settings = SettingsWindowController(controller: controller, loginItem: loginItem, license: license) { [weak onboarding] in
             onboarding?.show()
         }
@@ -93,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.updates = updates
         #endif
         controller.onStateChange = { [weak statusMenu] in statusMenu?.updateButton() }
-        onboarding.model.onOpenSettings = { [weak settings] in settings?.show() }
+        onboarding.model.onOpenLicense = { [weak settings] in settings?.showLicense() }
         self.controller = controller
         self.loginItem = loginItem
         self.statusMenu = statusMenu
@@ -112,7 +120,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if OPENAPPS_OFFICIAL
         updates?.start()
         #endif
-        if usesEventTap, OnboardingWindowController.shouldShowOnLaunch(permissions: controller.permissions) {
+        #if OPENAPPS_OFFICIAL
+        // Official builds open at login by default, decided once (LoginItemDefault).
+        loginItem.applyDefaultIfNeeded()
+        #endif
+        if usesEventTap, OnboardingWindowController.shouldShowOnLaunch() {
             onboarding.show()
         }
     }

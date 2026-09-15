@@ -117,14 +117,36 @@ private struct WelcomeStep: View {
                     .font(Brand.body(16))
                     .foregroundStyle(Brand.textSecondary)
             }
-            Button("Get started", action: model.getStarted)
-                .buttonStyle(PrimaryButtonStyle())
-                .keyboardShortcut(.defaultAction)
+            if Licensing.isCompiledIn {
+                trial
+            }
+            HStack(spacing: Brand.Space.s16) {
+                Button("Get started", action: model.getStarted)
+                    .buttonStyle(PrimaryButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+                Button("Skip for now", action: model.skip)
+                    .buttonStyle(LinkButtonStyle())
+            }
             Spacer(minLength: 0)
             MonoLabel("About a minute · Nothing leaves this Mac")
         }
         .padding(Brand.Space.s48)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    /// Official builds: the trial started by itself. The pill shows where it
+    /// stands, also when the guide is opened again later.
+    private var trial: some View {
+        VStack(alignment: .leading, spacing: Brand.Space.s8) {
+            Text("Your free 3-day trial started when you opened OpenReaction — no signup. Buy for $5 any time in Settings → License.")
+                .font(Brand.body(14))
+                .lineSpacing(3)
+                .foregroundStyle(Brand.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let badge = model.licenseBadge {
+                LicensePill(label: badge) { model.onOpenLicense?() }
+            }
+        }
     }
 }
 
@@ -175,6 +197,10 @@ private struct PermissionStep: View {
                             .cardSurface()
                             .transition(.opacity)
                     }
+                    Label("Switched it on but nothing changed? macOS sometimes applies a new permission only after OpenReaction is reopened.", systemImage: "arrow.clockwise")
+                        .font(Brand.body(13))
+                        .foregroundStyle(Brand.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     TroubleshootingList(model: model, kind: kind, topics: [.notWorking, .notListed, .afterUpdate])
                 }
             }
@@ -203,6 +229,9 @@ private struct PermissionStep: View {
                 }
             }
             .secondaryAction()
+            Spacer(minLength: 0)
+            Button("Skip for now", action: model.skip)
+                .buttonStyle(LinkButtonStyle())
         }
     }
 
@@ -400,7 +429,7 @@ private struct TryItStep: View {
                 title: "Try it after you start the trial or activate a license.",
                 detail: "Permissions are set. OpenReaction keeps the picker off until this Mac has a trial or a license; you can do that in Settings → License. Everything else keeps working meanwhile.",
                 actionTitle: "Open License settings",
-                action: { model.onOpenSettings?() }
+                action: { model.onOpenLicense?() }
             )
             HStack {
                 Spacer(minLength: 0)
@@ -510,12 +539,23 @@ private struct DoneStep: View {
                     .font(Brand.body(16))
                     .foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Text(Licensing.isCompiledIn
+                    ? "Settings, this guide and your license are behind the menu bar icon — click it, then choose Settings. The trial and Buy for $5 are under License."
+                    : "Settings and this guide are behind the menu bar icon — click it, then choose Settings.")
+                    .font(Brand.body(14))
+                    .foregroundStyle(Brand.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text("Can't see the icon? A full menu bar or the camera notch can hide it. Open OpenReaction again from Finder or Spotlight to reach its settings.")
                     .font(Brand.body(14))
                     .foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            #if OPENAPPS_OFFICIAL
+            // On by default in official builds; the switch lives in Settings.
+            LoginItemNote(loginItem: model.loginItem)
+            #else
             LoginItemToggle(loginItem: model.loginItem)
+            #endif
             Spacer(minLength: 0)
             HStack {
                 Spacer()
@@ -526,6 +566,36 @@ private struct DoneStep: View {
         }
         .padding(Brand.Space.s32)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// The last step's word on the login item in official builds, where it is
+/// on by default: where to change it, and macOS's approval if pending.
+private struct LoginItemNote: View {
+    let loginItem: LoginItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Brand.Space.s8) {
+            Label(
+                loginItem.isOn
+                    ? "OpenReaction starts with your Mac. Change this in Settings → General."
+                    : "OpenReaction can start with your Mac. Turn it on in Settings → General.",
+                systemImage: "power"
+            )
+            .font(Brand.body(14))
+            .foregroundStyle(Brand.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            if loginItem.requiresApproval {
+                HStack(spacing: Brand.Space.s8) {
+                    Text("macOS needs you to approve this in Login Items.")
+                        .font(Brand.body(13))
+                        .foregroundStyle(Brand.textSecondary)
+                    Button("Open Login Items") { loginItem.openLoginItemsSettings() }
+                        .buttonStyle(LinkButtonStyle())
+                }
+            }
+        }
+        .onAppear { loginItem.refresh() }
     }
 }
 
