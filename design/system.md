@@ -6,7 +6,7 @@ Creative tools label: expressive identities, simple utilities.
 Use short oversized headlines, generous section spacing, and contrasting white, charcoal, and signature-color fields; keep settings compact and quiet.
 Avoid filler copy, repetitive card grids, and decorative glow on controls.
 
-HQ owns yellow, OpenKlack cobalt, OpenReaction orchid.
+HQ owns yellow, OpenKlack cobalt, OpenReaction orchid, Hertz green (the success palette; Hertz's states therefore always carry a label or a shape as well).
 Products share typography, neutral surfaces, geometry, and behavior while owning their glyph and signature color.
 For marks, use [asset masters and rules](assets/README.md).
 

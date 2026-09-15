@@ -8,6 +8,7 @@ Read only the documents needed for the task.
 | Controls and states | [Components](components.md) |
 | OpenKlack behavior | [Product contract](products/openklack.md) |
 | OpenReaction behavior | [App architecture](../apps/openreaction/docs/architecture.md) |
+| Hertz behavior | [Product contract](products/hertz.md) |
 | Logos and icons | [Asset usage](assets/README.md) |
 | Token values | [tokens.json](tokens.json) |
 | New product | [Design checklist](system.md#adding-a-product), [repository setup](../docs/development.md#add-another-app) |

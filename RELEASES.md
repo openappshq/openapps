@@ -1,6 +1,6 @@
 # Releases and updates
 
-How every OpenApps HQ app is released, installed and kept up to date. OpenKlack and OpenReaction follow this document, and any new app under `apps/` must too. If an app needs to differ, change this document first. Licensing rules live in [LICENSING.md](LICENSING.md).
+How every OpenApps HQ app is released, installed and kept up to date. OpenKlack, OpenReaction and Hertz follow this document, and any new app under `apps/` must too. If an app needs to differ, change this document first. Licensing rules live in [LICENSING.md](LICENSING.md); Hertz is free and has none.
 
 ## Summary
 
@@ -13,6 +13,8 @@ How every OpenApps HQ app is released, installed and kept up to date. OpenKlack 
 | Update feed | `https://openapps.space/updates/<app>/latest.json`, a signed JSON file served by the website |
 | Updates | Manual by default: `brew upgrade --cask <app>`, or "Check now" in the app. Automatic checks and installs are opt-in Settings toggles, **off by default** |
 | Update signatures | Every feed and every zip is signed with an app-specific update key that official builds pin |
+
+**Hertz, for now:** no in-app updater, no feed and no update key. `brew upgrade --cask hertz` is its only update path, its cask sets `auto_updates false` so Homebrew reports upgrades, and its workflow has no feed job. Its standalone self-updater was removed on import because it fetched the repository-wide latest release. When the shared Swift updater package lands, Hertz adopts it and this exception goes away.
 
 ## Why a stable self-signed certificate
 
