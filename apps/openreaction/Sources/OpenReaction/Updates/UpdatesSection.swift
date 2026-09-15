@@ -19,6 +19,13 @@ struct UpdatesSection: View {
                 }
                 .disabled(!updates.checksAutomatically)
                 statusRow
+                if let backup = updates.preservedBackup {
+                    HStack(alignment: .top) {
+                        note("An update could not be completed and the previous version was kept at \(backup.path). If OpenReaction works, remove it.")
+                        Spacer()
+                        Button("Remove Previous Copy") { updates.discardPreservedBackup() }
+                    }
+                }
             }
         } header: {
             MonoLabel("Updates")

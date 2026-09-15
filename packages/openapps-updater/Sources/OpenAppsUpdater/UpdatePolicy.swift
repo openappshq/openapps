@@ -128,6 +128,14 @@ public enum UpdatePolicy {
         }
     }
 
+    /// Whether a staged update may replace what is on disk right now. The
+    /// installed bundle is re-read at install time: if something else (a
+    /// `brew upgrade`, a manual copy) put a newer or equal version there
+    /// while the app was running, the staged one is never installed over it.
+    public static func mayReplace(installedVersion: UpdateVersion, installedBuild: Int, with item: UpdateFeedItem) -> Bool {
+        item.version > installedVersion && item.build > installedBuild
+    }
+
     /// Whether a download URL may be used: https, or plain http to the
     /// loopback address for local update tests only.
     public static func allows(downloadURL url: URL, insecureLoopback: Bool) -> Bool {

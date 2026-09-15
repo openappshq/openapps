@@ -71,6 +71,10 @@ public enum UpdaterError: Error, Equatable, LocalizedError {
     case notOneBundle
     case wrongVersion(String)
     case cancelled
+    /// The bundle on disk is already this new or newer (installed by something else meanwhile).
+    case alreadyInstalled(String)
+    case installedBundleUnreadable
+    case quitInstallTimedOut
 
     public var errorDescription: String? {
         switch self {
@@ -84,6 +88,9 @@ public enum UpdaterError: Error, Equatable, LocalizedError {
         case .notOneBundle: "The download doesn't contain exactly the app."
         case .wrongVersion(let what): "The downloaded app is \(what), not the announced version."
         case .cancelled: "The update was cancelled."
+        case .alreadyInstalled(let version): "Version \(version) is already installed."
+        case .installedBundleUnreadable: "The installed app's version couldn't be read."
+        case .quitInstallTimedOut: "Installing on quit took too long and was skipped."
         }
     }
 }
@@ -128,6 +135,8 @@ public final class Updater {
     }
     /// Set once the staged update has been swapped in; the running process is the old version until it relaunches.
     public private(set) var installed = false
+    /// A previous copy kept next to the app after a failed update (RELEASES.md): shown in Settings until discarded.
+    public private(set) var preservedBackup: URL?
 
     /// Test and diagnostics hooks.
     @ObservationIgnored public var onPhaseChange: ((Phase) -> Void)?
@@ -167,7 +176,16 @@ public final class Updater {
     /// Recovers an interrupted swap, then starts the schedule if the user
     /// turned it on. Makes no request on its own unless a check is due.
     public func start() {
-        UpdateSwap.recover(app: configuration.bundleURL)
+        switch UpdateSwap.recover(app: configuration.bundleURL) {
+        case .nothing:
+            break
+        case .restored:
+            log.notice("Restored the app after an interrupted update")
+        case .backupPreserved(let backup):
+            // Never removed on its own: the user decides once the installed app works.
+            preservedBackup = backup
+            log.error("A previous copy is preserved at \(backup.path, privacy: .public) after a failed update")
+        }
         guard location == .updatable else {
             log.notice("Updates are off: the app runs from a \(String(describing: self.location), privacy: .public) location")
             return
@@ -435,7 +453,7 @@ public final class Updater {
     /// The staged bundle must be validly signed, satisfy the installed app's
     /// designated requirement (evaluated, not compared as text), and be the
     /// announced version and build.
-    static func verify(_ bundle: URL, against installed: URL, expecting item: UpdateFeedItem) throws {
+    nonisolated static func verify(_ bundle: URL, against installed: URL, expecting item: UpdateFeedItem) throws {
         let requirement = try CodeSignature.designatedRequirement(of: installed)
         try CodeSignature.verify(bundle, satisfies: requirement)
         let plist = bundle.appendingPathComponent("Contents/Info.plist")
@@ -448,20 +466,53 @@ public final class Updater {
         }
     }
 
+    /// The user has decided the installed app works: the preserved backup goes.
+    public func discardPreservedBackup() {
+        do {
+            try UpdateSwap.discardPreservedBackup(for: configuration.bundleURL)
+            preservedBackup = nil
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
+    }
+
     // MARK: - Installing
 
     /// Installs the staged update if its consent still holds. Called from
-    /// `applicationShouldTerminate`; the swap is one rename, so it is done
-    /// before the app exits. Returns whether an install happened.
+    /// `applicationShouldTerminate`. The verification and the swap run off
+    /// the main thread under one deadline: past it the install is skipped
+    /// (the staged copy stays for next time) and the quit goes on. Returns
+    /// whether an install happened.
     @discardableResult
-    public func installStagedIfAllowed() -> Bool {
+    public func installStagedIfAllowed(deadline: TimeInterval = 10) -> Bool {
         guard !installed, case .staged(let staged) = phase,
               UpdatePolicy.mayInstallOnQuit(consent: staged.consent, automaticDownloads: installsAutomatically) else { return false }
-        do {
-            try install(staged)
+        let bundleURL = configuration.bundleURL
+        let done = DispatchSemaphore(value: 0)
+        let box = InstallResult()
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try Self.install(staged, at: bundleURL)
+                box.set(.success(()))
+            } catch {
+                box.set(.failure(error))
+            }
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + deadline) == .success else {
+            log.error("Installing \(staged.item.version.description, privacy: .public) on quit exceeded \(deadline, privacy: .public)s; skipped")
+            return false
+        }
+        switch box.get() {
+        case .success:
+            installed = true
+            phase = .idle
+            log.notice("Installed \(staged.item.version.description, privacy: .public) on quit")
             return true
-        } catch {
+        case .failure(let error):
             log.error("Installing \(staged.item.version.description, privacy: .public) on quit failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        case nil:
             return false
         }
     }
@@ -491,11 +542,40 @@ public final class Updater {
     }
 
     private func install(_ staged: StagedUpdate) throws {
-        // Re-evaluated right before the swap: what is on disk now is what gets installed.
-        try Self.verify(staged.bundleURL, against: configuration.bundleURL, expecting: staged.item)
-        try UpdateSwap.swap(app: configuration.bundleURL, staged: staged.bundleURL)
+        try Self.install(staged, at: configuration.bundleURL)
         installed = true
         phase = .idle
         log.notice("Installed \(staged.item.version.description, privacy: .public)")
     }
+
+    /// The install proper, safe off the main actor: the bundle on disk must
+    /// still be older than the update (something else may have updated it
+    /// meanwhile), the staged bundle is re-evaluated against the installed
+    /// app's identity, then the two are swapped atomically.
+    nonisolated private static func install(_ staged: StagedUpdate, at bundleURL: URL) throws {
+        let onDisk = try installedVersion(of: bundleURL)
+        guard UpdatePolicy.mayReplace(installedVersion: onDisk.version, installedBuild: onDisk.build, with: staged.item) else {
+            throw UpdaterError.alreadyInstalled(onDisk.version.description)
+        }
+        try verify(staged.bundleURL, against: bundleURL, expecting: staged.item)
+        try UpdateSwap.swap(app: bundleURL, staged: staged.bundleURL)
+    }
+
+    nonisolated private static func installedVersion(of bundleURL: URL) throws -> (version: UpdateVersion, build: Int) {
+        let plist = bundleURL.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: plist),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let versionString = info["CFBundleShortVersionString"] as? String, let version = UpdateVersion(versionString),
+              let buildString = info["CFBundleVersion"] as? String, let build = Int(buildString)
+        else { throw UpdaterError.installedBundleUnreadable }
+        return (version, build)
+    }
+}
+
+/// A result handed from the install thread back to the main actor.
+private final class InstallResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<Void, any Error>?
+    func set(_ value: Result<Void, any Error>) { lock.withLock { result = value } }
+    func get() -> Result<Void, any Error>? { lock.withLock { result } }
 }

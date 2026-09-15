@@ -101,6 +101,16 @@ import Testing
         #expect(offers(item(version: "1.0.1", macOS: "15.1"), current: "1.0.0", macOS: "15.1.0"))
     }
 
+    @Test func anExternallyInstalledNewerAppIsNeverReplaced() {
+        let update = item(version: "1.2.0")
+        #expect(UpdatePolicy.mayReplace(installedVersion: UpdateVersion("1.1.0")!, installedBuild: 1_001_000, with: update))
+        // brew upgrade put 1.2.0 (or newer) there while the app was running.
+        #expect(!UpdatePolicy.mayReplace(installedVersion: UpdateVersion("1.2.0")!, installedBuild: 1_002_000, with: update))
+        #expect(!UpdatePolicy.mayReplace(installedVersion: UpdateVersion("1.3.0")!, installedBuild: 1_003_000, with: update))
+        // A bundle whose build says newer even though the version does not is not replaced either.
+        #expect(!UpdatePolicy.mayReplace(installedVersion: UpdateVersion("1.1.0")!, installedBuild: 1_002_000, with: update))
+    }
+
     @Test func consentToInstallOnQuitFollowsTheToggle() {
         #expect(UpdatePolicy.mayInstallOnQuit(consent: .automatic, automaticDownloads: true))
         #expect(!UpdatePolicy.mayInstallOnQuit(consent: .automatic, automaticDownloads: false))

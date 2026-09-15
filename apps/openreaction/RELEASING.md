@@ -294,8 +294,13 @@ The install is one atomic exchange of the two bundles (`renamex_np` with
 `RENAME_SWAP`), re-verified right before it: at no instant is the app
 missing, and the old bundle is deleted only afterwards. On a volume without
 atomic renames the updater falls back to move-aside/move-in with a marker
-file, restores the old bundle on any failure (or names where it is), and
-recovers an interrupted swap at the next launch. A copy running from a
+file, rolls the old bundle back on failure, and if even that fails keeps
+it as a marked backup that nothing removes on its own (Settings shows it
+with "Remove Previous Copy"); an interrupted swap is recovered at the next
+launch. The installed bundle's version is re-read right before installing,
+so a newer copy put there by `brew upgrade` meanwhile is never replaced,
+and the install on quit runs under one deadline (10 s) past which it is
+skipped rather than delaying the quit. A copy running from a
 read-only volume or App Translocation shows "Move OpenReaction to
 Applications to enable updates" instead. Updates never depend on the
 license or trial state. `scripts/update-e2e.sh` proves the whole path

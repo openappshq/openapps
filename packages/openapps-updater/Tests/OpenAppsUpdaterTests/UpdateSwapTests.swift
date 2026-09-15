@@ -65,7 +65,8 @@ struct Injected: Error, LocalizedError {
         let app = try folder.bundle(marker: "old")
         let staged = try folder.staged("new", for: app)
         var steps: [UpdateSwap.Step] = []
-        try UpdateSwap.swap(app: app, staged: staged, atomic: true) { steps.append($0) }
+        let outcome = try UpdateSwap.swap(app: app, staged: staged, atomic: true) { steps.append($0) }
+        #expect(outcome == .exchanged)
         #expect(steps == [.exchange])
         #expect(folder.marker(app) == "new")
         #expect(folder.names() == ["App.app"])
@@ -90,7 +91,8 @@ struct Injected: Error, LocalizedError {
         let app = try folder.bundle(marker: "old")
         let staged = try folder.staged("new", for: app)
         var steps: [UpdateSwap.Step] = []
-        try UpdateSwap.swap(app: app, staged: staged, atomic: false) { steps.append($0) }
+        let outcome = try UpdateSwap.swap(app: app, staged: staged, atomic: false) { steps.append($0) }
+        #expect(outcome == .moved)
         #expect(steps == [.moveAside, .moveIn])
         #expect(folder.marker(app) == "new")
         #expect(folder.names() == ["App.app"])
@@ -101,7 +103,7 @@ struct Injected: Error, LocalizedError {
         defer { folder.remove() }
         let app = try folder.bundle(marker: "old")
         let staged = try folder.staged("new", for: app)
-        #expect(throws: UpdateSwap.Failure.moveIn("disk full")) {
+        #expect(throws: UpdateSwap.Failure.rolledBack("disk full")) {
             try UpdateSwap.swap(app: app, staged: staged, atomic: false) { step in
                 if step == .moveIn { throw Injected("disk full") }
             }
@@ -128,13 +130,13 @@ struct Injected: Error, LocalizedError {
         #expect(folder.names() == [".App.app.update", "App.app"])
     }
 
-    @Test func aFailedRestoreKeepsThePreviousCopyAndSaysWhere() throws {
+    @Test func aFailedRollbackPreservesTheBackupAndNothingRemovesItOnItsOwn() throws {
         let folder = try AppFolder()
         defer { folder.remove() }
         let app = try folder.bundle(marker: "old")
         let staged = try folder.staged("new", for: app)
         let previous = UpdateSwap.previousLocation(for: app)
-        // The second move fails, and meanwhile something else took the app's place, so the restore fails too.
+        // The second move fails, and meanwhile something else took the app's place, so the rollback fails too.
         let error = #expect(throws: UpdateSwap.Failure.self) {
             try UpdateSwap.swap(app: app, staged: staged, atomic: false) { step in
                 if step == .moveIn {
@@ -143,16 +145,44 @@ struct Injected: Error, LocalizedError {
                 }
             }
         }
-        guard case .restore(let moveIn, _, let at)? = error else {
-            Issue.record("expected a restore failure, got \(String(describing: error))")
+        guard case .rollbackFailed(let moveIn, _, let backup)? = error else {
+            Issue.record("expected a rollback failure, got \(String(describing: error))")
             return
         }
         #expect(moveIn == "disk full")
-        #expect(at == previous)
-        // Nothing was deleted: the old app still exists at the named location, and so does the new one.
+        #expect(backup == previous)
+        #expect(error?.errorDescription?.contains(previous.path) == true)
+        // Nothing was deleted: the old app is preserved and marked, the new one still staged.
         #expect(folder.marker(previous) == "old")
         #expect(folder.marker(staged) == "new")
-        #expect(error?.errorDescription?.contains(previous.path) == true)
+        #expect(UpdateSwap.preservedBackup(for: app) == previous)
+
+        // Launch-time cleanup reports the backup and leaves it alone (the app path is taken).
+        #expect(UpdateSwap.recover(app: app) == .backupPreserved(previous))
+        #expect(folder.marker(previous) == "old")
+        #expect(UpdateSwap.preservedBackup(for: app) == previous)
+        // Nothing is swapped over a preserved backup.
+        let again = try folder.staged("newer", for: app)
+        #expect(throws: UpdateSwap.Failure.backupPreserved(previous)) {
+            try UpdateSwap.swap(app: app, staged: again)
+        }
+        #expect(folder.marker(previous) == "old")
+        // Only a deliberate discard removes it.
+        try UpdateSwap.discardPreservedBackup(for: app)
+        #expect(UpdateSwap.preservedBackup(for: app) == nil)
+        #expect(!FileManager.default.fileExists(atPath: previous.path))
+    }
+
+    @Test func aPreservedBackupComesBackWhenTheAppIsMissing() throws {
+        let folder = try AppFolder()
+        defer { folder.remove() }
+        let app = try folder.bundle(marker: "old")
+        let previous = UpdateSwap.previousLocation(for: app)
+        try FileManager.default.moveItem(at: app, to: previous)
+        FileManager.default.createFile(atPath: UpdateSwap.backupMarkerLocation(for: app).path, contents: nil)
+        #expect(UpdateSwap.recover(app: app) == .restored)
+        #expect(folder.marker(app) == "old")
+        #expect(folder.names() == ["App.app"])
     }
 
     @Test func aProcessKilledBetweenTheTwoMovesIsRecoveredAtTheNextLaunch() throws {
@@ -174,7 +204,7 @@ struct Injected: Error, LocalizedError {
         try fileManager.moveItem(at: app, to: previous)
         fileManager.createFile(atPath: marker.path, contents: nil)
         #expect(!fileManager.fileExists(atPath: app.path))
-        UpdateSwap.recover(app: app)
+        #expect(UpdateSwap.recover(app: app) == .restored)
         #expect(folder.marker(app) == "old")
         #expect(folder.names() == ["App.app"])
         #expect(!fileManager.fileExists(atPath: staged.path))
@@ -184,7 +214,7 @@ struct Injected: Error, LocalizedError {
         try fileManager.moveItem(at: app, to: previous)
         try fileManager.moveItem(at: staged, to: app)
         fileManager.createFile(atPath: marker.path, contents: nil)
-        UpdateSwap.recover(app: app)
+        #expect(UpdateSwap.recover(app: app) == .nothing)
         #expect(folder.marker(app) == "new")
         #expect(folder.names() == ["App.app"])
 

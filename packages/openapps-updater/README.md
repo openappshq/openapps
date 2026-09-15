@@ -37,8 +37,16 @@ What it guarantees:
   the quit path re-checks. A manual install keeps its consent.
 - **Atomic swap.** `renamex_np(RENAME_SWAP)` exchanges the bundles in one
   step; the old one is deleted only afterwards. Without atomic renames, a
-  marked move-aside/move-in restores the old bundle on failure (or names
-  where it is) and is recovered at the next launch.
+  marked move-aside/move-in rolls the old bundle back on failure; if even
+  that fails the old bundle is *preserved* with a marker — nothing removes
+  it on its own, launch-time recovery reports it, no swap happens over it,
+  and the app shows it until the user discards it.
+- **Never over a newer app.** The installed bundle's version is re-read at
+  install time; if something else (`brew upgrade`) put an equal or newer
+  version there, the staged update is not installed.
+- **Bounded quit.** `installStagedIfAllowed(deadline:)` runs the
+  verification and swap off the main thread under one deadline and skips
+  the install past it, so quitting never hangs.
 
 `swift test` covers feed verification, version and consent rules, the swap
 with injected failures (including a kill between the fallback's moves), and
