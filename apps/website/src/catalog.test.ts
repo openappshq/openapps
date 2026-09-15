@@ -77,10 +77,10 @@ test("catalog routes emit separate static HTML entries with product metadata", (
     );
     expect(inputs).toContain(join(root, "openklack/download/index.html"));
     expect(readFileSync(join(root, "openklack/download/index.html"), "utf8")).toContain(
-      "Download for Mac · OpenKlack",
+      "Install · OpenKlack",
     );
     expect(readFileSync(join(root, "openklack/download/index.html"), "utf8")).toContain(
-      'content="Your OpenKlack download,',
+      'content="Install OpenKlack with Homebrew,',
     );
     expect(readFileSync(join(root, "openklack/index.html"), "utf8")).toContain(
       'property="og:site_name" content="OpenKlack"',

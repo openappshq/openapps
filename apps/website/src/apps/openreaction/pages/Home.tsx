@@ -34,11 +34,11 @@ const { price: PRICE } = licensingFor("openreaction");
 const questions = [
   [
     "What do I need to run it?",
-    "macOS 14 or later on Apple Silicon. The download is signed and notarized. Building from source stays free and needs no key.",
+    "macOS 14 or later on Apple Silicon, and Homebrew to install it. The app is signed with our release certificate. Building from source stays free and needs no key.",
   ],
   [
     "How do licenses and trials work?",
-    `Download OpenReaction and it works right away for ${TRIAL_DAYS} days on that Mac, with no signup. To keep it, pay ${PRICE} once for ${MACS_PER_LICENSE} Macs, forever. No subscription or account, and nothing is charged when the trial ends. Remove a Mac in Settings › License to free a seat, or contact support if you no longer have it.`,
+    `Install OpenReaction and it works right away for ${TRIAL_DAYS} days on that Mac, with no signup. To keep it, pay ${PRICE} once for ${MACS_PER_LICENSE} Macs, forever. No subscription or account, and nothing is charged when the trial ends. Remove a Mac in Settings › License to free a seat, or contact support if you no longer have it.`,
   ],
   [
     "Can I use it offline?",

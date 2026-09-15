@@ -49,8 +49,8 @@ export const products: Product[] = [
       {
         path: "download",
         entry: "Download",
-        title: "Download for Mac · OpenKlack",
-        description: "Your OpenKlack download, and the three steps to set it up.",
+        title: "Install · OpenKlack",
+        description: "Install OpenKlack with Homebrew, and the one step to set it up.",
       },
       {
         path: "thanks",
@@ -87,8 +87,8 @@ export const products: Product[] = [
       {
         path: "download",
         entry: "Download",
-        title: "Download for Mac · OpenReaction",
-        description: "Your OpenReaction download, and the three steps to set it up.",
+        title: "Install · OpenReaction",
+        description: "Install OpenReaction with Homebrew, and the one step to set it up.",
         template: "src/apps/openreaction/template.html",
       },
       {

@@ -26,7 +26,7 @@ const questions = [
   ],
   [
     "What do I need to run it?",
-    "macOS 14 or later on Apple Silicon. The download is signed and notarized. OpenKlack asks for Input Monitoring on first launch, which is how it hears keystrokes to play a sound for them.",
+    "macOS 14 or later on Apple Silicon, and Homebrew to install it. The app is signed with our release certificate. OpenKlack asks for Input Monitoring on first launch, which is how it hears keystrokes to play a sound for them.",
   ],
   [
     "Can I give individual keys a different sound?",
@@ -42,11 +42,11 @@ const questions = [
   ],
   [
     `What does the ${PRICE} buy?`,
-    `A license for the official, signed and notarized build, for up to ${MACS_PER_LICENSE} Macs, forever. One price, no subscription, no account. It also keeps the project going.`,
+    `A license for the official build, signed with our release certificate, for up to ${MACS_PER_LICENSE} Macs, forever. One price, no subscription, no account. It also keeps the project going.`,
   ],
   [
     "How does the free trial work?",
-    `Download OpenKlack and it works right away for ${TRIAL_DAYS} days on that Mac. No signup, no email, no card. When the trial ends, OpenKlack goes quiet until you buy a license or build from source; nothing is charged. There’s one trial per Mac.`,
+    `Install OpenKlack and it works right away for ${TRIAL_DAYS} days on that Mac. No signup, no email, no card. When the trial ends, OpenKlack goes quiet until you buy a license or build from source; nothing is charged. There’s one trial per Mac.`,
   ],
   [
     "Does it work offline?",
