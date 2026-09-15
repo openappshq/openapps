@@ -56,6 +56,7 @@ struct LicenseSection: View {
         switch error {
         case .unavailable(let reason): reason
         case .corrupt: "the stored record is unreadable"
+        case .indeterminate(let reason): reason
         }
     }
 

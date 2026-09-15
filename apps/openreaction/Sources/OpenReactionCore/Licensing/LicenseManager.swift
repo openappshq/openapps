@@ -125,6 +125,10 @@ public final class LicenseManager {
     /// sequence; the entry goes once the deletion is durable, or once a new
     /// record durably replaces it.
     private var removingInstance: (instanceID: String, seq: UInt64)?
+    /// The activation a new record replaced while that record's save was
+    /// not yet known to be durable (`.indeterminate`); its entry goes once
+    /// the new record is.
+    private var replacedInstance: (instanceID: String, seq: UInt64)?
     /// The journal could not be written; surfaced like a storage problem.
     public private(set) var journalError = false
     /// Activations whose journal entry on disk cannot be read; nothing
@@ -407,12 +411,20 @@ public final class LicenseManager {
             if let pending, let known = journaledSeq[pending.instanceID], known <= pending.eventSeq {
                 clearJournal(pending.instanceID, upTo: pending.eventSeq)
             }
-            if pending == nil, let removed = removingInstance {
+            // A durably deleted record, or one durably replaced by another
+            // activation's record, retires the old activation's tombstone.
+            if let removed = removingInstance, removed.instanceID != pending?.instanceID {
                 removingInstance = nil
                 clearJournal(removed.instanceID, upTo: removed.seq)
             }
+            if let pending, let replaced = replacedInstance, replaced.instanceID != pending.instanceID {
+                replacedInstance = nil
+                clearJournal(replaced.instanceID, upTo: replaced.seq)
+            }
             if !cleanupsDirty, !cleanupsUnread, !journalUnreadable { storageError = nil }
         } catch {
+            // `.indeterminate` included: memory already holds the new state,
+            // the same write is repeated on the next tick.
             storageError = error
         }
     }
@@ -532,8 +544,11 @@ public final class LicenseManager {
 
     /// A new activation whose record the store already holds: the previous
     /// activation's record — and one whose deletion was still owed — is
-    /// durably replaced, so their journal entries go.
-    private func commitActivation(_ newRecord: LicenseRecord) {
+    /// durably replaced, so their journal entries go. Not `durable` (the
+    /// save was `.indeterminate`): memory commits the same way, but the
+    /// record stays owed to the store and those entries go only once
+    /// `flushRecord` has saved it for real.
+    private func commitActivation(_ newRecord: LicenseRecord, durable: Bool = true) {
         activationGeneration += 1
         // The replaced activation is dead for good: its entry, up to the
         // last sequence that activation reached, goes; so does the old
@@ -542,10 +557,11 @@ public final class LicenseManager {
         if let previous = record, previous.instanceID != newRecord.instanceID {
             restrictedInstances.remove(previous.instanceID)
             if let known = journaledSeq[previous.instanceID] {
-                clearJournal(previous.instanceID, upTo: max(known, previous.eventSeq))
+                let upTo = max(known, previous.eventSeq)
+                if durable { clearJournal(previous.instanceID, upTo: upTo) } else { replacedInstance = (previous.instanceID, upTo) }
             }
         }
-        if let removing = removingInstance, removing.instanceID != newRecord.instanceID {
+        if durable, let removing = removingInstance, removing.instanceID != newRecord.instanceID {
             removingInstance = nil
             clearJournal(removing.instanceID, upTo: removing.seq)
         }
@@ -561,8 +577,8 @@ public final class LicenseManager {
             storageError = error
         }
         record = newRecord
-        pendingDurableWrite = nil
-        if !cleanupsDirty, !cleanupsUnread { storageError = nil }
+        pendingDurableWrite = durable ? nil : .some(newRecord)
+        if durable, !cleanupsDirty, !cleanupsUnread { storageError = nil }
         failedChecks = 0
         blockedUntil = nil
         lastAttemptAt = now()
@@ -651,14 +667,22 @@ public final class LicenseManager {
             )
             // Persist first; announce success only once the record is durable.
             // The trial record is kept as it is.
+            var notDurable: LicenseStoreError?
             do {
                 try store.saveRecord(newRecord)
+            } catch .indeterminate(let reason) {
+                // The record is in place but not known to be on disk: the
+                // activation is kept (deactivating it would orphan a record
+                // a restart may find), shown as a storage problem, and the
+                // same record is saved again on every tick until it is.
+                notDurable = .indeterminate(reason)
             } catch {
                 storageError = error
                 await release(licenseKey: key, instanceID: instanceID)
                 return .storageFailed
             }
-            commitActivation(newRecord)
+            commitActivation(newRecord, durable: notDurable == nil)
+            if let notDurable { storageError = notDurable }
             if let previous, previous.instanceID != instanceID {
                 // A different paid key: free the old activation so it does
                 // not count against the limit.
@@ -802,9 +826,14 @@ public final class LicenseManager {
         updated.eventSeq = current.eventSeq + 1
         // The grant is saved first: it takes effect only once the store
         // holds it. A refused save leaves the Mac as it was; the next check
-        // (backoff applies) tries again.
+        // (backoff applies) tries again. A save that landed but is not known
+        // durable counts: the record is kept, owed to the store, and saved
+        // again on every tick; its journal entry goes only then.
+        var notDurable: LicenseStoreError?
         do {
             try store.saveRecord(updated)
+        } catch .indeterminate(let reason) {
+            notDurable = .indeterminate(reason)
         } catch {
             storageError = error
             failedChecks += 1
@@ -819,10 +848,15 @@ public final class LicenseManager {
             if pendingJournalOps[current.instanceID] == nil { restrictedInstances.remove(current.instanceID) }
         }
         record = updated
-        pendingDurableWrite = nil
-        if !cleanupsDirty, !cleanupsUnread, !journalUnreadable { storageError = nil }
-        if let known = journaledSeq[current.instanceID], known <= updated.eventSeq {
-            clearJournal(current.instanceID, upTo: updated.eventSeq)
+        if let notDurable {
+            pendingDurableWrite = .some(updated)
+            storageError = notDurable
+        } else {
+            pendingDurableWrite = nil
+            if !cleanupsDirty, !cleanupsUnread, !journalUnreadable { storageError = nil }
+            if let known = journaledSeq[current.instanceID], known <= updated.eventSeq {
+                clearJournal(current.instanceID, upTo: updated.eventSeq)
+            }
         }
         failedChecks = 0
         blockedUntil = nil
@@ -964,6 +998,11 @@ public final class LicenseManager {
     }
 
     private func readTrial() {
+        // A provisional save that landed but was not known durable: what is
+        // read back now is saved again, so it becomes durable before the
+        // hourly save would.
+        var owesResave = false
+        if case .indeterminate = trialStorageError { owesResave = true }
         do {
             let stored = try trialStore.loadTrial()
             if trialFoundAtLoad == nil { trialFoundAtLoad = stored != nil }
@@ -978,7 +1017,7 @@ public final class LicenseManager {
                 trial = record
                 trialClock = clock
                 trialLoad = .present
-                trialDirty = record != stored
+                trialDirty = record != stored || owesResave
                 lastTrialSaveMono = at.mono
             } else {
                 trial = nil
@@ -989,7 +1028,7 @@ public final class LicenseManager {
             durableFallbackID = trial?.fallbackDeviceID
             pendingRegistryAnswer = nil
             trialStorageError = nil
-            trialSaveRequired = false
+            trialSaveRequired = owesResave && trial != nil
             trialGeneration += 1
         } catch {
             trialStorageError = error
@@ -999,7 +1038,9 @@ public final class LicenseManager {
 
     /// Starting the trial grants access, so the record is saved first and
     /// the core turns on only once it is durable. A failed save leaves the
-    /// record unread: the next attempt reads before it writes.
+    /// record unread: the next attempt reads before it writes. That covers
+    /// a save that landed but is not known durable (`.indeterminate`) too:
+    /// access waits, the next tick reads the record back and saves it again.
     private func startProvisionalTrial() {
         let at = observation
         let fallback = device.hardwareUUID() == nil ? UUID().uuidString.lowercased() : nil

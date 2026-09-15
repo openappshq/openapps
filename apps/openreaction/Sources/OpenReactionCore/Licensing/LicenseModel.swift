@@ -268,6 +268,12 @@ public enum LicenseStoreError: Error, Equatable, Sendable {
     case unavailable(String)
     /// A record exists but could not be decoded.
     case corrupt
+    /// A save or delete may have landed but is not known to be durable: the
+    /// new file (or the deletion) is visible, the directory sync after it
+    /// failed. Memory keeps the new state as if saved — nothing is undone or
+    /// deactivated — and the same write is repeated on the next tick until
+    /// it is durable; a grant still waits for that.
+    case indeterminate(String)
 }
 
 /// Where the record lives (an encrypted file in the app; memory in tests). Every

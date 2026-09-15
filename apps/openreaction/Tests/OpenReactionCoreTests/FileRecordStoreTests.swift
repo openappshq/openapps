@@ -1,21 +1,21 @@
 import CryptoKit
 import Foundation
-import OpenReactionCore
+@testable import OpenReactionCore
 import Testing
 
 /// The encrypted file store (LICENSING.md, "Record store") against a
 /// temporary directory; the real Application Support is never touched.
 @Suite("File record store")
 struct FileRecordStoreTests {
-    private struct FixedDevice: DeviceIdentity {
+    struct FixedDevice: DeviceIdentity {
         let uuid: String?
         func hardwareUUID() -> String? { uuid }
     }
 
-    /// A throwaway `records` directory (not created: the store does that),
-    /// removed after the test, with its modes restored first so the removal
-    /// succeeds.
-    private final class Sandbox {
+    /// A throwaway base directory standing in for Application Support (the
+    /// store creates `OpenApps/openreaction/records` below it), removed
+    /// after the test with its modes restored first so the removal succeeds.
+    final class Sandbox {
         let root: URL
         let records: URL
         init() {
@@ -28,18 +28,71 @@ struct FileRecordStoreTests {
             chmod(records.path, 0o700)
             try? FileManager.default.removeItem(at: root)
         }
+        func file(_ name: String) -> URL { records.appendingPathComponent(name) }
+        func contents() throws -> [String] { try FileManager.default.contentsOfDirectory(atPath: records.path).sorted() }
     }
 
-    private func store(_ sandbox: Sandbox, uuid: String? = "11111111-2222-3333-4444-555555555555", appID: String = "openreaction") -> FileRecordStore {
-        FileRecordStore(appID: appID, device: FixedDevice(uuid: uuid), directory: sandbox.records)
+    /// The live system calls with any of them made to fail on demand.
+    final class FailingSystem: @unchecked Sendable {
+        enum Step { case write, fileSync, directorySync, rename, unlink }
+        private let lock = NSLock()
+        private var failing: Set<Step> = []
+        /// How often a failing step was hit.
+        private(set) var hits: [Step: Int] = [:]
+
+        func fail(_ step: Step, _ on: Bool = true) {
+            lock.withLock { if on { failing.insert(step) } else { failing.remove(step) } }
+        }
+
+        private func shouldFail(_ step: Step) -> Bool {
+            lock.withLock {
+                guard failing.contains(step) else { return false }
+                hits[step, default: 0] += 1
+                return true
+            }
+        }
+
+        private static func isDirectory(_ fd: Int32) -> Bool {
+            var status = stat()
+            return fstat(fd, &status) == 0 && (status.st_mode & S_IFMT) == S_IFDIR
+        }
+
+        var system: RecordFileSystem {
+            var system = RecordFileSystem.live
+            system.write = { [self] fd, bytes, count in
+                if shouldFail(.write) { errno = EIO; return -1 }
+                return Darwin.write(fd, bytes, count)
+            }
+            system.fsync = { [self] fd in
+                let step: Step = Self.isDirectory(fd) ? .directorySync : .fileSync
+                if shouldFail(step) { errno = EIO; return -1 }
+                return Darwin.fsync(fd)
+            }
+            system.renameat = { [self] from, fromName, to, toName in
+                if shouldFail(.rename) { errno = EIO; return -1 }
+                return Darwin.renameat(from, fromName, to, toName)
+            }
+            system.unlinkat = { [self] dirfd, name, flags in
+                if shouldFail(.unlink) { errno = EIO; return -1 }
+                return Darwin.unlinkat(dirfd, name, flags)
+            }
+            return system
+        }
     }
 
-    private static let license = LicenseRecord(
+    static let uuid = "11111111-2222-3333-4444-555555555555"
+    static let otherUUID = "AAAAAAAA-0000-0000-0000-000000000000"
+
+    func store(_ sandbox: Sandbox, uuid: String? = FileRecordStoreTests.uuid, appID: String = "openreaction", system: RecordFileSystem = .live) -> FileRecordStore {
+        FileRecordStore(appID: appID, device: FixedDevice(uuid: uuid), baseDirectory: sandbox.root, system: system)
+    }
+
+    static let license = LicenseRecord(
         licenseKey: "KEY-1", instanceID: "inst_1", productID: "pdt_paid",
         activatedAt: Date(timeIntervalSince1970: 1_700_000_000), lastSuccessAt: Date(timeIntervalSince1970: 1_700_000_100),
         eventSeq: 3
     )
-    private static let trial = TrialRecord(
+    static let trial = TrialRecord(
         startedAt: Date(timeIntervalSince1970: 1_700_000_000), lastSeenAt: Date(timeIntervalSince1970: 1_700_003_600),
         registered: true, fallbackDeviceID: nil
     )
@@ -48,6 +101,33 @@ struct FileRecordStoreTests {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         return (attributes[.posixPermissions] as? NSNumber)?.intValue ?? -1
     }
+
+    private func isSymlink(_ url: URL) throws -> Bool {
+        try FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType == .typeSymbolicLink
+    }
+
+    static func isUnavailable(_ error: LicenseStoreError?) -> Bool {
+        if case .unavailable? = error { return true }
+        return false
+    }
+
+    static func isIndeterminate(_ error: LicenseStoreError?) -> Bool {
+        if case .indeterminate? = error { return true }
+        return false
+    }
+
+    /// The error a throwing call produced, or nil when it did not throw.
+    static func failure<T>(_ body: () throws(LicenseStoreError) -> T) -> LicenseStoreError? {
+        do {
+            _ = try body()
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    private func unavailable<T>(_ body: @autoclosure () throws(LicenseStoreError) -> T) -> Bool { Self.isUnavailable(Self.failure(body)) }
+    private func indeterminate<T>(_ body: @autoclosure () throws(LicenseStoreError) -> T) -> Bool { Self.isIndeterminate(Self.failure(body)) }
 
     // MARK: Round trips
 
@@ -77,7 +157,7 @@ struct FileRecordStoreTests {
 
         // Nothing owed removes the cleanups file; the read is "none".
         try store.savePendingCleanups([])
-        #expect(!FileManager.default.fileExists(atPath: sandbox.records.appendingPathComponent(FileRecordStore.cleanupsFile).path))
+        #expect(!FileManager.default.fileExists(atPath: sandbox.file(FileRecordStore.cleanupsFile).path))
         #expect(try store.loadPendingCleanups() == [])
     }
 
@@ -89,8 +169,25 @@ struct FileRecordStoreTests {
         #expect(try store.loadRecord() == nil)
         #expect(try store.loadTrial() == nil)
         #expect(try store.loadPendingCleanups() == [])
-        // Clearing what is not there is fine too.
+        // Clearing what is not there is fine too, and creates nothing.
         try store.clearRecord()
+        #expect(!FileManager.default.fileExists(atPath: sandbox.records.path))
+        // Even the base directory may be missing.
+        try FileManager.default.removeItem(at: sandbox.root)
+        #expect(try store.loadRecord() == nil)
+        try FileManager.default.createDirectory(at: sandbox.root, withIntermediateDirectories: true)
+    }
+
+    @Test func aDeletedRecordReadsAsAbsent() throws {
+        let sandbox = Sandbox()
+        let store = store(sandbox)
+        try store.saveRecord(Self.license)
+        #expect(try store.loadRecord() == Self.license)
+        try store.clearRecord()
+        #expect(try store.loadRecord() == nil)
+        try store.savePendingCleanups([PendingCleanup(licenseKey: "KEY-0", instanceID: "inst_0")])
+        try store.savePendingCleanups([])
+        #expect(try store.loadPendingCleanups() == [])
     }
 
     // MARK: Format
@@ -98,8 +195,9 @@ struct FileRecordStoreTests {
     @Test func theFileStartsWithTheMagicAndHoldsNoPlaintext() throws {
         let sandbox = Sandbox()
         try store(sandbox).saveRecord(Self.license)
-        let bytes = try Data(contentsOf: sandbox.records.appendingPathComponent(FileRecordStore.licenseFile))
+        let bytes = try Data(contentsOf: sandbox.file(FileRecordStore.licenseFile))
         let magic = Data(FileRecordStore.magic.utf8)
+        #expect(magic.count == 19)
         #expect(bytes.prefix(magic.count) == magic)
         // magic + 12-byte nonce + ciphertext + 16-byte tag
         #expect(bytes.count > magic.count + 12 + 16)
@@ -108,22 +206,42 @@ struct FileRecordStoreTests {
         #expect(bytes.range(of: Data("license_key".utf8)) == nil)
     }
 
+    @Test func everySaveUsesAFreshNonce() throws {
+        let sandbox = Sandbox()
+        let store = store(sandbox)
+        let magic = FileRecordStore.magic.utf8.count
+        let saves: [(String, () throws -> Void)] = [
+            (FileRecordStore.licenseFile, { try store.saveRecord(Self.license) }),
+            (FileRecordStore.trialFile, { try store.saveTrial(Self.trial) }),
+            (FileRecordStore.cleanupsFile, { try store.savePendingCleanups([PendingCleanup(licenseKey: "KEY-0", instanceID: "inst_0")]) }),
+        ]
+        for (file, save) in saves {
+            try save()
+            let first = try Data(contentsOf: sandbox.file(file))
+            try save()
+            let second = try Data(contentsOf: sandbox.file(file))
+            #expect(first.count == second.count, Comment(rawValue: file))
+            #expect(first[magic..<(magic + 12)] != second[magic..<(magic + 12)], "nonce repeated for \(file)")
+            #expect(first[(magic + 12)...] != second[(magic + 12)...], "ciphertext repeated for \(file)")
+        }
+    }
+
     @Test func aDifferentMacCannotOpenTheFiles() throws {
         let sandbox = Sandbox()
-        try store(sandbox, uuid: "AAAAAAAA-0000-0000-0000-000000000000").saveRecord(Self.license)
-        try store(sandbox, uuid: "AAAAAAAA-0000-0000-0000-000000000000").saveTrial(Self.trial)
+        try store(sandbox, uuid: Self.otherUUID).saveRecord(Self.license)
+        try store(sandbox, uuid: Self.otherUUID).saveTrial(Self.trial)
         let other = store(sandbox, uuid: "BBBBBBBB-0000-0000-0000-000000000000")
         #expect(throws: LicenseStoreError.corrupt) { try other.loadRecord() }
         #expect(throws: LicenseStoreError.corrupt) { try other.loadTrial() }
         // The files are left where they are: not replaced, not deleted.
-        #expect(try store(sandbox, uuid: "AAAAAAAA-0000-0000-0000-000000000000").loadRecord() == Self.license)
+        #expect(try store(sandbox, uuid: Self.otherUUID).loadRecord() == Self.license)
     }
 
     @Test func noHardwareUUIDStillOpensItsOwnFilesButNotAnotherMacs() throws {
         let sandbox = Sandbox()
         try store(sandbox, uuid: nil).saveTrial(Self.trial)
         #expect(try store(sandbox, uuid: nil).loadTrial() == Self.trial)
-        #expect(throws: LicenseStoreError.corrupt) { try store(sandbox, uuid: "AAAAAAAA-0000-0000-0000-000000000000").loadTrial() }
+        #expect(throws: LicenseStoreError.corrupt) { try store(sandbox, uuid: Self.otherUUID).loadTrial() }
         // The stand-in is the fixed string, not an empty key.
         #expect(FileRecordStore.noHardwareUUID == "no-hardware-uuid")
     }
@@ -132,7 +250,7 @@ struct FileRecordStoreTests {
         let sandbox = Sandbox()
         let store = store(sandbox)
         try store.saveRecord(Self.license)
-        let url = sandbox.records.appendingPathComponent(FileRecordStore.licenseFile)
+        let url = sandbox.file(FileRecordStore.licenseFile)
         var bytes = try Data(contentsOf: url)
         // Flip one bit in the ciphertext, past the magic and the nonce.
         let index = FileRecordStore.magic.utf8.count + 12 + 2
@@ -145,7 +263,7 @@ struct FileRecordStoreTests {
         let sandbox = Sandbox()
         let store = store(sandbox)
         try store.saveTrial(Self.trial)
-        let url = sandbox.records.appendingPathComponent(FileRecordStore.trialFile)
+        let url = sandbox.file(FileRecordStore.trialFile)
 
         try Data("{\"started_at\":1}".utf8).write(to: url) // plain JSON from a hand edit
         #expect(throws: LicenseStoreError.corrupt) { try store.loadTrial() }
@@ -168,12 +286,14 @@ struct FileRecordStoreTests {
         let store = store(sandbox)
         try store.saveTrial(Self.trial)
         // The trial file copied over the license file: the file name is authenticated.
-        let trialURL = sandbox.records.appendingPathComponent(FileRecordStore.trialFile)
-        let licenseURL = sandbox.records.appendingPathComponent(FileRecordStore.licenseFile)
-        try FileManager.default.copyItem(at: trialURL, to: licenseURL)
+        try FileManager.default.copyItem(at: sandbox.file(FileRecordStore.trialFile), to: sandbox.file(FileRecordStore.licenseFile))
         #expect(throws: LicenseStoreError.corrupt) { try store.loadRecord() }
         #expect(try store.loadTrial() == Self.trial)
-        // Another app's store over the same directory: the app id is in the key and the AAD.
+        // Another app's file copied into this app's place (or the other way
+        // round): the app id is in the key and the AAD.
+        let openklack = sandbox.root.appendingPathComponent("OpenApps/openklack/records", isDirectory: true)
+        try FileManager.default.createDirectory(at: openklack, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: sandbox.file(FileRecordStore.trialFile), to: openklack.appendingPathComponent(FileRecordStore.trialFile))
         #expect(throws: LicenseStoreError.corrupt) { try self.store(sandbox, appID: "openklack").loadTrial() }
     }
 
@@ -183,11 +303,88 @@ struct FileRecordStoreTests {
         try store.saveTrial(Self.trial)
         // Sealed with this Mac's key for the license file, so the tag passes
         // and only the JSON decoding can refuse it.
-        let key = SymmetricKey(data: FileRecordStore.deriveKey(appID: "openreaction", hardwareUUID: "11111111-2222-3333-4444-555555555555"))
+        let key = SymmetricKey(data: FileRecordStore.deriveKey(appID: "openreaction", hardwareUUID: Self.uuid))
         let box = try AES.GCM.seal(Data("not json".utf8), using: key, authenticating: Data("openreaction:\(FileRecordStore.licenseFile)".utf8))
-        try (Data(FileRecordStore.magic.utf8) + box.combined!).write(to: sandbox.records.appendingPathComponent(FileRecordStore.licenseFile))
+        try (Data(FileRecordStore.magic.utf8) + box.combined!).write(to: sandbox.file(FileRecordStore.licenseFile))
         #expect(throws: LicenseStoreError.corrupt) { try store.loadRecord() }
         #expect(try store.loadTrial() == Self.trial)
+    }
+
+    // MARK: Links and special files
+
+    @Test func aDanglingSymlinkIsUnavailableNotAbsent() throws {
+        let sandbox = Sandbox()
+        let store = store(sandbox)
+        try store.saveRecord(Self.license) // creates the directory
+        let target = sandbox.root.appendingPathComponent("gone")
+        try FileManager.default.createSymbolicLink(at: sandbox.file(FileRecordStore.trialFile), withDestinationURL: target)
+        #expect(unavailable(try store.loadTrial()), "a dangling link must not read as 'no trial yet'")
+        // Not replaced by a save either: the link is still a link, its target still absent.
+        #expect(unavailable(try store.saveTrial(Self.trial)))
+        #expect(try isSymlink(sandbox.file(FileRecordStore.trialFile)))
+        #expect(!FileManager.default.fileExists(atPath: target.path))
+        #expect(try sandbox.contents() == [FileRecordStore.licenseFile, FileRecordStore.trialFile], "no temporary file left")
+    }
+
+    @Test func aSymlinkToAValidRecordIsUnavailable() throws {
+        let sandbox = Sandbox()
+        let store = store(sandbox)
+        try store.saveTrial(Self.trial)
+        // A real record elsewhere, linked into the records directory.
+        let elsewhere = sandbox.root.appendingPathComponent("elsewhere")
+        try FileManager.default.moveItem(at: sandbox.file(FileRecordStore.trialFile), to: elsewhere)
+        let bytes = try Data(contentsOf: elsewhere)
+        try FileManager.default.createSymbolicLink(at: sandbox.file(FileRecordStore.trialFile), withDestinationURL: elsewhere)
+        #expect(unavailable(try store.loadTrial()), "a link is never followed, even to a good record")
+        #expect(unavailable(try store.saveTrial(Self.trial)))
+        // The linked file was neither replaced nor written through.
+        #expect(try Data(contentsOf: elsewhere) == bytes)
+        #expect(try isSymlink(sandbox.file(FileRecordStore.trialFile)))
+        // Put back as a regular file, it reads.
+        try FileManager.default.removeItem(at: sandbox.file(FileRecordStore.trialFile))
+        try FileManager.default.moveItem(at: elsewhere, to: sandbox.file(FileRecordStore.trialFile))
+        #expect(try store.loadTrial() == Self.trial)
+    }
+
+    @Test func aRecordsDirectoryThatIsASymlinkIsUnavailable() throws {
+        let sandbox = Sandbox()
+        let store = store(sandbox)
+        try store.saveTrial(Self.trial)
+        // The whole directory moved away and linked back.
+        let elsewhere = sandbox.root.appendingPathComponent("records-elsewhere")
+        try FileManager.default.moveItem(at: sandbox.records, to: elsewhere)
+        try FileManager.default.createSymbolicLink(at: sandbox.records, withDestinationURL: elsewhere)
+        #expect(unavailable(try store.loadTrial()))
+        #expect(unavailable(try store.loadRecord()))
+        #expect(unavailable(try store.saveTrial(Self.trial)))
+        #expect(unavailable(try store.clearRecord()))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path) == [FileRecordStore.trialFile], "nothing written through the link")
+        try FileManager.default.removeItem(at: sandbox.records)
+
+        // A link higher up (`OpenApps`) is refused the same way.
+        let openApps = sandbox.root.appendingPathComponent("OpenApps")
+        try FileManager.default.removeItem(at: openApps)
+        try FileManager.default.createSymbolicLink(at: openApps, withDestinationURL: sandbox.root.appendingPathComponent("nowhere"))
+        #expect(unavailable(try store.loadTrial()))
+        #expect(unavailable(try store.saveTrial(Self.trial)))
+    }
+
+    @Test func aFileWhereADirectoryShouldBeIsUnavailable() throws {
+        let sandbox = Sandbox()
+        let store = store(sandbox)
+        try Data().write(to: sandbox.root.appendingPathComponent("OpenApps"))
+        #expect(unavailable(try store.loadTrial()))
+        #expect(unavailable(try store.saveTrial(Self.trial)))
+    }
+
+    @Test func aFIFOInTheRecordsPlaceIsUnavailableWithoutBlocking() throws {
+        let sandbox = Sandbox()
+        let store = store(sandbox)
+        try store.saveRecord(Self.license)
+        #expect(mkfifo(sandbox.file(FileRecordStore.trialFile).path, 0o600) == 0)
+        // No writer ever opens the FIFO: a blocking open would hang here.
+        #expect(unavailable(try store.loadTrial()))
+        #expect(unavailable(try store.saveTrial(Self.trial)))
     }
 
     // MARK: Availability and atomicity
@@ -200,26 +397,14 @@ struct FileRecordStoreTests {
         #expect(chmod(sandbox.records.path, 0o000) == 0)
         defer { chmod(sandbox.records.path, 0o700) }
 
-        var unavailable = false
-        do { _ = try store.loadRecord() } catch { if case .unavailable = error { unavailable = true } }
-        #expect(unavailable, "an unreadable directory must never read as 'no license'")
-        unavailable = false
-        do { _ = try store.loadTrial() } catch { if case .unavailable = error { unavailable = true } }
-        #expect(unavailable, "an unreadable directory must never read as 'no trial yet'")
-        unavailable = false
-        do { _ = try store.loadPendingCleanups() } catch { if case .unavailable = error { unavailable = true } }
-        #expect(unavailable)
-
-        // A save into it fails and says so.
-        do {
-            try store.saveTrial(Self.trial)
-            Issue.record("saving into an unreadable directory must fail")
-        } catch {
-            guard case .unavailable = error else { Issue.record("expected .unavailable, got \(error)"); return }
-        }
+        #expect(unavailable(try store.loadRecord()), "an unreadable directory must never read as 'no license'")
+        #expect(unavailable(try store.loadTrial()), "an unreadable directory must never read as 'no trial yet'")
+        #expect(unavailable(try store.loadPendingCleanups()))
+        #expect(unavailable(try store.saveTrial(Self.trial)))
+        #expect(unavailable(try store.clearRecord()))
     }
 
-    @Test func aFailedWriteLeavesTheOldFileAndNoTemporaryBehind() throws {
+    @Test func aFailedTemporaryFileLeavesTheOldFileAndNoTemporaryBehind() throws {
         let sandbox = Sandbox()
         let store = store(sandbox)
         try store.saveTrial(Self.trial)
@@ -229,14 +414,79 @@ struct FileRecordStoreTests {
 
         var later = Self.trial
         later.lastSeenAt = later.lastSeenAt.addingTimeInterval(3_600)
-        var failed = false
-        do { try store.saveTrial(later) } catch { if case .unavailable = error { failed = true } }
-        #expect(failed)
+        #expect(unavailable(try store.saveTrial(later)))
 
         chmod(sandbox.records.path, 0o700)
         #expect(try store.loadTrial() == Self.trial, "the old record survives a failed save")
-        let contents = try FileManager.default.contentsOfDirectory(atPath: sandbox.records.path)
-        #expect(contents == [FileRecordStore.trialFile], "no temporary file is left behind: \(contents)")
+        #expect(try sandbox.contents() == [FileRecordStore.trialFile], "no temporary file is left behind")
+    }
+
+    @Test(arguments: [FailingSystem.Step.write, .fileSync, .rename])
+    func aFailureBeforeTheRenameIsUnavailableAndLeavesTheOldFile(step: FailingSystem.Step) throws {
+        let sandbox = Sandbox()
+        let failing = FailingSystem()
+        let store = store(sandbox, system: failing.system)
+        try store.saveTrial(Self.trial)
+        let before = try Data(contentsOf: sandbox.file(FileRecordStore.trialFile))
+
+        failing.fail(step)
+        var later = Self.trial
+        later.lastSeenAt = later.lastSeenAt.addingTimeInterval(3_600)
+        #expect(unavailable(try store.saveTrial(later)), "\(step)")
+        #expect(failing.hits[step] == 1)
+        #expect(try Data(contentsOf: sandbox.file(FileRecordStore.trialFile)) == before, "\(step): the old file is byte-for-byte what it was")
+        #expect(try sandbox.contents() == [FileRecordStore.trialFile], "\(step): no temporary file left")
+
+        failing.fail(step, false)
+        try store.saveTrial(later)
+        #expect(try store.loadTrial() == later)
+    }
+
+    @Test func aFailedDirectorySyncAfterTheRenameIsIndeterminateAndTheNewFileIsInPlace() throws {
+        let sandbox = Sandbox()
+        let failing = FailingSystem()
+        let store = store(sandbox, system: failing.system)
+        try store.saveRecord(Self.license)
+
+        failing.fail(.directorySync)
+        var updated = Self.license
+        updated.eventSeq = 4
+        #expect(indeterminate(try store.saveRecord(updated)))
+        #expect(failing.hits[.directorySync] == 1)
+        // The rename happened: what the directory shows is the new, complete record.
+        #expect(try self.store(sandbox).loadRecord() == updated)
+        #expect(try sandbox.contents() == [FileRecordStore.licenseFile], "no temporary file left")
+
+        // The same write again, once the disk answers: durable, no error.
+        failing.fail(.directorySync, false)
+        try store.saveRecord(updated)
+        #expect(try store.loadRecord() == updated)
+    }
+
+    @Test func aFailedDirectorySyncAfterADeleteIsIndeterminate() throws {
+        let sandbox = Sandbox()
+        let failing = FailingSystem()
+        let store = store(sandbox, system: failing.system)
+        try store.saveRecord(Self.license)
+        try store.saveTrial(Self.trial)
+
+        failing.fail(.directorySync)
+        #expect(indeterminate(try store.clearRecord()))
+        #expect(try self.store(sandbox).loadRecord() == nil) // the entry is gone from the directory
+        #expect(try store.loadTrial() == Self.trial)
+
+        // A failed unlink itself is an ordinary failure: the file stays.
+        failing.fail(.directorySync, false)
+        try store.saveRecord(Self.license)
+        failing.fail(.unlink)
+        #expect(unavailable(try store.clearRecord()))
+        #expect(try store.loadRecord() == Self.license)
+
+        // Retried, the delete is idempotent and completes.
+        failing.fail(.unlink, false)
+        try store.clearRecord()
+        try store.clearRecord()
+        #expect(try store.loadRecord() == nil)
     }
 
     @Test func aSuccessfulWriteLeavesNoTemporaryFile() throws {
@@ -245,8 +495,7 @@ struct FileRecordStoreTests {
         try store.saveTrial(Self.trial)
         try store.saveTrial(Self.trial)
         try store.saveRecord(Self.license)
-        let contents = try FileManager.default.contentsOfDirectory(atPath: sandbox.records.path).sorted()
-        #expect(contents == [FileRecordStore.licenseFile, FileRecordStore.trialFile])
+        #expect(try sandbox.contents() == [FileRecordStore.licenseFile, FileRecordStore.trialFile])
     }
 
     // MARK: Deletion
@@ -257,13 +506,13 @@ struct FileRecordStoreTests {
         try store.saveRecord(Self.license)
         try store.saveTrial(Self.trial)
         try store.savePendingCleanups([PendingCleanup(licenseKey: "KEY-0", instanceID: "inst_0")])
-        let trialBytes = try Data(contentsOf: sandbox.records.appendingPathComponent(FileRecordStore.trialFile))
+        let trialBytes = try Data(contentsOf: sandbox.file(FileRecordStore.trialFile))
 
         try store.clearRecord()
         #expect(try store.loadRecord() == nil)
-        #expect(!FileManager.default.fileExists(atPath: sandbox.records.appendingPathComponent(FileRecordStore.licenseFile).path))
+        #expect(!FileManager.default.fileExists(atPath: sandbox.file(FileRecordStore.licenseFile).path))
         // The trial file is byte-for-byte what it was; the cleanups stay owed.
-        #expect(try Data(contentsOf: sandbox.records.appendingPathComponent(FileRecordStore.trialFile)) == trialBytes)
+        #expect(try Data(contentsOf: sandbox.file(FileRecordStore.trialFile)) == trialBytes)
         #expect(try store.loadTrial() == Self.trial)
         #expect(try store.loadPendingCleanups().count == 1)
 
@@ -281,14 +530,242 @@ struct FileRecordStoreTests {
         try store.savePendingCleanups([PendingCleanup(licenseKey: "KEY-0", instanceID: "inst_0")])
         #expect(try mode(sandbox.records) == 0o700)
         for file in [FileRecordStore.licenseFile, FileRecordStore.trialFile, FileRecordStore.cleanupsFile] {
-            #expect(try mode(sandbox.records.appendingPathComponent(file)) == 0o600, Comment(rawValue: file))
+            #expect(try mode(sandbox.file(file)) == 0o600, Comment(rawValue: file))
         }
         // The directories above it were created with the same mode.
         #expect(try mode(sandbox.records.deletingLastPathComponent()) == 0o700)
+        #expect(try mode(sandbox.root.appendingPathComponent("OpenApps")) == 0o700)
     }
 
     @Test func theDefaultDirectoryIsUnderApplicationSupport() {
         let url = FileRecordStore.defaultDirectory(appID: "openreaction")
         #expect(url.path.hasSuffix("/Library/Application Support/OpenApps/openreaction/records"))
+        let store = FileRecordStore(appID: "openreaction", device: FixedDevice(uuid: nil))
+        #expect(store.directory == url)
+    }
+}
+
+/// The manager over the real file store: what the store reports is what
+/// the manager does with it, including a save that landed but is not known
+/// durable (`.indeterminate`).
+@Suite("File record store with the manager")
+@LicenseActor
+struct FileRecordStoreManagerTests {
+    typealias Sandbox = FileRecordStoreTests.Sandbox
+    typealias FailingSystem = FileRecordStoreTests.FailingSystem
+    typealias Fixtures = FileRecordStoreTests
+
+    let sandbox = Sandbox()
+    let failing = FailingSystem()
+    let clock = LicensingTests.Clock()
+    let client = LicensingTests.FakeClient()
+    let journal = LicensingTests.MemoryJournal()
+    let registry = LicensingTests.FakeRegistry()
+    let device = LicensingTests.FakeDevice()
+
+    /// The store the manager uses, with failures injectable.
+    var store: FileRecordStore {
+        FileRecordStore(appID: LicenseManager.trialAppID, device: device, baseDirectory: sandbox.root, system: failing.system)
+    }
+
+    /// The same files through the live system calls: what is really there.
+    var disk: FileRecordStore {
+        FileRecordStore(appID: LicenseManager.trialAppID, device: device, baseDirectory: sandbox.root)
+    }
+
+    func makeManager() -> LicenseManager {
+        let clock = self.clock
+        let manager = LicenseManager(
+            products: LicensingTests.products, client: client, store: store, journal: journal,
+            trialStore: store, registry: registry, device: device, now: { clock.now }, uptime: { clock.uptime }
+        )
+        manager.load()
+        return manager
+    }
+
+    private func activation(_ instance: String) -> Activation {
+        Activation(instanceID: instance, productID: LicensingTests.paid, productName: "OpenReaction", createdAt: clock.now, serverDate: clock.now)
+    }
+
+    /// An ended, registered trial, as the license cases start.
+    private func endedTrial() throws {
+        try disk.saveTrial(TrialRecord(startedAt: clock.now.addingTimeInterval(-10 * LicensingTests.Clock.day), registered: true))
+    }
+
+    private func paidRecord(instance: String = "inst_1", key: String = "KEY-PAID") throws {
+        try disk.saveRecord(LicenseRecord(
+            licenseKey: key, instanceID: instance, productID: LicensingTests.paid,
+            activatedAt: clock.now.addingTimeInterval(-30 * LicensingTests.Clock.day), lastSuccessAt: clock.now.addingTimeInterval(-3600)
+        ))
+    }
+
+    @Test("17. A dangling trial link is a storage error: no new trial, no registry call, the link untouched")
+    func aDanglingTrialLinkStartsNoTrial() async throws {
+        try disk.saveTrial(Fixtures.trial) // creates the directory
+        try FileManager.default.removeItem(at: sandbox.file(FileRecordStore.trialFile))
+        let target = sandbox.root.appendingPathComponent("gone")
+        try FileManager.default.createSymbolicLink(at: sandbox.file(FileRecordStore.trialFile), withDestinationURL: target)
+        registry.result = .registered(startedAt: clock.now, now: clock.now)
+
+        let manager = makeManager()
+        #expect(manager.state == .trialUnavailable)
+        #expect(!manager.isFeatureEnabled)
+        #expect(Fixtures.isUnavailable(manager.trialStorageError))
+        await manager.checkOnLaunch()
+        await manager.tick()
+        await manager.tick(wake: true)
+        manager.saveTrialBeforeQuit()
+        #expect(manager.state == .trialUnavailable)
+        #expect(registry.devices.isEmpty)
+        #expect(try FileManager.default.attributesOfItem(atPath: sandbox.file(FileRecordStore.trialFile).path)[.type] as? FileAttributeType == .typeSymbolicLink)
+        #expect(!FileManager.default.fileExists(atPath: target.path))
+        #expect(try sandbox.contents() == [FileRecordStore.trialFile])
+
+        // The link removed by hand: a positively absent record, the trial starts.
+        try FileManager.default.removeItem(at: sandbox.file(FileRecordStore.trialFile))
+        await manager.tick()
+        #expect(manager.state == .trial(daysLeft: 3))
+        #expect(try disk.loadTrial()?.startedAt == clock.now)
+    }
+
+    @Test("An activation whose save is indeterminate is kept, shown, saved again and survives a restart")
+    func anIndeterminateActivationIsKept() async throws {
+        try endedTrial()
+        client.activation = .activated(activation("inst_1"))
+        let manager = makeManager()
+        #expect(manager.state == .trialEnded)
+
+        failing.fail(.directorySync)
+        #expect(await manager.activate(key: "KEY-PAID") == .activated)
+        #expect(manager.state == .licensed) // kept, as if saved
+        #expect(manager.isFeatureEnabled)
+        #expect(Fixtures.isIndeterminate(manager.storageError))
+        #expect(client.calls == [.activate(key: "KEY-PAID", name: "Mac")], "the activation is not released")
+        #expect(try disk.loadRecord()?.instanceID == "inst_1") // in place
+
+        // A restart meanwhile finds the record and is licensed.
+        let restarted = makeManager()
+        #expect(restarted.state == .licensed)
+
+        // Ticks repeat the same write until the disk answers.
+        await manager.tick()
+        #expect(Fixtures.isIndeterminate(manager.storageError))
+        #expect(failing.hits[.directorySync] == 2)
+        failing.fail(.directorySync, false)
+        await manager.tick()
+        #expect(manager.storageError == nil)
+        #expect(manager.state == .licensed)
+        #expect(try disk.loadRecord()?.instanceID == "inst_1")
+        #expect(client.calls == [.activate(key: "KEY-PAID", name: "Mac")])
+    }
+
+    @Test("A replacing activation whose save is indeterminate keeps the old activation's tombstone until durable")
+    func anIndeterminateReplacementKeepsTheTombstone() async throws {
+        try endedTrial()
+        try paidRecord(instance: "inst_old", key: "KEY-OLD")
+        client.validation = .invalid
+        let manager = makeManager()
+        failing.fail(.write) // the revoked record cannot be saved: the journal protects
+        await manager.check()
+        #expect(manager.state == .revoked)
+        #expect(journal.entries["inst_old"] != nil)
+        failing.fail(.write, false)
+
+        // A new key: its save lands but is not known durable.
+        client.activation = .activated(activation("inst_new"))
+        client.deactivation = .deactivated
+        failing.fail(.directorySync)
+        #expect(await manager.activate(key: "KEY-NEW") == .activated)
+        #expect(manager.state == .licensed)
+        #expect(Fixtures.isIndeterminate(manager.storageError))
+        #expect(journal.entries["inst_old"] != nil, "the old activation stays tombstoned while the replacement is not durable")
+        #expect(client.calls.contains(.deactivate(instance: "inst_old")), "the replaced activation is released as usual")
+        #expect(!client.calls.contains(.deactivate(instance: "inst_new")), "the new one is not")
+        #expect(try disk.loadRecord()?.instanceID == "inst_new")
+
+        // Durable: the tombstone goes.
+        failing.fail(.directorySync, false)
+        await manager.tick()
+        #expect(manager.storageError == nil)
+        #expect(journal.entries.isEmpty)
+        #expect(try disk.loadRecord()?.instanceID == "inst_new")
+    }
+
+    @Test("A successful check whose save is indeterminate grants, keeps the journal entry and saves again")
+    func anIndeterminateGrantSavesAgain() async throws {
+        try endedTrial()
+        try paidRecord()
+        client.validation = .invalid
+        let manager = makeManager()
+        failing.fail(.write)
+        await manager.check()
+        #expect(manager.state == .revoked)
+        #expect(journal.entries["inst_1"] != nil)
+        failing.fail(.write, false)
+
+        client.validation = .valid(serverDate: clock.now)
+        failing.fail(.directorySync)
+        clock.advance(120)
+        await manager.check()
+        #expect(manager.state == .licensed, "Dodo's valid:true counts")
+        #expect(Fixtures.isIndeterminate(manager.storageError))
+        #expect(journal.entries["inst_1"] != nil, "the entry goes only once the grant is durable")
+        #expect(try disk.loadRecord()?.isRevoked == false)
+
+        failing.fail(.directorySync, false)
+        await manager.tick()
+        #expect(manager.storageError == nil)
+        #expect(journal.entries.isEmpty)
+        #expect(manager.state == .licensed)
+    }
+
+    @Test("A provisional trial whose save is indeterminate waits, then is read back and saved again")
+    func anIndeterminateProvisionalTrialWaits() async throws {
+        registry.result = .unreachable
+        // The records directory exists (a new one's own sync failing is an
+        // ordinary failure before anything is written); the trial file does not.
+        try disk.savePendingCleanups([PendingCleanup(licenseKey: "KEY-0", instanceID: "inst_0")])
+        try disk.savePendingCleanups([])
+        failing.fail(.directorySync)
+        let manager = makeManager()
+        #expect(manager.state == .trialUnavailable, "access waits for a durable save")
+        #expect(!manager.isFeatureEnabled)
+        #expect(Fixtures.isIndeterminate(manager.trialStorageError))
+        let written = try disk.loadTrial()
+        #expect(written?.startedAt == clock.now) // in place, not known durable
+
+        failing.fail(.directorySync, false)
+        clock.advance(60)
+        await manager.tick()
+        #expect(manager.state == .trial(daysLeft: 3))
+        #expect(manager.isFeatureEnabled)
+        #expect(manager.trialStorageError == nil)
+        #expect(manager.trial?.startedAt == written?.startedAt, "the same trial, not a new one")
+        #expect(try disk.loadTrial()?.startedAt == written?.startedAt)
+        #expect(failing.hits[.directorySync] == 1)
+    }
+
+    @Test("Remove this Mac whose delete is indeterminate stays removed and retries the delete")
+    func anIndeterminateRemovalRetries() async throws {
+        try endedTrial()
+        try paidRecord()
+        client.deactivation = .deactivated
+        let manager = makeManager()
+        #expect(manager.state == .licensed)
+
+        failing.fail(.directorySync)
+        #expect(await manager.removeThisMac() == .storageUnavailable)
+        #expect(manager.state == .trialEnded)
+        #expect(Fixtures.isIndeterminate(manager.storageError))
+        #expect(try disk.loadRecord() == nil) // gone from the directory
+        #expect(journal.entries["inst_1"] != nil, "tombstoned until the deletion is durable")
+        let restarted = makeManager()
+        #expect(restarted.state == .trialEnded)
+
+        failing.fail(.directorySync, false)
+        await manager.tick()
+        #expect(manager.storageError == nil)
+        #expect(journal.entries.isEmpty)
+        #expect(try disk.loadTrial() != nil, "the trial record is never deleted")
     }
 }
