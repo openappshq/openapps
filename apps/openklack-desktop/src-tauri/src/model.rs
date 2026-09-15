@@ -204,7 +204,6 @@ pub enum LoginItemDefault {
 
 /// Decides once per install. Source builds never register a login item; a user who turns it
 /// off afterwards, in Settings or in System Settings, is never overridden.
-#[cfg_attr(not(feature = "licensing"), allow(dead_code))]
 pub fn login_item_default(
     official: bool,
     fresh_install: bool,
@@ -217,6 +216,49 @@ pub fn login_item_default(
     } else {
         LoginItemDefault::Remember
     }
+}
+
+/// The Mac's login item for the app (the autostart plugin in the app, a fake in tests).
+pub trait LoginItem {
+    fn is_enabled(&self) -> Result<bool, String>;
+    fn set_enabled(&self, enabled: bool) -> Result<(), String>;
+}
+
+/// The user's explicit choice in Settings. Runs inside the preferences update, so it is
+/// serialized with `apply_login_item_default`: whichever lands first, the user's choice stands,
+/// because the choice marks the default as decided before the default can look.
+pub fn choose_login_item(
+    prefs: &mut Preferences,
+    enabled: bool,
+    item: &impl LoginItem,
+) -> Result<(), String> {
+    item.set_enabled(enabled)?;
+    prefs.login_item_defaulted = true;
+    Ok(())
+}
+
+/// The default, inside the same preferences update as the user's choice. Registers only on a
+/// fresh install and remembers the decision only once it holds, so a failed registration is
+/// tried again on the next launch. Returns whether the preferences changed.
+#[cfg_attr(not(feature = "licensing"), allow(dead_code))]
+pub fn apply_login_item_default(
+    prefs: &mut Preferences,
+    official: bool,
+    fresh_install: bool,
+    item: &impl LoginItem,
+) -> bool {
+    match login_item_default(official, fresh_install, prefs) {
+        LoginItemDefault::Leave => return false,
+        LoginItemDefault::TurnOn => {
+            let registered = item.is_enabled().unwrap_or(false) || item.set_enabled(true).is_ok();
+            if !registered {
+                return false;
+            }
+        }
+        LoginItemDefault::Remember => {}
+    }
+    prefs.login_item_defaulted = true;
+    true
 }
 
 impl Default for Preferences {
@@ -537,6 +579,72 @@ mod tests {
             LoginItemDefault::Leave,
             "a later launch never overrides the user's choice"
         );
+    }
+
+    /// A login item that records what the app asked of it and can refuse to register.
+    #[derive(Default)]
+    struct FakeLoginItem {
+        enabled: std::cell::Cell<bool>,
+        refuse: std::cell::Cell<bool>,
+        calls: std::cell::RefCell<Vec<bool>>,
+    }
+
+    impl LoginItem for FakeLoginItem {
+        fn is_enabled(&self) -> Result<bool, String> {
+            Ok(self.enabled.get())
+        }
+        fn set_enabled(&self, enabled: bool) -> Result<(), String> {
+            self.calls.borrow_mut().push(enabled);
+            if self.refuse.get() {
+                return Err("refused".into());
+            }
+            self.enabled.set(enabled);
+            Ok(())
+        }
+    }
+
+    /// The Settings toggle and the default are serialized by the preferences lock; in every
+    /// order, an explicit choice made while the records were still being read stands.
+    #[test]
+    fn a_choice_made_before_the_records_resolve_beats_the_default() {
+        // User turns it off first, the fresh-install default lands afterwards.
+        let item = FakeLoginItem::default();
+        let mut prefs = Preferences::default();
+        choose_login_item(&mut prefs, false, &item).unwrap();
+        assert!(prefs.login_item_defaulted);
+        assert!(!apply_login_item_default(&mut prefs, true, true, &item));
+        assert!(
+            !item.enabled.get(),
+            "the default never re-enables a chosen off"
+        );
+        assert_eq!(*item.calls.borrow(), vec![false]);
+
+        // The default lands first, the user turns it off afterwards.
+        let item = FakeLoginItem::default();
+        let mut prefs = Preferences::default();
+        assert!(apply_login_item_default(&mut prefs, true, true, &item));
+        assert!(item.enabled.get());
+        choose_login_item(&mut prefs, false, &item).unwrap();
+        assert!(!item.enabled.get());
+        assert!(!apply_login_item_default(&mut prefs, true, true, &item));
+        assert_eq!(*item.calls.borrow(), vec![true, false]);
+
+        // An upgrade remembers without touching the item, whatever the user had chosen.
+        let item = FakeLoginItem::default();
+        let mut prefs = Preferences::default();
+        assert!(apply_login_item_default(&mut prefs, true, false, &item));
+        assert!(prefs.login_item_defaulted);
+        assert!(item.calls.borrow().is_empty());
+
+        // A refused registration is not remembered, so the next launch tries again; a refused
+        // choice is not remembered either.
+        let item = FakeLoginItem::default();
+        item.refuse.set(true);
+        let mut prefs = Preferences::default();
+        assert!(!apply_login_item_default(&mut prefs, true, true, &item));
+        assert!(!prefs.login_item_defaulted);
+        assert!(choose_login_item(&mut prefs, true, &item).is_err());
+        assert!(!prefs.login_item_defaulted);
     }
 
     #[test]

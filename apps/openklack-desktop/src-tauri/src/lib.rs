@@ -97,18 +97,47 @@ fn add_tray_volume(app: &tauri::AppHandle, state: &Snapshot) {
     }
 }
 
-#[tauri::command]
-fn startup_state(app: tauri::AppHandle, enabled: Option<bool>) -> Result<bool, String> {
-    let manager = app.autolaunch();
-    if let Some(enabled) = enabled {
+/// The app's login item through the autostart plugin.
+struct AutostartItem(tauri::AppHandle);
+
+impl model::LoginItem for AutostartItem {
+    fn is_enabled(&self) -> Result<bool, String> {
+        self.0.autolaunch().is_enabled().map_err(|e| e.to_string())
+    }
+    fn set_enabled(&self, enabled: bool) -> Result<(), String> {
+        let manager = self.0.autolaunch();
         if enabled {
             manager.enable()
         } else {
             manager.disable()
         }
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
     }
-    manager.is_enabled().map_err(|e| e.to_string())
+}
+
+/// Reads "Open at login", or sets it. A choice is made inside the preferences update, so it is
+/// serialized with the default in `default_login_item` and marks that default as decided.
+#[tauri::command]
+async fn startup_state(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<Controller>>,
+    enabled: Option<bool>,
+) -> Result<bool, String> {
+    let controller = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let item = AutostartItem(app);
+        if let Some(enabled) = enabled {
+            let mut outcome = Ok(());
+            let saved = controller.update_preferences(|prefs| {
+                outcome = model::choose_login_item(prefs, enabled, &item);
+            });
+            outcome?;
+            saved?;
+        }
+        model::LoginItem::is_enabled(&item)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// "Open at login" is on by default: turned on once, on the first launch of a fresh install of
@@ -116,29 +145,28 @@ fn startup_state(app: tauri::AppHandle, enabled: Option<bool>) -> Result<bool, S
 /// the preferences. An upgrade only remembers the decision, so a user who had turned it off
 /// stays off; afterwards the toggle in Settings and System Settings → Login Items are the
 /// user's. If registering fails, it is tried again on the next launch. Called by the licensing
-/// runtime once it has read the records, which official builds always do.
+/// runtime once it has read the records, which official builds always do. The decision runs
+/// inside the preferences update, like the Settings toggle, so a choice the user makes while
+/// the records are still being read is never overridden, whichever lands first.
 #[cfg(feature = "licensing")]
 pub fn default_login_item(app: &tauri::AppHandle, fresh_records: bool) {
     let Some(controller) = app.try_state::<Arc<Controller>>() else {
         return;
     };
     let fresh_install = controller.fresh_preferences && fresh_records;
-    let decision = model::login_item_default(
+    // Nothing to write on an ordinary launch: only a pending decision takes the lock.
+    let pending = model::login_item_default(
         licensing::ENABLED,
         fresh_install,
         &controller.snapshot().preferences,
-    );
-    match decision {
-        model::LoginItemDefault::Leave => return,
-        model::LoginItemDefault::TurnOn => {
-            let manager = app.autolaunch();
-            if !(manager.is_enabled().unwrap_or(false) || manager.enable().is_ok()) {
-                return;
-            }
-        }
-        model::LoginItemDefault::Remember => {}
+    ) != model::LoginItemDefault::Leave;
+    if !pending {
+        return;
     }
-    let _ = controller.update_preferences(|prefs| prefs.login_item_defaulted = true);
+    let item = AutostartItem(app.clone());
+    let _ = controller.update_preferences(|prefs| {
+        model::apply_login_item_default(prefs, licensing::ENABLED, fresh_install, &item);
+    });
 }
 
 #[tauri::command]
