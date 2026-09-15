@@ -1,0 +1,1 @@
+NOT GENERATED: run scripts/release/create-signing-certificate.sh on the release owner's own Mac, then scripts/release/designated-requirement.sh com.openappshq.hertz <certificate.pem> > apps/hertz/release/designated-requirement.txt (apps/hertz/RELEASING.md, "Signing certificate").
