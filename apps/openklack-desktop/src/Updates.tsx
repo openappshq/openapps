@@ -92,6 +92,12 @@ export function Updates({
           {status.error}
         </p>
       )}
+      {status?.backup && (
+        <p className="inline-error" role="alert">
+          The last update could not be completed. A previous copy of OpenKlack is kept at{" "}
+          {status.backup}; move it back to Applications if this version misbehaves.
+        </p>
+      )}
       {status?.available?.notes && (
         <Disclosure title="What’s new">
           <p className="update-notes">{status.available.notes}</p>

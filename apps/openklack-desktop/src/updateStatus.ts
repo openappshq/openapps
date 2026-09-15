@@ -10,6 +10,8 @@ export type UpdateStatus = {
   supported: boolean;
   configured: boolean;
   locationBlocked: boolean;
+  /** A previous copy kept next to the app after an update failed and could not be undone. */
+  backup: string | null;
   currentVersion: string;
   settings: UpdateSettings;
   phase:

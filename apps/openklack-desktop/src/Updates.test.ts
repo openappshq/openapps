@@ -6,6 +6,7 @@ const fresh: UpdateStatus = {
   supported: true,
   configured: true,
   locationBlocked: false,
+  backup: null,
   currentVersion: "0.1.0",
   settings: { checkAutomatically: false, installAutomatically: false },
   phase: "idle",

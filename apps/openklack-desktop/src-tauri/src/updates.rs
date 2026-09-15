@@ -41,6 +41,9 @@ pub struct Status {
     pub configured: bool,
     /// The app runs from somewhere it can't replace itself (a disk image, App Translocation).
     pub location_blocked: bool,
+    /// A previous copy of the app kept next to it after an update that failed and could not be
+    /// undone; the user can put it back by hand.
+    pub backup: Option<String>,
     pub current_version: String,
     pub settings: Settings,
     pub phase: &'static str,
@@ -73,6 +76,7 @@ pub mod unavailable {
             supported: false,
             configured: false,
             location_blocked: false,
+            backup: None,
             current_version: app.package_info().version.to_string(),
             settings: Settings::default(),
             phase: "idle",

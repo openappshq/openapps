@@ -265,11 +265,16 @@ pub fn init(app: &tauri::AppHandle) {
     if let Some(bundle) = &bundle {
         install::recover(bundle);
     }
+    let backup = bundle
+        .as_deref()
+        .and_then(install::preserved_backup)
+        .map(|path| path.display().to_string());
     let status = Status {
         revision: 0,
         supported: true,
         configured: endpoint.is_ok(),
         location_blocked,
+        backup,
         current_version: app.package_info().version.to_string(),
         settings: saved.settings,
         phase: "idle",
@@ -376,22 +381,27 @@ impl Updates {
     /// Records a verified bundle as ready, if the permission it was downloaded under still
     /// holds. The check and the record happen under the settings lock, so a setting change
     /// either sees the staged bundle and discards it, or is seen here and stops the staging.
-    fn stage(&self, staged: Staged) -> bool {
+    fn stage(&self, app: &tauri::AppHandle, staged: Staged) -> bool {
         let saved = self.saved.lock().unwrap();
         if !policy::may_install(staged.automatic, &saved.settings) {
             return false;
         }
-        *self.staged.lock().unwrap() = Some(staged);
+        let mut slot = self.staged.lock().unwrap();
+        *slot = Some(staged);
+        // "Ready" is published while the staged slot is held, so a discard that follows
+        // publishes after it, never before.
+        self.publish(app, |status| status.phase = "ready");
         true
     }
 
     /// Drops the staged bundle, if any, and reports why.
     fn discard_staged(&self, app: &tauri::AppHandle, reason: &str) {
-        let Some(staged) = self.staged.lock().unwrap().take() else {
+        let mut slot = self.staged.lock().unwrap();
+        let Some(staged) = slot.take() else {
             return;
         };
         if let Some(bundle) = &self.bundle {
-            let _ = std::fs::remove_dir_all(install::staging_dir(bundle));
+            install::recover(bundle);
         }
         eprintln!(
             "OpenKlack: discarded the staged {} update: {reason}",
@@ -566,7 +576,7 @@ async fn download(app: &tauri::AppHandle, updates: &Updates, automatic: bool) {
                 policy::verify(&bytes, &signature, &public_key)?;
                 let bundle = install::unpack(&bytes, &installed)?;
                 install::verify_bundle(&bundle, &installed, &version).inspect_err(|_| {
-                    let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
+                    install::recover(&installed);
                 })?;
                 Ok(bundle)
             })
@@ -585,15 +595,14 @@ async fn download(app: &tauri::AppHandle, updates: &Updates, automatic: bool) {
                 bundle,
                 automatic,
             };
-            if !updates.stage(staged) {
-                let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
+            if !updates.stage(app, staged) {
+                install::recover(&installed);
                 eprintln!(
                     "OpenKlack: dropped the automatic {version} download: {AUTOMATIC_INSTALL_OFF}"
                 );
                 updates.publish(app, |status| status.phase = "available");
                 return;
             }
-            updates.publish(app, |status| status.phase = "ready");
             #[cfg(debug_assertions)]
             if std::env::var_os("OPENKLACK_DEV_QUIT_WHEN_UPDATE_READY").is_some() {
                 app.exit(0);
@@ -618,25 +627,31 @@ pub fn install_on_exit(app: &tauri::AppHandle) {
         return;
     };
     if !updates.may_install(staged.automatic) {
-        let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
+        install::recover(&installed);
         eprintln!(
             "OpenKlack: the staged {} update was not installed: {AUTOMATIC_INSTALL_OFF}",
             staged.version
         );
         return;
     }
-    let version = staged.version.clone();
-    // After the exchange the old bundle sits at the staged path, so it is the identity to
-    // verify against; before it, the installed app is.
-    let confirm = |app: &Path| install::verify_bundle(app, &staged.bundle, &version);
-    let result = install::verify_bundle(&staged.bundle, &installed, &staged.version)
-        .and_then(|()| install::swap(&installed, &staged.bundle, &confirm, &mut |_| Ok(())));
+    let result = install::install(
+        &installed,
+        &staged.bundle,
+        &staged.version,
+        &install::verify_bundle_by,
+        Instant::now(),
+        &mut |_| Ok(()),
+    );
     match result {
         Ok(()) => eprintln!("OpenKlack: installed the staged update."),
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
-            eprintln!("OpenKlack: the staged update was not installed: {error}");
+        Err(install::Failure::RollbackFailed { backup, message }) => {
+            // The backup folder stays; the next launch reports it in Settings.
+            eprintln!(
+                "OpenKlack: the update failed and could not be undone: {message} The previous copy is kept at {}.",
+                backup.display()
+            );
         }
+        Err(error) => eprintln!("OpenKlack: the staged update was not installed: {error}"),
     }
 }
 

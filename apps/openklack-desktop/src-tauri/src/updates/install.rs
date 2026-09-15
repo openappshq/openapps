@@ -2,7 +2,8 @@
 //! folder next to the app, verified there, and exchanged with the app in one atomic rename
 //! (`renamex_np` with `RENAME_SWAP`): at no instant is the folder without an app. The exchanged
 //! old bundle is deleted only after the app at its final path verifies again; if it doesn't, the
-//! exchange is undone.
+//! exchange is undone. If even that fails, the old bundle is kept as a backup that no cleanup
+//! in this module ever deletes.
 
 use std::{
     fs, io,
@@ -14,6 +15,13 @@ use std::{
 /// How long a `codesign` check may take before it counts as failed. Long enough for a slow disk,
 /// short enough that quitting never hangs on it. The exchange itself has no deadline.
 pub const VERIFY_TIMEOUT: Duration = Duration::from_secs(60);
+/// The whole install on the way out, all checks included. Past it, an install that hasn't
+/// exchanged yet is refused; one that has still gets its final check, with at least this much.
+pub const INSTALL_BUDGET: Duration = Duration::from_secs(90);
+const FINAL_CHECK_MINIMUM: Duration = Duration::from_secs(20);
+/// Marks a staging folder whose contents are the last working app, kept after a failed
+/// install; nothing here deletes a folder holding it.
+const PRESERVED: &str = "PRESERVED-BACKUP";
 
 /// Where a downloaded bundle is unpacked, next to the app so the exchange is a rename.
 pub fn staging_dir(app: &Path) -> PathBuf {
@@ -24,10 +32,40 @@ pub fn staging_dir(app: &Path) -> PathBuf {
     app.with_file_name(format!(".{name}.update"))
 }
 
+/// Where the last working app is kept when an install failed and could not be undone.
+pub fn backup_dir(app: &Path) -> PathBuf {
+    let name = app
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    app.with_file_name(format!(".{name}.backup"))
+}
+
+/// The preserved backup next to the app, if a failed install left one.
+pub fn preserved_backup(app: &Path) -> Option<PathBuf> {
+    let name = app.file_name()?;
+    [backup_dir(app), staging_dir(app)]
+        .into_iter()
+        .find(|dir| dir.join(PRESERVED).exists() && dir.join(name).is_dir())
+        .map(|dir| dir.join(name))
+}
+
+/// Deletes a folder unless it holds a preserved backup.
+fn remove_unless_preserved(dir: &Path) -> Result<(), String> {
+    if dir.join(PRESERVED).exists() {
+        return Err(format!(
+            "{} holds the previous copy of the app, kept after a failed update.",
+            dir.display()
+        ));
+    }
+    let _ = fs::remove_dir_all(dir);
+    Ok(())
+}
+
 /// A folder only this user can enter, created fresh: never a leftover, never a symlink.
 fn private_dir(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-    let _ = fs::remove_dir_all(path);
+    remove_unless_preserved(path)?;
     if fs::symlink_metadata(path).is_ok() {
         fs::remove_file(path).map_err(|e| e.to_string())?;
     }
@@ -101,16 +139,43 @@ fn run(mut command: Command, timeout: Duration) -> Result<std::process::Output, 
     }
 }
 
-fn codesign(args: &[&str], bundle: &Path) -> Result<std::process::Output, String> {
+/// How much of a check's time is left: never more than [`VERIFY_TIMEOUT`], never less than
+/// zero. `None` means no overall deadline.
+fn remaining(deadline: Option<Instant>) -> Duration {
+    deadline.map_or(VERIFY_TIMEOUT, |deadline| {
+        deadline
+            .saturating_duration_since(Instant::now())
+            .min(VERIFY_TIMEOUT)
+    })
+}
+
+fn codesign(
+    args: &[&str],
+    bundle: &Path,
+    deadline: Option<Instant>,
+) -> Result<std::process::Output, String> {
     let mut command = Command::new("/usr/bin/codesign");
     command.args(args).arg(bundle);
-    run(command, VERIFY_TIMEOUT)
+    run(command, remaining(deadline))
+}
+
+/// `CFBundleShortVersionString` of a bundle on disk.
+pub fn bundle_version(bundle: &Path, deadline: Option<Instant>) -> Result<String, String> {
+    let mut plutil = Command::new("/usr/bin/plutil");
+    plutil
+        .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
+        .arg(bundle.join("Contents/Info.plist"));
+    let found = run(plutil, remaining(deadline))?;
+    if !found.status.success() {
+        return Err("The app has no version.".into());
+    }
+    Ok(String::from_utf8_lossy(&found.stdout).trim().to_string())
 }
 
 /// The designated requirement macOS evaluates for a bundle's permissions and Keychain access.
 #[cfg(target_os = "macos")]
 pub fn designated_requirement(bundle: &Path) -> Result<String, String> {
-    let output = codesign(&["--display", "--requirements", "-"], bundle)?;
+    let output = codesign(&["--display", "--requirements", "-"], bundle, None)?;
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -131,19 +196,25 @@ pub fn designated_requirement(bundle: &Path) -> Result<String, String> {
 /// signature has no stable identity to keep and skips the requirement; release builds never do.
 #[cfg(target_os = "macos")]
 pub fn verify_bundle(bundle: &Path, installed: &Path, version: &str) -> Result<(), String> {
-    let verified = codesign(&["--verify", "--deep", "--strict"], bundle)?;
+    verify_bundle_by(bundle, installed, version, None)
+}
+
+/// [`verify_bundle`] with an overall deadline shared with the caller's other work.
+#[cfg(target_os = "macos")]
+pub fn verify_bundle_by(
+    bundle: &Path,
+    installed: &Path,
+    version: &str,
+    deadline: Option<Instant>,
+) -> Result<(), String> {
+    let verified = codesign(&["--verify", "--deep", "--strict"], bundle, deadline)?;
     if !verified.status.success() {
         return Err(format!(
             "The downloaded app is not correctly signed: {}",
             String::from_utf8_lossy(&verified.stderr).trim()
         ));
     }
-    let mut plutil = Command::new("/usr/bin/plutil");
-    plutil
-        .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
-        .arg(bundle.join("Contents/Info.plist"));
-    let found = run(plutil, VERIFY_TIMEOUT)?;
-    let found = String::from_utf8_lossy(&found.stdout).trim().to_string();
+    let found = bundle_version(bundle, deadline)?;
     if found != version {
         return Err(format!(
             "The downloaded app is version {found}, not {version}. Nothing was installed."
@@ -160,6 +231,7 @@ pub fn verify_bundle(bundle: &Path, installed: &Path, version: &str) -> Result<(
                 &format!("-R={requirement}"),
             ],
             bundle,
+            deadline,
         )?;
         if !satisfied.status.success() {
             return Err(
@@ -173,6 +245,16 @@ pub fn verify_bundle(bundle: &Path, installed: &Path, version: &str) -> Result<(
 
 #[cfg(not(target_os = "macos"))]
 pub fn verify_bundle(_bundle: &Path, _installed: &Path, _version: &str) -> Result<(), String> {
+    Err("App updates are supported on macOS.".into())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn verify_bundle_by(
+    _bundle: &Path,
+    _installed: &Path,
+    _version: &str,
+    _deadline: Option<Instant>,
+) -> Result<(), String> {
     Err("App updates are supported on macOS.".into())
 }
 
@@ -202,35 +284,83 @@ pub enum Step {
     Exchange,
     /// Verification of the app at its final path, before the old one is deleted.
     Confirm,
+    /// The exchange back, after a failed final check.
+    Undo,
+}
+
+/// How an install ended when it didn't succeed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// Nothing was exchanged; the installed app is untouched, the staged bundle still there.
+    NotExchanged(String),
+    /// The new app was exchanged in, failed its final check, and was exchanged back out; the
+    /// installed app is the old one again and the staged bundle is gone.
+    RolledBack(String),
+    /// The new app failed its final check and could not be exchanged back: it is installed,
+    /// invalid, and the last working app is kept at `backup`.
+    RollbackFailed { message: String, backup: PathBuf },
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotExchanged(message) | Self::RolledBack(message) => f.write_str(message),
+            Self::RollbackFailed { message, backup } => write!(
+                f,
+                "{message} The previous copy of the app is kept at {}.",
+                backup.display()
+            ),
+        }
+    }
+}
+
+/// Keeps the old bundle, now at the staged path, where no cleanup will touch it: the staging
+/// folder is renamed to the backup folder when possible, and marked as preserved either way.
+fn preserve(app: &Path, staged: &Path) -> PathBuf {
+    let staging = staging_dir(app);
+    let backup = backup_dir(app);
+    let dir = if !backup.exists() && fs::rename(&staging, &backup).is_ok() {
+        backup
+    } else {
+        staging
+    };
+    let _ = fs::write(
+        dir.join(PRESERVED),
+        b"The previous copy of OpenKlack, kept after a failed update.\n",
+    );
+    dir.join(staged.file_name().unwrap_or_default())
 }
 
 /// Replaces `app` with `staged`, which must be in the staging folder next to it. `confirm` checks
 /// the app at its final path after the exchange; if it fails, the exchange is undone and the
-/// staged bundle removed. `before` runs ahead of each step and may fail it (tests). The folder
-/// holds a complete app at every instant.
+/// staged bundle removed, and if undoing fails too the old bundle is preserved. `before` runs
+/// ahead of each step and may fail it (tests). The folder holds a complete app at every instant.
 pub fn swap(
     app: &Path,
     staged: &Path,
     confirm: &dyn Fn(&Path) -> Result<(), String>,
     before: &mut dyn FnMut(Step) -> io::Result<()>,
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     before(Step::Exchange)
         .and_then(|()| exchange(staged, app))
-        .map_err(|e| format!("Could not exchange the app with the new one: {e}"))?;
+        .map_err(|e| {
+            Failure::NotExchanged(format!("Could not exchange the app with the new one: {e}"))
+        })?;
     // From here the new app is installed and the old one waits at the staged path.
     let confirmed = before(Step::Confirm)
         .map_err(|e| e.to_string())
         .and_then(|()| confirm(app));
     if let Err(error) = confirmed {
-        return match exchange(staged, app) {
+        let message = format!("The new app failed its final check: {error}");
+        return match before(Step::Undo).and_then(|()| exchange(staged, app)) {
             Ok(()) => {
                 let _ = fs::remove_dir_all(staging_dir(app));
-                Err(format!("The new app failed its final check: {error}"))
+                Err(Failure::RolledBack(message))
             }
-            Err(undo) => Err(format!(
-                "The new app failed its final check ({error}) and the previous one could not be put back ({undo}); it is at {}",
-                staged.display()
-            )),
+            Err(undo) => Err(Failure::RollbackFailed {
+                message: format!("{message} The previous one could not be put back: {undo}."),
+                backup: preserve(app, staged),
+            }),
         };
     }
     let _ = fs::remove_dir_all(staging_dir(app));
@@ -238,10 +368,59 @@ pub fn swap(
     Ok(())
 }
 
-/// Removes what an earlier run left next to the app: a staging folder, holding either a bundle
-/// that was never installed or the old one after an exchange whose cleanup was interrupted.
+/// Verifies a candidate bundle against the bundle it is to replace, for a version, by a deadline.
+pub type Verifier = dyn Fn(&Path, &Path, &str, Option<Instant>) -> Result<(), String>;
+
+/// The whole install on the way out: the staged bundle must verify against the installed app,
+/// must be newer than what is on disk now (something else may have updated the app meanwhile),
+/// is exchanged in, and must verify again at its final path. Everything before the exchange
+/// runs within `INSTALL_BUDGET` from `started`; past it the install is refused and the app
+/// kept. After a failure the staging folder is removed, except when it holds the backup.
+pub fn install(
+    app: &Path,
+    staged: &Path,
+    version: &str,
+    verify: &Verifier,
+    started: Instant,
+    before: &mut dyn FnMut(Step) -> io::Result<()>,
+) -> Result<(), Failure> {
+    let deadline = started + INSTALL_BUDGET;
+    let prepared = (|| {
+        verify(staged, app, version, Some(deadline))?;
+        let current = bundle_version(app, Some(deadline))?;
+        match (
+            semver::Version::parse(&current),
+            semver::Version::parse(version),
+        ) {
+            (Ok(current), Ok(next)) if current >= next => Err(format!(
+                "The installed app is already version {current}; {version} is not newer. Nothing was installed."
+            )),
+            _ => Ok(()),
+        }?;
+        if Instant::now() >= deadline {
+            return Err("Preparing the update took too long. Nothing was installed.".into());
+        }
+        Ok(())
+    })();
+    if let Err(message) = prepared {
+        let _ = remove_unless_preserved(&staging_dir(app));
+        return Err(Failure::NotExchanged(message));
+    }
+    // The final check always gets some time, even if preparation used the budget.
+    let final_deadline = deadline.max(Instant::now() + FINAL_CHECK_MINIMUM);
+    let confirm = |installed: &Path| verify(installed, staged, version, Some(final_deadline));
+    let result = swap(app, staged, &confirm, before);
+    if let Err(Failure::NotExchanged(_)) = &result {
+        let _ = remove_unless_preserved(&staging_dir(app));
+    }
+    result
+}
+
+/// Removes what an earlier run left next to the app: a staging folder holding either a bundle
+/// that was never installed or the old one after an exchange whose cleanup was interrupted. A
+/// folder holding a preserved backup stays.
 pub fn recover(app: &Path) {
-    let _ = fs::remove_dir_all(staging_dir(app));
+    let _ = remove_unless_preserved(&staging_dir(app));
 }
 
 #[cfg(test)]
@@ -342,12 +521,15 @@ mod tests {
             _ => Ok(()),
         })
         .unwrap_err();
-        assert!(error.contains("busy"), "{error}");
+        assert!(
+            matches!(&error, Failure::NotExchanged(m) if m.contains("busy")),
+            "{error}"
+        );
         assert_eq!(marker(&app), "old");
         assert_eq!(marker(&staged), "new");
         // A staged path that isn't there fails the same way, with the app untouched.
         let error = swap(&app, &folder.0.join("missing"), &accept, &mut |_| Ok(())).unwrap_err();
-        assert!(error.contains("exchange"), "{error}");
+        assert!(matches!(error, Failure::NotExchanged(_)), "{error}");
         assert_eq!(marker(&app), "old");
     }
 
@@ -361,8 +543,153 @@ mod tests {
             Err("tampered".to_string())
         };
         let error = swap(&app, &staged, &reject, &mut |_| Ok(())).unwrap_err();
-        assert!(error.contains("tampered"), "{error}");
+        assert!(
+            matches!(&error, Failure::RolledBack(m) if m.contains("tampered")),
+            "{error}"
+        );
         assert_eq!(marker(&app), "old");
+        only_app(&folder.0, &app);
+    }
+
+    /// The verifier the install tests inject: marker-based, no codesign.
+    fn verify_marker(
+        candidate: &Path,
+        _against: &Path,
+        version: &str,
+        _deadline: Option<Instant>,
+    ) -> Result<(), String> {
+        if marker(candidate) == "damaged" {
+            return Err("damaged".into());
+        }
+        let found = bundle_version(candidate, None)?;
+        (found == version)
+            .then_some(())
+            .ok_or(format!("version {found}"))
+    }
+
+    fn versioned(folder: &Folder, name: &str, marker: &str, version: &str) -> PathBuf {
+        let bundle = folder.bundle(name, marker);
+        fs::write(
+            bundle.join("Contents/Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>{version}</string></dict></plist>"#
+            ),
+        )
+        .unwrap();
+        bundle
+    }
+
+    fn versioned_archive(marker: &str, version: &str) -> Vec<u8> {
+        let folder = Folder::new();
+        let bundle = versioned(&folder, "OpenKlack.app", marker, version);
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        builder.append_dir_all("OpenKlack.app", &bundle).unwrap();
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn the_install_path_keeps_the_last_working_app_when_rollback_fails() {
+        let folder = Folder::new();
+        let app = versioned(&folder, "OpenKlack.app", "old", "0.1.0");
+        let staged = unpack(&versioned_archive("new", "0.1.1"), &app).unwrap();
+        // The new app is damaged after the exchange, and the exchange back fails too.
+        let error = install(
+            &app,
+            &staged,
+            "0.1.1",
+            &verify_marker,
+            Instant::now(),
+            &mut |step| {
+                if step == Step::Confirm {
+                    fs::write(app.join("Contents/MacOS/openklack-desktop"), "damaged").unwrap();
+                }
+                if step == Step::Undo {
+                    return Err(io::Error::other("immutable"));
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        let Failure::RollbackFailed { backup, message } = &error else {
+            panic!("{error}");
+        };
+        assert!(
+            message.contains("damaged") && message.contains("immutable"),
+            "{message}"
+        );
+        // The caller path ran to its end: the backup is there, intact and findable.
+        assert_eq!(marker(backup), "old");
+        assert_eq!(bundle_version(backup, None).unwrap(), "0.1.0");
+        assert_eq!(preserved_backup(&app).as_deref(), Some(backup.as_path()));
+        assert_eq!(marker(&app), "damaged");
+        // Nothing that runs later removes it: not the next launch, not the next download.
+        recover(&app);
+        assert_eq!(marker(backup), "old");
+        let again = unpack(&versioned_archive("newer", "0.1.2"), &app).unwrap();
+        assert_eq!(marker(backup), "old");
+        assert_eq!(marker(&again), "newer");
+        // Even a backup that could only stay in the staging folder is refused deletion.
+        let staging = staging_dir(&app);
+        fs::write(staging.join(PRESERVED), b"kept").unwrap();
+        assert!(unpack(&versioned_archive("x", "0.1.3"), &app).is_err());
+        recover(&app);
+        assert_eq!(marker(&again), "newer");
+    }
+
+    #[test]
+    fn the_install_path_refuses_downgrades_and_a_blown_budget() {
+        let folder = Folder::new();
+        let app = versioned(&folder, "OpenKlack.app", "current", "0.2.0");
+        // Something else installed 0.2.0 meanwhile; the staged 0.1.1 must not replace it.
+        let staged = unpack(&versioned_archive("older", "0.1.1"), &app).unwrap();
+        let error = install(
+            &app,
+            &staged,
+            "0.1.1",
+            &verify_marker,
+            Instant::now(),
+            &mut |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, Failure::NotExchanged(m) if m.contains("not newer")),
+            "{error}"
+        );
+        assert_eq!(marker(&app), "current");
+        only_app(&folder.0, &app);
+        // Out of time before the exchange: refused, app kept, staging removed.
+        let staged = unpack(&versioned_archive("newer", "0.3.0"), &app).unwrap();
+        let long_ago = Instant::now() - INSTALL_BUDGET - Duration::from_secs(1);
+        let error = install(
+            &app,
+            &staged,
+            "0.3.0",
+            &verify_marker,
+            long_ago,
+            &mut |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, Failure::NotExchanged(m) if m.contains("too long")),
+            "{error}"
+        );
+        assert_eq!(marker(&app), "current");
+        only_app(&folder.0, &app);
+        // In time: installed.
+        let staged = unpack(&versioned_archive("newer", "0.3.0"), &app).unwrap();
+        install(
+            &app,
+            &staged,
+            "0.3.0",
+            &verify_marker,
+            Instant::now(),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(marker(&app), "newer");
         only_app(&folder.0, &app);
     }
 
@@ -471,7 +798,7 @@ mod tests {
         // because it does not satisfy the requirement.
         assert_eq!(designated_requirement(&forged).unwrap(), claimed);
         assert!(
-            codesign(&["--verify", "--deep", "--strict"], &forged)
+            codesign(&["--verify", "--deep", "--strict"], &forged, None)
                 .unwrap()
                 .status
                 .success()
