@@ -62,6 +62,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preferences.didShowWelcome = true
             showWelcome()
         }
+        // Open at login by default, once; a user who later turns it off stays off.
+        if !preferences.didDefaultOpenAtLogin, loginItem.isAvailable {
+            preferences.didDefaultOpenAtLogin = true
+            if !loginItem.isOn { loginItem.setOn(true) }
+        }
     }
 
     func showSettings() {

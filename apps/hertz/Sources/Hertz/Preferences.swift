@@ -13,6 +13,7 @@ final class Preferences {
         static let processes = "showsProcesses"
         static let cleanup = "showsCleanupScout"
         static let welcomed = "didShowWelcome"
+        static let loginDefaulted = "didDefaultOpenAtLogin"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -36,6 +37,12 @@ final class Preferences {
     var didShowWelcome: Bool {
         didSet { defaults.set(didShowWelcome, forKey: Key.welcomed) }
     }
+    /// "Open at login" is turned on once, on the first launch of a packaged
+    /// app; after that the user's own choice in Settings (or in System
+    /// Settings → Login Items) is never overridden.
+    var didDefaultOpenAtLogin: Bool {
+        didSet { defaults.set(didDefaultOpenAtLogin, forKey: Key.loginDefaulted) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -45,5 +52,6 @@ final class Preferences {
         showsProcesses = defaults.object(forKey: Key.processes) as? Bool ?? true
         showsCleanupScout = defaults.object(forKey: Key.cleanup) as? Bool ?? true
         didShowWelcome = defaults.bool(forKey: Key.welcomed)
+        didDefaultOpenAtLogin = defaults.bool(forKey: Key.loginDefaulted)
     }
 }

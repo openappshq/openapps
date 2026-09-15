@@ -38,7 +38,7 @@ Refresh every two seconds; rates need two samples, so the first tick shows 0 for
 
 | Section | Behavior |
 | --- | --- |
-| General | Open at login (opt-in, `SMAppService`, approval state shown); menu bar shows CPU / memory / symbol only |
+| General | Open at login (on by default from the first launch, `SMAppService`, approval state shown; the user can turn it off); menu bar shows CPU / memory / symbol only |
 | Dashboard | Diagnosis, sleep blockers, processes, Cleanup Scout on or off; the vitals are always shown |
 | Updates | Version; "installed and updated with Homebrew, never checks on its own"; the `brew upgrade` command with Copy |
 | About | Welcome window again; MIT; Copy diagnostics (the same snapshot as the Diagnosis card, plus version and login state) |

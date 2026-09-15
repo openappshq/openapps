@@ -84,7 +84,7 @@ private struct WelcomeView: View {
             Spacer(minLength: 0)
 
             HStack {
-                MonoLabel("Settings has the rest")
+                MonoLabel("Starts with your Mac · Settings has the rest")
                 Spacer()
                 Button("Done", action: done)
                     .buttonStyle(PrimaryButtonStyle())

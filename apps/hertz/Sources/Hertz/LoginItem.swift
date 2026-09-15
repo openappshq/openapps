@@ -1,8 +1,8 @@
 import AppKit
 import ServiceManagement
 
-/// "Open at login" through `SMAppService.mainApp`. Off until the user turns it
-/// on; the status is always re-read from the system, since the user can remove
+/// "Open at login" through `SMAppService.mainApp`. On by default (registered on
+/// the first launch, see `AppDelegate`), off whenever the user says so; the status is always re-read from the system, since the user can remove
 /// the item in System Settings at any time.
 @MainActor
 @Observable
