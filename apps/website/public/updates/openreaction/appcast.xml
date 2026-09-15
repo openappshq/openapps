@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:openapps="https://openapps.space/xml-namespaces/releases">
+    <channel>
+        <title>OpenReaction</title>
+        <link>https://openapps.space/openreaction/</link>
+        <description>OpenReaction releases</description>
+        <language>en</language>
+        <item>
+            <title>OpenReaction 0.1.0</title>
+            <openapps:app>openreaction</openapps:app>
+            <openapps:channel>stable</openapps:channel>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:version>1000</sparkle:version>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <openapps:publishedAt>2026-09-15T13:36:22Z</openapps:publishedAt>
+            <pubDate>Tue, 15 Sep 2026 13:36:22 +0000</pubDate>
+            <description><![CDATA[OpenReaction 0.1.0. Release notes: https://github.com/openappshq/openapps/releases/tag/openreaction-v0.1.0]]></description>
+            <openapps:sha256>92d9aeb794907f38379d5d9c80320e315af780c6d36f24e83d28e84540106466</openapps:sha256>
+            <enclosure url="https://github.com/openappshq/openapps/releases/download/openreaction-v0.1.0/OpenReaction-0.1.0.zip" length="3022501" type="application/octet-stream" sparkle:edSignature="/OWVtTZDvCF/9WNfjYtF7qK8LBmS5jiIqEhVsqnlikmI6Wk7yLv+Uo7v9ExK9vXMfhXwQ+xNlguk7FnsNqyGBw=="/>
+        </item>
+    </channel>
+</rss>
+<!-- sparkle-signatures:
+edSignature: CRLL9O8Ug2FYlvkf+/ydtFN916IxZk7fzvnpTxtt9F7uyi3UHhZCuRgC7OTbYpYZd3mSe4n6YunnHzgki8IHAA==
+length: 1504
+-->
