@@ -138,7 +138,7 @@ private struct WelcomeStep: View {
     /// stands, also when the guide is opened again later.
     private var trial: some View {
         VStack(alignment: .leading, spacing: Brand.Space.s8) {
-            Text("Your free 3-day trial started when you opened OpenReaction — no signup. Buy for $5 any time in Settings → License.")
+            Text("Your free 3-day trial started when you opened OpenReaction — no signup. Buy a license any time in Settings → License.")
                 .font(Brand.body(14))
                 .lineSpacing(3)
                 .foregroundStyle(Brand.textSecondary)
@@ -540,7 +540,7 @@ private struct DoneStep: View {
                     .foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(Licensing.isCompiledIn
-                    ? "Settings, this guide and your license are behind the menu bar icon — click it, then choose Settings. The trial and Buy for $5 are under License."
+                    ? "Settings, this guide and your license are behind the menu bar icon — click it, then choose Settings. The trial and buying a license are under License."
                     : "Settings and this guide are behind the menu bar icon — click it, then choose Settings.")
                     .font(Brand.body(14))
                     .foregroundStyle(Brand.textSecondary)

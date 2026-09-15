@@ -143,9 +143,10 @@ struct LicenseSection: View {
     }
 
     /// Checkout links exist only once the website ships them; until then the
-    /// button says so instead of opening a page that is not there.
+    /// button says so instead of opening a page that is not there. The price
+    /// is the website's to state: it may change, or carry an offer.
     private var buyButton: some View {
-        Button(LicensingConfig.buyURL == nil ? "Buy for $5 — coming soon" : "Buy for $5") {
+        Button(LicensingConfig.buyURL == nil ? "Buy a license — coming soon" : "Buy a license") {
             if let url = LicensingConfig.buyURL { openURL(url) }
         }
         .buttonStyle(PrimaryButtonStyle())
