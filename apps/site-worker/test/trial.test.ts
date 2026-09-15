@@ -127,8 +127,9 @@ describe("POST /api/trial", () => {
     ]);
   });
 
-  it("accepts exactly the catalog's apps", () => {
+  it("accepts exactly the catalog's paid apps, never a free one", () => {
     expect([...TRIAL_APPS].sort()).toEqual(["openklack", "openreaction"]);
+    expect(TRIAL_APPS.has("hertz")).toBe(false);
   });
 
   it.each([

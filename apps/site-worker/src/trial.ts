@@ -1,7 +1,7 @@
-import { products } from "../../website/src/catalog.ts";
+import { paidProducts } from "../../website/src/catalog.ts";
 
-/** App ids the registry accepts: every app in the website catalog. */
-export const TRIAL_APPS: ReadonlySet<string> = new Set(products.map((product) => product.id));
+/** App ids the registry accepts: the paid apps in the website catalog. Free apps have no trial. */
+export const TRIAL_APPS: ReadonlySet<string> = new Set(paidProducts.map((product) => product.id));
 export const RATE_LIMIT_PERIOD_SECONDS = 60;
 
 const FIELDS = ["app", "device", "env"];
