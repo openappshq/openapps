@@ -55,7 +55,7 @@ cleanup() {
     while IFS= read -r entry; do
         [[ -z "$entry" || "$entry" == "$keychain" || ! -e "$entry" ]] || remaining+=("$entry")
     done < <(keychain_entries)
-    security list-keychains -d user -s "${remaining[@]}" || exit_code=1
+    security list-keychains -d user -s ${remaining[@]+"${remaining[@]}"} || exit_code=1
     if [[ -e "$keychain" ]]; then
         security delete-keychain "$keychain" || exit_code=1
     fi
@@ -102,6 +102,6 @@ current=()
 while IFS= read -r entry; do
     [[ -z "$entry" ]] || current+=("$entry")
 done < <(keychain_entries)
-security list-keychains -d user -s "$keychain" "${current[@]}"
+security list-keychains -d user -s "$keychain" ${current[@]+"${current[@]}"}
 
 RELEASE_SIGNING_IDENTITY="$identity" RELEASE_SIGNING_KEYCHAIN="$keychain" "$@"
