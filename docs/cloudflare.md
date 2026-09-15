@@ -42,7 +42,9 @@ rm -rf .wrangler/state   # forget every local trial
 | Event | Job | Result |
 | --- | --- | --- |
 | Every PR and push | `checks` | Worker typecheck and tests, with no credentials. Site lint, test and build already run in `openklack.yml` |
-| Push to `main`, or a manual run on `main` | `deploy` | Builds with the `website-live` variables, applies D1 migrations to the live database, then `wrangler deploy` |
+| Push to `main`, or a manual run on `main` | `deploy` | Builds with the `website-live` variables, applies D1 migrations to the live database, then `wrangler deploy`. Skipped until the repository variable `CLOUDFLARE_DEPLOY_ENABLED` is `true` |
+
+**Turning deploys on.** Until the Cloudflare account, the D1 database and the `website-live` environment exist, `deploy` is skipped so `main` stays green. After finishing the setup above, set the repository variable `CLOUDFLARE_DEPLOY_ENABLED` to `true` (Settings → Secrets and variables → Actions → Variables), then run the workflow manually on `main` once.
 
 **Credential boundary.** The Cloudflare token exists only as a secret of the `website-live` environment, which only `main` may use. Pull requests never receive it, never run remote migrations and never upload a version: code reaches Cloudflare only after it's merged. There are no PR previews, and the Worker has `preview_urls: false`. Review previews locally with `pnpm build && pnpm site:dev`. If hosted previews are wanted later, they need their own Cloudflare account (or a token that can't reach the live Worker, database or domain), a separate environment with required reviewers, and a trigger that deploys only merged code, never a PR's workflow.
 
