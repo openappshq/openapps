@@ -6,19 +6,24 @@ import { Choice, Disclosure, Toggle } from "./controls";
 import { Updates } from "./Updates";
 import { License } from "./License";
 import { packLabel, type Desktop, type Preset } from "./useDesktop";
+import type { LicenseState } from "./useLicense";
 
 export function General({
   desktop,
+  license,
   preset,
   theme,
   onThemeChange,
   onApps,
+  onShowGuide,
 }: {
   desktop: Desktop;
+  license: LicenseState;
   preset: Preset;
   theme: string;
   onThemeChange: (theme: string) => void;
   onApps: () => void;
+  onShowGuide: () => void;
 }) {
   const { snapshot, busy, setError } = desktop;
   const [startup, setStartup] = useState<boolean>();
@@ -80,7 +85,9 @@ export function General({
           ]}
         />
       </div>
-      {snapshot!.licensingEnabled && <License onError={setError} disabled={busy} />}
+      {snapshot!.licensingEnabled && (
+        <License license={license} onError={setError} disabled={busy} />
+      )}
       <Disclosure title="Sounds & settings files">
         <div className="disclosure-content">
           <div className="actions">
@@ -123,6 +130,11 @@ export function General({
           {snapshot!.runtime.secureInput && (
             <p>macOS Secure Input is active. Keyboard sounds resume when it clears.</p>
           )}
+          <div className="actions">
+            <Button variant="secondary" onPress={onShowGuide}>
+              Show setup guide
+            </Button>
+          </div>
           <Updates onError={setError} disabled={busy} />
           {pack && (
             <Disclosure title="Sound credits">

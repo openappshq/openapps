@@ -171,10 +171,17 @@ pub struct Preferences {
     pub app_rules: Vec<AppRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub favorite_pack_ids: Vec<String>,
+    /// The setup guide was finished or skipped; official builds show it once, on first launch.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub onboarding_completed: bool,
 }
 
 fn is_zero(value: &f32) -> bool {
     *value == 0.0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Default for Preferences {
@@ -199,6 +206,7 @@ impl Default for Preferences {
             }],
             app_rules: vec![],
             favorite_pack_ids: vec![],
+            onboarding_completed: false,
         }
     }
 }
@@ -444,6 +452,24 @@ mod tests {
         assert_eq!(restored.favorite_pack_ids, prefs.favorite_pack_ids);
         prefs.favorite_pack_ids.push("cherry-mx-brown-pbt".into());
         assert!(prefs.validate_shape().is_err());
+    }
+
+    #[test]
+    fn the_setup_guide_is_completed_once_and_survives_restart() {
+        let fresh = Preferences::default();
+        assert!(
+            !fresh.onboarding_completed,
+            "a fresh install shows the guide"
+        );
+        // Untouched settings keep the 0.1.0 wire shape.
+        let saved = serde_json::to_value(&fresh).unwrap();
+        assert!(saved.get("onboardingCompleted").is_none());
+        let mut done = fresh.clone();
+        done.onboarding_completed = true;
+        let saved = serde_json::to_string(&done).unwrap();
+        let restored: Preferences = serde_json::from_str(&saved).unwrap();
+        assert!(restored.onboarding_completed);
+        assert!(!restored.only_mute_changed(&fresh));
     }
 
     #[test]

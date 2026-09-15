@@ -1,84 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { Button, Input, Label, TextField } from "@heroui/react";
 import { BadgeCheck, KeyRound, WifiOff } from "lucide-react";
-
-export type LicenseView = {
-  revision: number;
-  ready: boolean;
-  environment: "test" | "live";
-  state:
-    | "unlicensed"
-    | "trial"
-    | "trialEnded"
-    | "trialOffline"
-    | "clockBehind"
-    | "licensed"
-    | "grace"
-    | "checkRequired"
-    | "revoked";
-  daysLeft?: number;
-  daysOffline?: number;
-  coreFeature: boolean;
-  clockChanged: boolean;
-  journalUnreadable: boolean;
-  trialStorageError: boolean;
-  graceWarning: boolean;
-  checking: boolean;
-  lastSuccessAt: number | null;
-  lastError: string | null;
-  pendingKey: string | null;
-  buyUrl: string;
-  supportUrl: string;
-};
+import { trialLeft, type LicenseView } from "./licenseState";
+import type { LicenseState } from "./useLicense";
 
 export const PRIVACY_COPY =
   "Official builds include a 3-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use the app are never sent. Builds from source never contact the license service.";
 
-/** "N days left", rounded up; the backend sends 0 in the final 24 hours. */
-function trialLeft(daysLeft = 0) {
-  if (daysLeft < 1) return "less than a day left";
-  return `${daysLeft} ${daysLeft === 1 ? "day" : "days"} left`;
-}
-
 export function License({
+  license,
   onError,
   disabled,
 }: {
+  license: LicenseState;
   onError: (error: string) => void;
   disabled: boolean;
 }) {
-  const [view, setView] = useState<LicenseView>();
+  const { view, accept } = license;
   // `null` until the user types, so a deep link's key shows without being copied into state.
   const [typed, setTyped] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
-  const accept = useCallback((next: LicenseView) => {
-    setView((current) => (current && current.revision > next.revision ? current : next));
-  }, []);
-  useEffect(() => {
-    let disposed = false;
-    let off: (() => void) | undefined;
-    async function subscribe() {
-      off = await listen<LicenseView>("license", ({ payload }) => {
-        if (!disposed) accept(payload);
-      });
-      if (disposed) {
-        off();
-        return;
-      }
-      const current = await invoke<LicenseView>("license_status");
-      if (!disposed) accept(current);
-    }
-    void subscribe().catch((error: unknown) => {
-      if (!disposed) onError(String(error));
-    });
-    return () => {
-      disposed = true;
-      off?.();
-    };
-  }, [accept, onError]);
   // A deep link only pre-fills the key; the user confirms before anything is sent.
   const pendingKey = view?.pendingKey ?? null;
   const key = typed ?? pendingKey ?? "";
@@ -116,7 +59,7 @@ export function License({
 
   if (!view || !view.ready)
     return (
-      <section className="license" aria-label="License">
+      <section className="license" id="license" tabIndex={-1} aria-label="License">
         <h2>License</h2>
         {view?.lastError ? (
           <>
@@ -166,7 +109,7 @@ export function License({
   const warning = offline || !view.coreFeature;
 
   return (
-    <section className="license" aria-label="License">
+    <section className="license" id="license" tabIndex={-1} aria-label="License">
       <div className="license-heading">
         <h2>License</h2>
         {view.environment === "test" && <span className="eyebrow">Test mode</span>}
@@ -189,13 +132,11 @@ export function License({
           <div className="actions">{retry}</div>
         </>
       )}
-      {!view.journalUnreadable &&
-        view.lastError &&
-        (view.state === "checkRequired" || inTrial) && (
-          <p className="inline-error" role="alert">
-            {view.lastError}
-          </p>
-        )}
+      {!view.journalUnreadable && view.lastError && (view.state === "checkRequired" || inTrial) && (
+        <p className="inline-error" role="alert">
+          {view.lastError}
+        </p>
+      )}
       {notice && (
         <p className="feedback" role="status">
           {notice}

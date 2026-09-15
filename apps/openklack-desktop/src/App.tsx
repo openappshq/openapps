@@ -3,22 +3,43 @@ import { withoutThemeTransitions } from "@openapps/ui/theme";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Link } from "@heroui/react";
-import { ArrowLeft, Settings2, ShieldCheck, Volume2, VolumeX, Pause, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Hourglass,
+  KeyRound,
+  Settings2,
+  ShieldCheck,
+  Volume2,
+  VolumeX,
+  Pause,
+  WifiOff,
+  X,
+} from "lucide-react";
 import { useDesktop } from "./useDesktop";
+import { useLicense } from "./useLicense";
+import { licensePill } from "./licenseState";
+import { offersSetupGuide, withSetupGuideCompleted } from "./setupGuide";
 import { KeyAssignments } from "./KeyAssignments";
 import { CurrentPreset } from "./CurrentPreset";
 import klackMark from "../../../design/assets/openklack/symbol-paper.svg";
 import { SoundLibrary } from "./SoundLibrary";
 import { AppRules } from "./AppRules";
 import { General } from "./General";
+import { Onboarding } from "./Onboarding";
 
 type Page = "library" | "keyboard" | "rules" | "general";
 
 export default function App() {
   const desktop = useDesktop();
   const { snapshot, packs, busy } = desktop;
+  const license = useLicense(!!snapshot?.licensingEnabled, desktop.setError);
   const [animatePower, setAnimatePower] = useState(false);
   const [page, setPage] = useState<Page>("library");
+  // A request to land on Settings → License; counted so each click scrolls there again.
+  const licenseRequested = useRef(false);
+  const [licenseRequests, setLicenseRequests] = useState(0);
+  // `undefined` follows the saved preference: official builds open the guide once.
+  const [guide, setGuide] = useState<boolean>();
   const [key, setKey] = useState("Space");
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("openklack-theme");
@@ -40,8 +61,13 @@ export default function App() {
     if (desktop.error) errorMessage.current?.scrollIntoView({ block: "nearest" });
   }, [desktop.error]);
   useEffect(() => {
-    window.scrollTo({ top: 0 });
-  }, [page]);
+    if (licenseRequested.current) {
+      licenseRequested.current = false;
+      const section = document.getElementById("license");
+      section?.scrollIntoView({ block: "start" });
+      section?.focus({ preventScroll: true });
+    } else window.scrollTo({ top: 0 });
+  }, [page, licenseRequests]);
   const prefs = snapshot?.preferences;
   const preset = prefs?.presets.find((p) => p.id === prefs.activePresetId);
   const pack = packs.find((p) => p.id === preset?.packId) ?? {
@@ -59,6 +85,17 @@ export default function App() {
     source: "",
   };
   const effective = prefs?.presets.find((p) => p.id === snapshot?.effectivePresetId);
+  const pill = licensePill(license.view);
+  const showGuide = snapshot ? (guide ?? offersSetupGuide(snapshot)) : false;
+  function openLicense() {
+    licenseRequested.current = true;
+    setPage("general");
+    setLicenseRequests((count) => count + 1);
+  }
+  function finishGuide() {
+    setGuide(false);
+    if (!prefs?.onboardingCompleted) void desktop.save(withSetupGuideCompleted);
+  }
   if (!snapshot || !prefs || !preset)
     return (
       <main className="starting">
@@ -79,7 +116,16 @@ export default function App() {
       <Link className="skip-link" href="#content">
         Skip to settings
       </Link>
-      <div className="main-column">
+      {showGuide && (
+        <Onboarding
+          official={snapshot.licensingEnabled}
+          inputPermission={snapshot.runtime.inputPermission}
+          busy={busy}
+          onRequestPermission={() => void desktop.perform(() => invoke("request_input_permission"))}
+          onDone={finishGuide}
+        />
+      )}
+      <div className="main-column" inert={showGuide}>
         <div className="topbar">
           <Button
             variant="ghost"
@@ -123,6 +169,26 @@ export default function App() {
             </StateIcon>
             {prefs.muted ? "Sound off" : snapshot.pauseReason ? "Sound paused" : "Sound on"}
           </Button>
+          {pill && (
+            <Button
+              variant="secondary"
+              className="status-pill"
+              data-warning={pill.warning}
+              aria-label={`${pill.label}. Open License`}
+              onPress={openLicense}
+            >
+              {pill.warning ? (
+                license.view?.state === "trialEnded" || license.view?.state === "revoked" ? (
+                  <KeyRound size={16} aria-hidden="true" />
+                ) : (
+                  <WifiOff size={16} aria-hidden="true" />
+                )
+              ) : (
+                <Hourglass size={16} aria-hidden="true" />
+              )}
+              {pill.label}
+            </Button>
+          )}
           <Button
             isIconOnly
             variant="ghost"
@@ -174,7 +240,7 @@ export default function App() {
                   </Button>
                 )}
                 {snapshot.runtime.licenseBlocked && page !== "general" && (
-                  <Button variant="ghost" onPress={() => setPage("general")}>
+                  <Button variant="ghost" onPress={openLicense}>
                     Open License
                   </Button>
                 )}
@@ -259,8 +325,10 @@ export default function App() {
             {page === "general" && (
               <General
                 desktop={desktop}
+                license={license}
                 preset={preset}
                 onApps={() => setPage("rules")}
+                onShowGuide={() => setGuide(true)}
                 theme={theme}
                 onThemeChange={(value) => {
                   try {

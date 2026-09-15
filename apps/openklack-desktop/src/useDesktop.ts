@@ -23,6 +23,8 @@ export type Preferences = {
   presets: Preset[];
   favoritePackIds?: string[];
   appRules: { bundleId: string; name: string; presetId: string | null; mute: boolean }[];
+  /** The setup guide was finished or skipped; absent until then. */
+  onboardingCompleted?: boolean;
 };
 export type Snapshot = {
   version: string;
