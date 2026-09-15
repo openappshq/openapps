@@ -401,11 +401,19 @@ public actor LicenseActor {
 /// is derived from the snapshot with the current clock (`state(now:)`), so
 /// deadlines never wait on I/O.
 public struct LicenseSnapshot: Equatable, Sendable {
+    /// The record in memory: the current activation, checked with Dodo.
     public var record: LicenseRecord?
+    /// A grant (an activation, a `valid: true`) is in place but its save
+    /// is not yet known durable (`LicenseStoreError.indeterminate`). Access
+    /// then comes from `accessRecord` — the last record the store confirmed,
+    /// or the trial rules when that is nil — until a retried save succeeds.
+    public var grantPending: Bool
+    public var accessRecord: LicenseRecord?
     /// The license record was read (present or positively absent). Until
     /// then no trial runs: an unreadable record may hold a license.
     public var licenseRead: Bool
-    /// The activation's journal entry is unreadable and Dodo has not settled it.
+    /// The journal entry of the activation access comes from is unreadable
+    /// and Dodo has not settled it.
     public var isRestricted: Bool
     public var storageError: LicenseStoreError?
     public var journalError: Bool
@@ -431,7 +439,8 @@ public struct LicenseSnapshot: Equatable, Sendable {
     public var freshInstall: Bool?
 
     public init(
-        record: LicenseRecord? = nil, licenseRead: Bool = false, isRestricted: Bool = false,
+        record: LicenseRecord? = nil, grantPending: Bool = false, accessRecord: LicenseRecord? = nil,
+        licenseRead: Bool = false, isRestricted: Bool = false,
         storageError: LicenseStoreError? = nil, journalError: Bool = false, journalUnreadable: Bool = false,
         trial: TrialRecord? = nil, trialClock: TrialClock? = nil, trialStorageError: LicenseStoreError? = nil,
         trialTiming: TrialTiming = .standard, nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false,
@@ -439,6 +448,8 @@ public struct LicenseSnapshot: Equatable, Sendable {
     ) {
         self.trialClock = trialClock
         self.record = record
+        self.grantPending = grantPending
+        self.accessRecord = accessRecord
         self.licenseRead = licenseRead
         self.isRestricted = isRestricted
         self.storageError = storageError
@@ -453,13 +464,17 @@ public struct LicenseSnapshot: Equatable, Sendable {
         self.freshInstall = freshInstall
     }
 
+    /// The record access is derived from: the one in memory, or — while a
+    /// grant waits for a confirmed save — the last one the store confirmed.
+    public var effectiveRecord: LicenseRecord? { grantPending ? accessRecord : record }
+
     /// A license always wins over the trial; without a readable license
     /// record the trial record and its clock, projected to `now` and
     /// `uptime` (the monotonic clock), decide. `wakeSince`: the monotonic
     /// time of a wake the manager has not checked yet — the clock-behind
     /// check is applied here too, so a wake restricts before any I/O.
     public func state(now: Date, uptime: TimeInterval, wakeSince: TimeInterval? = nil) -> LicenseState {
-        if let record {
+        if let record = effectiveRecord {
             let policy = LicensePolicy.state(record: record, now: now)
             if isRestricted, policy.isFeatureEnabled { return .checkRequired }
             return policy
@@ -474,7 +489,7 @@ public struct LicenseSnapshot: Equatable, Sendable {
     /// Seconds until the state may change on its own: the paid license's
     /// next deadline, or the trial's on its projected clock.
     public func deadlineDelay(now: Date, uptime: TimeInterval, wakeSince: TimeInterval? = nil) -> TimeInterval? {
-        if record != nil { return nextDeadline.map { max(0, $0.timeIntervalSince(now)) } }
+        if effectiveRecord != nil { return nextDeadline.map { max(0, $0.timeIntervalSince(now)) } }
         let observation = TrialObservation(wall: now, mono: uptime)
         guard licenseRead, let trial, let clock = projectedClock(at: observation, wakeSince: wakeSince) else { return nil }
         return LicensePolicy.trialDeadlineDelay(trial, clock: clock, timing: trialTiming, at: observation)

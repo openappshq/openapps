@@ -30,15 +30,18 @@ import Foundation
 /// `openat` on a verified directory descriptor and `O_NOFOLLOW`, so a link
 /// planted in the chain is refused rather than followed.
 ///
-/// Writes are durable before they are reported: a temporary file in the
-/// records directory, `fsync`, `rename` over the old file, then `fsync` of
-/// the directory. A failure before the rename is `.unavailable` and leaves
-/// the old file exactly as it was. After the rename only the directory sync
-/// can fail; that is `.indeterminate`: the new, complete file is what the
-/// directory shows, the disk holds the old or the new one, and the manager
-/// keeps the new state, keeps its journal protection and repeats the same
-/// write on the next tick. A deletion is `unlink` then the same directory
-/// `fsync`, with the same two outcomes.
+/// Writes are durable before they are reported: every directory above the
+/// records directory is `fsync`ed (so one an earlier, failed save created
+/// is made durable by the save that succeeds), then a temporary file in
+/// the records directory, `fsync`, `rename` over the old file, then `fsync`
+/// of the directory. A failure before the rename is `.unavailable` and
+/// leaves the old file exactly as it was. After the rename only the
+/// directory sync can fail; that is `.indeterminate`: the new, complete
+/// file is what the directory shows, the disk holds the old or the new one,
+/// and the manager keeps the new record, keeps its journal protection,
+/// grants nothing new yet and repeats the same write on the next tick. A
+/// deletion is `unlink` then the same directory `fsync`, with the same two
+/// outcomes.
 public struct FileRecordStore: LicenseStore, TrialStore, Sendable {
     /// The format tag every file starts with.
     public static let magic = "openapps-records-v1"
@@ -195,8 +198,12 @@ public struct FileRecordStore: LicenseStore, TrialStore, Sendable {
     /// by path, then each of `OpenApps`, `<app id>` and `records` with
     /// `openat(O_DIRECTORY | O_NOFOLLOW)`, so a symlink or a file in the
     /// chain is refused. nil when a component does not exist and `create`
-    /// is false; with `create`, missing components are made at `0700` and
-    /// each new entry is synced in its parent before going on.
+    /// is false. With `create`, missing components are made at `0700` (the
+    /// base too), and every ancestor — the base's parent, the base,
+    /// `OpenApps`, `<app id>` — is `fsync`ed on every call, created now or
+    /// not: a directory created by an earlier save whose parent sync failed
+    /// then is made durable by the save that succeeds, whichever process
+    /// runs it. Writes are rare, so this costs nothing worth avoiding.
     private func openDirectory(create: Bool) throws(LicenseStoreError) -> Descriptor? {
         let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         var current: Descriptor
@@ -217,6 +224,14 @@ public struct FileRecordStore: LicenseStore, TrialStore, Sendable {
         } else {
             throw .unavailable(Self.describe("open", "the \(baseDirectory.lastPathComponent) directory"))
         }
+        if create {
+            // The base's own entry is on disk before anything goes inside —
+            // whether this call created it or an earlier one did.
+            let parent = system.open(baseDirectory.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            guard parent >= 0 else { throw .unavailable(Self.describe("open", "the directory above \(baseDirectory.lastPathComponent)")) }
+            let parentDescriptor = Descriptor(parent, system: system)
+            guard system.fsync(parentDescriptor.fd) == 0 else { throw .unavailable(Self.describe("sync", "the directory above \(baseDirectory.lastPathComponent)")) }
+        }
 
         for component in Self.relativeComponents(appID: appID) {
             var fd = system.openat(current.fd, component, flags, 0)
@@ -225,13 +240,16 @@ public struct FileRecordStore: LicenseStore, TrialStore, Sendable {
                 guard system.mkdirat(current.fd, component, 0o700) == 0 || errno == EEXIST else {
                     throw .unavailable(Self.describe("create", "the \(component) directory"))
                 }
-                // The new entry is on disk before anything is put inside it.
-                guard system.fsync(current.fd) == 0 else { throw .unavailable(Self.describe("sync", "the new \(component) directory")) }
                 fd = system.openat(current.fd, component, flags, 0)
             }
             guard fd >= 0 else {
                 // ELOOP: a symlink; ENOTDIR: a file; anything else: can't open.
                 throw .unavailable(Self.describe("open", "the \(component) directory"))
+            }
+            if create {
+                // The entry is on disk before anything is put inside it — and
+                // so is one a failed earlier save left unsynced.
+                guard system.fsync(current.fd) == 0 else { throw .unavailable(Self.describe("sync", "the directory holding \(component)")) }
             }
             current = Descriptor(fd, system: system)
         }

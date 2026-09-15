@@ -95,6 +95,11 @@ public final class LicenseManager {
     /// The fallback device id the store is known to hold; only that id is
     /// ever sent.
     private var durableFallbackID: String?
+    /// A provisional trial whose save was `.indeterminate`: in place, not
+    /// known durable. Nothing runs on it — no access, no registry call —
+    /// and the same record is saved again on every tick until a save
+    /// succeeds; only then is it installed. Never replaced by a new start.
+    private var pendingProvisional: TrialRecord?
 
     /// The record as it should be on disk while the last write has failed.
     private var pendingDurableWrite: LicenseRecord??
@@ -129,6 +134,19 @@ public final class LicenseManager {
     /// not yet known to be durable (`.indeterminate`); its entry goes once
     /// the new record is.
     private var replacedInstance: (instanceID: String, seq: UInt64)?
+    /// A grant whose record is in place but whose save was `.indeterminate`.
+    /// The record and the activation are kept and checked as usual, but
+    /// access stays with `accessRecord` — the last record the store
+    /// confirmed (nil: the trial rules) — until `flushRecord` saves it for
+    /// real. Restrictions and journal work owed to the grant wait with it.
+    private struct PendingGrant {
+        let record: LicenseRecord
+        let accessRecord: LicenseRecord?
+        /// The activation's unreadable journal entry is settled by this
+        /// grant, once durable.
+        let settlesUnreadableJournal: Bool
+    }
+    private var pendingGrant: PendingGrant?
     /// The journal could not be written; surfaced like a storage problem.
     public private(set) var journalError = false
     /// Activations whose journal entry on disk cannot be read; nothing
@@ -140,9 +158,10 @@ public final class LicenseManager {
     public var journalUnreadable: Bool {
         record.map { unreadableJournalInstances.contains($0.instanceID) } ?? false
     }
-    /// The current activation waits for Dodo to settle its unreadable entry.
+    /// The activation access comes from waits for Dodo to settle its
+    /// unreadable entry.
     private var isRestricted: Bool {
-        record.map { restrictedInstances.contains($0.instanceID) } ?? false
+        effectiveRecord.map { restrictedInstances.contains($0.instanceID) } ?? false
     }
     /// Storage could not be read or written; retried on every tick.
     public private(set) var storageError: LicenseStoreError?
@@ -274,16 +293,24 @@ public final class LicenseManager {
         snapshot.state(now: now(), uptime: uptime())
     }
 
+    /// The record access is derived from: the one in memory, or — while a
+    /// grant waits for a confirmed save — the last one the store confirmed.
+    private var effectiveRecord: LicenseRecord? {
+        if let pendingGrant { return pendingGrant.accessRecord }
+        return record
+    }
+
     /// What the app layer works from; `onChange` hands it over.
     public var snapshot: LicenseSnapshot {
         let current = now()
         return LicenseSnapshot(
-            record: record, licenseRead: licenseRead, isRestricted: isRestricted, storageError: storageError,
+            record: record, grantPending: pendingGrant != nil, accessRecord: pendingGrant?.accessRecord,
+            licenseRead: licenseRead, isRestricted: isRestricted, storageError: storageError,
             journalError: journalError, journalUnreadable: journalUnreadable,
             trial: trial, trialClock: trialClock, trialStorageError: trialApplies ? trialStorageError : nil,
             trialTiming: trialTiming,
             nextCheckAt: nextCheckDelay.map { current.addingTimeInterval($0) },
-            nextDeadline: record.flatMap { LicensePolicy.nextDeadline(record: $0, now: current) },
+            nextDeadline: effectiveRecord.flatMap { LicensePolicy.nextDeadline(record: $0, now: current) },
             hasPendingCleanups: !pendingCleanups.isEmpty,
             freshInstall: freshInstall
         )
@@ -317,7 +344,7 @@ public final class LicenseManager {
 
     /// The trial is what decides the state: no license record, and that is known.
     private var trialApplies: Bool {
-        licenseRead && record == nil
+        licenseRead && effectiveRecord == nil
     }
 
     /// Whether a check should be attempted now: a day since the last attempt
@@ -393,10 +420,16 @@ public final class LicenseManager {
         notify() // what storage said
     }
 
-    /// The in-memory change, published before any storage runs.
+    /// The in-memory change, published before any storage runs. A pending
+    /// grant survives only a change to the same, still granted activation
+    /// (its time moving on); a revocation, a removal or another activation
+    /// takes over.
     private func setRecord(_ newRecord: LicenseRecord?) {
         record = newRecord
         pendingDurableWrite = .some(newRecord)
+        if let grant = pendingGrant, newRecord.map({ $0.instanceID != grant.record.instanceID || $0.isRevoked }) ?? true {
+            pendingGrant = nil
+        }
         notify() // enforcement first, storage second
     }
 
@@ -421,12 +454,38 @@ public final class LicenseManager {
                 replacedInstance = nil
                 clearJournal(replaced.instanceID, upTo: replaced.seq)
             }
+            if let pending, let grant = pendingGrant, pending.instanceID == grant.record.instanceID,
+               pending.eventSeq >= grant.record.eventSeq, !pending.isRevoked {
+                confirmGrant(grant)
+            }
             if !cleanupsDirty, !cleanupsUnread, !journalUnreadable { storageError = nil }
         } catch {
             // `.indeterminate` included: memory already holds the new state,
             // the same write is repeated on the next tick.
             storageError = error
         }
+    }
+
+    /// The grant's record is durable: access follows it, and the work that
+    /// waited for that — the replaced activation's restriction, the
+    /// unreadable entry Dodo settled — is done now.
+    private func confirmGrant(_ grant: PendingGrant) {
+        pendingGrant = nil
+        if let previous = grant.accessRecord, previous.instanceID != grant.record.instanceID {
+            restrictedInstances.remove(previous.instanceID)
+        }
+        if grant.settlesUnreadableJournal, unreadableJournalInstances.contains(grant.record.instanceID) {
+            settleUnreadableJournal(grant.record.instanceID)
+        }
+    }
+
+    /// Dodo settled what an unreadable entry might have said with a
+    /// durable grant: the journal is rebuilt without it, atomically. The
+    /// restriction is lifted only once that rebuild is durable (retried on
+    /// ticks).
+    private func settleUnreadableJournal(_ instanceID: String) {
+        replaceUnreadableJournal(instanceID, with: nil)
+        if pendingJournalOps[instanceID] == nil { restrictedInstances.remove(instanceID) }
     }
 
     /// Journals a dead activation before anything else is touched. A failed
@@ -545,9 +604,10 @@ public final class LicenseManager {
     /// A new activation whose record the store already holds: the previous
     /// activation's record — and one whose deletion was still owed — is
     /// durably replaced, so their journal entries go. Not `durable` (the
-    /// save was `.indeterminate`): memory commits the same way, but the
-    /// record stays owed to the store and those entries go only once
-    /// `flushRecord` has saved it for real.
+    /// save was `.indeterminate`): the activation is kept and checked, but
+    /// the record stays owed to the store, access stays with what the store
+    /// last confirmed, and the previous activation's entries and restriction
+    /// go only once `flushRecord` has saved the new record for real.
     private func commitActivation(_ newRecord: LicenseRecord, durable: Bool = true) {
         activationGeneration += 1
         // The replaced activation is dead for good: its entry, up to the
@@ -555,7 +615,7 @@ public final class LicenseManager {
         // activation's journal restriction. The new activation's journal
         // status is established on its own.
         if let previous = record, previous.instanceID != newRecord.instanceID {
-            restrictedInstances.remove(previous.instanceID)
+            if durable { restrictedInstances.remove(previous.instanceID) }
             if let known = journaledSeq[previous.instanceID] {
                 let upTo = max(known, previous.eventSeq)
                 if durable { clearJournal(previous.instanceID, upTo: upTo) } else { replacedInstance = (previous.instanceID, upTo) }
@@ -576,8 +636,13 @@ public final class LicenseManager {
             restrictedInstances.insert(newRecord.instanceID)
             storageError = error
         }
+        // Access: the new record once durable; until then whatever the store
+        // last confirmed — an earlier pending grant's baseline, or the
+        // record that was current.
+        let accessRecord: LicenseRecord? = if let pendingGrant { pendingGrant.accessRecord } else { record }
         record = newRecord
         pendingDurableWrite = durable ? nil : .some(newRecord)
+        pendingGrant = durable ? nil : PendingGrant(record: newRecord, accessRecord: accessRecord, settlesUnreadableJournal: false)
         if durable, !cleanupsDirty, !cleanupsUnread { storageError = nil }
         failedChecks = 0
         blockedUntil = nil
@@ -827,8 +892,9 @@ public final class LicenseManager {
         // The grant is saved first: it takes effect only once the store
         // holds it. A refused save leaves the Mac as it was; the next check
         // (backoff applies) tries again. A save that landed but is not known
-        // durable counts: the record is kept, owed to the store, and saved
-        // again on every tick; its journal entry goes only then.
+        // durable is kept — the record, owed to the store, is saved again on
+        // every tick — but access stays with the record the store last
+        // confirmed, and the journal work waits, until that save succeeds.
         var notDurable: LicenseStoreError?
         do {
             try store.saveRecord(updated)
@@ -840,18 +906,16 @@ public final class LicenseManager {
             notify()
             return
         }
-        if unreadableJournalInstances.contains(current.instanceID) {
-            // Dodo settled what the unreadable entry might have said: the
-            // journal is rebuilt without it, atomically. The restriction is
-            // lifted only once that rebuild is durable (retried on ticks).
-            replaceUnreadableJournal(current.instanceID, with: nil)
-            if pendingJournalOps[current.instanceID] == nil { restrictedInstances.remove(current.instanceID) }
-        }
+        let settlesUnreadableJournal = unreadableJournalInstances.contains(current.instanceID)
         record = updated
         if let notDurable {
+            let accessRecord: LicenseRecord? = if let pendingGrant { pendingGrant.accessRecord } else { current }
+            pendingGrant = PendingGrant(record: updated, accessRecord: accessRecord, settlesUnreadableJournal: settlesUnreadableJournal)
             pendingDurableWrite = .some(updated)
             storageError = notDurable
         } else {
+            pendingGrant = nil
+            if settlesUnreadableJournal { settleUnreadableJournal(current.instanceID) }
             pendingDurableWrite = nil
             if !cleanupsDirty, !cleanupsUnread, !journalUnreadable { storageError = nil }
             if let known = journaledSeq[current.instanceID], known <= updated.eventSeq {
@@ -993,32 +1057,20 @@ public final class LicenseManager {
     /// even read. Nothing is created over a record that could not be read.
     private func settleTrial() {
         guard trialApplies else { return }
+        if let pendingProvisional {
+            retryProvisionalTrial(pendingProvisional)
+            return
+        }
         if trialLoad == .unread { readTrial() }
         if trialLoad == .absent, trialApplies { startProvisionalTrial() }
     }
 
     private func readTrial() {
-        // A provisional save that landed but was not known durable: what is
-        // read back now is saved again, so it becomes durable before the
-        // hourly save would.
-        var owesResave = false
-        if case .indeterminate = trialStorageError { owesResave = true }
         do {
             let stored = try trialStore.loadTrial()
             if trialFoundAtLoad == nil { trialFoundAtLoad = stored != nil }
             if let stored {
-                // Launch: the clock is anchored at the stored time and
-                // observed once, checking whether it is behind.
-                let at = observation
-                var clock = TrialClock(seen: stored.lastSeenAt, at: at)
-                clock.observe(at, checkingBehind: true)
-                var record = stored
-                record.lastSeenAt = clock.seen
-                trial = record
-                trialClock = clock
-                trialLoad = .present
-                trialDirty = record != stored || owesResave
-                lastTrialSaveMono = at.mono
+                install(stored: stored)
             } else {
                 trial = nil
                 trialClock = nil
@@ -1028,7 +1080,7 @@ public final class LicenseManager {
             durableFallbackID = trial?.fallbackDeviceID
             pendingRegistryAnswer = nil
             trialStorageError = nil
-            trialSaveRequired = owesResave && trial != nil
+            trialSaveRequired = false
             trialGeneration += 1
         } catch {
             trialStorageError = error
@@ -1036,17 +1088,39 @@ public final class LicenseManager {
         notify()
     }
 
+    /// A record the store holds becomes the trial in memory: the clock is
+    /// anchored at the stored time and observed once, checking whether the
+    /// clock is behind.
+    private func install(stored: TrialRecord) {
+        let at = observation
+        var clock = TrialClock(seen: stored.lastSeenAt, at: at)
+        clock.observe(at, checkingBehind: true)
+        var record = stored
+        record.lastSeenAt = clock.seen
+        trial = record
+        trialClock = clock
+        trialLoad = .present
+        trialDirty = record != stored
+        lastTrialSaveMono = at.mono
+    }
+
     /// Starting the trial grants access, so the record is saved first and
     /// the core turns on only once it is durable. A failed save leaves the
-    /// record unread: the next attempt reads before it writes. That covers
-    /// a save that landed but is not known durable (`.indeterminate`) too:
-    /// access waits, the next tick reads the record back and saves it again.
+    /// record unread: the next attempt reads before it writes. A save that
+    /// landed but is not known durable (`.indeterminate`) keeps that very
+    /// record as `pendingProvisional`: no access, no registry call, and the
+    /// same record is saved again on every tick until a save succeeds.
     private func startProvisionalTrial() {
         let at = observation
         let fallback = device.hardwareUUID() == nil ? UUID().uuidString.lowercased() : nil
         let provisional = TrialRecord(startedAt: at.wall, lastSeenAt: at.wall, registered: false, fallbackDeviceID: fallback)
         do {
             try trialStore.saveTrial(provisional)
+        } catch .indeterminate(let reason) {
+            pendingProvisional = provisional
+            trialStorageError = .indeterminate(reason)
+            notify()
+            return
         } catch {
             trialStorageError = error
             trialLoad = .unread
@@ -1064,6 +1138,32 @@ public final class LicenseManager {
         trialEndSaved = false
         trialGeneration += 1
         lastTrialSaveMono = at.mono
+        registryFailures = 0
+        registryLastAttemptMono = nil
+        notify()
+    }
+
+    /// Saves the pending provisional record again — the same start, the
+    /// same fallback id — and installs it once a save succeeds. Any failure,
+    /// `.indeterminate` or not, keeps it pending: the record is never read
+    /// back as a substitute for a confirmed save, and never replaced by a
+    /// later start.
+    private func retryProvisionalTrial(_ provisional: TrialRecord) {
+        do {
+            try trialStore.saveTrial(provisional)
+        } catch {
+            trialStorageError = error
+            notify()
+            return
+        }
+        pendingProvisional = nil
+        install(stored: provisional)
+        durableFallbackID = provisional.fallbackDeviceID
+        pendingRegistryAnswer = nil
+        trialStorageError = nil
+        trialSaveRequired = false
+        trialEndSaved = false
+        trialGeneration += 1
         registryFailures = 0
         registryLastAttemptMono = nil
         notify()
