@@ -50,12 +50,24 @@ final class LicenseController {
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     @ObservationIgnored private var networkWasSatisfied = true
 
+    /// What `onChange` last reported; compared against, not the snapshot
+    /// that was just replaced, so a change in the badge alone (a storage
+    /// error while the state stays the same) reaches the app too.
+    private struct Published: Equatable {
+        var state: LicenseState
+        var badge: LicenseBadge.Label?
+        var freshInstall: Bool?
+    }
+    @ObservationIgnored private var published: Published
+
     /// Until the manager has loaded, there is no record: the feature is off.
     init(manager: LicenseManager) {
         self.manager = manager
         let initial = LicenseSnapshot(trialTiming: manager.trialTiming)
+        let initialState = initial.state(now: Date(), uptime: LicenseManager.continuousUptime())
         snapshot = initial
-        state = initial.state(now: Date(), uptime: LicenseManager.continuousUptime())
+        state = initialState
+        published = Published(state: initialState, badge: LicenseBadge.label(for: initialState), freshInstall: nil)
     }
 
     /// Wires the snapshot feed, then loads storage on the license actor.
@@ -104,6 +116,10 @@ final class LicenseController {
     var storageError: LicenseStoreError? { snapshot.storageError }
     var trialStorageError: LicenseStoreError? { snapshot.trialStorageError }
     var journalError: Bool { snapshot.journalError }
+    /// The install has never run with licensing (both Keychain records
+    /// positively absent); nil until storage has answered. See
+    /// `LicenseManager.freshInstall`.
+    var freshInstall: Bool? { snapshot.freshInstall }
 
     func start() {
         // Storage, the provisional trial and the launch check run on the
@@ -273,10 +289,13 @@ final class LicenseController {
     /// Re-evaluates the state from the snapshot and the clock — never from
     /// storage — and re-arms both timers. Cheap; called on every timer and event.
     private func refresh() {
-        let previous = (state, badge)
         state = snapshot.state(now: Date(), uptime: LicenseManager.continuousUptime(), wakeSince: pendingWake)
         scheduleTimers()
-        if previous != (state, badge) { onChange?() }
+        let current = Published(state: state, badge: badge, freshInstall: freshInstall)
+        if current != published {
+            published = current
+            onChange?()
+        }
     }
 
     // MARK: - Copy

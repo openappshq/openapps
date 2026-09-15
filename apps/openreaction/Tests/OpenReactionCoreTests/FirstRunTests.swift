@@ -47,19 +47,100 @@ struct OnboardingLaunchTests {
 
 @Suite("Login item default")
 struct LoginItemDefaultTests {
-    @Test func registersOnceOnTheFirstLaunch() {
+    @Test func freshInstallRegistersOnce() {
         let store = MemoryFlags()
-        #expect(LoginItemDefault.shouldRegister(store: store, isRegistered: false))
+        let launch = LoginItemDefault(store: store)
+        #expect(launch.shouldRegister(isRegistered: false, storageIsFresh: true))
         #expect(store.values[LoginItemDefault.Key.applied] == true)
         // Turned off later (Settings or System Settings): the next launches leave it off.
-        #expect(!LoginItemDefault.shouldRegister(store: store, isRegistered: false))
-        #expect(!LoginItemDefault.shouldRegister(store: store, isRegistered: false))
+        let next = LoginItemDefault(store: store)
+        #expect(!next.shouldRegister(isRegistered: false, storageIsFresh: true))
+        #expect(!next.shouldRegister(isRegistered: false, storageIsFresh: true))
+    }
+
+    @Test func storageStillUnknownDecidesNothing() {
+        let store = MemoryFlags()
+        let launch = LoginItemDefault(store: store)
+        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: nil))
+        #expect(store.values[LoginItemDefault.Key.applied] == nil, "not decided yet")
+        #expect(launch.shouldRegister(isRegistered: false, storageIsFresh: true))
+    }
+
+    @Test func upgradeWithPreferencesAndLoginOffIsLeftAlone() {
+        // An earlier version showed the guide (and never wrote the flag).
+        let store = MemoryFlags()
+        OnboardingLaunch.markShown(store: store)
+        let launch = LoginItemDefault(store: store)
+        #expect(launch.hadPreferences)
+        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: true))
+        #expect(store.values[LoginItemDefault.Key.applied] == true, "decided: never again")
+        #expect(!LoginItemDefault(store: store).shouldRegister(isRegistered: false, storageIsFresh: true))
+    }
+
+    @Test func preferencesWrittenByThisLaunchDoNotCount() {
+        // The guide opens (and records itself) before storage answers.
+        let store = MemoryFlags()
+        let launch = LoginItemDefault(store: store)
+        OnboardingLaunch.markShown(store: store)
+        #expect(launch.shouldRegister(isRegistered: false, storageIsFresh: true))
+    }
+
+    @Test func aKeptTrialOrLicenseRecordMeansNotFresh() {
+        let store = MemoryFlags()
+        let launch = LoginItemDefault(store: store)
+        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: false))
+        #expect(store.values[LoginItemDefault.Key.applied] == true)
     }
 
     @Test func anAlreadyRegisteredItemNeedsNothing() {
         let store = MemoryFlags()
-        #expect(!LoginItemDefault.shouldRegister(store: store, isRegistered: true))
+        #expect(!LoginItemDefault(store: store).shouldRegister(isRegistered: true, storageIsFresh: true))
         #expect(store.values[LoginItemDefault.Key.applied] == true)
-        #expect(!LoginItemDefault.shouldRegister(store: store, isRegistered: false))
+    }
+}
+
+/// What the license manager reports as "fresh install", with the licensing fakes.
+extension LicensingTests {
+    @Test("Fresh install: no license record and no trial record at the first read")
+    func freshInstallWhenBothRecordsAreAbsent() {
+        trialStore.record = nil
+        let manager = makeManager()
+        #expect(manager.freshInstall == true)
+        #expect(manager.snapshot.freshInstall == true)
+        // The provisional trial saved just now does not change the answer.
+        #expect(trialStore.record != nil)
+        #expect(manager.snapshot.freshInstall == true)
+    }
+
+    @Test("Not fresh: a kept trial record (a reinstall) or a license record")
+    func notFreshWithAnyRecord() {
+        let manager = makeManager() // the default fake trial record: ended long ago
+        #expect(manager.freshInstall == false)
+
+        trialStore.record = nil
+        store.record = paidRecord(lastSuccessAge: 0)
+        let licensed = makeManager()
+        #expect(licensed.freshInstall == false)
+        #expect(licensed.snapshot.freshInstall == false)
+    }
+
+    @Test("Unknown while storage has not answered; decided once it does")
+    func freshInstallWaitsForStorage() async {
+        trialStore.record = nil
+        trialStore.readError = .unavailable("locked")
+        let manager = makeManager()
+        #expect(manager.freshInstall == nil, "the license record is absent but the trial record is unread")
+        trialStore.readError = nil
+        await manager.tick()
+        #expect(manager.freshInstall == true)
+
+        let locked = MemoryStore()
+        locked.failsReads = true
+        let other = LicenseManager(
+            products: Self.products, client: client, store: locked, journal: journal,
+            trialStore: trialStore, registry: registry, device: device, now: { [clock] in clock.now }, uptime: { [clock] in clock.uptime }
+        )
+        other.load()
+        #expect(other.freshInstall == nil, "the license record could not be read")
     }
 }

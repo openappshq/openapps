@@ -39,20 +39,35 @@ public enum OnboardingLaunch {
     }
 }
 
-/// "Open at login" defaults to on in official builds: the login item is
-/// registered once, on the first launch that finds it unregistered. The
-/// default never runs again, so a later "off" — in Settings or in System
-/// Settings — is never undone.
-public enum LoginItemDefault {
+/// "Open at login" defaults to on in official builds, but only on a
+/// demonstrably fresh install: no preferences from an earlier launch (of
+/// any version), and neither a trial nor a license record in the Keychain,
+/// both positively absent. Anything else — an upgrade, a reinstall over a
+/// kept Keychain, a login item the user once turned off — is left alone.
+/// Decided once; the flag makes every later launch leave the item as is.
+public struct LoginItemDefault {
     public enum Key {
         /// The default was applied (or found unnecessary); never again.
         public static let applied = "loginItem.defaultApplied"
     }
 
-    /// Whether to register now. Records that the default was considered.
-    public static func shouldRegister(store: any FlagStore, isRegistered: Bool) -> Bool {
-        guard !store.bool(forKey: Key.applied) else { return false }
+    private let store: any FlagStore
+    /// An earlier launch left preferences behind. Read when this is created,
+    /// at launch, before the current launch writes any.
+    public let hadPreferences: Bool
+
+    public init(store: any FlagStore) {
+        self.store = store
+        hadPreferences = store.bool(forKey: OnboardingLaunch.Key.shown)
+    }
+
+    /// Whether to register now. `storageIsFresh` is whether the license and
+    /// trial records are both positively absent; nil while storage has not
+    /// answered, which decides nothing yet. Once storage has answered, the
+    /// decision is recorded whichever way it went.
+    public func shouldRegister(isRegistered: Bool, storageIsFresh: Bool?) -> Bool {
+        guard let storageIsFresh, !store.bool(forKey: Key.applied) else { return false }
         store.set(true, forKey: Key.applied)
-        return !isRegistered
+        return storageIsFresh && !hadPreferences && !isRegistered
     }
 }

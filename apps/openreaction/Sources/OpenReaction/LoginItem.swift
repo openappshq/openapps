@@ -2,20 +2,40 @@ import AppKit
 import OpenReactionCore
 import ServiceManagement
 
+/// The system's login-item registration behind `LoginItem`, so the debug
+/// preview harness can stand in something that registers nothing.
+@MainActor
+protocol LoginItemService {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+    func openSystemSettings()
+}
+
+struct MainAppLoginItemService: LoginItemService {
+    var status: SMAppService.Status { SMAppService.mainApp.status }
+    func register() throws { try SMAppService.mainApp.register() }
+    func unregister() throws { try SMAppService.mainApp.unregister() }
+    func openSystemSettings() { SMAppService.openSystemSettingsLoginItems() }
+}
+
 /// "Open at login" through `SMAppService.mainApp`. Official builds turn it
-/// on once, on the first launch (`applyDefaultIfNeeded`); the Settings
-/// toggle decides from then on. The status is always re-read from the
-/// system, since the user can remove the item in System Settings at any
-/// time.
+/// on once, on the first launch of a fresh install (`applyDefaultIfNeeded`,
+/// `LoginItemDefault`); the Settings toggle decides from then on. The
+/// status is always re-read from the system, since the user can remove the
+/// item in System Settings at any time.
 @MainActor
 @Observable
 final class LoginItem {
     private(set) var status: SMAppService.Status = .notRegistered
     private(set) var errorMessage: String?
-    @ObservationIgnored private let flags: any FlagStore
+    @ObservationIgnored private let service: any LoginItemService
+    /// Created at launch, before this launch writes any preferences.
+    @ObservationIgnored private let launchDefault: LoginItemDefault
 
-    init(flags: any FlagStore = UserDefaults.standard) {
-        self.flags = flags
+    init(flags: any FlagStore = UserDefaults.standard, service: any LoginItemService = MainAppLoginItemService()) {
+        self.service = service
+        launchDefault = LoginItemDefault(store: flags)
         refresh()
     }
 
@@ -27,7 +47,7 @@ final class LoginItem {
     var requiresApproval: Bool { status == .requiresApproval }
 
     func refresh() {
-        let current = SMAppService.mainApp.status
+        let current = service.status
         if current != status { status = current }
     }
 
@@ -36,13 +56,14 @@ final class LoginItem {
         register(on)
     }
 
-    /// The default, once: registers on the first launch that finds the item
-    /// unregistered. A registration macOS refuses is reported in Settings
-    /// like any other.
-    func applyDefaultIfNeeded() {
+    /// The default, once: registers when the install is demonstrably fresh
+    /// (no earlier preferences, and `storageIsFresh` — the license and trial
+    /// records positively absent; nil while unknown, which waits). A
+    /// registration macOS refuses is reported in Settings like any other.
+    func applyDefaultIfNeeded(storageIsFresh: Bool?) {
         guard isAvailable else { return }
         refresh()
-        guard LoginItemDefault.shouldRegister(store: flags, isRegistered: isOn) else { return }
+        guard launchDefault.shouldRegister(isRegistered: isOn, storageIsFresh: storageIsFresh) else { return }
         register(true)
     }
 
@@ -50,9 +71,9 @@ final class LoginItem {
         errorMessage = nil
         do {
             if on {
-                try SMAppService.mainApp.register()
+                try service.register()
             } else {
-                try SMAppService.mainApp.unregister()
+                try service.unregister()
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -61,6 +82,6 @@ final class LoginItem {
     }
 
     func openLoginItemsSettings() {
-        SMAppService.openSystemSettingsLoginItems()
+        service.openSystemSettings()
     }
 }

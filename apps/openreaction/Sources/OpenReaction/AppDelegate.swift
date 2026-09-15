@@ -81,9 +81,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             trialTiming: Licensing.trialTiming
         ))
         self.license = license
-        license.onChange = { [weak controller, weak license] in
+        license.onChange = { [weak controller, weak license, weak loginItem] in
             guard let controller, let license else { return }
             controller.setLicense(allowsFeature: license.isFeatureEnabled, badge: license.badge)
+            #if OPENAPPS_OFFICIAL
+            // Open at login by default, once storage says whether this is a
+            // fresh install (LoginItemDefault); anything else is left alone.
+            loginItem?.applyDefaultIfNeeded(storageIsFresh: license.freshInstall)
+            #endif
         }
         // From the manager's thread, before storage: the gate stops
         // authorizing at once; the tap's stop and the UI follow on main.
@@ -123,10 +128,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         #if OPENAPPS_OFFICIAL
         updates?.start()
-        #endif
-        #if OPENAPPS_OFFICIAL
-        // Official builds open at login by default, decided once (LoginItemDefault).
-        loginItem.applyDefaultIfNeeded()
         #endif
         if usesEventTap, OnboardingWindowController.shouldShowOnLaunch() {
             onboarding.show()

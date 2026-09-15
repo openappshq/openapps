@@ -54,6 +54,10 @@ public final class LicenseManager {
     /// The license record was read, present or positively absent. No trial
     /// starts or runs before that.
     public private(set) var licenseRead = false
+    /// What the first positive read of each Keychain item found, for
+    /// `freshInstall`. Set once; a later reload does not change it.
+    private var licenseFoundAtLoad: Bool?
+    private var trialFoundAtLoad: Bool?
 
     // MARK: Trial state
 
@@ -200,6 +204,7 @@ public final class LicenseManager {
         var failure: LicenseStoreError?
         do {
             var loaded = try store.loadRecord()
+            if licenseFoundAtLoad == nil { licenseFoundAtLoad = loaded != nil }
             if let stored = loaded, stored.isLegacyTrial || !products.isPaid(stored.productID) {
                 // A retired trial key or another product is not a license:
                 // it is ignored (and replaced by any activation), and the
@@ -275,8 +280,21 @@ public final class LicenseManager {
             trialTiming: trialTiming,
             nextCheckAt: nextCheckDelay.map { current.addingTimeInterval($0) },
             nextDeadline: record.flatMap { LicensePolicy.nextDeadline(record: $0, now: current) },
-            hasPendingCleanups: !pendingCleanups.isEmpty
+            hasPendingCleanups: !pendingCleanups.isEmpty,
+            freshInstall: freshInstall
         )
+    }
+
+    /// Whether this Mac has never run the app with licensing: the license
+    /// and trial records were both positively absent when first read. False
+    /// as soon as either was found (a kept trial record survives a
+    /// reinstall, so that is not fresh either); nil until storage has
+    /// answered for both. Only an install that is fresh here gets defaults
+    /// that a returning user may have turned off (the login item).
+    public var freshInstall: Bool? {
+        if licenseFoundAtLoad == true || trialFoundAtLoad == true { return false }
+        if licenseFoundAtLoad == false, trialFoundAtLoad == false { return true }
+        return nil
     }
 
     /// Memory changed: tell the app layer before any storage runs.
@@ -947,7 +965,9 @@ public final class LicenseManager {
 
     private func readTrial() {
         do {
-            if let stored = try trialStore.loadTrial() {
+            let stored = try trialStore.loadTrial()
+            if trialFoundAtLoad == nil { trialFoundAtLoad = stored != nil }
+            if let stored {
                 // Launch: the clock is anchored at the stored time and
                 // observed once, checking whether it is behind.
                 let at = observation

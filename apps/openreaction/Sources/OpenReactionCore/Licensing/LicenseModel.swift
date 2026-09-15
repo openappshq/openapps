@@ -419,12 +419,16 @@ public struct LicenseSnapshot: Equatable, Sendable {
     /// The paid license's next deadline on the wall clock.
     public var nextDeadline: Date?
     public var hasPendingCleanups: Bool
+    /// The license and trial records were both positively absent at the
+    /// first read (see `LicenseManager.freshInstall`); nil until known.
+    public var freshInstall: Bool?
 
     public init(
         record: LicenseRecord? = nil, licenseRead: Bool = false, isRestricted: Bool = false,
         storageError: LicenseStoreError? = nil, journalError: Bool = false, journalUnreadable: Bool = false,
         trial: TrialRecord? = nil, trialClock: TrialClock? = nil, trialStorageError: LicenseStoreError? = nil,
-        trialTiming: TrialTiming = .standard, nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false
+        trialTiming: TrialTiming = .standard, nextCheckAt: Date? = nil, nextDeadline: Date? = nil, hasPendingCleanups: Bool = false,
+        freshInstall: Bool? = nil
     ) {
         self.trialClock = trialClock
         self.record = record
@@ -439,6 +443,7 @@ public struct LicenseSnapshot: Equatable, Sendable {
         self.nextCheckAt = nextCheckAt
         self.nextDeadline = nextDeadline
         self.hasPendingCleanups = hasPendingCleanups
+        self.freshInstall = freshInstall
     }
 
     /// A license always wins over the trial; without a readable license
