@@ -5,7 +5,7 @@ How every OpenApps HQ app sells and checks licenses. OpenKlack and OpenReaction 
 ## Principles
 
 - **The source is free.** Apps are MIT licensed. A build from source has licensing compiled out: every feature works and nothing contacts the license service.
-- **The license pays for the official build**: the signed, notarized download with updates.
+- **The license pays for the official build**: the signed build installed with Homebrew, with updates. Release and update rules are in [RELEASES.md](RELEASES.md).
 - **No license server.** Apps talk directly to Dodo Payments' public license endpoints. There are no secrets in any app. The only OpenApps backend is a tiny **trial registry** that remembers when each Mac started each app's trial.
 - **No signup to try.** The official build works right after download and stops by itself after 3 days. Only buying goes through checkout.
 - **Privacy first.** License checks send only the license key and an activation ID. The trial registry receives only a one-way hash of the Mac's hardware ID, salted per app, so it can't be linked across apps or back to the Mac. Never the Mac's name, user, raw hardware IDs, typed content or usage.
