@@ -8,8 +8,9 @@
 #   scripts/verify-release.sh --release dist/OpenReaction-1.2.3.zip   # release: everything must pass
 #
 # Without --release an ad-hoc signed build only gets the structural checks
-# (signature integrity, bundle layout, universal binary, updater
-# configuration); the designated requirement is reported, not compared.
+# (signature integrity, bundle layout, universal binary, derived build
+# number, updater configuration); the designated requirement is reported,
+# not compared.
 # With --release the requirement must equal release/designated-requirement.txt
 # (PINNED_REQUIREMENT_FILE overrides the path for local rehearsals), the
 # updater must be compiled in with the committed public key, and nothing of
@@ -39,7 +40,12 @@ echo "==> App bundle"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 info() { plutil -extract "$1" raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true; }
 VERSION="$(info CFBundleShortVersionString)"
-echo "version: ${VERSION} ($(info CFBundleVersion))"
+BUILD="$(info CFBundleVersion)"
+echo "version: ${VERSION} (${BUILD})"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version '${VERSION}' is not MAJOR.MINOR.PATCH" >&2; exit 1; }
+IFS=. read -r major minor patch <<< "$VERSION"
+[[ "$BUILD" == "$(( major * 1000000 + minor * 1000 + patch ))" ]] \
+    || { echo "error: CFBundleVersion ${BUILD} is not derived from ${VERSION} (RELEASES.md: builds order as releases do)" >&2; exit 1; }
 echo "bundle id: $(info CFBundleIdentifier)"
 [[ "$(info CFBundleIdentifier)" == "$BUNDLE_ID" ]] || { echo "error: bundle identifier is not ${BUNDLE_ID}" >&2; exit 1; }
 [[ "$ZIP" == *"/${APP_NAME}-${VERSION}.zip" || "$ZIP" == "${APP_NAME}-${VERSION}.zip" ]] \
@@ -70,36 +76,26 @@ if [[ "$REQUIRE_RELEASE" == 1 ]]; then
         || { echo "error: ${PINNED_REQUIREMENT_FILE} does not hold a requirement for ${BUNDLE_ID} (RELEASING.md, \"Signing certificate and update key\")" >&2; exit 1; }
     ../../scripts/release/verify-designated-requirement.sh "$APP" "$PINNED_REQUIREMENT_FILE"
     grep -q '^Authority=OpenApps HQ Release$' <<< "$signature" || { echo "error: not signed by 'OpenApps HQ Release'" >&2; exit 1; }
-    # Every nested Sparkle piece must carry the same certificate, or the
-    # hardened runtime's library validation refuses to load it.
-    for nested in "$APP/Contents/Frameworks/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"; do
-        nested_signature="$(codesign --display --verbose=2 "$nested" 2>&1)"
-        grep -q '^Authority=OpenApps HQ Release$' <<< "$nested_signature" \
-            || { echo "error: ${nested#"$APP"/} is not signed by 'OpenApps HQ Release'" >&2; exit 1; }
-    done
 fi
 
 echo "==> Updater"
 feed="$(info SUFeedURL)"
 key="$(info SUPublicEDKey)"
+test ! -d "$APP/Contents/Frameworks" || { echo "error: the app embeds frameworks; the updater is compiled in" >&2; exit 1; }
 if [[ "$REQUIRE_RELEASE" == 1 || -n "$feed" ]]; then
     [[ "$feed" == "https://openapps.space/updates/openreaction/appcast.xml" ]] || { echo "error: SUFeedURL is '${feed}'" >&2; exit 1; }
-    [[ "$(info SURequireSignedFeed)" == true && "$(info SUVerifyUpdateBeforeExtraction)" == true ]] || { echo "error: signed feeds are not required" >&2; exit 1; }
-    [[ "$(info SUEnableAutomaticChecks)" == false && "$(info SUAutomaticallyUpdate)" == false ]] || { echo "error: automatic checks or downloads are on by default" >&2; exit 1; }
     [[ "$key" =~ ^[A-Za-z0-9+/]{43}=$ ]] || { echo "error: SUPublicEDKey is missing" >&2; exit 1; }
     if [[ "$REQUIRE_RELEASE" == 1 ]]; then
         committed="$(head -n 1 release/sparkle-public-key.txt)"
         [[ "$key" == "$committed" ]] || { echo "error: SUPublicEDKey is not the committed update key" >&2; exit 1; }
     fi
-    test -d "$APP/Contents/Frameworks/Sparkle.framework" || { echo "error: Sparkle.framework is not embedded" >&2; exit 1; }
     [[ -z "$(info CFBundleURLTypes)" ]] && { echo "error: the openreaction:// URL scheme is missing" >&2; exit 1; }
     if strings "$APP/Contents/MacOS/${APP_NAME}" | grep -q 'OPENREACTION_UPDATE_TEST_ACTION\|OPENREACTION_DISABLE_TAP'; then
         echo "error: the binary contains update-test hooks" >&2; exit 1
     fi
     [[ -z "$(info NSAppTransportSecurity)" ]] || { echo "error: App Transport Security exceptions in a release" >&2; exit 1; }
-    echo "ok: feed ${feed}, signed feeds required, automatic checks off by default"
+    echo "ok: feed ${feed}, key pinned, updater compiled in (automatic checks off by default)"
 else
-    test ! -d "$APP/Contents/Frameworks/Sparkle.framework" || { echo "error: Sparkle is embedded but not configured" >&2; exit 1; }
     echo "ok: no updater (source build)"
 fi
 

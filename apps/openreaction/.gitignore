@@ -10,6 +10,6 @@ xcuserdata/
 .idea
 *.local
 Sources/OpenReaction/Licensing/LicensingConfig.swift
-# Official builds resolve Sparkle (pinned by revision in Package.swift);
+# Official builds resolve the local OpenAppsUpdater package;
 # source builds have no dependencies.
 Package.resolved

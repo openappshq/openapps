@@ -1,5 +1,8 @@
 import AppKit
 import OpenReactionCore
+#if OPENAPPS_OFFICIAL
+import OpenAppsUpdater
+#endif
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -13,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var license: LicenseController?
     #endif
     #if OPENAPPS_OFFICIAL
-    private var updates: UpdateController?
+    private var updates: Updater?
     #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -84,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         #if OPENAPPS_OFFICIAL
         // Independent of licensing: updates never depend on the license or trial state.
-        let updates = UpdateController()
+        let updates = Updates.make()
         self.updates = updates
         settings.updates = updates
         statusMenu.updates = updates
@@ -107,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         license.start()
         #endif
         #if OPENAPPS_OFFICIAL
-        updates.start()
+        updates?.start()
         #endif
         if usesEventTap, OnboardingWindowController.shouldShowOnLaunch(permissions: controller.permissions) {
             onboarding.show()
@@ -121,14 +124,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// unconfirmed delivery.
     ///
     /// Official builds also save the trial's latest observed time, bounded
-    /// by `LicenseController.quitSaveBound`, alongside the drain.
+    /// by `LicenseController.quitSaveBound`, alongside the drain, and as the
+    /// very last thing swap in a staged update whose consent still holds: one
+    /// atomic rename, evaluated against the running app's identity first.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let drain = controller?.isTapRunning == true ? controller : nil
         #if OPENAPPS_LICENSING
         let license = self.license
-        guard drain != nil || license != nil else { return .terminateNow }
+        guard drain != nil || license != nil else { installStagedUpdate(); return .terminateNow }
         #else
-        guard drain != nil else { return .terminateNow }
+        guard drain != nil else { installStagedUpdate(); return .terminateNow }
         #endif
         Task {
             #if OPENAPPS_LICENSING
@@ -138,9 +143,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             #if OPENAPPS_LICENSING
             await saved.value
             #endif
+            installStagedUpdate()
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    private func installStagedUpdate() {
+        #if OPENAPPS_OFFICIAL
+        updates?.installStagedIfAllowed()
+        #endif
     }
 
     // MARK: - Deep link

@@ -1,6 +1,9 @@
 import AppKit
 import Carbon.HIToolbox
 import OpenReactionCore
+#if OPENAPPS_OFFICIAL
+import OpenAppsUpdater
+#endif
 
 @MainActor
 final class StatusMenuController: NSObject, NSMenuDelegate {
@@ -14,7 +17,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     /// Frontmost app when the menu opened; opening a status menu does not activate OpenReaction.
     private var frontmostApp: NSRunningApplication?
     #if OPENAPPS_OFFICIAL
-    var updates: UpdateController?
+    var updates: Updater?
     #endif
 
     init(controller: AppController, showOnboarding: @escaping () -> Void, showSettings: @escaping () -> Void) {

@@ -21,8 +21,10 @@
 #   VERSION       CFBundleShortVersionString, MAJOR.MINOR.PATCH. Defaults to
 #                 the `openreaction-vX.Y.Z` tag on HEAD, else 0.0.0 (a
 #                 development build; official releases always come from a tag).
-#   BUILD_NUMBER  CFBundleVersion. Defaults to the commit count on HEAD, so it
-#                 only ever grows along the main branch.
+#                 CFBundleVersion is derived from it, MAJOR*1000000 + MINOR*1000
+#                 + PATCH, so build order is release order: the updater compares
+#                 builds, and a back-port from a later commit never outranks the
+#                 release it patches.
 #   UNIVERSAL=1   Build one arm64 + x86_64 binary (the release configuration).
 #                 Default: the host architecture only.
 #   SCRATCH_PATH  SwiftPM's scratch path (default .build).
@@ -49,11 +51,12 @@
 # (gitignored) and refuses to build a licensed app without the paid product ID.
 #
 # Updates (RELEASES.md, "In-app updater") are compiled out by default too.
-# OPENAPPS_OFFICIAL=1 compiles Sparkle in, embeds Sparkle.framework and pins
-# the feed (https://openapps.space/updates/openreaction/appcast.xml), the
-# public update key from release/sparkle-public-key.txt and signed feeds in
-# Info.plist, with automatic checks and downloads off until the user turns
-# them on. Official releases set both OPENAPPS_LICENSING and OPENAPPS_OFFICIAL.
+# OPENAPPS_OFFICIAL=1 compiles the shared OpenAppsUpdater package in and pins
+# the feed (https://openapps.space/updates/openreaction/appcast.xml) and the
+# public update key from release/sparkle-public-key.txt in Info.plist
+# (SUFeedURL, SUPublicEDKey). Automatic checks and downloads are off until
+# the user turns them on. Official releases set both OPENAPPS_LICENSING and
+# OPENAPPS_OFFICIAL.
 #
 # An ad-hoc signed official build may pin a throwaway key instead with
 # UPDATE_PUBLIC_ED_KEY (the CI checks job does, before a real key exists); a
@@ -98,11 +101,14 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "error: VERSION must be MAJOR.MINOR.PATCH (got '${VERSION}')" >&2
     exit 1
 fi
-BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
-if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
-    echo "error: BUILD_NUMBER must be an integer (got '${BUILD_NUMBER}')" >&2
+# CFBundleVersion, derived from the version (RELEASES.md): the updater and
+# the feed compare builds, so they must order exactly as releases do.
+IFS=. read -r major minor patch <<< "$VERSION"
+if (( major > 999 || minor > 999 || patch > 999 )); then
+    echo "error: each part of VERSION must be at most 999 (got '${VERSION}')" >&2
     exit 1
 fi
+BUILD_NUMBER=$(( major * 1000000 + minor * 1000 + patch ))
 
 # Release signing (inside scripts/release/with-signing-keychain.sh, which
 # exports both): the requirement is derived from the bundle identifier and
@@ -205,28 +211,12 @@ cp LICENSE NOTICE "$APP/Contents/Resources/"
 test -f "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-SPARKLE_PLIST=""
+UPDATER_PLIST=""
 if [[ "$OFFICIAL" == "1" ]]; then
-    # The binary framework SwiftPM fetched for this build, embedded next to
-    # the executable (the rpath Package.swift sets).
-    SPARKLE="$(find "$SCRATCH_PATH/artifacts" -path '*/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework' -maxdepth 6 -type d | head -n 1)"
-    test -d "$SPARKLE" || { echo "error: Sparkle.framework not found under ${SCRATCH_PATH}/artifacts" >&2; exit 1; }
-    mkdir -p "$APP/Contents/Frameworks"
-    ditto "$SPARKLE" "$APP/Contents/Frameworks/Sparkle.framework"
-    SPARKLE_PLIST="<key>SUFeedURL</key>
+    UPDATER_PLIST="<key>SUFeedURL</key>
     <string>${FEED_URL}</string>
     <key>SUPublicEDKey</key>
-    <string>${PUBLIC_ED_KEY}</string>
-    <key>SURequireSignedFeed</key>
-    <true/>
-    <key>SUVerifyUpdateBeforeExtraction</key>
-    <true/>
-    <key>SUEnableAutomaticChecks</key>
-    <false/>
-    <key>SUAutomaticallyUpdate</key>
-    <false/>
-    <key>SUScheduledCheckInterval</key>
-    <integer>86400</integer>"
+    <string>${PUBLIC_ED_KEY}</string>"
 fi
 
 URL_TYPES_PLIST=""
@@ -288,7 +278,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     ${ATS_PLIST}
-    ${SPARKLE_PLIST}
+    ${UPDATER_PLIST}
     ${URL_TYPES_PLIST}
     <!-- Informational. macOS does not show custom text in the Accessibility
          or Input Monitoring prompts; the onboarding window explains both. -->
@@ -301,7 +291,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
-# Signing, inside out. The release keychain is on the search list only while
+# Signing. The release keychain is on the search list only while
 # with-signing-keychain.sh runs; this script never changes that list.
 if [[ -n "$SIGNING_IDENTITY" ]]; then
     echo "==> Signing with the release certificate ${SIGNING_IDENTITY}"
@@ -309,14 +299,6 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
 else
     echo "==> Signing ad-hoc (development build)"
     SIGN=(codesign --force --options runtime --timestamp=none --sign -)
-fi
-if [[ "$OFFICIAL" == "1" ]]; then
-    FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
-    "${SIGN[@]}" "$FRAMEWORK/XPCServices/Installer.xpc"
-    "${SIGN[@]}" --preserve-metadata=entitlements "$FRAMEWORK/XPCServices/Downloader.xpc"
-    "${SIGN[@]}" "$FRAMEWORK/Autoupdate"
-    "${SIGN[@]}" "$FRAMEWORK/Updater.app"
-    "${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
 fi
 if [[ -n "$REQUIREMENT" ]]; then
     "${SIGN[@]}" --entitlements "$ENTITLEMENTS" -r="designated => ${REQUIREMENT}" "$APP"

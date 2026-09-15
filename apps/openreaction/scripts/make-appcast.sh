@@ -6,9 +6,8 @@
 #
 # The update key comes from SPARKLE_ED_PRIVATE_KEY (the secret's value) or
 # SPARKLE_ED_KEY_FILE (a file holding it); it is copied only into a private
-# temporary file that is removed on exit. Sparkle's sign_update comes from
-# SPARKLE_BIN, by default the Sparkle artifact of an official build under
-# .build/.
+# temporary file that is removed on exit. Signing is scripts/sign-update.sh,
+# byte-compatible with Sparkle's sign_update.
 #
 # Optional: DOWNLOAD_URL (default: the GitHub Release asset for the version),
 # PUBLISHED_AT (ISO 8601 UTC, default now), NOTES, OUT (default
@@ -20,8 +19,8 @@
 # (sparkle:shortVersionString), build (sparkle:version), minimum_macos
 # (sparkle:minimumSystemVersion), published_at (openapps:publishedAt and
 # pubDate), notes (description), url, sha256 (openapps:sha256) and the zip's
-# signature (sparkle:edSignature). sign_update then embeds the feed's own
-# signature, which official builds require (SURequireSignedFeed).
+# signature (sparkle:edSignature). The feed's own signature is then appended,
+# which official builds require before trusting any field.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -45,12 +44,6 @@ KEY="$WORK/update.key"
         exit 1
     fi
 )
-
-if [[ -z "${SPARKLE_BIN:-}" ]]; then
-    SPARKLE_BIN="$(find .build -path '*/artifacts/sparkle/Sparkle/bin' -type d 2>/dev/null | head -n 1)"
-fi
-SIGN_UPDATE="${SPARKLE_BIN:-}/sign_update"
-test -x "$SIGN_UPDATE" || { echo "error: sign_update not found; build an official app first or set SPARKLE_BIN" >&2; exit 1; }
 
 # The facts come from the app inside the zip, so the feed can only describe
 # what is actually being shipped.
@@ -76,7 +69,7 @@ PUB_DATE="$(LC_ALL=C date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$PUBLISHED_AT" '+%a, %d
 
 SHA256="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
 LENGTH="$(stat -f %z "$ZIP")"
-SIGNATURE="$("$SIGN_UPDATE" --ed-key-file "$KEY" -p "$ZIP")"
+SIGNATURE="$(scripts/sign-update.sh "$KEY" "$ZIP")"
 [[ "$SIGNATURE" =~ ^[A-Za-z0-9+/]{86}==$ ]] || { echo "error: sign_update returned no signature" >&2; exit 1; }
 
 mkdir -p "$(dirname "$OUT")"
@@ -104,7 +97,7 @@ cat > "$OUT" <<XML
     </channel>
 </rss>
 XML
-"$SIGN_UPDATE" --ed-key-file "$KEY" --disable-signing-warning "$OUT" >/dev/null
+scripts/sign-update.sh "$KEY" --feed "$OUT"
 
 scripts/verify-appcast.sh "$OUT" "$ZIP"
 echo "==> Wrote ${OUT} (OpenReaction ${VERSION}, build ${BUILD})"

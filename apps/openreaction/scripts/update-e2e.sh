@@ -6,7 +6,7 @@
 #
 #   1. a throwaway signing certificate and update key go into a temporary
 #      directory;
-#   2. version A (1.0.0, build 1) and version B (1.0.1, build 2) are built as
+#   2. version A (1.0.0) and version B (1.0.1) are built as
 #      the update-test variant (bundle id com.openappshq.openreaction.updatetest,
 #      no event tap, feed on 127.0.0.1) inside scripts/release/with-signing-keychain.sh,
 #      which holds the certificate in a temporary keychain (never the login
@@ -18,9 +18,12 @@
 #      appcast are served from 127.0.0.1;
 #   5. A runs as a fresh install: automatic checks are off, so the server must
 #      see no request at all;
-#   6. A runs with both Settings toggles on (their user-defaults keys): it must
-#      find B, verify it, report it ready, and install it when it quits;
-#   7. the installed app must be B, with the same designated requirement as A.
+#   6. A runs with both Settings toggles on (their user-defaults keys) and
+#      turns "install automatically" off again mid-download, then once more
+#      after staging: neither run may install anything or leave a staged copy;
+#   7. A runs with both toggles on: it must find B, verify it, report it
+#      staged, and install it when it quits;
+#   8. the installed app must be B, with the same designated requirement as A.
 #
 # Everything is removed afterwards: apps, keychain, certificate, key, the
 # test bundle's defaults and caches. Needs OpenSSL 3 (`openssl` on PATH,
@@ -34,17 +37,17 @@ cd "$(dirname "$0")/.."
 #   update-e2e.sh --build-signed <tmp dir> <feed url> <public key>
 if [[ "${1:-}" == "--build-signed" ]]; then
     TMP="${2:?tmp dir}"; FEED_URL="${3:?feed url}"; PUBLIC_KEY="${4:?public key}"
-    build() { # <version> <build> <destination>
-        echo "==> Building ${1} (build ${2})"
-        VERSION="$1" BUILD_NUMBER="$2" OPENAPPS_OFFICIAL=1 OPENREACTION_UPDATE_TEST=1 \
+    build() { # <version> <destination>
+        echo "==> Building ${1}"
+        VERSION="$1" OPENAPPS_OFFICIAL=1 OPENREACTION_UPDATE_TEST=1 \
             UPDATE_FEED_URL="$FEED_URL" UPDATE_PUBLIC_ED_KEY="$PUBLIC_KEY" \
             scripts/bundle.sh > "$TMP/build-$1.log" 2>&1 || { tail -n 30 "$TMP/build-$1.log" >&2; return 1; }
-        rm -rf "$3"
-        mkdir -p "$(dirname "$3")"
-        ditto build/OpenReaction.app "$3"
+        rm -rf "$2"
+        mkdir -p "$(dirname "$2")"
+        ditto build/OpenReaction.app "$2"
     }
-    build 1.0.0 1 "$TMP/Applications/OpenReaction.app"
-    build 1.0.1 2 "$TMP/B/OpenReaction.app"
+    build 1.0.0 "$TMP/Applications/OpenReaction.app"
+    build 1.0.1 "$TMP/B/OpenReaction.app"
     exit 0
 fi
 
@@ -110,8 +113,10 @@ for app in "$TMP/Applications/OpenReaction.app" "$TMP/B/OpenReaction.app"; do
     [[ "$actual" == "$REQUIREMENT" ]] || { echo "error: ${app} has requirement '${actual}'" >&2; exit 1; }
     [[ "$(plutil -extract SUPublicEDKey raw -o - "$app/Contents/Info.plist")" == "$PUBLIC_KEY" ]]
     [[ "$(plutil -extract SUFeedURL raw -o - "$app/Contents/Info.plist")" == "$FEED_URL" ]]
-    [[ "$(plutil -extract SUEnableAutomaticChecks raw -o - "$app/Contents/Info.plist")" == false ]]
+    test ! -d "$app/Contents/Frameworks"
 done
+[[ "$(plutil -extract CFBundleVersion raw -o - "$TMP/Applications/OpenReaction.app/Contents/Info.plist")" == 1000000 ]]
+[[ "$(plutil -extract CFBundleVersion raw -o - "$TMP/B/OpenReaction.app/Contents/Info.plist")" == 1000001 ]]
 # A wrongly signed app must not satisfy the requirement (the pinned check has teeth).
 cp -R "$TMP/B/OpenReaction.app" "$TMP/wrong.app"
 codesign --force --sign - "$TMP/wrong.app" 2>/dev/null
@@ -167,28 +172,58 @@ if grep -q 'dyld\[' "$TMP/run-fresh.log"; then
 fi
 echo "ok: no request, no update cycle"
 
-echo "==> 6. With both toggles on, A finds B and installs it on quit"
-defaults write "$BUNDLE_ID" SUEnableAutomaticChecks -bool true
-defaults write "$BUNDLE_ID" SUAutomaticallyUpdate -bool true
-OPENREACTION_DISABLE_TAP=1 OPENREACTION_UPDATE_TEST_ACTION=quit "$BIN" > "$TMP/run-update.log" 2>&1 &
-APP_PID=$!
-for _ in $(seq 1 120); do
-    if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
-    sleep 1
-done
-if kill -0 "$APP_PID" 2>/dev/null; then
-    echo "error: A did not quit within 2 minutes; its log:" >&2
-    cat "$TMP/run-update.log" >&2
-    exit 1
-fi
-wait "$APP_PID" 2>/dev/null || true
-APP_PID=""
-grep -q 'openreaction-update-test: ready' "$TMP/run-update.log" || { echo "error: A never reported the update ready:" >&2; cat "$TMP/run-update.log" >&2; exit 1; }
+run_app() { # <log> <action>: runs A until it quits by itself (or 2 minutes pass)
+    # Each run is a fresh day: the last check is what makes a launch check due.
+    defaults delete "$BUNDLE_ID" OpenAppsUpdater.lastCheck >/dev/null 2>&1 || true
+    OPENREACTION_DISABLE_TAP=1 OPENREACTION_UPDATE_TEST_ACTION="$2" "$BIN" > "$1" 2>&1 &
+    APP_PID=$!
+    for _ in $(seq 1 120); do
+        if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
+        sleep 1
+    done
+    if kill -0 "$APP_PID" 2>/dev/null; then
+        echo "error: A did not quit within 2 minutes; its log:" >&2
+        cat "$1" >&2
+        exit 1
+    fi
+    wait "$APP_PID" 2>/dev/null || true
+    APP_PID=""
+}
+still_1_0_0() { # <label>
+    local version
+    version="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")"
+    [[ "$version" == "1.0.0" ]] || { echo "error ($1): the installed app changed to ${version}" >&2; exit 1; }
+    if [[ -e "$TMP/Applications/.OpenReaction.app.update" ]]; then
+        echo "error ($1): a staged update was left behind" >&2; exit 1
+    fi
+}
+defaults write "$BUNDLE_ID" OpenAppsUpdater.checkAutomatically -bool true
+defaults write "$BUNDLE_ID" OpenAppsUpdater.installAutomatically -bool true
+
+echo "==> 6. Turning \"install automatically\" off withdraws a download and a staged update"
+run_app "$TMP/run-revoke-download.log" revoke-during-download
+grep -q 'openreaction-update-test: revoked-during-download' "$TMP/run-revoke-download.log" \
+    || { echo "error: the download was never revoked:" >&2; cat "$TMP/run-revoke-download.log" >&2; exit 1; }
+grep -q 'openreaction-update-test: staged' "$TMP/run-revoke-download.log" && { echo "error: the update was staged after the revocation" >&2; exit 1; }
+still_1_0_0 "revoked during download"
+echo "ok: revoked mid-download, nothing installed"
+# The toggle is off now (the app saved it); turn it back on for the next run.
+defaults write "$BUNDLE_ID" OpenAppsUpdater.installAutomatically -bool true
+run_app "$TMP/run-revoke-staged.log" revoke-after-staged
+grep -q 'openreaction-update-test: staged' "$TMP/run-revoke-staged.log" || { echo "error: the update was never staged:" >&2; cat "$TMP/run-revoke-staged.log" >&2; exit 1; }
+grep -q 'openreaction-update-test: revoked-after-staged' "$TMP/run-revoke-staged.log" || { echo "error: the staged update was never revoked" >&2; exit 1; }
+still_1_0_0 "revoked after staging"
+echo "ok: revoked after staging, nothing installed"
+defaults write "$BUNDLE_ID" OpenAppsUpdater.installAutomatically -bool true
+
+echo "==> 7. With both toggles on, A finds B and installs it on quit"
+run_app "$TMP/run-update.log" quit
+grep -q 'openreaction-update-test: ready 1.0.1' "$TMP/run-update.log" || { echo "error: A never reported the update ready:" >&2; cat "$TMP/run-update.log" >&2; exit 1; }
 if ! requests_since_probes | grep -q '"GET /appcast.xml' || ! requests_since_probes | grep -q '"GET /OpenReaction-1.0.1.zip'; then
     echo "error: the feed or the zip was not fetched:" >&2; cat "$TMP/server.log" >&2; exit 1
 fi
 
-echo "==> 7. The installed app is B with A's designated requirement"
+echo "==> 8. The installed app is B with A's designated requirement"
 installed=""
 for _ in $(seq 1 60); do
     installed="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)"
@@ -198,7 +233,9 @@ done
 [[ "$installed" == "1.0.1" ]] || { echo "error: installed version is '${installed}', not 1.0.1" >&2; exit 1; }
 sleep 2 # the installer's last file operations
 pkill -f "$BIN" 2>/dev/null || true
-[[ "$(plutil -extract CFBundleVersion raw -o - "$APP/Contents/Info.plist")" == 2 ]]
+[[ "$(plutil -extract CFBundleVersion raw -o - "$APP/Contents/Info.plist")" == 1000001 ]]
+test ! -e "$TMP/Applications/.OpenReaction.app.update"
+test ! -e "$TMP/Applications/.OpenReaction.app.previous"
 codesign --verify --deep --strict "$APP"
 after="$(codesign --display -r- "$APP" 2>/dev/null | sed -n 's/^designated => //p')"
 [[ "$after" == "$REQUIREMENT" ]] || { echo "error: the installed app's requirement changed to '${after}'" >&2; exit 1; }

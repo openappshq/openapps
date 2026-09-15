@@ -1,5 +1,8 @@
 import AppKit
 import OpenReactionCore
+#if OPENAPPS_OFFICIAL
+import OpenAppsUpdater
+#endif
 import SwiftUI
 
 @MainActor
@@ -12,7 +15,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let license: LicenseController
     #endif
     #if OPENAPPS_OFFICIAL
-    var updates: UpdateController?
+    var updates: Updater?
     #endif
 
     #if OPENAPPS_LICENSING
@@ -69,9 +72,9 @@ private struct SettingsView: View {
     #endif
     let showOnboarding: () -> Void
     #if OPENAPPS_OFFICIAL
-    var updates: UpdateController? = nil
+    var updates: Updater? = nil
 
-    func showingUpdates(_ updates: UpdateController?) -> SettingsView {
+    func showingUpdates(_ updates: Updater?) -> SettingsView {
         var view = self
         view.updates = updates
         return view

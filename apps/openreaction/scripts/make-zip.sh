@@ -5,7 +5,8 @@
 #
 #   scripts/make-zip.sh [path/to/OpenReaction.app]
 #
-# Prints the zip's SHA-256 and path on its last line: `<digest>  <path>`.
+# Writes `<zip>.sha256` (`<digest>  <name>`, what shasum -c reads) next to
+# the zip and prints the same line.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,4 +20,4 @@ mkdir -p dist
 rm -f "$ZIP"
 echo "==> Creating ${ZIP}" >&2
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
-shasum -a 256 "$ZIP"
+(cd dist && shasum -a 256 "$(basename "$ZIP")" | tee "$(basename "$ZIP").sha256")

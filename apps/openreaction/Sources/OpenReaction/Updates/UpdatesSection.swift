@@ -1,47 +1,75 @@
 #if OPENAPPS_OFFICIAL
-import OpenReactionCore
+import OpenAppsUpdater
 import SwiftUI
 
 /// Settings → Updates (RELEASES.md, "In-app updater").
 struct UpdatesSection: View {
-    let updates: UpdateController
+    let updates: Updater
 
     var body: some View {
         Section {
             if updates.location != .updatable {
                 note("Move OpenReaction to Applications to enable updates.")
             } else {
-                Toggle(isOn: Binding(get: { updates.automaticChecks }, set: { updates.setAutomaticChecks($0) })) {
+                Toggle(isOn: Binding(get: { updates.checksAutomatically }, set: { updates.setChecksAutomatically($0) })) {
                     Text("Check for updates automatically").font(Brand.body(14))
                 }
-                .disabled(!updates.isAvailable)
-                Toggle(isOn: Binding(get: { updates.automaticDownloads }, set: { updates.setAutomaticDownloads($0) })) {
+                Toggle(isOn: Binding(get: { updates.installsAutomatically }, set: { updates.setInstallsAutomatically($0) })) {
                     Text("Download and install automatically").font(Brand.body(14))
                 }
-                .disabled(!updates.isAvailable || !updates.automaticChecks)
-                if let version = updates.readyVersion {
-                    HStack {
-                        Text("OpenReaction \(version) is downloaded and installs when you quit, whatever the settings above.").font(Brand.body(13))
-                        Spacer()
-                        Button("Restart to Update") { updates.restartToUpdate() }
-                    }
-                }
-                HStack {
-                    Text(lastCheckText)
-                        .font(Brand.body(12))
-                        .foregroundStyle(Brand.textSecondary)
-                    Spacer()
-                    Button("Check Now") { updates.checkNow() }
-                        .disabled(!updates.canCheckNow)
-                }
+                .disabled(!updates.checksAutomatically)
+                statusRow
             }
         } header: {
             MonoLabel("Updates")
         } footer: {
-            Text("Both are off by default, so OpenReaction only looks for updates when you click Check Now. Turned on, it checks once a day and installs updates when you quit. A check only downloads the update list from openapps.space and sends nothing about you or this Mac. Installed with Homebrew? `brew upgrade --cask openreaction` updates it too.")
+            Text("Both are off by default, so OpenReaction only looks for updates when you click Check Now. Turned on, it checks once a day and installs updates when you quit; turning them off again cancels anything it downloaded. A check only downloads the update list from openapps.space and sends nothing about you or this Mac. Installed with Homebrew? `brew upgrade --cask openreaction` updates it too.")
                 .font(Brand.body(12))
                 .foregroundStyle(Brand.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder private var statusRow: some View {
+        switch updates.phase {
+        case .idle, .upToDate:
+            HStack {
+                Text(updates.phase == .upToDate ? "OpenReaction is up to date." : lastCheckText)
+                    .font(Brand.body(12))
+                    .foregroundStyle(Brand.textSecondary)
+                Spacer()
+                Button("Check Now") { updates.checkNow() }
+            }
+        case .checking:
+            HStack {
+                Text("Checking…").font(Brand.body(12)).foregroundStyle(Brand.textSecondary)
+                Spacer()
+                ProgressView().controlSize(.small)
+            }
+        case .available(let item):
+            HStack {
+                Text("OpenReaction \(item.version.description) is available.").font(Brand.body(13))
+                Spacer()
+                Button("Install and Restart") { updates.installAvailable() }
+            }
+        case .downloading(let item):
+            HStack {
+                Text("Downloading OpenReaction \(item.version.description)…").font(Brand.body(12)).foregroundStyle(Brand.textSecondary)
+                Spacer()
+                ProgressView().controlSize(.small)
+            }
+        case .staged(let staged):
+            HStack {
+                Text("OpenReaction \(staged.item.version.description) is ready and installs when you quit.").font(Brand.body(13))
+                Spacer()
+                Button("Restart to Update") { updates.restartToUpdate() }
+            }
+        case .failed(let message):
+            HStack(alignment: .top) {
+                note("Update failed: \(message)")
+                Spacer()
+                Button("Try Again") { updates.checkNow() }
+            }
         }
     }
 

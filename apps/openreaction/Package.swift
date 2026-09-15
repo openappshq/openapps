@@ -4,7 +4,7 @@ import PackageDescription
 
 // Official builds set OPENAPPS_LICENSING=1 and OPENAPPS_OFFICIAL=1 (see
 // scripts/bundle.sh); source builds compile licensing and the updater out
-// entirely, and fetch no dependencies.
+// entirely, and depend on nothing.
 let environment = ProcessInfo.processInfo.environment
 let licensing = environment["OPENAPPS_LICENSING"] == "1"
 let official = environment["OPENAPPS_OFFICIAL"] == "1"
@@ -19,14 +19,10 @@ if updateTesting { appSettings.append(.define("OPENREACTION_UPDATE_TESTING")) }
 
 var appDependencies: [Target.Dependency] = ["OpenReactionCore"]
 var packageDependencies: [Package.Dependency] = []
-var appLinkerSettings: [LinkerSetting] = []
 if official {
-    // Sparkle 2.10.0, pinned by commit: the binary framework's checksum is
-    // part of that commit's manifest, so a moved tag cannot change it.
-    packageDependencies.append(.package(url: "https://github.com/sparkle-project/Sparkle", revision: "eef1a539a373c1f1a320624b1130fc5de7b2e100"))
-    appDependencies.append(.product(name: "Sparkle", package: "Sparkle"))
-    // scripts/bundle.sh embeds Sparkle.framework in Contents/Frameworks.
-    appLinkerSettings.append(.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]))
+    // The shared in-app updater (RELEASES.md, "In-app updater").
+    packageDependencies.append(.package(path: "../../packages/openapps-updater"))
+    appDependencies.append(.product(name: "OpenAppsUpdater", package: "openapps-updater"))
 }
 
 let package = Package(
@@ -48,8 +44,7 @@ let package = Package(
             name: "OpenReaction",
             dependencies: appDependencies,
             resources: [.copy("Resources")],
-            swiftSettings: appSettings,
-            linkerSettings: appLinkerSettings
+            swiftSettings: appSettings
         ),
         .testTarget(
             name: "OpenReactionCoreTests",
