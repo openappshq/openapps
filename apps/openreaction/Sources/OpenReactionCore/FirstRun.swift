@@ -61,9 +61,9 @@ public enum OnboardingLaunch {
 
 /// "Open at login" defaults to on in official builds, but only on a
 /// demonstrably fresh install: no preferences from an earlier launch (of
-/// any version), and neither a trial nor a license record in the Keychain,
-/// both positively absent. Anything else — an upgrade, a reinstall over a
-/// kept Keychain, a login item the user once turned off — is left alone.
+/// any version), and neither a trial nor a license record in the record
+/// store, both positively absent. Anything else — an upgrade, a reinstall
+/// over kept records, a login item the user once turned off — is left alone.
 /// Decided once; the flag makes every later launch leave the item as is.
 public struct LoginItemDefault {
     public enum Key {

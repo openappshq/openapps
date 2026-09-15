@@ -222,7 +222,7 @@ extension LicensingTests {
 
     // MARK: 18–21 — the registry
 
-    @Test("18. After a Keychain wipe the registry's older start ends the trial")
+    @Test("18. After the records are wiped the registry's older start ends the trial")
     func case18_wipedRegistryEndsTrial() async {
         trialStore.record = nil
         let registryNow = clock.now.addingTimeInterval(-3 * 3600) // its clock runs 3 h behind
@@ -245,7 +245,7 @@ extension LicensingTests {
         #expect(registry.devices.count == 1)
     }
 
-    @Test("19. After a Keychain wipe the registry's start 1 day ago leaves 2 days, not 3")
+    @Test("19. After the records are wiped the registry's start 1 day ago leaves 2 days, not 3")
     func case19_wipedRegistryKeepsRemainingTime() async {
         trialStore.record = nil
         registry.result = .registered(startedAt: clock.now.addingTimeInterval(-Day.day), now: clock.now)

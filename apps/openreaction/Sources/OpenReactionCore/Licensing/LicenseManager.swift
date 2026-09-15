@@ -18,7 +18,7 @@ import Foundation
 /// metadata never changes the generation.
 ///
 /// Invalidation (`valid: false`) and removal are journaled outside the
-/// Keychain first, then take effect in memory at once; if the Keychain
+/// record store first, then take effect in memory at once; if the store
 /// refuses the write it is retried on every tick and surfaced as a storage
 /// problem, and the journal entry keeps the activation dead across a restart
 /// until the record is durably saved as revoked, deleted or replaced. Nothing
@@ -54,7 +54,7 @@ public final class LicenseManager {
     /// The license record was read, present or positively absent. No trial
     /// starts or runs before that.
     public private(set) var licenseRead = false
-    /// What the first positive read of each Keychain item found, for
+    /// What the first positive read of each record found, for
     /// `freshInstall`. Set once; a later reload does not change it.
     private var licenseFoundAtLoad: Bool?
     private var trialFoundAtLoad: Bool?
@@ -571,7 +571,7 @@ public final class LicenseManager {
 
     /// Invalidation takes effect immediately, whatever storage says: the
     /// restrictive state is published before any I/O, then the journal is
-    /// written, then the Keychain — so a restart before the Keychain accepts
+    /// written, then the record — so a restart before the store accepts
     /// the revoked record still finds it revoked.
     private func invalidate(_ current: LicenseRecord) {
         var revoked = current
@@ -800,7 +800,7 @@ public final class LicenseManager {
         // which goes once this record is durable (`flushRecord`). If the
         // save fails, a restart stays locked until the next successful check.
         updated.eventSeq = current.eventSeq + 1
-        // The grant is saved first: it takes effect only once the Keychain
+        // The grant is saved first: it takes effect only once the store
         // holds it. A refused save leaves the Mac as it was; the next check
         // (backoff applies) tries again.
         do {

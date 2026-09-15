@@ -14,7 +14,7 @@ import SwiftUI
 /// actions that neither ask TCC, open System Settings nor run tccutil; a
 /// relauncher that is unavailable, so Relaunch never starts a real copy; a
 /// login item that registers only in memory; and — with licensing — an
-/// in-memory Keychain, a Dodo client and a trial registry that never answer,
+/// in-memory record store, a Dodo client and a trial registry that never answer,
 /// so Activate and Try again go nowhere. The event tap is never installed:
 /// `AppController.start()` is not called.
 ///
@@ -86,7 +86,7 @@ final class SetupPreviewHarness {
 
     #if OPENAPPS_LICENSING
     /// A licensed-flavour preview runs the real controller and manager over
-    /// these: the "Keychain" holds a registered trial with a day used, and
+    /// these: the "record store" holds a registered trial with a day used, and
     /// no service ever answers.
     private final class MemoryLicenseStore: LicenseStore, @unchecked Sendable {
         private let lock = NSLock()

@@ -31,9 +31,9 @@ struct LicenseBadgeTests {
 
     @Test func unavailableSaysStartingUnlessStorageFailed() {
         #expect(LicenseBadge.label(for: .trialUnavailable) == .init(text: "Starting your free trial…", tone: .trial))
-        #expect(LicenseBadge.label(for: .trialUnavailable, storageError: true) == .init(text: "Can’t read the license from the Keychain", tone: .attention))
-        #expect(LicenseBadge.label(for: .trialUnavailable, trialStorageError: true) == .init(text: "Can’t read or save the free trial in the Keychain", tone: .attention))
-        #expect(LicenseBadge.label(for: .trialUnavailable, storageError: true, trialStorageError: true)?.text == "Can’t read the license from the Keychain")
+        #expect(LicenseBadge.label(for: .trialUnavailable, storageError: true) == .init(text: "Can’t read the license record", tone: .attention))
+        #expect(LicenseBadge.label(for: .trialUnavailable, trialStorageError: true) == .init(text: "Can’t read or save the free trial record", tone: .attention))
+        #expect(LicenseBadge.label(for: .trialUnavailable, storageError: true, trialStorageError: true)?.text == "Can’t read the license record")
     }
 
     @Test func onlyFeatureOnStatesAreCalm() {

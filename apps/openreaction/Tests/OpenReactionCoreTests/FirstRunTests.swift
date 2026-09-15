@@ -136,7 +136,7 @@ struct LoginItemDefaultTests {
     }
 
     @Test func anExplicitChoiceWhileStorageIsPendingIsNeverUndone() {
-        // Fresh launch, Keychain slow: the user turns the item on and off in
+        // Fresh launch, storage slow: the user turns the item on and off in
         // Settings before storage answers; when it then says "fresh", the
         // default must not turn it back on.
         let store = MemoryFlags()

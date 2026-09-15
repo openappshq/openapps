@@ -1,8 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// The in-app trial's record (LICENSING.md, "Stored records"): a Keychain
-/// item of its own, never deleted by the app.
+/// The in-app trial's record (LICENSING.md, "Stored records"): a file of
+/// its own in the record store, never deleted by the app.
 public struct TrialRecord: Codable, Equatable, Sendable {
     /// Trial start on the local clock: the registry's start converted to
     /// local time, or the local clock at a provisional start.
@@ -134,7 +134,7 @@ public struct TrialTiming: Equatable, Sendable {
     public var offlineLimit: TimeInterval { day }
 }
 
-/// Where the trial record lives (a Keychain item in the app; memory in
+/// Where the trial record lives (an encrypted file in the app; memory in
 /// tests). Only a read that positively finds nothing returns nil.
 public protocol TrialStore: Sendable {
     func loadTrial() throws(LicenseStoreError) -> TrialRecord?

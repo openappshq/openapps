@@ -64,7 +64,7 @@ placeholder.
    Commit `release/designated-requirement.txt`
    (`identifier "com.openappshq.openreaction" and certificate leaf = H"<sha1>"`).
    Every release is signed with exactly this requirement and verified against
-   it, so permissions and Keychain access survive updates. Losing the
+   it, so permissions survive updates. Losing the
    certificate means every installed user re-grants permissions once.
 
 2. **The update key**, one per app:

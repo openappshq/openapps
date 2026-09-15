@@ -33,8 +33,8 @@ public enum LicenseBadge {
         case .trial(let days):
             return Label(text: trialText(daysLeft: days), tone: .trial)
         case .trialUnavailable:
-            if storageError { return Label(text: "Can’t read the license from the Keychain", tone: .attention) }
-            if trialStorageError { return Label(text: "Can’t read or save the free trial in the Keychain", tone: .attention) }
+            if storageError { return Label(text: "Can’t read the license record", tone: .attention) }
+            if trialStorageError { return Label(text: "Can’t read or save the free trial record", tone: .attention) }
             return Label(text: "Starting your free trial…", tone: .trial)
         case .trialEnded:
             return Label(text: "Trial ended", tone: .attention)

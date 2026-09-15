@@ -263,13 +263,14 @@ public protocol LicenseClient: Sendable {
 
 /// Storage that could not be read or written. Distinct from "no record".
 public enum LicenseStoreError: Error, Equatable, Sendable {
-    /// The Keychain is locked, denied or otherwise unavailable.
+    /// The record store cannot be read or written (a directory or file
+    /// the app can't open); the reason, for the License screen.
     case unavailable(String)
     /// A record exists but could not be decoded.
     case corrupt
 }
 
-/// Where the record lives (the Keychain in the app; memory in tests). Every
+/// Where the record lives (an encrypted file in the app; memory in tests). Every
 /// operation reports failure instead of pretending it worked.
 public protocol LicenseStore: Sendable {
     func loadRecord() throws(LicenseStoreError) -> LicenseRecord?
@@ -282,8 +283,8 @@ public protocol LicenseStore: Sendable {
 }
 
 /// A non-secret note that an activation is dead (revoked by Dodo, or removed
-/// by the user), kept outside the Keychain so it survives a restart even when
-/// the Keychain refused to save or delete the record. Keyed by activation
+/// by the user), kept outside the record store so it survives a restart even
+/// when the store refused to save or delete the record. Keyed by activation
 /// (the instance id, hashed by the implementation); never holds the license
 /// key, and never a time: the entry carries the record's `eventSeq` of the
 /// revocation, so on load it is honored only while the saved record has not
@@ -372,8 +373,8 @@ public enum LicenseMessage: Equatable, Sendable {
         case .removeFailedOffline: "Couldn’t reach the license service to remove this Mac. Try again when you’re online."
         case .activated: "OpenReaction is licensed on this Mac."
         case .removed: "This Mac was removed from the license."
-        case .storageFailed: "OpenReaction couldn’t save the license on this Mac (the Keychain refused). The activation was released; unlock the Keychain and try again."
-        case .storageUnavailable: "OpenReaction can’t read or update its license in the Keychain right now. It keeps retrying; unlock the Keychain if it stays locked."
+        case .storageFailed: "OpenReaction couldn’t save the license on this Mac (its records folder refused the write). The activation was released; check that Application Support is writable and try again."
+        case .storageUnavailable: "OpenReaction can’t read or update its license records right now. It keeps retrying; check that its Application Support folder is readable and writable."
         case .cleanupPending: "A previous activation couldn’t be released yet; OpenReaction will retry. If a Mac stays counted, contact support."
         case .alreadyActivated: "This key is already active on this Mac."
         case .malformedResponse: "The license service sent an unexpected answer. Try again later."
@@ -382,7 +383,7 @@ public enum LicenseMessage: Equatable, Sendable {
 }
 
 /// Where licensing runs: its own serial executor, never the main actor, so
-/// a Keychain or preferences call that stalls cannot stall the UI, the
+/// a storage or preferences call that stalls cannot stall the UI, the
 /// deadline timers or the tap's shutdown.
 @globalActor
 public actor LicenseActor {

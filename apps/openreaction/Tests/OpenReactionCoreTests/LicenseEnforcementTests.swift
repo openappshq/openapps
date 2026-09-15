@@ -17,7 +17,7 @@ struct LicenseEnforcementTests {
 
         var record: LicenseRecord? { lock.withLock { _record } }
         var isBlocked: Bool { lock.withLock { blockedSaves > 0 } }
-        /// Once set, reading the record hangs until released (a Keychain retry that stalls).
+        /// Once set, reading the record hangs until released (a store retry that stalls).
         var blockReads = false
         /// Reading the cleanups fails, so every tick retries storage.
         var failCleanupReads = false
@@ -36,7 +36,7 @@ struct LicenseEnforcementTests {
         }
         func saveRecord(_ record: LicenseRecord) throws(LicenseStoreError) {
             lock.withLock { blockedSaves += 1 }
-            gate.wait() // the Keychain is waiting for the user, say
+            gate.wait() // the disk is stuck, say
             lock.withLock {
                 blockedSaves -= 1
                 _record = record
@@ -117,7 +117,7 @@ struct LicenseEnforcementTests {
         let start = clock.now
         let minute: TimeInterval = 60
         let store = BlockingStore(record: nil)
-        store.failCleanupReads = true // a Keychain retry runs on every tick
+        store.failCleanupReads = true // a store retry runs on every tick
         let trialStore = BlockingTrialStore(record: TrialRecord(
             startedAt: start.addingTimeInterval(-elapsed), lastSeenAt: start, registered: registered
         ))
@@ -263,7 +263,7 @@ struct LicenseEnforcementTests {
         func append(_ snapshot: LicenseSnapshot) { lock.withLock { _snapshots.append(snapshot) } }
     }
 
-    @Test func aRevocationIsPublishedBeforeTheKeychainAnswers() async throws {
+    @Test func aRevocationIsPublishedBeforeTheStoreAnswers() async throws {
         let now = Date()
         let record = LicenseRecord(
             licenseKey: "KEY", instanceID: "inst_1", productID: "pdt_P",
@@ -277,7 +277,7 @@ struct LicenseEnforcementTests {
         await manager.load()
         #expect(seen.snapshots.last?.state(now: now, uptime: 0) == .licensed)
 
-        // Dodo says valid:false; the Keychain write then hangs.
+        // Dodo says valid:false; the store write then hangs.
         let check = Task { await manager.check() }
         let deadline = Date().addingTimeInterval(5)
         while !store.isBlocked, Date() < deadline { try? await Task.sleep(for: .milliseconds(1)) }
@@ -298,7 +298,7 @@ struct LicenseEnforcementTests {
         #expect(await manager.state == .revoked)
     }
 
-    @Test func aRevocationIsPublishedBeforeTheJournalOrAnyKeychainRead() async throws {
+    @Test func aRevocationIsPublishedBeforeTheJournalOrAnyStoreRead() async throws {
         let now = Date()
         let record = LicenseRecord(
             licenseKey: "KEY", instanceID: "inst_1", productID: "pdt_P",
@@ -325,12 +325,12 @@ struct LicenseEnforcementTests {
         #expect(trialStore.readCount == readsAfterLoad) // building snapshots read nothing
         #expect(try journal.entry(instanceID: "inst_1") == nil)
         #expect(store.record?.isRevoked == false)
-        #expect(!store.isBlocked) // the Keychain was not even asked yet
+        #expect(!store.isBlocked) // the store was not even asked yet
 
-        journal.release() // the journal accepts: now the Keychain hangs
+        journal.release() // the journal accepts: now the store hangs
         while !store.isBlocked, Date() < deadline { try? await Task.sleep(for: .milliseconds(1)) }
         #expect(store.isBlocked)
-        #expect(try journal.entry(instanceID: "inst_1") == JournalEntry(seq: 2)) // journal before Keychain
+        #expect(try journal.entry(instanceID: "inst_1") == JournalEntry(seq: 2)) // journal before the store
         #expect(store.record?.isRevoked == false)
         store.release()
         await check.value

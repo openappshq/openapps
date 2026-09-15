@@ -9,7 +9,7 @@ import SwiftUI
 /// exposes state for the UI and tells the app whether the picker may run.
 ///
 /// The manager lives on its own actor and hands over a `LicenseSnapshot`
-/// right after its memory changes, before it touches the Keychain. The
+/// right after its memory changes, before it touches the record store. The
 /// entitlement is derived from that snapshot with the clock, so deadlines
 /// and the feature lock never wait on storage: a snapshot that turns the
 /// feature off locks the gate from the manager's thread at once
@@ -116,7 +116,7 @@ final class LicenseController {
     var storageError: LicenseStoreError? { snapshot.storageError }
     var trialStorageError: LicenseStoreError? { snapshot.trialStorageError }
     var journalError: Bool { snapshot.journalError }
-    /// The install has never run with licensing (both Keychain records
+    /// The install has never run with licensing (both record files
     /// positively absent); nil until storage has answered. See
     /// `LicenseManager.freshInstall`.
     var freshInstall: Bool? { snapshot.freshInstall }
@@ -192,7 +192,7 @@ final class LicenseController {
     }
 
     /// Saves the trial's latest `last_seen_at` before the process exits.
-    /// Waits at most `quitSaveBound`: a stuck Keychain never holds up Quit,
+    /// Waits at most `quitSaveBound`: a stuck disk never holds up Quit,
     /// and at most the last hour of observed time is lost.
     func saveBeforeQuit() async {
         let manager = self.manager

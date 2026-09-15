@@ -18,7 +18,7 @@ struct LicenseSection: View {
             if let error = license.storageError {
                 note(LicenseMessage.storageUnavailable.text + " (\(Self.describe(error)))")
             } else if let error = license.trialStorageError {
-                note("OpenReaction can’t read or save its free trial in the Keychain right now. It keeps retrying; unlock the Keychain if it stays locked. (\(Self.describe(error)))")
+                note("OpenReaction can’t read or save its free trial record right now. It keeps retrying; check that its Application Support folder is readable and writable. (\(Self.describe(error)))")
             } else if license.journalError {
                 note("OpenReaction couldn’t save its license notes in Preferences. It keeps retrying.")
             }

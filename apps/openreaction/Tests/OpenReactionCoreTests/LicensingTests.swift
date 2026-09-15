@@ -3,7 +3,7 @@ import OpenReactionCore
 import Testing
 
 /// The shared test cases from LICENSING.md, numbered as there, against a
-/// fake Dodo client, a fake trial registry, fake Keychain items and an
+/// fake Dodo client, a fake trial registry, fake record stores and an
 /// injectable clock. Cases 12–27 (the in-app trial) are in
 /// `TrialLicensingTests.swift`.
 @Suite("Licensing")
@@ -136,7 +136,7 @@ struct LicensingTests {
         }
     }
 
-    /// The trial record as a Keychain item: absent, readable, or failing.
+    /// The trial record as the store holds it: absent, readable, or failing.
     final class MemoryTrialStore: TrialStore, @unchecked Sendable {
         /// By default this Mac's trial ended long ago and is registered, so
         /// the license cases start from TrialEnded with no registry calls.
@@ -889,7 +889,7 @@ struct LicensingTests {
 
     // MARK: P0-2 — one invalidation path
 
-    @Test("P0-2. valid:false locks at once even when the Keychain refuses; the write is retried")
+    @Test("P0-2. valid:false locks at once even when the store refuses; the write is retried")
     func invalidationLocksInMemoryAndRetriesTheWrite() async {
         store.record = paidRecord(lastSuccessAge: 3600)
         client.validation = .invalid
@@ -938,7 +938,7 @@ struct LicensingTests {
         #expect(store.record?.isRevoked == false)
     }
 
-    @Test("T2. A revocation the Keychain refused survives an offline restart")
+    @Test("T2. A revocation the store refused survives an offline restart")
     func revocationSurvivesRestartWhenSaveFailed() async {
         store.record = paidRecord(lastSuccessAge: 3600)
         client.validation = .invalid
@@ -956,7 +956,7 @@ struct LicensingTests {
         #expect(restarted.storageError != nil)
         await restarted.checkOnLaunch()
         #expect(restarted.state == .revoked)
-        // The Keychain accepts the write later: the journal entry is done.
+        // The store accepts the write later: the journal entry is done.
         store.failsWrites = false
         await restarted.tick()
         #expect(store.record?.isRevoked == true)
@@ -997,7 +997,7 @@ struct LicensingTests {
         #expect(makeManager().state == .trialEnded)
     }
 
-    @Test("R2. Remove whose Keychain delete fails keeps the activation dead across a restart")
+    @Test("R2. Remove whose store delete fails keeps the activation dead across a restart")
     func removalDeleteFailureKeepsTombstone() async {
         // The reviewer's sequence: invalid → failing store → Remove succeeds
         // at Dodo but the delete fails → offline restart.
@@ -1070,7 +1070,7 @@ struct LicensingTests {
         await manager.tick()
         #expect(journal.entries["inst_1"] != nil)
         #expect(!manager.journalError)
-        // The Keychain still refuses: the journal now protects the restart.
+        // The store still refuses: the journal now protects the restart.
         #expect(makeManager().state == .revoked)
     }
 
@@ -1227,7 +1227,7 @@ struct LicensingTests {
     func queuedClearCannotRemoveANewerRevocation() async {
         // The sibling app's repro: valid:true saves, the journal clear fails
         // and queues; valid:false then writes a newer entry while its
-        // Keychain save fails; the old clear retry must not delete it.
+        // The record save fails; the old clear retry must not delete it.
         store.record = paidRecord(lastSuccessAge: 3600) // seq 1
         journal.entries["inst_1"] = JournalEntry(seq: 2)
         store.failsWrites = true
@@ -1304,7 +1304,7 @@ struct LicensingTests {
         #expect(journal.entries.isEmpty)
         journal.readError = nil
         #expect(makeManager().state == .revoked)
-        // With the Keychain refusing, the fresh revocation entry is what protects the restart.
+        // With the store refusing, the fresh revocation entry is what protects the restart.
         store.record = paidRecord(lastSuccessAge: 60)
         journal.entries["inst_1"] = JournalEntry(seq: 2)
         journal.readError = .corrupt
@@ -1321,7 +1321,7 @@ struct LicensingTests {
     @Test("G1. A failed recovery clear never outranks a later revocation")
     func failedRecoveryClearDoesNotOutrankALaterRevocation() async {
         // Record seq 1 protected by an unreadable entry. valid:true queues a
-        // failed rebuild while the Keychain refuses; invalid then journals
+        // failed rebuild while the store refuses; invalid then journals
         // seq 3; once the journal writes again, the retry must not erase it.
         store.record = paidRecord(lastSuccessAge: 60)
         journal.entries["inst_1"] = JournalEntry(seq: 2)
@@ -1335,7 +1335,7 @@ struct LicensingTests {
         #expect(manager.journalError)
         store.failsWrites = true
         client.validation = .invalid
-        await manager.check() // revocation seq 3: journaled (fails, waits), Keychain refuses
+        await manager.check() // revocation seq 3: journaled (fails, waits), store refuses
         #expect(manager.state == .revoked)
         journal.failsWrites = false
         await manager.tick() // the newest request (the revocation) runs, not the stale rebuild
@@ -1395,7 +1395,7 @@ struct LicensingTests {
         journal.entries["inst_1"] = JournalEntry(seq: 2)
         journal.unreadable = ["inst_1"]
         let manager = makeManager()
-        // The replacement write fails and so does the Keychain save.
+        // The replacement write fails and so does the record save.
         journal.failsWrites = true
         store.failsWrites = true
         client.validation = .invalid
