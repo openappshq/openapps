@@ -97,7 +97,10 @@ final class OnboardingModel {
         sync()
     }
 
+    /// Granting in System Settings can end with macOS quitting and reopening
+    /// the app; the marker brings the window back in that new process.
     func request(_ kind: PermissionKind) {
+        OnboardingLaunch.markAwaitingPermission(store: defaults)
         permissions.request(kind)
         showHow.insert(kind)
         onRequest?(kind)
@@ -210,9 +213,11 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// The first launch, or a relaunch started from onboarding. Consumes the
-    /// relaunch marker. An unfinished setup does not reopen the window by
-    /// itself: the status item's badge and "Finish Setup…" carry it.
+    /// The first launch, a relaunch started from onboarding, or macOS
+    /// reopening the app after a permission the window asked for was
+    /// granted. Consumes the markers. An unfinished setup the user closed
+    /// does not reopen the window by itself: the status item's badge and
+    /// "Finish Setup…" carry it.
     static func shouldShowOnLaunch() -> Bool {
         OnboardingLaunch.shouldShow(store: UserDefaults.standard)
     }
@@ -245,7 +250,12 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
+    /// Closing (skip, finish, the close button) is the user's choice: the
+    /// window will not come back on its own until it asks for a permission
+    /// again. A quit does not close windows this way, so the marker survives
+    /// macOS's "Quit & Reopen".
     func windowWillClose(_ notification: Notification) {
+        OnboardingLaunch.clearAwaitingPermission(store: defaults)
         model.didHide()
         model.permissions.setFastPolling(false, reason: "onboarding")
         menuBarHint.hide()

@@ -43,6 +43,53 @@ struct OnboardingLaunchTests {
         OnboardingLaunch.markShown(store: store)
         #expect(!OnboardingLaunch.shouldShow(store: store))
     }
+
+    @Test func resumesOnceAfterMacOSReopensItWhileAwaitingAPermission() {
+        // The window asked for a permission; granting it ended with macOS's
+        // own "Quit & Reopen", which never set the relaunch marker.
+        let store = MemoryFlags()
+        OnboardingLaunch.markShown(store: store)
+        OnboardingLaunch.markAwaitingPermission(store: store)
+        #expect(OnboardingLaunch.shouldShow(store: store))
+        #expect(!OnboardingLaunch.shouldShow(store: store), "the marker is consumed")
+        #expect(store.values[OnboardingLaunch.Key.awaitingPermission] == nil)
+    }
+
+    @Test func closingTheWindowAfterAskingDoesNotReopenIt() {
+        // Asked for a permission, then skipped or closed the window: the
+        // user's dismissal wins over the pending request.
+        let store = MemoryFlags()
+        OnboardingLaunch.markShown(store: store)
+        OnboardingLaunch.markAwaitingPermission(store: store)
+        OnboardingLaunch.clearAwaitingPermission(store: store)
+        #expect(!OnboardingLaunch.shouldShow(store: store))
+        #expect(store.values[OnboardingLaunch.Key.awaitingPermission] == nil)
+    }
+
+    @Test func bothMarkersTogetherOpenItOnce() {
+        // Asked for a permission, then pressed Relaunch: one window, and
+        // neither marker is left behind.
+        let store = MemoryFlags()
+        OnboardingLaunch.markShown(store: store)
+        OnboardingLaunch.markAwaitingPermission(store: store)
+        OnboardingLaunch.markResumeAfterRelaunch(store: store)
+        #expect(OnboardingLaunch.shouldShow(store: store))
+        #expect(!OnboardingLaunch.shouldShow(store: store))
+        #expect(store.values[OnboardingLaunch.Key.resumeAfterRelaunch] == nil)
+        #expect(store.values[OnboardingLaunch.Key.awaitingPermission] == nil)
+    }
+
+    @Test func firstLaunchIsUnchangedByTheMarkers() {
+        // Nothing shown yet: the first launch opens it, and a stray marker
+        // is consumed rather than counted a second time.
+        let store = MemoryFlags()
+        OnboardingLaunch.markAwaitingPermission(store: store)
+        #expect(OnboardingLaunch.shouldShow(store: store))
+        #expect(store.values[OnboardingLaunch.Key.awaitingPermission] == nil)
+        #expect(OnboardingLaunch.shouldShow(store: store), "still the first launch until shown")
+        OnboardingLaunch.markShown(store: store)
+        #expect(!OnboardingLaunch.shouldShow(store: store))
+    }
 }
 
 @Suite("Login item default")

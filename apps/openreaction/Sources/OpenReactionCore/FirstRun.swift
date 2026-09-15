@@ -10,20 +10,28 @@ public protocol FlagStore {
 
 extension UserDefaults: FlagStore {}
 
-/// When the setup window opens on its own: once, on the first launch, and
-/// after a relaunch the window itself started. Afterwards it is reached
-/// from Settings ("Show setup guide"), the status menu, or by opening the
-/// app again while setup is incomplete; it never opens by itself again.
+/// When the setup window opens on its own: once, on the first launch; after
+/// a relaunch the window itself started; and after macOS quit and reopened
+/// the app while the window was waiting on a permission it had just asked
+/// for (granting Accessibility or Input Monitoring in System Settings ends
+/// with "Quit & Reopen", a relaunch the app did not start). Afterwards it
+/// is reached from Settings ("Show setup guide"), the status menu, or by
+/// opening the app again while setup is incomplete; a window the user
+/// closed never opens by itself again.
 public enum OnboardingLaunch {
     public enum Key {
         public static let shown = "onboarding.shown"
         public static let resumeAfterRelaunch = "onboarding.resumeAfterRelaunch"
+        /// The window asked for a permission and has not been closed since:
+        /// a launch meanwhile is macOS reopening the app.
+        public static let awaitingPermission = "onboarding.awaitingPermission"
     }
 
-    /// Consumes the relaunch marker.
+    /// Consumes both markers.
     public static func shouldShow(store: any FlagStore) -> Bool {
-        let resume = store.bool(forKey: Key.resumeAfterRelaunch)
+        let resume = store.bool(forKey: Key.resumeAfterRelaunch) || store.bool(forKey: Key.awaitingPermission)
         store.removeObject(forKey: Key.resumeAfterRelaunch)
+        store.removeObject(forKey: Key.awaitingPermission)
         return resume || !store.bool(forKey: Key.shown)
     }
 
@@ -36,6 +44,18 @@ public enum OnboardingLaunch {
     /// process opens it again.
     public static func markResumeAfterRelaunch(store: any FlagStore) {
         store.set(true, forKey: Key.resumeAfterRelaunch)
+    }
+
+    /// Call when the window asks for a permission, so a launch before the
+    /// window is closed opens it again.
+    public static func markAwaitingPermission(store: any FlagStore) {
+        store.set(true, forKey: Key.awaitingPermission)
+    }
+
+    /// Call when the user closes the window (skip, finish, the close
+    /// button): an unfinished setup they dismissed stays dismissed.
+    public static func clearAwaitingPermission(store: any FlagStore) {
+        store.removeObject(forKey: Key.awaitingPermission)
     }
 }
 
