@@ -40,6 +40,66 @@ extension PermissionKind {
     }
 }
 
+/// The side effects of asking for a permission, behind `PermissionMonitor`,
+/// so the debug preview harness can stand in ones that touch nothing.
+@MainActor
+protocol PermissionActions {
+    /// Registers the app in macOS's permission list (it only lists apps that
+    /// asked) and opens the matching System Settings pane.
+    func request(_ kind: PermissionKind)
+    /// Removes the app's own TCC entry for `kind`. Returns an error message,
+    /// or nil on success.
+    func reset(_ kind: PermissionKind) async -> String?
+    func revealAppInFinder()
+}
+
+struct SystemPermissionActions: PermissionActions {
+    func request(_ kind: PermissionKind) {
+        switch kind {
+        case .accessibility:
+            // String key: the SDK's kAXTrustedCheckOptionPrompt global is not concurrency-safe.
+            _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        case .inputMonitoring:
+            _ = CGRequestListenEventAccess()
+        }
+        NSWorkspace.shared.open(kind.settingsURL)
+    }
+
+    /// Runs `/usr/bin/tccutil reset <service> <bundle id>` directly, without
+    /// a shell, for this app's bundle id only.
+    func reset(_ kind: PermissionKind) async -> String? {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return "Not available outside an app bundle." }
+        return await Self.runTCCReset(service: kind.tccService, bundleIdentifier: bundleIdentifier)
+    }
+
+    func revealAppInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+    }
+
+    private nonisolated static func runTCCReset(service: String, bundleIdentifier: String) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            process.arguments = ["reset", service, bundleIdentifier]
+            let errors = Pipe()
+            process.standardError = errors
+            process.standardOutput = FileHandle.nullDevice
+            do {
+                try process.run()
+            } catch {
+                return "Couldn't run tccutil: \(error.localizedDescription)"
+            }
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                let output = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return output.isEmpty ? "tccutil failed (\(process.terminationStatus))." : output
+            }
+            return nil
+        }.value
+    }
+}
+
 /// Identifies this exact build the way TCC does: the code directory hash of
 /// the running signature. Unsigned builds fall back to version and executable
 /// modification date.
@@ -105,11 +165,18 @@ final class PermissionMonitor {
     private static let memoryKey = "permissionFlow"
 
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let actions: any PermissionActions
 
-    /// `provider` and `defaults` are TCC and the app's own preferences,
-    /// except in the debug preview harness (a stub and a throwaway suite).
-    init(provider: any PermissionProvider = SystemPermissionProvider(), defaults: UserDefaults = .standard) {
+    /// `provider`, `actions` and `defaults` are TCC, System Settings and the
+    /// app's own preferences, except in the debug preview harness (stubs
+    /// that touch nothing, and a throwaway suite).
+    init(
+        provider: any PermissionProvider = SystemPermissionProvider(),
+        actions: any PermissionActions = SystemPermissionActions(),
+        defaults: UserDefaults = .standard
+    ) {
         self.defaults = defaults
+        self.actions = actions
         let memory = defaults.data(forKey: Self.memoryKey)
             .flatMap { try? JSONDecoder().decode(PermissionFlow.Memory.self, from: $0) }
         flow = PermissionFlow(
@@ -174,16 +241,9 @@ final class PermissionMonitor {
     /// Registers OpenReaction in the permission list (macOS only lists apps
     /// that asked) and opens the matching System Settings pane.
     func request(_ kind: PermissionKind) {
-        switch kind {
-        case .accessibility:
-            // String key: the SDK's kAXTrustedCheckOptionPrompt global is not concurrency-safe.
-            _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-        case .inputMonitoring:
-            _ = CGRequestListenEventAccess()
-        }
+        actions.request(kind)
         flow.didRequest(kind)
         commit()
-        NSWorkspace.shared.open(kind.settingsURL)
     }
 
     var canReset: Bool { Bundle.main.bundleIdentifier != nil }
@@ -191,10 +251,10 @@ final class PermissionMonitor {
     /// Removes OpenReaction's own TCC entry for `kind` with `tccutil`, then
     /// asks again so a fresh entry matching this build appears in the list.
     func reset(_ kind: PermissionKind) async {
-        guard let bundleIdentifier = Bundle.main.bundleIdentifier, resetInProgress == nil else { return }
+        guard canReset, resetInProgress == nil else { return }
         resetInProgress = kind
         lastError = nil
-        let result = await Self.runTCCReset(service: kind.tccService, bundleIdentifier: bundleIdentifier)
+        let result = await actions.reset(kind)
         resetInProgress = nil
         if let result {
             lastError = result
@@ -207,36 +267,11 @@ final class PermissionMonitor {
     }
 
     func revealAppInFinder() {
-        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+        actions.revealAppInFinder()
     }
 
     func clearError() {
         lastError = nil
-    }
-
-    /// Runs `/usr/bin/tccutil reset <service> <bundle id>` directly, without a
-    /// shell. Returns an error message, or nil on success.
-    private nonisolated static func runTCCReset(service: String, bundleIdentifier: String) async -> String? {
-        await Task.detached(priority: .userInitiated) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-            process.arguments = ["reset", service, bundleIdentifier]
-            let errors = Pipe()
-            process.standardError = errors
-            process.standardOutput = FileHandle.nullDevice
-            do {
-                try process.run()
-            } catch {
-                return "Couldn't run tccutil: \(error.localizedDescription)"
-            }
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                let output = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return output.isEmpty ? "tccutil failed (\(process.terminationStatus))." : output
-            }
-            return nil
-        }.value
     }
 
     // MARK: - Private

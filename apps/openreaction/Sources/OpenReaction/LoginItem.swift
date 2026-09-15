@@ -51,17 +51,21 @@ final class LoginItem {
         if current != status { status = current }
     }
 
-    /// The user's choice in Settings or onboarding.
+    /// The user's choice in Settings or onboarding. Recorded first, so the
+    /// default can never undo it — also when storage has not answered yet
+    /// and the default is still pending.
     func setOn(_ on: Bool) {
+        launchDefault.markSuperseded()
         register(on)
     }
 
     /// The default, once: registers when the install is demonstrably fresh
     /// (no earlier preferences, and `storageIsFresh` — the license and trial
-    /// records positively absent; nil while unknown, which waits). A
-    /// registration macOS refuses is reported in Settings like any other.
+    /// records positively absent; nil while unknown, which waits). Once
+    /// decided, the system is not asked again. A registration macOS refuses
+    /// is reported in Settings like any other.
     func applyDefaultIfNeeded(storageIsFresh: Bool?) {
-        guard isAvailable else { return }
+        guard isAvailable, storageIsFresh != nil, !launchDefault.isDecided else { return }
         refresh()
         guard launchDefault.shouldRegister(isRegistered: isOn, storageIsFresh: storageIsFresh) else { return }
         register(true)

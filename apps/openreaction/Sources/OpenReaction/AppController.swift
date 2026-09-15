@@ -20,6 +20,32 @@ final class FeatureLock: @unchecked Sendable {
     }
 }
 
+/// Starts a fresh copy of the app, behind `AppController.relaunch()`, so the
+/// debug preview harness can stand in one that starts nothing.
+@MainActor
+protocol AppRelauncher {
+    /// A packaged `.app` can start a fresh copy of itself; `swift run` builds cannot.
+    var isAvailable: Bool { get }
+    /// Opens a new instance. Returns an error message, or nil once it runs.
+    func openNewInstance() async -> String?
+}
+
+struct WorkspaceRelauncher: AppRelauncher {
+    var isAvailable: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+
+    func openNewInstance() async -> String? {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        return await withCheckedContinuation { continuation in
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { app, error in
+                let message = error?.localizedDescription
+                let launched = app != nil && error == nil
+                continuation.resume(returning: launched ? nil : (message ?? "OpenReaction couldn't open a new copy of itself."))
+            }
+        }
+    }
+}
+
 /// Connects the event tap, trigger state machine, suggestion provider, caret
 /// lookup, picker and insertion. Everything here runs on the main thread;
 /// the tap and accessibility queries hand results over asynchronously.
@@ -56,7 +82,7 @@ final class AppController {
         updateTap()
     }
     /// A packaged `.app` can start a fresh copy of itself; `swift run` builds cannot.
-    var canRelaunch: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+    var canRelaunch: Bool { relauncher.isAvailable }
 
     @ObservationIgnored var onStateChange: (() -> Void)?
 
@@ -76,6 +102,7 @@ final class AppController {
     @ObservationIgnored let dataSourceSummary: String
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let relauncher: any AppRelauncher
 
     private enum DefaultsKey {
         static let enabled = "enabled"
@@ -83,18 +110,22 @@ final class AppController {
         static let exclusions = "exclusions"
     }
 
-    /// `defaults` and `permissionProvider` are the app's own except in the
-    /// debug preview harness, which passes a throwaway suite and a stub.
+    /// `defaults`, the permission provider and actions, and the relauncher
+    /// are the app's own except in the debug preview harness, which passes
+    /// a throwaway suite and stand-ins that touch nothing.
     init(
         provider: any SuggestionProvider,
         dataSourceSummary: String,
         defaults: UserDefaults = .standard,
-        permissionProvider: any PermissionProvider = SystemPermissionProvider()
+        permissionProvider: any PermissionProvider = SystemPermissionProvider(),
+        permissionActions: any PermissionActions = SystemPermissionActions(),
+        relauncher: any AppRelauncher = WorkspaceRelauncher()
     ) {
         self.provider = provider
         self.dataSourceSummary = dataSourceSummary
         self.defaults = defaults
-        permissions = PermissionMonitor(provider: permissionProvider, defaults: defaults)
+        self.relauncher = relauncher
+        permissions = PermissionMonitor(provider: permissionProvider, actions: permissionActions, defaults: defaults)
         isEnabled = defaults.object(forKey: DefaultsKey.enabled) as? Bool ?? true
         hasStoredUsage = defaults.data(forKey: DefaultsKey.frecency) != nil
         if let stored = Self.decode(Frecency.self, key: DefaultsKey.frecency, defaults: defaults) {
@@ -200,23 +231,13 @@ final class AppController {
         permissions.willRelaunch()
         Task {
             await stopTapDraining()
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.createsNewApplicationInstance = true
-            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { app, error in
-                let message = error?.localizedDescription
-                let launched = app != nil && error == nil
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        if launched {
-                            NSApp.terminate(nil)
-                        } else {
-                            self.isRelaunching = false
-                            self.relaunchError = message ?? "OpenReaction couldn't open a new copy of itself."
-                            self.permissions.relaunchFailed()
-                            self.updateTap()
-                        }
-                    }
-                }
+            if let message = await relauncher.openNewInstance() {
+                isRelaunching = false
+                relaunchError = message
+                permissions.relaunchFailed()
+                updateTap()
+            } else {
+                NSApp.terminate(nil)
             }
         }
     }

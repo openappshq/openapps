@@ -10,11 +10,13 @@ import SwiftUI
 /// checks for the flag).
 ///
 /// Nothing real is touched: a throwaway preferences suite (removed again on
-/// quit), a permission provider that reports nothing granted (TCC is never
-/// asked), a login item that registers only in memory, and — with licensing
-/// — an in-memory Keychain, a Dodo client and a trial registry that never
-/// answer, so Activate and Try again go nowhere. The event tap is never
-/// installed: `AppController.start()` is not called.
+/// quit); a permission provider that reports nothing granted and permission
+/// actions that neither ask TCC, open System Settings nor run tccutil; a
+/// relauncher that is unavailable, so Relaunch never starts a real copy; a
+/// login item that registers only in memory; and — with licensing — an
+/// in-memory Keychain, a Dodo client and a trial registry that never answer,
+/// so Activate and Try again go nowhere. The event tap is never installed:
+/// `AppController.start()` is not called.
 ///
 /// ⌘] and ⌘[ move the guide between steps. With a directory, each window
 /// is rendered there in light and dark appearance and the app quits.
@@ -58,6 +60,20 @@ final class SetupPreviewHarness {
     /// Nothing granted, nothing asked: the guide sits on its permission steps.
     private struct NoPermissions: PermissionProvider {
         func isGranted(_ kind: PermissionKind) -> Bool { false }
+    }
+
+    /// Never asks TCC, never opens System Settings, never runs tccutil: the
+    /// guide moves to "waiting" and the reset "succeeds" in memory.
+    private struct NoPermissionActions: PermissionActions {
+        func request(_ kind: PermissionKind) { print("PREVIEW_PERMISSION_REQUEST \(kind.rawValue)") }
+        func reset(_ kind: PermissionKind) async -> String? { print("PREVIEW_PERMISSION_RESET \(kind.rawValue)"); return nil }
+        func revealAppInFinder() { print("PREVIEW_REVEAL_IN_FINDER") }
+    }
+
+    /// The preview never starts a real copy of the app: Relaunch is disabled.
+    private struct NoRelaunch: AppRelauncher {
+        var isAvailable: Bool { false }
+        func openNewInstance() async -> String? { "Not available in the preview." }
     }
 
     /// Registers in memory only.
@@ -132,7 +148,10 @@ final class SetupPreviewHarness {
             UserDefaults(suiteName: SetupPreviewHarness.suite)?.removePersistentDomain(forName: SetupPreviewHarness.suite)
         }
         // Never started: no tap, no focus monitor, no relaunch.
-        controller = AppController(provider: provider, dataSourceSummary: dataSourceSummary, defaults: defaults, permissionProvider: NoPermissions())
+        controller = AppController(
+            provider: provider, dataSourceSummary: dataSourceSummary, defaults: defaults,
+            permissionProvider: NoPermissions(), permissionActions: NoPermissionActions(), relauncher: NoRelaunch()
+        )
         onboarding = OnboardingWindowController(controller: controller, loginItem: loginItem, defaults: defaults) { nil }
         #if OPENAPPS_LICENSING
         let license = LicenseController(manager: LicenseManager(
@@ -225,6 +244,13 @@ final class SetupPreviewHarness {
                 try? await Task.sleep(for: .milliseconds(500))
                 if let window = NSApp.windows.first(where: { $0.title == "Set Up OpenReaction" }) {
                     write(window, to: directory.appendingPathComponent("onboarding-\(step)-\(suffix).png"))
+                    if let kind = step.permission {
+                        // "Open System Settings" against the inert actions: the
+                        // waiting state and the guide panel, nothing else.
+                        onboarding.model.request(kind)
+                        try? await Task.sleep(for: .milliseconds(500))
+                        write(window, to: directory.appendingPathComponent("onboarding-\(step)-requested-\(suffix).png"))
+                    }
                 }
             }
             write(pills, to: directory.appendingPathComponent("pills-\(suffix).png"))

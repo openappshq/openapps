@@ -85,6 +85,21 @@ struct LoginItemDefaultTests {
         #expect(launch.shouldRegister(isRegistered: false, storageIsFresh: true))
     }
 
+    @Test func anExplicitChoiceWhileStorageIsPendingIsNeverUndone() {
+        // Fresh launch, Keychain slow: the user turns the item on and off in
+        // Settings before storage answers; when it then says "fresh", the
+        // default must not turn it back on.
+        let store = MemoryFlags()
+        let launch = LoginItemDefault(store: store)
+        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: nil))
+        #expect(!launch.isDecided)
+        launch.markSuperseded() // on
+        launch.markSuperseded() // off again
+        #expect(launch.isDecided)
+        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: true))
+        #expect(!LoginItemDefault(store: store).shouldRegister(isRegistered: false, storageIsFresh: true))
+    }
+
     @Test func aKeptTrialOrLicenseRecordMeansNotFresh() {
         let store = MemoryFlags()
         let launch = LoginItemDefault(store: store)

@@ -61,12 +61,23 @@ public struct LoginItemDefault {
         hadPreferences = store.bool(forKey: OnboardingLaunch.Key.shown)
     }
 
+    /// The default was applied, found unnecessary, or superseded by the
+    /// user: nothing is left to decide, and the system need not be asked.
+    public var isDecided: Bool { store.bool(forKey: Key.applied) }
+
+    /// The user switched the login item themselves. Recorded before the
+    /// switch takes effect, and also while storage has not answered yet,
+    /// so the default can never undo an explicit choice.
+    public func markSuperseded() {
+        store.set(true, forKey: Key.applied)
+    }
+
     /// Whether to register now. `storageIsFresh` is whether the license and
     /// trial records are both positively absent; nil while storage has not
     /// answered, which decides nothing yet. Once storage has answered, the
     /// decision is recorded whichever way it went.
     public func shouldRegister(isRegistered: Bool, storageIsFresh: Bool?) -> Bool {
-        guard let storageIsFresh, !store.bool(forKey: Key.applied) else { return false }
+        guard let storageIsFresh, !isDecided else { return false }
         store.set(true, forKey: Key.applied)
         return storageIsFresh && !hadPreferences && !isRegistered
     }
