@@ -1,0 +1,23 @@
+{
+  "app": "openklack",
+  "channel": "stable",
+  "version": "0.1.0",
+  "build": 196,
+  "minimum_macos": "14.0",
+  "published_at": "2026-09-15T13:47:01Z",
+  "pub_date": "2026-09-15T13:47:01Z",
+  "notes": "",
+  "url": "https://github.com/openappshq/openapps/releases/download/openklack-v0.1.0/OpenKlack-0.1.0.zip",
+  "sha256": "85f190816e9207308f81b9240b34267aed75bb96e2ec638be01f7abf008e3e28",
+  "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNGo2QitNMlJuZWcrZzFKa0VJcDE4by9kM1Y0QnZPVG9yU3A3bHNhTmFuL1Bod3NrcFNDc1o5MWNnbjhMc1JKZEdudmIrTERId1pFZEhlNDFVMXArREhReUlmRTBFV3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDgwMDIwCWZpbGU6T3BlbktsYWNrLTAuMS4wLnppcApTQ0NtSFRTSERhNXA3SWdPbjM3Nlg0ckV3MysvdWNTL2QvSGJYWkY2Vm50bVRhSXlvR2plMEVXNEQxeGp3ZzF0QWNheEZIYVkzeE5CS3N6c3ZaL1ZBQT09Cg==",
+  "platforms": {
+    "darwin-aarch64": {
+      "url": "https://github.com/openappshq/openapps/releases/download/openklack-v0.1.0/OpenKlack-0.1.0.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNGo2QitNMlJuZXBxMDFFaVo0bDAvdm1Eek1CV3JYWXJZKzdiREltbVg1M2s1dDNKSUU2dTF2TnpnbWpaKzkwaGRUTmQyczVrV21NMjdNK1pUZjJpZjZNYVppcUZsd2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDgwMDE3CWZpbGU6T3BlbktsYWNrLmFwcC50YXIuZ3oKWjJZck9HYVlNYjUvRzZhaHhTMytVa1VPOEdxaDFZcmZBSUVERmNXK2RMMzlnVVpkZGdhVnYxdVBnM092N082WWF1VlIxVjhXZzNYQStwNHRnSmlPQnc9PQo="
+    },
+    "darwin-x86_64": {
+      "url": "https://github.com/openappshq/openapps/releases/download/openklack-v0.1.0/OpenKlack-0.1.0.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNGo2QitNMlJuZXBxMDFFaVo0bDAvdm1Eek1CV3JYWXJZKzdiREltbVg1M2s1dDNKSUU2dTF2TnpnbWpaKzkwaGRUTmQyczVrV21NMjdNK1pUZjJpZjZNYVppcUZsd2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDgwMDE3CWZpbGU6T3BlbktsYWNrLmFwcC50YXIuZ3oKWjJZck9HYVlNYjUvRzZhaHhTMytVa1VPOEdxaDFZcmZBSUVERmNXK2RMMzlnVVpkZGdhVnYxdVBnM092N082WWF1VlIxVjhXZzNYQStwNHRnSmlPQnc9PQo="
+    }
+  }
+}
