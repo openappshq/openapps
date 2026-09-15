@@ -11,7 +11,7 @@ How every OpenApps HQ app is released, installed and kept up to date. OpenKlack 
 | Release tags | `<app>-vX.Y.Z` (strict SemVer, never moved or reused) |
 | Release files | A zip of the `.app` attached to the GitHub Release for that tag |
 | Update feed | `https://openapps.space/updates/<app>/latest.json`, a signed JSON file served by the website |
-| Updates | In the app: daily check, background download, install on the next quit or relaunch. Settings toggles |
+| Updates | Manual by default: `brew upgrade --cask <app>`, or "Check now" in the app. Automatic checks and installs are opt-in Settings toggles, **off by default** |
 | Update signatures | Every feed and every zip is signed with an app-specific update key that official builds pin |
 
 ## Why a stable self-signed certificate
@@ -22,6 +22,7 @@ macOS ties Accessibility, Input Monitoring and Keychain access to an app's code-
 - **Signing:** the release job imports it into a temporary keychain, signs with hardened runtime, then deletes the keychain immediately after the last signing step.
 - **Verification before publishing:** `codesign --verify --deep --strict`, and the designated requirement must equal the pinned one checked in at `apps/<app>/release/designated-requirement.txt`. A mismatch fails the release.
 - **Gatekeeper:** the app isn't notarized, so the cask clears the quarantine flag after install (as Hertz does). A zip downloaded by hand needs right-click → Open once.
+- **If identity ever changes anyway:** users re-grant permissions once, which the user accepts for manual updates. The stable certificate is still kept, because it also avoids a Keychain password prompt for the license and trial records after every update.
 - **Later:** switching to Apple Developer ID changes the identity once. Plan that as a single migration release that tells users to re-grant permissions.
 
 ## Homebrew cask
@@ -96,8 +97,8 @@ The feed never points at a release until that release's zip is published and ver
 | Rule | Detail |
 | --- | --- |
 | Who updates | Official builds only. Builds from source never check, download or install |
-| When | On launch in the background, every 24 hours while running, and on wake if the last check is older than 24 hours |
-| Settings | "Check for updates automatically" (on by default), "Download and install automatically" (on by default), and "Check now" |
+| When | Only when the user opts in: then on launch in the background, every 24 hours while running, and on wake if the last check is older than 24 hours. With automatic checks off (the default), the app never contacts the feed on its own |
+| Settings | "Check for updates automatically" (**off** by default), "Download and install automatically" (**off** by default), and "Check now", which always works |
 | Install | Download and verify in the background, then install on the next quit or relaunch; the menu shows "Update ready — Restart". Never interrupt typing or sound playback mid-use |
 | Location | Install in place; if the app runs from a read-only location or App Translocation, show "Move <App> to Applications to enable updates" instead |
 | Failures | Retry with backoff (1 hour, then daily). Never loop or block the app |
