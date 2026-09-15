@@ -15,7 +15,7 @@ cask "hertz" do
   # Hertz has no in-app updater; Homebrew is the only update path, so let it
   # report and install upgrades as usual.
   auto_updates false
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   # Installed into the user's Applications: no admin password to install or
   # upgrade.
@@ -24,7 +24,7 @@ cask "hertz" do
   # Signed with the stable OpenApps HQ Release certificate but not notarized:
   # clear the download quarantine so it opens without a Gatekeeper prompt,
   # then start it in the menu bar.
-  postflight do
+  postflight_steps do
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{Dir.home}/Applications/Hertz.app"]
     system_command "/usr/bin/open",

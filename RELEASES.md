@@ -40,9 +40,9 @@ cask "<app>" do
   desc "<one line>"
   homepage "https://openapps.space/<app>/"
   auto_updates true
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
   app "<App>.app", target: "#{Dir.home}/Applications/<App>.app"
-  postflight do
+  postflight_steps do
     system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{Dir.home}/Applications/<App>.app"]
     system_command "/usr/bin/open", args: ["#{Dir.home}/Applications/<App>.app"]
   end

@@ -14,7 +14,7 @@ cask "openklack" do
 
   # OpenKlack can update itself (off by default); Homebrew shouldn't fight it.
   auto_updates true
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   # Installed into the user's Applications, so an in-app update never needs
   # an admin password.
@@ -23,7 +23,7 @@ cask "openklack" do
   # Signed with the stable OpenApps HQ Release certificate but not notarized:
   # clear the download quarantine so it opens without a Gatekeeper prompt,
   # then start it in the menu bar.
-  postflight do
+  postflight_steps do
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{Dir.home}/Applications/OpenKlack.app"]
     system_command "/usr/bin/open",
