@@ -219,9 +219,9 @@ The corrupt journal is never overwritten before a replacement has been written. 
 
 ## Website and checkout
 
-- **Buttons on each app page:** "Download free" (the official build; the page says it includes a 3-day trial, no signup) and "Buy for $5" (checkout link). Both stay "Coming soon" until the app has an official build.
+- **Buttons on each app page:** an install block with the exact `brew install --cask <cask>` command and a Copy button (the page says it includes a 3-day trial, no signup), and "Buy for $5" (checkout link). An app is available exactly when its paid product ID and its Homebrew cask are configured; otherwise both show "Coming soon". Pulling an app from sale means unsetting its cask variable. There is no code-side on/off list.
 - **Hosting:** the website and the trial registry are one Cloudflare Worker: static assets for the pages, `/api/trial` backed by D1. Cloudflare's free plan allows commercial use; Vercel's Hobby plan doesn't.
-- **Configuration:** the website reads the checkout origin, each app's paid product ID and each app's download URL from build-time environment variables. Production uses live values; local development and previews use Dodo test mode.
+- **Configuration:** the website reads the checkout origin (`VITE_DODO_CHECKOUT_ORIGIN`), each app's paid product ID (`VITE_<APP>_DODO_PAID_PRODUCT_ID`) and each app's Homebrew cask (`VITE_<APP>_BREW_CASK`, `owner/tap/name`) from build-time environment variables; an optional `VITE_<APP>_MAC_DOWNLOAD_URL` adds a direct download beside the brew command and never gates availability on its own. Production uses live values from the `website-live` GitHub environment; local development uses Dodo test mode.
 - **Return URL:** checkout returns to `/<app>/thanks/`, and Dodo appends `license_key` and `email`.
 - **Thanks page:**
   - shows the key with Copy, an "Open <App>" deep link (`<app>://activate?key=…`) and setup steps, including a download link for buyers who haven't installed the app yet;
