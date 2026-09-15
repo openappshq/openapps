@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { Button } from "@heroui/react";
 import { KeyRound, Menu, Power, ShieldCheck, Volume2 } from "lucide-react";
 import klackMark from "../../../design/assets/openklack/symbol-paper.svg";
+import type { LicenseView } from "./licenseState";
+import { guideLicenseLine, guideLoginLine } from "./setupGuide";
 
 const STEPS = ["Welcome", "Keyboard access", "Tips"] as const;
 
@@ -18,14 +20,17 @@ const step = {
  * native bridge refreshes every second while the app runs.
  */
 export function Onboarding({
-  official,
+  license,
+  openAtLogin,
   inputPermission,
   busy,
   onRequestPermission,
   onDone,
 }: {
-  /** An official build: the trial and the license are worth a mention. */
-  official: boolean;
+  /** The license view; absent in a source build, which has no trial to explain. */
+  license: LicenseView | undefined;
+  /** The real "Open at login" setting, or unknown while it is being read. */
+  openAtLogin: boolean | undefined;
   inputPermission: boolean;
   busy: boolean;
   onRequestPermission: () => void;
@@ -38,6 +43,7 @@ export function Onboarding({
     panel.current?.focus();
   }, [index]);
   const last = index === STEPS.length - 1;
+  const licenseLine = guideLicenseLine(license);
   return (
     <div
       className="onboarding"
@@ -69,12 +75,7 @@ export function Onboarding({
                   OpenKlack plays a keyboard sound for every key you press, in any app, from the
                   menu bar. Your typing is never saved or sent anywhere.
                 </p>
-                {official && (
-                  <p>
-                    Your free 3-day trial started when you opened the app. No signup, nothing to set
-                    up.
-                  </p>
-                )}
+                {licenseLine && <p>{licenseLine}</p>}
               </>
             )}
             {index === 1 && (
@@ -128,27 +129,25 @@ export function Onboarding({
                       </p>
                     </div>
                   </li>
-                  {official && (
+                  {license && (
                     <li>
                       <KeyRound size={18} aria-hidden="true" />
                       <div>
                         <strong>Your trial and license</strong>
                         <p>
-                          Settings → License shows the days left and where to paste your key after
-                          you buy.
+                          Settings → License shows where the trial stands and where to paste your
+                          key after you buy.
                         </p>
                       </div>
                     </li>
                   )}
-                  {official && (
-                    <li>
-                      <Power size={18} aria-hidden="true" />
-                      <div>
-                        <strong>Starts with your Mac</strong>
-                        <p>OpenKlack opens at login. Change this in Settings.</p>
-                      </div>
-                    </li>
-                  )}
+                  <li>
+                    <Power size={18} aria-hidden="true" />
+                    <div>
+                      <strong>Starts with your Mac</strong>
+                      <p>{guideLoginLine(openAtLogin)}</p>
+                    </div>
+                  </li>
                 </ul>
               </>
             )}

@@ -40,6 +40,9 @@ export default function App() {
   const [licenseRequests, setLicenseRequests] = useState(0);
   // `undefined` follows the saved preference: official builds open the guide once.
   const [guide, setGuide] = useState<boolean>();
+  // The real "Open at login" setting for the guide, read while the guide is open and again once
+  // the default has been decided.
+  const [openAtLogin, setOpenAtLogin] = useState<boolean>();
   const [key, setKey] = useState("Space");
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("openklack-theme");
@@ -87,6 +90,21 @@ export default function App() {
   const effective = prefs?.presets.find((p) => p.id === snapshot?.effectivePresetId);
   const pill = licensePill(license.view);
   const showGuide = snapshot ? (guide ?? offersSetupGuide(snapshot)) : false;
+  const loginDecided = prefs?.loginItemDefaulted ?? false;
+  useEffect(() => {
+    if (!showGuide) return;
+    let disposed = false;
+    void invoke<boolean>("startup_state")
+      .then((value) => {
+        if (!disposed) setOpenAtLogin(value);
+      })
+      .catch(() => {
+        if (!disposed) setOpenAtLogin(undefined);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [showGuide, loginDecided]);
   function openLicense() {
     licenseRequested.current = true;
     setPage("general");
@@ -118,7 +136,8 @@ export default function App() {
       </Link>
       {showGuide && (
         <Onboarding
-          official={snapshot.licensingEnabled}
+          license={license.view}
+          openAtLogin={openAtLogin}
           inputPermission={snapshot.runtime.inputPermission}
           busy={busy}
           onRequestPermission={() => void desktop.perform(() => invoke("request_input_permission"))}
