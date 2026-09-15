@@ -172,7 +172,7 @@ pub fn bundle_version(bundle: &Path, deadline: Option<Instant>) -> Result<String
     Ok(String::from_utf8_lossy(&found.stdout).trim().to_string())
 }
 
-/// The designated requirement macOS evaluates for a bundle's permissions and Keychain access.
+/// The designated requirement macOS evaluates for a bundle's permissions.
 #[cfg(target_os = "macos")]
 pub fn designated_requirement(bundle: &Path) -> Result<String, String> {
     let output = codesign(&["--display", "--requirements", "-"], bundle, None)?;

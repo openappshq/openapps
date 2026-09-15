@@ -1,4 +1,4 @@
-//! The licensing rules from LICENSING.md, with no clock, network or Keychain of their own.
+//! The licensing rules from LICENSING.md, with no clock, network or record store of their own.
 //! Time is passed in by the caller as a `Moment`: the wall clock in Unix seconds, plus a
 //! monotonic clock that keeps counting through sleep. Dodo and the trial registry are traits so
 //! tests script every answer.
@@ -40,7 +40,7 @@ impl From<i64> for Moment {
     }
 }
 
-/// The Keychain record for one activation of this Mac.
+/// The stored record for one activation of this Mac.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub license_key: String,
@@ -72,7 +72,7 @@ pub struct Record {
     pub event_seq: u64,
 }
 
-/// Everything kept in the license Keychain item.
+/// Everything the license side of the record store keeps: the record and the owed cleanups.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Stored {
     #[serde(default)]
@@ -83,7 +83,7 @@ pub struct Stored {
     pub pending_cleanups: Vec<Probe>,
 }
 
-/// The trial Keychain item. Never deleted by the app.
+/// The trial record. Never deleted by the app.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TrialRecord {
     /// Trial start on the local clock: the registry's start converted to local time, or the
@@ -115,12 +115,12 @@ impl TrialRecord {
     }
 }
 
-/// What is known about the trial Keychain item.
+/// What is known about the trial record.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrialSlot {
     /// Not read yet, or the read failed: never "no trial yet".
     Unread,
-    /// The Keychain positively reported that the item does not exist.
+    /// The store positively reported that the record does not exist.
     Absent,
     Present(TrialRecord),
 }
@@ -302,7 +302,7 @@ pub enum LicenseError {
     },
     NothingToRemove,
     RemoveOffline,
-    /// The Keychain refused the record; the activation was given back.
+    /// The store refused the record; the activation was given back.
     NotSaved(String),
 }
 
@@ -1170,7 +1170,7 @@ pub struct Refusal {
 }
 
 /// The full sequences the runtime performs, with a Dodo client in place of its network calls.
-/// Tests drive these; the runtime interleaves the same steps with its locks and the Keychain.
+/// Tests drive these; the runtime interleaves the same steps with its locks and the record store.
 #[cfg(test)]
 impl Engine {
     pub fn core_feature(&self, at: impl Into<Moment>) -> bool {
@@ -1265,7 +1265,7 @@ fn days_up(seconds: i64) -> u32 {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    //! The shared test cases from LICENSING.md that need no Keychain or threads, numbered as in
+    //! The shared test cases from LICENSING.md that need no record store or threads, numbered as in
     //! the document. The rest are in `runtime.rs`.
     use super::*;
     use std::cell::RefCell;

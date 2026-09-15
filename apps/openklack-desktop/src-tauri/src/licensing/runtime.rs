@@ -1,11 +1,11 @@
-//! The licensed build's plumbing around `core`: the license and trial Keychain records, the Dodo
+//! The licensed build's plumbing around `core`: the license and trial records, the Dodo
 //! and trial registry HTTP clients, the scheduler, and the commands and events the settings
 //! window uses.
 //!
 //! Rules: lock first, persist after, and unlock only after the record is saved.
-//! `Service::mutate` orders every license Keychain write and `Service::trial_mutate` every trial
+//! `Service::mutate` orders every license record write and `Service::trial_mutate` every trial
 //! write, so a slower writer can never put an older record back. `Service::engine` is only ever
-//! held for a pure step, never across the network or the Keychain, so reads for the window and
+//! held for a pure step, never across the network or the record store, so reads for the window and
 //! the deep link never wait on I/O. Every gate decision carries a revision issued under the
 //! engine lock, and the audio side applies only newer ones; a restrictive decision is published
 //! before any I/O, a permissive one after the save it depends on. While the records are unknown,
@@ -30,15 +30,11 @@ use tauri::{Emitter, Manager};
 
 /// The revocation journal's file name in the app's data directory.
 const JOURNAL_FILE: &str = "license-journal.json";
-/// A failed Keychain read, or a trial that could not be saved, is retried with backoff from a
+/// A failed record read, or a trial that could not be saved, is retried with backoff from a
 /// minute up to an hour.
 const LOAD_RETRY_MIN: i64 = 60;
 const LOAD_RETRY_MAX: i64 = 3600;
 
-pub const KEYCHAIN_SERVICE: &str = "space.openapps.openklack.license";
-const KEYCHAIN_ACCOUNT: &str = "license";
-pub const TRIAL_KEYCHAIN_SERVICE: &str = "space.openapps.openklack.trial";
-const TRIAL_KEYCHAIN_ACCOUNT: &str = "trial";
 const HOST: &str = env!("OPENKLACK_DODO_HOST");
 const ENVIRONMENT: &str = env!("OPENKLACK_LICENSE_ENV");
 const PAID_PRODUCT_ID: &str = env!("OPENKLACK_DODO_PAID_PRODUCT_ID");
@@ -155,92 +151,24 @@ fn random_uuid() -> Result<String, String> {
     ))
 }
 
-/// Where the records live. The real ones are two Keychain items; tests use memory.
+/// Where the records live. The real ones are the encrypted files of `store::RecordStore`;
+/// tests use memory.
 pub trait Vault: Send + Sync {
+    /// The license record and the owed cleanups. `Err` when either could not be read: never
+    /// "no license".
     fn load(&self) -> Result<Stored, String>;
+    /// Saves the license record, or deletes it when `stored.license` is `None`, and the owed
+    /// cleanups with it.
     fn save(&self, stored: &Stored) -> Result<(), String>;
-    /// `Ok(None)` only when the Keychain positively reports that the item does not exist.
+    /// `Ok(None)` only when the store positively reports that the record does not exist.
     fn load_trial(&self) -> Result<Option<TrialRecord>, String>;
     fn save_trial(&self, trial: &TrialRecord) -> Result<(), String>;
 }
 
-/// The license and trial Keychain items. Never plain preferences.
-pub struct Keychain;
-
-/// An item's bytes, or `None` when the Keychain reports it does not exist.
-#[cfg(target_os = "macos")]
-fn read_keychain_item(service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
-    match security_framework::passwords::get_generic_password(service, account) {
-        Ok(bytes) => Ok(Some(bytes)),
-        // errSecItemNotFound: nothing saved yet.
-        Err(error) if error.code() == -25300 => Ok(None),
-        Err(error) => Err(format!("The Keychain could not be read: {error}")),
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Vault for Keychain {
-    fn load(&self) -> Result<Stored, String> {
-        match read_keychain_item(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)? {
-            Some(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| format!("The saved license could not be read: {e}")),
-            None => Ok(Stored::default()),
-        }
-    }
-
-    fn save(&self, stored: &Stored) -> Result<(), String> {
-        let bytes = serde_json::to_vec(stored).map_err(|e| e.to_string())?;
-        security_framework::passwords::set_generic_password(
-            KEYCHAIN_SERVICE,
-            KEYCHAIN_ACCOUNT,
-            &bytes,
-        )
-        .map_err(|error| format!("The license could not be saved to the Keychain: {error}"))
-    }
-
-    fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
-        match read_keychain_item(TRIAL_KEYCHAIN_SERVICE, TRIAL_KEYCHAIN_ACCOUNT)? {
-            Some(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|e| format!("The saved free trial could not be read: {e}")),
-            None => Ok(None),
-        }
-    }
-
-    fn save_trial(&self, trial: &TrialRecord) -> Result<(), String> {
-        let bytes = serde_json::to_vec(trial).map_err(|e| e.to_string())?;
-        security_framework::passwords::set_generic_password(
-            TRIAL_KEYCHAIN_SERVICE,
-            TRIAL_KEYCHAIN_ACCOUNT,
-            &bytes,
-        )
-        .map_err(|error| format!("The free trial could not be saved to the Keychain: {error}"))
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-impl Vault for Keychain {
-    fn load(&self) -> Result<Stored, String> {
-        Ok(Stored::default())
-    }
-
-    fn save(&self, _: &Stored) -> Result<(), String> {
-        Err("Licensing is supported on macOS.".into())
-    }
-
-    fn load_trial(&self) -> Result<Option<TrialRecord>, String> {
-        Ok(None)
-    }
-
-    fn save_trial(&self, _: &TrialRecord) -> Result<(), String> {
-        Err("Licensing is supported on macOS.".into())
-    }
-}
-
-/// A small non-secret note, outside the Keychain, that an activation was revoked or removed:
+/// A small non-secret note, outside the record store, that an activation was revoked or removed:
 /// keyed by a SHA-256 hash of the activation ID and holding only the record's event sequence
-/// after that change, never a clock. Written before the Keychain save and kept as a tombstone
-/// until that save lands, so a lost access survives a restart even when the Keychain never
+/// after that change, never a clock. Written before the record save and kept as a tombstone
+/// until that save lands, so a lost access survives a restart even when the record never
 /// caught up. Never contains the license key.
 pub trait Journal: Send + Sync {
     /// The sequence noted for the activation, if an entry exists. `Err` means the journal could
@@ -700,10 +628,10 @@ struct Meta {
     last_reachability_poll: Option<i64>,
     /// A recovery check may run once after the network was seen down.
     recovery_armed: bool,
-    /// A Keychain write failed; the record is written again every tick until it succeeds.
+    /// A record write failed; the record is written again every tick until it succeeds.
     storage_dirty: bool,
     last_cleanup_at: Option<i64>,
-    /// The Keychain could not be read: not "no license". Retried with backoff.
+    /// The records could not be read: not "no license". Retried with backoff.
     load_failures: u32,
     next_load_at: Option<i64>,
     /// Journal writes that failed, one per activation (a newer op supersedes an older one);
@@ -772,13 +700,13 @@ pub type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
 
 pub struct Service<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Journal>
 {
-    /// Held for pure steps only: never across the network or the Keychain.
+    /// Held for pure steps only: never across the network or the record store.
     engine: Mutex<Engine>,
     meta: Mutex<Meta>,
-    /// Orders every license Keychain write, and the activation and removal sequences around
+    /// Orders every license record write, and the activation and removal sequences around
     /// theirs.
     mutate: Mutex<()>,
-    /// Orders every trial Keychain write. Never held across the network; when both are needed,
+    /// Orders every trial record write. Never held across the network; when both are needed,
     /// taken after `mutate`.
     trial_mutate: Mutex<()>,
     /// One validation in flight at a time, from the scheduler or the window.
@@ -796,7 +724,7 @@ pub struct Service<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H
     /// Bumped by every change to the records in memory or on disk; a load result older than the
     /// latest change is discarded.
     generation: AtomicU64,
-    /// One Keychain read at a time, automatic or manual.
+    /// One record read at a time, automatic or manual.
     load: Mutex<()>,
     /// The host hears about the first successful read only.
     records_reported: AtomicBool,
@@ -814,11 +742,11 @@ pub struct Service<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H
     monotonic: Clock,
 }
 
-pub type Live = Service<HttpDodo, HttpRegistry, Keychain, TauriHost, FileJournal>;
+pub type Live = Service<HttpDodo, HttpRegistry, super::store::RecordStore, TauriHost, FileJournal>;
 
 impl Live {
     /// Registers the service, gates playback until the records are known, and starts the thread
-    /// that reads the Keychain. Launch is never delayed.
+    /// that reads the records. Launch is never delayed.
     pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
         let journal = FileJournal::new(
             app.path()
@@ -826,10 +754,21 @@ impl Live {
                 .map_err(|e| e.to_string())?
                 .join(JOURNAL_FILE),
         );
+        // The records live in the app's own encrypted files (LICENSING.md, "Record store"),
+        // keyed by this Mac's hardware UUID: never in the Keychain, whose items from releases
+        // before 0.1.2 are left alone.
+        let records = super::store::RecordStore::new(
+            super::store::RecordStore::directory_under(
+                &app.path().data_dir().map_err(|e| e.to_string())?,
+                APP_ID,
+            ),
+            APP_ID,
+            platform_uuid().as_deref(),
+        );
         let service = Arc::new(Service::new(
             HttpDodo::new()?,
             HttpRegistry::new()?,
-            Keychain,
+            records,
             TauriHost { app: app.clone() },
             journal,
             Box::new(system_now),
@@ -863,7 +802,7 @@ where
     J: Journal + 'static,
 {
     /// Saves the trial record on quit from a helper thread and waits at most `timeout` for it,
-    /// so a stuck Keychain never holds up quitting. Returns whether the save finished in time.
+    /// so a stuck record write never holds up quitting. Returns whether the save finished in time.
     pub fn flush_within(self: Arc<Self>, timeout: Duration) -> bool {
         let (done, finished) = mpsc::channel();
         let spawned = std::thread::Builder::new()
@@ -917,7 +856,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
 
     /// The deadline enforcer: only ever reads the engine and the saved records, and publishes
     /// restrictions the moment a trial ends, grace runs out or the clock is found to have
-    /// changed. It never touches the ordering locks, the Keychain, the network or cleanup, so a
+    /// changed. It never touches the ordering locks, the record store, the network or cleanup, so a
     /// stalled write cannot delay it.
     pub fn run_deadlines(&self) {
         loop {
@@ -1062,7 +1001,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         }
     }
 
-    /// Reads the Keychain and the journal. Unreadable storage is a storage error, never "no
+    /// Reads the records and the journal. Unreadable storage is a storage error, never "no
     /// license" or "no trial yet": the Mac stays gated, the error is shown, and the read is
     /// retried with backoff. Loads are single-flight, and a result is discarded if the records
     /// changed meanwhile. With no license and no trial record, the trial starts here.
@@ -1681,7 +1620,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         self.gate(false);
         let hash = instance_hash(&probe.instance_id);
         match answered {
-            // Journalled before the Keychain save, so a restart cannot lose the revocation.
+            // Journalled before the record save, so a restart cannot lose the revocation.
             Some((true, seq)) if result.is_ok() => self.journal_revoke(hash, seq),
             Some((false, seq)) if result.is_ok() => self.journal_clear(hash, seq),
             _ => {}
@@ -2338,7 +2277,7 @@ mod tests {
         }
     }
 
-    /// An in-memory Keychain whose reads and writes can be paused so slow I/O can be raced.
+    /// An in-memory record store whose reads and writes can be paused so slow I/O can be raced.
     #[derive(Default)]
     struct FakeVault {
         stored: Mutex<Stored>,
@@ -2745,7 +2684,7 @@ mod tests {
     fn case_16_a_trial_that_cannot_be_saved_does_not_run_and_is_retried() {
         let clock = Arc::new(AtomicI64::new(NOW));
         let service = service(Stored::default(), clock.clone());
-        *service.vault.trial_save_error.lock().unwrap() = Some("keychain locked".into());
+        *service.vault.trial_save_error.lock().unwrap() = Some("records locked".into());
         service.registry.started(NOW, NOW);
         service.load();
         let view = service.view();
@@ -2753,7 +2692,7 @@ mod tests {
         assert_eq!(view.state, State::Unlicensed);
         assert!(view.trial_storage_error);
         assert!(!view.core_feature);
-        assert!(view.last_error.unwrap().contains("keychain locked"));
+        assert!(view.last_error.unwrap().contains("records locked"));
         assert!(service.host.blocked());
         assert_eq!(service.vault.saved_trial(), None);
         assert_eq!(service.registry.calls(), 0, "no trial is running");
@@ -2783,13 +2722,13 @@ mod tests {
         let clock = Arc::new(AtomicI64::new(NOW));
         let original = trial_record(DAY, true);
         let service = trial_service(original.clone(), clock.clone());
-        *service.vault.trial_load_error.lock().unwrap() = Some("keychain denied".into());
+        *service.vault.trial_load_error.lock().unwrap() = Some("records denied".into());
         service.load();
         let view = service.view();
         assert!(view.ready);
         assert_eq!(view.state, State::Unlicensed);
         assert!(view.trial_storage_error);
-        assert!(view.last_error.unwrap().contains("keychain denied"));
+        assert!(view.last_error.unwrap().contains("records denied"));
         assert!(service.host.blocked());
         assert_eq!(service.registry.calls(), 0);
         clock.store(NOW + 10, Ordering::SeqCst);
@@ -2813,7 +2752,7 @@ mod tests {
         assert_eq!(service.registry.calls(), 0);
         // A license does not depend on the trial record.
         let licensed = self::service(with_paid(HOUR), clock);
-        *licensed.vault.trial_load_error.lock().unwrap() = Some("keychain denied".into());
+        *licensed.vault.trial_load_error.lock().unwrap() = Some("records denied".into());
         licensed.load();
         assert_eq!(licensed.view().state, State::Licensed);
         assert!(licensed.view().trial_storage_error);
@@ -2822,7 +2761,7 @@ mod tests {
     }
 
     #[test]
-    fn case_18_a_wiped_keychain_gets_the_registry_start_back_and_the_trial_ends() {
+    fn case_18_wiped_records_get_the_registry_start_back_and_the_trial_ends() {
         let service = service(Stored::default(), Arc::new(AtomicI64::new(NOW)));
         service.registry.started(NOW - 4 * DAY, NOW);
         service.load();
@@ -2837,7 +2776,7 @@ mod tests {
     }
 
     #[test]
-    fn case_19_a_wiped_keychain_one_day_in_resumes_with_two_days_left() {
+    fn case_19_wiped_records_one_day_in_resume_with_two_days_left() {
         let service = service(Stored::default(), Arc::new(AtomicI64::new(NOW)));
         service.registry.started(NOW - DAY, NOW);
         service.load();
@@ -3200,7 +3139,7 @@ mod tests {
         let clock = Arc::new(AtomicI64::new(NOW));
         let service = trial_service(trial_record(HOUR, false), clock.clone());
         service.host.no_hardware_uuid.store(true, Ordering::SeqCst);
-        *service.vault.trial_save_error.lock().unwrap() = Some("keychain locked".into());
+        *service.vault.trial_save_error.lock().unwrap() = Some("records locked".into());
         service.registry.started(NOW - HOUR, NOW);
         service.load();
         assert_eq!(service.registry.calls(), 0);
@@ -3415,7 +3354,7 @@ mod tests {
     }
 
     #[test]
-    fn quitting_never_waits_on_a_stuck_keychain_save() {
+    fn quitting_never_waits_on_a_stuck_record_save() {
         let clock = Arc::new(AtomicI64::new(NOW));
         let service = trial_service(trial_record(HOUR, true), clock.clone());
         service.load();
@@ -3819,7 +3758,7 @@ mod tests {
 
     #[test]
     fn sound_is_gated_until_the_record_has_been_read() {
-        // A pending Keychain read must not leave an unknown entitlement audible, however long
+        // A pending record read must not leave an unknown entitlement audible, however long
         // it takes; the settings window shows a loading state meanwhile.
         let clock = Arc::new(AtomicI64::new(NOW));
         let service = service(with_paid(HOUR), clock.clone());
@@ -4056,9 +3995,9 @@ mod tests {
     fn a_record_that_cannot_be_saved_leaves_the_trial_and_frees_the_slot() {
         let service = trial_service(trial_record(DAY, true), Arc::new(AtomicI64::new(NOW)));
         service.load();
-        *service.vault.save_error.lock().unwrap() = Some("keychain locked".into());
+        *service.vault.save_error.lock().unwrap() = Some("records locked".into());
         let error = service.activate("KEY-PAID").unwrap_err();
-        assert!(error.contains("keychain locked"), "{error}");
+        assert!(error.contains("records locked"), "{error}");
         assert_eq!(service.state(), State::Trial { days_left: 2 });
         assert_eq!(
             service.dodo.calls(),
@@ -4136,7 +4075,7 @@ mod tests {
         let clock = Arc::new(AtomicI64::new(NOW));
         let service = service(with_paid(HOUR), clock.clone());
         service.load();
-        *service.vault.save_error.lock().unwrap() = Some("keychain locked".into());
+        *service.vault.save_error.lock().unwrap() = Some("records locked".into());
         service.dodo.answer(Ok(Validation {
             valid: false,
             server_time: Some(NOW),
@@ -4149,7 +4088,7 @@ mod tests {
                 .view()
                 .last_error
                 .unwrap()
-                .contains("keychain locked")
+                .contains("records locked")
         );
         clock.store(NOW + 5, Ordering::SeqCst);
         service.tick();
@@ -4220,11 +4159,11 @@ mod tests {
     fn an_unreadable_record_is_a_storage_error_that_is_retried() {
         let clock = Arc::new(AtomicI64::new(NOW));
         let service = service(with_paid(HOUR), clock.clone());
-        *service.vault.load_error.lock().unwrap() = Some("keychain denied".into());
+        *service.vault.load_error.lock().unwrap() = Some("records denied".into());
         service.load();
         let view = service.view();
         assert!(!view.ready, "an unreadable record is not an empty one");
-        assert!(view.last_error.unwrap().contains("keychain denied"));
+        assert!(view.last_error.unwrap().contains("records denied"));
         assert!(service.host.blocked());
         assert!(service.dodo.calls().is_empty(), "nothing to check yet");
         assert!(
@@ -4267,7 +4206,7 @@ mod tests {
             "journalled before the save"
         );
         assert!(!service.vault.load().unwrap().license.unwrap().revoked);
-        // Restart offline over the same stores: the journal wins over the Keychain record.
+        // Restart offline over the same stores: the journal wins over the stored record.
         let restarted = service_with(
             service.vault.reopen(),
             service.journal.clone(),
@@ -4305,7 +4244,7 @@ mod tests {
         service.journal.revoke(&hash2, 2).unwrap();
         service.remove().unwrap();
         assert!(service.journal.entry(&hash2).unwrap().is_none());
-        // Remove whose Keychain save fails: the tombstone stays and an offline restart stays
+        // Remove whose record save fails: the tombstone stays and an offline restart stays
         // off; once the cleared record is saved, the tombstone goes.
         let service = self::service(with_paid(0), Arc::new(AtomicI64::new(NOW)));
         service.load();
@@ -4511,7 +4450,7 @@ mod tests {
         let view = service.view();
         assert!(
             view.ready,
-            "the Keychain record is kept as a recovery candidate"
+            "the stored record is kept as a recovery candidate"
         );
         assert!(view.journal_unreadable);
         assert!(view.last_error.unwrap().contains("journal"));
@@ -4766,7 +4705,7 @@ mod tests {
     fn the_scheduler_sleeps_no_longer_than_the_next_load_retry() {
         let clock = Arc::new(AtomicI64::new(NOW));
         let service = service(with_paid(HOUR), clock);
-        *service.vault.load_error.lock().unwrap() = Some("keychain denied".into());
+        *service.vault.load_error.lock().unwrap() = Some("records denied".into());
         service.load();
         let wait = service.next_wait();
         assert_eq!(wait, Duration::from_secs(LOAD_RETRY_MIN as u64));

@@ -85,7 +85,7 @@ export function License({
   const canEnterKey = inTrial || view.state === "revoked";
   const status: Record<LicenseView["state"], string> = {
     unlicensed: view.trialStorageError
-      ? "Your free trial can’t run until OpenKlack can use the Keychain."
+      ? "Your free trial can’t run until OpenKlack can save its records."
       : "Starting your free trial…",
     trial: `Free trial: ${trialLeft(view.daysLeft)}`,
     trialEnded: "Your free trial has ended",

@@ -10,6 +10,8 @@ pub const ENABLED: bool = cfg!(feature = "licensing");
 pub mod core;
 #[cfg(feature = "licensing")]
 pub mod runtime;
+#[cfg(feature = "licensing")]
+pub mod store;
 
 #[cfg(all(test, not(feature = "licensing")))]
 mod source_build {
