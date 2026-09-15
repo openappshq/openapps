@@ -54,7 +54,7 @@ OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_â€
 
 The trial registers with `https://openapps.space/api/trial` (`env` follows `OPENAPPS_DODO_ENV`). A test build can use a local `wrangler dev` instead with `OPENAPPS_TRIAL_REGISTRY_BASE_URL=http://127.0.0.1:8787`. To run the whole trial in minutes, start a debug build with `OPENREACTION_DEBUG_TRIAL_DAY_SECONDS=60` (a trial "day" becomes a minute); release builds ignore it.
 
-Official builds also compile in the updater (`OPENAPPS_OFFICIAL=1`; Sparkle, off by default, see [RELEASES.md](../../RELEASES.md)). The official download is built by CI from an `openreaction-v*` tag, published as a GitHub Release and installed with `brew install --cask openappshq/tap/openreaction`; see [RELEASING.md](RELEASING.md).
+Official builds also compile in the shared updater (`OPENAPPS_OFFICIAL=1`; `packages/openapps-updater`, off by default, see [RELEASES.md](../../RELEASES.md)). The official download is built by CI from an `openreaction-v*` tag, published as a GitHub Release and installed with `brew install --cask openappshq/tap/openreaction`; see [RELEASING.md](RELEASING.md).
 
 `scripts/bundle.sh` signs ad-hoc unless it runs inside `scripts/release/with-signing-keychain.sh` with the release certificate:
 

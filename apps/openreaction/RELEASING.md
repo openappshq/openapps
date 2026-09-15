@@ -18,10 +18,11 @@ The scripts the workflow runs are the ones you can run locally:
 
 | Script | Does |
 | --- | --- |
-| `scripts/bundle.sh` | `swift build -c release`, assembles and signs `build/OpenReaction.app` (hardened runtime, no sandbox, `scripts/OpenReaction.entitlements`); with `OPENAPPS_OFFICIAL=1` embeds Sparkle and pins the feed and update key |
-| `scripts/make-zip.sh` | `ditto -c -k --keepParent` into `dist/OpenReaction-<version>.zip`, prints its SHA-256 |
+| `scripts/bundle.sh` | `swift build -c release`, assembles and signs `build/OpenReaction.app` (hardened runtime, no sandbox, `scripts/OpenReaction.entitlements`); with `OPENAPPS_OFFICIAL=1` compiles the shared updater in and pins the feed and update key |
+| `scripts/make-zip.sh` | `ditto -c -k --keepParent` into `dist/OpenReaction-<version>.zip`, writes its `.sha256` |
 | `scripts/verify-release.sh [--release] <zip>` | Unpacks the zip and runs the checks a user's Mac and the updater run; `--release` requires the pinned designated requirement and the committed update key |
 | `scripts/make-appcast.sh <zip>` | Signs the zip with the update key and writes the signed `dist/appcast.xml` |
+| `scripts/sign-update.sh <key> [--feed] <file>` | Ed25519 signing, byte-compatible with Sparkle's `sign_update` |
 | `scripts/verify-appcast.sh <appcast> [zip]` | Verifies a feed, and the zip it announces, with the public key only |
 | `scripts/verify-live.sh <version> <sha256>` | Downloads the public zip and the live feed and checks both |
 | `scripts/publish-release.sh [--dry-run]` | Creates the GitHub Release for a tag, only once the tag provably names the built commit |
@@ -38,6 +39,7 @@ Shared with every app (repository root):
 | `scripts/release/verify-designated-requirement.sh <app> <pinned file>` | Fails unless an app has exactly the pinned requirement |
 | `scripts/release/release-tag-ruleset.sh check\|apply <definition> [repo]` | Checks for, or creates, the ruleset that makes `openreaction-v*` tags immutable |
 | `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>` | Sets the cask's version and digest; the template is `packaging/homebrew/Casks/openreaction.rb` |
+| `packages/openapps-updater` | The in-app updater every Swift app compiles into official builds (`swift test --package-path packages/openapps-updater`) |
 
 ## One-time setup
 
@@ -157,9 +159,11 @@ and a live build refuses placeholder product IDs in any casing.
 
 1. Merge everything the release needs into `main` and make sure the
    OpenReaction workflow is green there.
-2. Pick the version, `MAJOR.MINOR.PATCH`. It becomes `CFBundleShortVersionString`;
-   `CFBundleVersion` is the commit count on `main`, so it always grows, and
-   it is what the updater compares.
+2. Pick the version, `MAJOR.MINOR.PATCH` (each part at most 999). It becomes
+   `CFBundleShortVersionString`; `CFBundleVersion` is derived from it
+   (`MAJOR*1000000 + MINOR*1000 + PATCH`), so build order is release order:
+   the updater compares both, and a back-port cut from a later commit never
+   outranks the release it patches.
 3. Tag and push:
 
    ```sh
@@ -189,7 +193,10 @@ and a live build refuses placeholder product IDs in any casing.
      deploy then serves it at
      `https://openapps.space/updates/openreaction/appcast.xml`), downloads
      the public zip and polls the live feed until both check out, then
-     bumps `Casks/openreaction.rb` in `openappshq/homebrew-tap`.
+     bumps `Casks/openreaction.rb` in `openappshq/homebrew-tap`. The feed
+     and the cask only ever move forward: a version below the live feed's
+     fails the job unless the run set `allow_older`, in which case the
+     back-port is published as a GitHub Release only and both stay put.
    Expect 15–30 minutes, most of it the website deploy wait.
 5. Open the release, check the notes, and run the clean-Mac check below
    before announcing it.
@@ -257,28 +264,43 @@ the next release must install it without asking for permissions again.
 
 ## Updates
 
-Official builds embed Sparkle 2 (`OPENAPPS_OFFICIAL=1`; source builds have
-no updater at all). `Info.plist` pins
-`https://openapps.space/updates/openreaction/appcast.xml`, the public update
-key, `SURequireSignedFeed` and `SUVerifyUpdateBeforeExtraction`, so an
-unsigned or tampered feed or zip is ignored. **Both Settings toggles are off
-by default**: a fresh install never contacts the feed on its own, "Check
-Now" always works, and most users update with `brew upgrade --cask
-openreaction`. With "Check for updates automatically" on, the app checks on
-launch, every 24 hours and on wake when a check is overdue, retries a failed
-check once after an hour, and with "Download and install automatically" on
-installs the verified update when the app quits ("Update ready — Restart"
-in the menu installs it at once). Once an update is downloaded and staged,
-Sparkle installs it on the next quit whatever the toggles are set to
-afterwards; it has no way to retract a staged install, and Settings says so
-next to "Restart to Update". A copy running from a read-only volume or App
-Translocation shows "Move OpenReaction to Applications to enable updates"
-instead. Updates never depend on the license or trial state.
+Official builds compile in the shared updater,
+[`packages/openapps-updater`](../../packages/openapps-updater)
+(`OPENAPPS_OFFICIAL=1`; source builds have no updater at all and no
+dependencies). `Info.plist` pins the feed
+`https://openapps.space/updates/openreaction/appcast.xml` (`SUFeedURL`) and
+the public update key (`SUPublicEDKey`); the app trusts nothing in a feed
+before its Ed25519 signature verifies, and nothing in a zip before its
+length, SHA-256 and signature do. **Both Settings toggles are off by
+default**: a fresh install never contacts the feed on its own, "Check Now"
+always works, and most users update with `brew upgrade --cask openreaction`.
 
-Sparkle accepts an update when its EdDSA signature verifies with the pinned
-key, and additionally checks the new app's code signature against the old
-one's designated requirement, which the stable certificate keeps identical.
-`scripts/update-e2e.sh` proves the whole path locally (below).
+With "Check for updates automatically" on, the app checks on launch, every
+24 hours and on wake when a check is overdue, and retries a failed check
+once after an hour. With "Download and install automatically" on as well, a
+found update is downloaded, verified and unpacked into a private staging
+folder next to the app (`~/Applications/.OpenReaction.app.update`, mode
+0700); the staged bundle must be validly signed and *satisfy the running
+app's designated requirement* (evaluated with the Security framework, the
+same check as `codesign --verify --strict -R=`, never compared as text) and
+carry the announced version and build. It installs when the app quits, or
+at once from "Update ready — Restart" / "Restart to Update". Turning either
+toggle off cancels a download in flight and discards a staged automatic
+update, so nothing installs on quit; the quit path checks the toggle again.
+"Check Now" → "Install and Restart" is the user's explicit consent and
+installs immediately, independent of the toggles.
+
+The install is one atomic exchange of the two bundles (`renamex_np` with
+`RENAME_SWAP`), re-verified right before it: at no instant is the app
+missing, and the old bundle is deleted only afterwards. On a volume without
+atomic renames the updater falls back to move-aside/move-in with a marker
+file, restores the old bundle on any failure (or names where it is), and
+recovers an interrupted swap at the next launch. A copy running from a
+read-only volume or App Translocation shows "Move OpenReaction to
+Applications to enable updates" instead. Updates never depend on the
+license or trial state. `scripts/update-e2e.sh` proves the whole path
+locally (below); the package's own tests cover feed verification, version
+rules, the swap with injected failures and the copied-requirement case.
 
 ## Local builds
 
@@ -330,8 +352,10 @@ search list is unchanged and the identity gone afterwards, verifies both
 carry the same designated requirement and an ad-hoc re-signed copy does not,
 zips and update-signs 1.0.1, writes and verifies the signed appcast (and
 refuses a tampered one), serves both from a local port, runs 1.0.0 as a
-fresh install and asserts the server sees no request, then runs it with both
-toggles on and asserts 1.0.1 is downloaded, verified, reported ready and
-installed on quit with the requirement unchanged. Everything it created is
+fresh install and asserts the server sees no request, runs it with both
+toggles on and turns "install automatically" off mid-download and again
+after staging (nothing may install or stay staged), then runs it with both
+on and asserts 1.0.1 is downloaded, verified, staged and installed on quit
+with the requirement unchanged and no leftovers. Everything it created is
 removed afterwards. It needs OpenSSL 3 (`brew install openssl@3`), python3
 and a logged-in session.

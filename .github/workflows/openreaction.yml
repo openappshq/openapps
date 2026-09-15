@@ -12,6 +12,7 @@ on:
   pull_request:
     paths:
       - apps/openreaction/**
+      - packages/openapps-updater/**
       - packaging/homebrew/**
       - scripts/release/**
       - .github/workflows/openreaction.yml
@@ -21,6 +22,7 @@ on:
     tags: [openreaction-v*]
     paths:
       - apps/openreaction/**
+      - packages/openapps-updater/**
       - packaging/homebrew/**
       - scripts/release/**
       - .github/workflows/openreaction.yml
@@ -87,11 +89,15 @@ jobs:
           scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
           swift test --scratch-path .build/licensed \
             --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests|OpenReactionTests.DefaultsInvalidationJournalTests'
-      - name: Lint the release scripts
+      - name: Test the updater package
+        run: swift test --package-path ../../packages/openapps-updater
+      - name: Lint and test the release scripts
         run: |
           brew install shellcheck actionlint
-          shellcheck scripts/*.sh ../../scripts/release/*.sh ../../packaging/homebrew/*.sh
+          shellcheck scripts/*.sh ../../scripts/release/*.sh ../../scripts/release/tests/*.sh ../../packaging/homebrew/*.sh ../../packaging/homebrew/tests/*.sh
           actionlint ../../.github/workflows/openreaction.yml
+          ../../scripts/release/tests/with-signing-keychain.test.sh
+          ../../packaging/homebrew/tests/bump-cask.test.sh
       # The official flavour (licensing and the updater) as an ad-hoc signed
       # development app, pinning a throwaway update key so the build does not
       # depend on the real key existing; it verifies like a release except
@@ -260,7 +266,7 @@ jobs:
         run: |
           # Feed verification needs OpenSSL 3 (Ed25519); macOS ships LibreSSL.
           brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
-          scripts/make-zip.sh | tee "dist/OpenReaction-$VERSION.zip.sha256"
+          scripts/make-zip.sh
           scripts/verify-release.sh --release "dist/OpenReaction-$VERSION.zip"
           scripts/make-appcast.sh "dist/OpenReaction-$VERSION.zip"
           echo "sha256=$(cut -d' ' -f1 "dist/OpenReaction-$VERSION.zip.sha256")" >> "$GITHUB_OUTPUT"
@@ -355,7 +361,30 @@ jobs:
           if [ "$version" != "$VERSION" ] || [ "$sha256" != "$EXPECTED_SHA256" ] || [ "$url" != "$expected_url" ]; then
             echo "::error::dist/appcast.xml announces $version $sha256 at $url, not $VERSION $EXPECTED_SHA256 at $expected_url"; exit 1
           fi
+      - name: Never move the stable feed backwards
+        # The feed and the cask only ever advance. A back-port (allow_older)
+        # is published as a GitHub Release and nothing else: installed apps
+        # never downgrade anyway, and the cask refuses lower versions.
+        id: order
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          ALLOW_OLDER: ${{ inputs.allow_older == true }}
+        run: |
+          current=""
+          if [ -f apps/website/public/updates/openreaction/appcast.xml ]; then
+            read -r current _ < <(cd apps/openreaction && scripts/verify-appcast.sh ../website/public/updates/openreaction/appcast.xml)
+          fi
+          if [ -n "$current" ] && [ "$current" != "$VERSION" ] && [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" = "$current" ]; then
+            if [ "$ALLOW_OLDER" != true ]; then
+              echo "::error::The live feed is at $current, newer than $VERSION; a lower version is never promoted."; exit 1
+            fi
+            echo "::notice::$VERSION is a back-port below the live feed's $current: the release is published, the feed and the cask stay at $current."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Commit the feed to main
+        if: steps.order.outputs.promote == 'true'
         env:
           FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
@@ -375,6 +404,7 @@ jobs:
           done
           echo "::error::Could not push the feed to main after 3 attempts."; exit 1
       - name: Verify the live feed and download
+        if: steps.order.outputs.promote == 'true'
         env:
           VERSION: ${{ needs.release.outputs.version }}
           EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
@@ -382,6 +412,7 @@ jobs:
           WAIT_SECONDS: "1500"
         run: apps/openreaction/scripts/verify-live.sh "$VERSION" "$EXPECTED_SHA256"
       - name: Bump the cask
+        if: steps.order.outputs.promote == 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
