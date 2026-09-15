@@ -64,10 +64,13 @@ chmod 644 "$OUT/release-signing.cert.pem"
 
 # macOS `security import` reads the legacy PKCS#12 encryption; OpenSSL 3 needs
 # -legacy to write it, LibreSSL writes it by default.
-legacy=()
-if openssl version | grep -q '^OpenSSL 3'; then legacy=(-legacy); fi
+# (Bash 3.2 on the macOS runners treats an empty array as unset under
+# `set -u`, so the flag is a plain string.)
+legacy=""
+if openssl version | grep -q '^OpenSSL 3'; then legacy="-legacy"; fi
 printf '%s' "$password" > "$OUT/release-signing.p12.password"
-openssl pkcs12 -export "${legacy[@]}" -name "$NAME" \
+# shellcheck disable=SC2086
+openssl pkcs12 -export $legacy -name "$NAME" \
     -inkey "$OUT/release-signing.key.pem" -in "$OUT/release-signing.cert.pem" \
     -out "$OUT/release-signing.p12" -passout "file:$OUT/release-signing.p12.password"
 base64 < "$OUT/release-signing.p12" | tr -d '\n' > "$OUT/release-signing.p12.base64"
