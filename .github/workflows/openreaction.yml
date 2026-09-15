@@ -1,8 +1,10 @@
 name: OpenReaction
 
-# Checks on every change to the app; a signed, notarized universal release
-# when an `openreaction-v<MAJOR.MINOR.PATCH>` tag is pushed (or on manual
-# dispatch, which publishes only when asked). See apps/openreaction/RELEASING.md.
+# Checks on every change to the app; a signed universal release when an
+# `openreaction-v<MAJOR.MINOR.PATCH>` tag is pushed (or on manual dispatch,
+# which publishes only when asked). The release flow follows RELEASES.md:
+# build and sign, zip, update-sign, publish, commit the feed, verify live,
+# bump the cask. See apps/openreaction/RELEASING.md.
 #
 # The paths filter applies to branch pushes and pull requests; tag pushes
 # always run, which is what the release needs.
@@ -10,6 +12,8 @@ on:
   pull_request:
     paths:
       - apps/openreaction/**
+      - packaging/homebrew/**
+      - scripts/release/**
       - .github/workflows/openreaction.yml
       - .github/rulesets/openreaction-release-tags.json
   push:
@@ -17,6 +21,8 @@ on:
     tags: [openreaction-v*]
     paths:
       - apps/openreaction/**
+      - packaging/homebrew/**
+      - scripts/release/**
       - .github/workflows/openreaction.yml
       - .github/rulesets/openreaction-release-tags.json
   workflow_dispatch:
@@ -54,7 +60,7 @@ env:
 jobs:
   checks:
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
         with:
@@ -81,27 +87,41 @@ jobs:
           scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
           swift test --scratch-path .build/licensed \
             --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests|OpenReactionTests.DefaultsInvalidationJournalTests'
-      - name: Build an ad-hoc signed development app and DMG
+      - name: Lint the release scripts
+        run: |
+          brew install shellcheck actionlint
+          shellcheck scripts/*.sh ../../scripts/release/*.sh ../../packaging/homebrew/*.sh
+          actionlint ../../.github/workflows/openreaction.yml
+      # The official flavour (licensing and the updater) as an ad-hoc signed
+      # development app, pinning a throwaway update key so the build does not
+      # depend on the real key existing; it verifies like a release except
+      # for the signature.
+      - name: Build an ad-hoc signed official development app
         env:
           OPENAPPS_LICENSING: "1"
+          OPENAPPS_OFFICIAL: "1"
           OPENAPPS_DODO_ENV: test
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
           UNIVERSAL: "1"
+          SCRATCH_PATH: .build/official
         run: |
+          UPDATE_PUBLIC_ED_KEY="$(xcrun swift -e 'import CryptoKit; print(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString())')"
+          export UPDATE_PUBLIC_ED_KEY
           scripts/bundle.sh
-          scripts/make-dmg.sh
-          scripts/verify-release.sh dist/OpenReaction-*.dmg
+          scripts/make-zip.sh
+          scripts/verify-release.sh dist/OpenReaction-*.zip
       - uses: actions/upload-artifact@v4
         with:
           name: OpenReaction-development-unsigned
-          path: apps/openreaction/dist/*.dmg
+          path: apps/openreaction/dist/*.zip
           retention-days: 7
           if-no-files-found: error
 
-  # Builds, signs, notarizes and verifies the release. Read-only token: it
-  # never touches tags or releases; that is the publish job's business.
+  # Builds, signs, verifies and packages the release. Read-only token: it
+  # never touches tags, releases, the feed or the tap.
   release:
-    if: startsWith(github.ref, 'refs/tags/openreaction-v') || github.event_name == 'workflow_dispatch'
+    # Never in a fork: the environment, its secrets and the publish path belong to this repository.
+    if: github.repository == 'openappshq/openapps' && (startsWith(github.ref, 'refs/tags/openreaction-v') || github.event_name == 'workflow_dispatch')
     needs: checks
     runs-on: macos-26
     timeout-minutes: 90
@@ -116,12 +136,10 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       publish: ${{ steps.version.outputs.publish }}
       commit: ${{ steps.version.outputs.commit }}
-      # The digest of the DMG as verified here, and the id of the artifact it
-      # was uploaded as: the publish job trusts these, not what it downloads.
-      sha256: ${{ steps.verify.outputs.sha256 }}
+      # The digest of the zip as verified here, and the id of the artifact it
+      # was uploaded as: later jobs trust these, not what they download.
+      sha256: ${{ steps.package.outputs.sha256 }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
-    env:
-      KEYCHAIN_NAME: openreaction-release.keychain-db
     steps:
       - uses: actions/checkout@v6
         with:
@@ -168,37 +186,40 @@ jobs:
           echo "Building OpenReaction $version from $(git rev-parse HEAD) (publish: $publish)"
       - name: Check release configuration
         # Everything the release needs is checked up front, so a missing
-        # secret fails here with its name and never produces an unsigned build.
+        # secret fails here with its name and never produces a signed build
+        # that cannot be published. Only public material is committed: the
+        # pinned requirement and the update public key must have been generated.
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
+          RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           PUBLISH: ${{ steps.version.outputs.publish }}
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
           OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
           OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
         run: |
           missing=0
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD SPARKLE_ED_PRIVATE_KEY; do
             if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openreaction-release environment."; missing=1; fi
           done
-          # Only publication reads the tag ruleset, but a missing token should fail before a 30-minute build, not after.
-          if [ "$PUBLISH" = true ] && [ -z "$RULESET_READ_TOKEN" ]; then
-            echo "::error::Secret RULESET_READ_TOKEN is not set in the openreaction-release environment; publishing needs it to verify the tag ruleset."; missing=1
+          # Only publication uses these, but a missing token should fail before a 30-minute build, not after.
+          if [ "$PUBLISH" = true ]; then
+            for name in RULESET_READ_TOKEN FEED_COMMIT_TOKEN HOMEBREW_TAP_TOKEN; do
+              if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openreaction-release environment; publishing needs it."; missing=1; fi
+            done
           fi
           if [ -z "$OPENAPPS_DODO_PAID_PRODUCT_ID" ]; then
             echo "::error::Variable OPENAPPS_DODO_PAID_PRODUCT_ID is not set in the openreaction-release environment."; missing=1
           fi
+          for file in release/designated-requirement.txt release/sparkle-public-key.txt; do
+            if grep -q '^NOT GENERATED' "$file"; then
+              echo "::error::$file has not been generated yet; create the release certificate and update key first (apps/openreaction/RELEASING.md, \"Signing certificate and update key\")."; missing=1
+            fi
+          done
           [ "$missing" = 0 ] || exit 1
-          case "$APPLE_SIGNING_IDENTITY" in
-            'Developer ID Application:'*) ;;
-            *) echo "::error::APPLE_SIGNING_IDENTITY must be a 'Developer ID Application: …' identity; releases are never signed with anything else."; exit 1 ;;
-          esac
           case "$OPENAPPS_DODO_PAID_PRODUCT_ID" in
             pdt_*) ;;
             *) echo "::error::OPENAPPS_DODO_PAID_PRODUCT_ID must be a Dodo product ID (pdt_…)."; exit 1 ;;
@@ -207,102 +228,59 @@ jobs:
           for name in OPENAPPS_BUY_URL OPENAPPS_SUPPORT_URL; do
             if [ -n "${!name}" ]; then echo "$name: set"; else echo "$name: not set (optional)"; fi
           done
-      - name: Import the Developer ID certificate
+      - name: Build, sign and verify the universal release
+        # The identity lives in a temporary keychain for exactly this step;
+        # with-signing-keychain.sh removes it before the step ends and fails
+        # if it can still be found. bundle.sh signs with the pinned designated
+        # requirement and refuses a certificate that does not produce it.
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          KEYCHAIN="$RUNNER_TEMP/$KEYCHAIN_NAME"
-          P12="$RUNNER_TEMP/openreaction.p12"
-          trap 'rm -f "$P12"' EXIT
-          umask 077
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$P12"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 3600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import "$P12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
-          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
-          identities="$(security find-identity -v -p codesigning "$KEYCHAIN")"
-          if ! grep -Fq "$APPLE_SIGNING_IDENTITY" <<< "$identities"; then
-            echo "::error::APPLE_CERTIFICATE does not contain the identity named by APPLE_SIGNING_IDENTITY."
-            printf '%s\n' "$identities"
-            exit 1
-          fi
-      - name: Build the signed universal release
-        env:
+          RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
+          RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
           VERSION: ${{ steps.version.outputs.version }}
           UNIVERSAL: "1"
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           OPENAPPS_LICENSING: "1"
+          OPENAPPS_OFFICIAL: "1"
           OPENAPPS_DODO_ENV: live
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
           OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
           OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
-        run: scripts/bundle.sh
-      - name: Notarize and staple the app
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: scripts/notarize.sh build/OpenReaction.app
-      - name: Build the DMG
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: scripts/make-dmg.sh
-      - name: Remove the signing identity
-        # The DMG was the last thing signed. Notarization, verification,
-        # upload and publish only need the notary credentials, so the
-        # keychain goes now, not at the end of the job; failing to remove
-        # it fails the release.
+        run: ../../scripts/release/with-signing-keychain.sh scripts/bundle.sh
+      - name: Confirm the signing identity is gone
+        # Nothing after this point may sign: the zip, the feed, the upload and
+        # the publish only need the update key and tokens.
         run: |
-          security delete-keychain "$RUNNER_TEMP/$KEYCHAIN_NAME"
-          security list-keychains -d user -s login.keychain-db
-          identities="$(security find-identity -v -p codesigning)"
-          if grep -q 'Developer ID Application:' <<< "$identities"; then
-            echo "::error::A Developer ID identity is still available after cleanup."; exit 1
+          if security find-identity -p codesigning 2>/dev/null | grep -q 'OpenApps HQ Release'; then
+            echo "::error::The release signing identity is still available after the build."; exit 1
           fi
-      - name: Notarize and staple the DMG
+      - name: Zip, verify and sign the update
+        id: package
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: scripts/notarize.sh "dist/OpenReaction-$VERSION.dmg"
-      - name: Verify the download
-        id: verify
-        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          scripts/verify-release.sh --notarized "dist/OpenReaction-$VERSION.dmg"
-          cd dist
-          shasum -a 256 "OpenReaction-$VERSION.dmg" | tee "OpenReaction-$VERSION.dmg.sha256"
-          echo "sha256=$(cut -d' ' -f1 "OpenReaction-$VERSION.dmg.sha256")" >> "$GITHUB_OUTPUT"
+          # Feed verification needs OpenSSL 3 (Ed25519); macOS ships LibreSSL.
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          scripts/make-zip.sh | tee "dist/OpenReaction-$VERSION.zip.sha256"
+          scripts/verify-release.sh --release "dist/OpenReaction-$VERSION.zip"
+          scripts/make-appcast.sh "dist/OpenReaction-$VERSION.zip"
+          echo "sha256=$(cut -d' ' -f1 "dist/OpenReaction-$VERSION.zip.sha256")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         id: upload
         with:
           name: OpenReaction-${{ steps.version.outputs.version }}-signed
           path: |
-            apps/openreaction/dist/*.dmg
+            apps/openreaction/dist/*.zip
             apps/openreaction/dist/*.sha256
+            apps/openreaction/dist/appcast.xml
           if-no-files-found: error
-      - name: Remove temporary signing material
-        # Fallback for runs that fail before the identity was removed above.
-        if: always()
-        run: |
-          security delete-keychain "$RUNNER_TEMP/$KEYCHAIN_NAME" 2>/dev/null || true
-          security list-keychains -d user -s login.keychain-db || true
-          rm -f "$RUNNER_TEMP/openreaction.p12"
 
-  # Publishes the verified DMG. The only job with a token that can write to
-  # the repository; it runs no build, only scripts/publish-release.sh, which
+  # Publishes the verified zip. The only job with a token that can write
+  # releases; it runs no build, only scripts/publish-release.sh, which
   # requires the openreaction-v* tag ruleset to be active with no bypass
-  # actors and refuses unless the tag names exactly the commit the DMG was
-  # built from and the DMG has exactly the digest the release job verified.
+  # actors and refuses unless the tag names exactly the commit the zip was
+  # built from and the zip has exactly the digest the release job verified.
   publish:
-    if: needs.release.outputs.publish == 'true'
+    if: github.repository == 'openappshq/openapps' && needs.release.outputs.publish == 'true'
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -336,3 +314,88 @@ jobs:
           CREATE_TAG: ${{ github.event_name == 'workflow_dispatch' }}
           ALLOW_OLDER: ${{ inputs.allow_older == true }}
         run: scripts/publish-release.sh
+
+  # Once the release is public: commit the signed feed to main (the website
+  # deploy serves it), verify the live feed and zip, then bump the cask.
+  # No build runs here and no signing material is present; the feed was
+  # signed by the release job and is only checked again here.
+  feed:
+    if: github.repository == 'openappshq/openapps'
+    needs: [release, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: openreaction-release
+    concurrency:
+      group: openreaction-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.release.outputs.artifact_id }}
+          path: apps/openreaction/dist
+          merge-multiple: true
+      - name: Check the feed against the published release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          cd apps/openreaction
+          read -r version _ url sha256 < <(scripts/verify-appcast.sh dist/appcast.xml "dist/OpenReaction-$VERSION.zip")
+          expected_url="https://github.com/openappshq/openapps/releases/download/openreaction-v$VERSION/OpenReaction-$VERSION.zip"
+          if [ "$version" != "$VERSION" ] || [ "$sha256" != "$EXPECTED_SHA256" ] || [ "$url" != "$expected_url" ]; then
+            echo "::error::dist/appcast.xml announces $version $sha256 at $url, not $VERSION $EXPECTED_SHA256 at $expected_url"; exit 1
+          fi
+      - name: Commit the feed to main
+        env:
+          FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p apps/website/public/updates/openreaction
+          cp apps/openreaction/dist/appcast.xml apps/website/public/updates/openreaction/appcast.xml
+          git config user.name "openapps-release"
+          git config user.email "release@openapps.space"
+          git add apps/website/public/updates/openreaction/appcast.xml
+          if git diff --cached --quiet; then echo "The feed already names $VERSION."; exit 0; fi
+          git commit -m "Point OpenReaction's update feed at $VERSION"
+          # The token is passed per command and never written to .git/config.
+          for _ in 1 2 3; do
+            if git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" push "https://github.com/$REPO.git" HEAD:main; then exit 0; fi
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" pull --rebase "https://github.com/$REPO.git" main
+          done
+          echo "::error::Could not push the feed to main after 3 attempts."; exit 1
+      - name: Verify the live feed and download
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+          # The website deploys from main after the commit above.
+          WAIT_SECONDS: "1500"
+        run: apps/openreaction/scripts/verify-live.sh "$VERSION" "$EXPECTED_SHA256"
+      - name: Bump the cask
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=$auth" clone --depth 1 https://github.com/openappshq/homebrew-tap.git tap
+          mkdir -p tap/Casks
+          if [ ! -f tap/Casks/openreaction.rb ]; then cp packaging/homebrew/Casks/openreaction.rb tap/Casks/openreaction.rb; fi
+          packaging/homebrew/bump-cask.sh tap/Casks/openreaction.rb "$VERSION" "$SHA256"
+          cd tap
+          git config user.name "openapps-release"
+          git config user.email "release@openapps.space"
+          git add Casks/openreaction.rb
+          if git diff --cached --quiet; then echo "The cask already names $VERSION."; exit 0; fi
+          git commit -m "openreaction $VERSION"
+          git -c "http.https://github.com/.extraheader=$auth" push origin HEAD

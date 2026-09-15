@@ -1,36 +1,84 @@
 # Releasing OpenReaction
 
-The official build is a signed, notarized, universal (Apple silicon + Intel)
-`OpenReaction.app` inside a DMG, with licensing compiled in against Dodo live
-mode. [`.github/workflows/openreaction.yml`](../../.github/workflows/openreaction.yml)
-builds it on GitHub's `macos-26` runner and publishes it as a GitHub Release.
+The official build is a universal (Apple silicon + Intel) `OpenReaction.app`,
+signed with the stable OpenApps HQ Release certificate, zipped, with
+licensing compiled in against Dodo live mode and the in-app updater compiled
+in. It is installed with Homebrew and updates itself from a signed feed, all
+as [RELEASES.md](../../RELEASES.md) specifies.
+[`.github/workflows/openreaction.yml`](../../.github/workflows/openreaction.yml)
+builds it on GitHub's `macos-26` runner, publishes it as a GitHub Release,
+commits the update feed, verifies both live and bumps the Homebrew cask.
 Nothing about a release is manual except pushing the tag.
+
+```sh
+brew install --cask openappshq/tap/openreaction   # how users install it
+```
 
 The scripts the workflow runs are the ones you can run locally:
 
 | Script | Does |
 | --- | --- |
-| `scripts/bundle.sh` | `swift build -c release`, assembles and signs `build/OpenReaction.app` (hardened runtime, no sandbox, `scripts/OpenReaction.entitlements`) |
-| `scripts/make-dmg.sh` | Packages the app and an Applications link into `dist/OpenReaction-<version>.dmg` and signs it |
-| `scripts/notarize.sh <item>` | Submits an app or DMG with `notarytool`, waits, staples the ticket |
-| `scripts/verify-release.sh [--notarized] <dmg>` | Mounts the DMG and runs the checks a user's Mac runs |
-| `scripts/release-tag-ruleset.sh check\|apply` | Checks for, or creates, the ruleset that makes `openreaction-v*` tags immutable |
+| `scripts/bundle.sh` | `swift build -c release`, assembles and signs `build/OpenReaction.app` (hardened runtime, no sandbox, `scripts/OpenReaction.entitlements`); with `OPENAPPS_OFFICIAL=1` embeds Sparkle and pins the feed and update key |
+| `scripts/make-zip.sh` | `ditto -c -k --keepParent` into `dist/OpenReaction-<version>.zip`, prints its SHA-256 |
+| `scripts/verify-release.sh [--release] <zip>` | Unpacks the zip and runs the checks a user's Mac and the updater run; `--release` requires the pinned designated requirement and the committed update key |
+| `scripts/make-appcast.sh <zip>` | Signs the zip with the update key and writes the signed `dist/appcast.xml` |
+| `scripts/verify-appcast.sh <appcast> [zip]` | Verifies a feed, and the zip it announces, with the public key only |
+| `scripts/verify-live.sh <version> <sha256>` | Downloads the public zip and the live feed and checks both |
 | `scripts/publish-release.sh [--dry-run]` | Creates the GitHub Release for a tag, only once the tag provably names the built commit |
+| `scripts/create-update-key.sh <dir>` | One-time: creates the Sparkle EdDSA update key |
+| `scripts/update-e2e.sh` | The local end-to-end update test, no secrets, no network beyond 127.0.0.1 |
+
+Shared with every app (repository root):
+
+| Script | Does |
+| --- | --- |
+| `scripts/release/create-signing-certificate.sh <dir>` | One-time: creates the `OpenApps HQ Release` certificate as a password-protected `.p12` |
+| `scripts/release/designated-requirement.sh <bundle id> <cert.pem>` | Prints the designated requirement to pin |
+| `scripts/release/with-signing-keychain.sh <command>` | Runs one command with the certificate in a temporary keychain, then removes it |
+| `scripts/release/verify-designated-requirement.sh <app> <pinned file>` | Fails unless an app has exactly the pinned requirement |
+| `scripts/release/release-tag-ruleset.sh check\|apply <definition> [repo]` | Checks for, or creates, the ruleset that makes `openreaction-v*` tags immutable |
+| `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>` | Sets the cask's version and digest; the template is `packaging/homebrew/Casks/openreaction.rb` |
 
 ## One-time setup
 
-### Apple
+### Signing certificate and update key
 
-1. In the Apple Developer account, create a **Developer ID Application**
-   certificate (not "Mac Development", not "Apple Distribution") and install
-   it in your login keychain together with its private key.
-2. Export it from Keychain Access as a `.p12` with a password, then base64 it:
-   `base64 -i DeveloperID.p12 | pbcopy`.
-3. Find its exact name: `security find-identity -v -p codesigning` prints
-   something like `Developer ID Application: OpenApps HQ (ABCDE12345)`.
-4. Create an [app-specific password](https://support.apple.com/102654) for
-   the Apple ID that belongs to the team; `notarytool` uses it.
-5. The Team ID is the ten-character code in parentheses in the identity name.
+Both are created on the release owner's own Mac, never in CI, and only their
+public halves are committed. The repository ships with placeholder files
+(`NOT GENERATED …`); the release job fails closed while either is still a
+placeholder.
+
+1. **The certificate**, shared by every OpenApps HQ app (create it once, or
+   reuse the existing one):
+
+   ```sh
+   scripts/release/create-signing-certificate.sh ~/openapps-release-signing
+   scripts/release/designated-requirement.sh com.openappshq.openreaction \
+       ~/openapps-release-signing/release-signing.cert.pem \
+       > apps/openreaction/release/designated-requirement.txt
+   ```
+
+   Commit `release/designated-requirement.txt`
+   (`identifier "com.openappshq.openreaction" and certificate leaf = H"<sha1>"`).
+   Every release is signed with exactly this requirement and verified against
+   it, so permissions and Keychain access survive updates. Losing the
+   certificate means every installed user re-grants permissions once.
+
+2. **The update key**, one per app:
+
+   ```sh
+   apps/openreaction/scripts/create-update-key.sh ~/openreaction-update-key
+   ```
+
+   It writes the private key to `~/openreaction-update-key/sparkle-ed25519.key`
+   and the public key to `release/sparkle-public-key.txt`; commit the latter.
+   Official builds pin it as `SUPublicEDKey` and require every feed and zip
+   to be signed with it. Losing the key means no installed copy can verify
+   another update.
+
+3. Back both folders up offline, set the secrets below, then delete the
+   folders from the Mac. Never add either to the login keychain; nothing in
+   the release path needs that.
 
 ### GitHub
 
@@ -44,11 +92,10 @@ is checked in at
 a repository admin applies it once:
 
 ```sh
-scripts/release-tag-ruleset.sh apply openappshq/openapps   # gh must be logged in as an admin
-scripts/release-tag-ruleset.sh check openappshq/openapps   # what the workflow runs
+scripts/release/release-tag-ruleset.sh apply .github/rulesets/openreaction-release-tags.json openappshq/openapps   # gh must be logged in as an admin
+scripts/release/release-tag-ruleset.sh check .github/rulesets/openreaction-release-tags.json openappshq/openapps   # what the workflow runs
 ```
 
-(Equivalent: `gh api --method POST repos/openappshq/openapps/rulesets --input .github/rulesets/openreaction-release-tags.json`.)
 Creating tags stays allowed; once a release tag exists it can only ever be
 left alone. A wrong release is fixed by a new patch version, never by
 re-tagging.
@@ -56,31 +103,35 @@ re-tagging.
 GitHub shows a ruleset's bypass actors only to callers allowed to
 administer the repository; to anyone else the ruleset looks as if nobody
 were exempt. The workflow's own token is not such a caller, so the publish
-job reads rulesets with a dedicated **`RULESET_READ_TOKEN`**: a
-[fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
-for this repository only, with the single permission **Administration:
-Read-only**, no other access, created by a repository admin. A ruleset whose
-bypass actors are not visible fails the check, and so does a missing token.
+job reads rulesets with a dedicated **`RULESET_READ_TOKEN`**.
+
+**The tap.** `openappshq/homebrew-tap` holds `Casks/openreaction.rb`. The
+release workflow creates the cask from
+[`packaging/homebrew/Casks/openreaction.rb`](../../packaging/homebrew/Casks/openreaction.rb)
+on the first release and bumps it after every later one.
 
 **Environment.** Create the environment **`openreaction-release`**
 (Settings → Environments) and add, on that environment, the following.
 Restrict its deployment branches and tags to `main` and `openreaction-v*` so
-nothing else can reach the signing certificate or publish. Both the build
-job and the publish job run in this environment, so any required reviewers
-approve both.
+nothing else can reach the signing certificate or publish. The build, publish
+and feed jobs all run in this environment, so any required reviewers approve
+each.
 
-**Secrets** (the same names OpenKlack's `openklack-release` environment uses):
+**Secrets:**
 
 | Secret | Value |
 | --- | --- |
-| `APPLE_CERTIFICATE` | The `.p12`, base64-encoded |
-| `APPLE_CERTIFICATE_PASSWORD` | The `.p12` export password |
-| `KEYCHAIN_PASSWORD` | Any random string; protects the temporary keychain on the runner |
-| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: <Name> (<TEAMID>)`, exactly as `security find-identity` prints it |
-| `APPLE_ID` | The Apple ID used for notarization |
-| `APPLE_PASSWORD` | Its app-specific password |
-| `APPLE_TEAM_ID` | The ten-character Team ID |
-| `RULESET_READ_TOKEN` | Fine-grained token, this repository, Administration: Read-only; used only to read the tag ruleset before publishing |
+| `RELEASE_SIGNING_P12` | The certificate and key as a `.p12`, base64-encoded (`release-signing.p12.base64`) |
+| `RELEASE_SIGNING_P12_PASSWORD` | Its password (`release-signing.p12.password`) |
+| `SPARKLE_ED_PRIVATE_KEY` | The update key (`sparkle-ed25519.key`, one base64 line) |
+| `RULESET_READ_TOKEN` | [Fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository only, Administration: Read-only, created by a repository admin; used only to read the tag ruleset before publishing |
+| `FEED_COMMIT_TOKEN` | Fine-grained token for this repository only, Contents: Read and write; used only to push the update feed commit to `main` |
+| `HOMEBREW_TAP_TOKEN` | Fine-grained token for `openappshq/homebrew-tap` only, Contents: Read and write; used only to push the cask bump |
+
+`FEED_COMMIT_TOKEN` and `HOMEBREW_TAP_TOKEN` belong to a bot account or the
+release owner; the commits they push are authored `openapps-release
+<release@openapps.space>`. If `main` requires status checks or reviews for
+pushes, allow that account to bypass them for the feed path only.
 
 **Variables** (public configuration, per [LICENSING.md](../../LICENSING.md)):
 
@@ -95,20 +146,20 @@ The trial lives in the app and needs no configuration: release builds
 register trials with `https://openapps.space/api/trial` (`env: "live"`), and
 there is no trial product.
 
-The release job checks every secret and the paid product ID before it
-touches the certificate, and fails naming what is missing. There is no
-unsigned fallback: without a `Developer ID Application` identity the job
-stops before building. The certificate lives in a temporary keychain that is
-deleted as soon as the DMG is signed, before notarization, upload or
-publishing run, and a live build refuses placeholder product IDs in any
-casing.
+The release job checks every secret, the paid product ID and both committed
+public files before it touches the certificate, and fails naming what is
+missing. There is no unsigned fallback. The certificate lives in a temporary
+keychain for exactly the build-and-sign step (`with-signing-keychain.sh`),
+which deletes it before the zip, the feed, the upload or the publish run,
+and a live build refuses placeholder product IDs in any casing.
 
 ## Cutting a release
 
 1. Merge everything the release needs into `main` and make sure the
    OpenReaction workflow is green there.
 2. Pick the version, `MAJOR.MINOR.PATCH`. It becomes `CFBundleShortVersionString`;
-   `CFBundleVersion` is the commit count on `main`, so it always grows.
+   `CFBundleVersion` is the commit count on `main`, so it always grows, and
+   it is what the updater compares.
 3. Tag and push:
 
    ```sh
@@ -117,49 +168,55 @@ casing.
    git push origin openreaction-v1.0.0
    ```
 
-4. The workflow runs three jobs. `checks` as on every change. `release`
-   (read-only token) imports the certificate into a temporary keychain,
-   builds the universal licensed app, signs it, notarizes and staples the
-   app, builds and signs the DMG, removes the signing identity, notarizes
-   and staples the DMG, verifies the result and uploads
-   `OpenReaction-1.0.0.dmg` plus its `.sha256` as a workflow artifact.
-   `publish` (the only job that can write to the repository) downloads that
-   exact artifact by id, checks the DMG against the SHA-256 the release job
-   reported as a job output (a checksum file that travelled with the
-   download is never trusted), confirms the tag ruleset is active with no
-   bypass actors, confirms `openreaction-v1.0.0` names exactly the commit
-   that was built, creates a *draft* release, uploads the files, confirms
-   the tag once more, and only then publishes. Release notes are generated
-   from the commits. Expect 20–40 minutes; notarization is most of it.
-5. Open the release, check the notes, and download the DMG for the clean-Mac
-   check below before linking it from the website.
+4. The workflow runs four jobs, following RELEASES.md step by step:
+   - `checks`, as on every change.
+   - `release` (read-only token): imports the certificate into a temporary
+     keychain, builds the universal licensed app with the updater, signs it
+     with the pinned designated requirement and verifies that, deletes the
+     keychain, zips with `ditto`, records the zip's SHA-256 as a job output,
+     verifies the zip as a release, signs it with the update key and writes
+     the signed `appcast.xml`, and uploads all of it as a workflow artifact.
+   - `publish` (the only job that can write releases): downloads that exact
+     artifact by id, checks the zip against the SHA-256 the release job
+     reported (a checksum file that travelled with the download is never
+     trusted), confirms the tag ruleset is active with no bypass actors,
+     confirms `openreaction-v1.0.0` names exactly the commit that was built,
+     creates a *draft* release, uploads `OpenReaction-1.0.0.zip` and its
+     `.sha256`, confirms the tag once more, and only then publishes.
+   - `feed`: re-verifies the signed feed against the published zip's digest,
+     commits it to `main` as
+     `apps/website/public/updates/openreaction/appcast.xml` (the website
+     deploy then serves it at
+     `https://openapps.space/updates/openreaction/appcast.xml`), downloads
+     the public zip and polls the live feed until both check out, then
+     bumps `Casks/openreaction.rb` in `openappshq/homebrew-tap`.
+   Expect 15–30 minutes, most of it the website deploy wait.
+5. Open the release, check the notes, and run the clean-Mac check below
+   before announcing it.
 
 Builds for the same version and publications of any version are
 serialised by GitHub concurrency groups, so two runs never publish at the
-same time. GitHub keeps at most one run waiting per group and cancels an
-older waiting run when a newer one arrives, so if several releases are
-started in quick succession only the running one and the latest waiting one
-survive; start the next release once the previous run has finished. A
-version lower than the newest published release is refused unless the
-manual run sets `allow_older` (a deliberate back-port).
+same time. A version lower than the newest published release is refused
+unless the manual run sets `allow_older` (a deliberate back-port).
 
 If `release` fails, fix the cause, but do not move or delete the tag: the
 ruleset forbids it, and a tag that exists is final. Push the fix to `main`
 and tag it as the next patch version. Re-running a failed run is fine as
 long as nothing was published yet (a leftover draft is discarded); once a
 release is published for a tag, the publish step refuses to touch it again.
-A release that turns out to be bad gets a new patch version.
+A release that turns out to be bad gets a new patch version; to stop it
+being offered as an update meanwhile, restore the previous `appcast.xml`
+on `main` from git history.
 
 ### Release candidates
 
 **Actions → OpenReaction → Run workflow** on a branch (with a `version`) or
 on an existing `openreaction-v*` tag (version comes from the tag), with
-`publish` left off, runs the same signed and notarized build and uploads
+`publish` left off, runs the same signed build and uploads
 `OpenReaction-<version>-signed` as a workflow artifact without creating a
-release. With `publish` on it creates the tag at that commit if it does not
-exist yet and publishes exactly as a tag push would; prefer pushing a tag
-on `main`. `allow_older` permits publishing a version below the newest
-published one.
+release, committing a feed or touching the tap. With `publish` on it creates
+the tag at that commit if it does not exist yet and publishes exactly as a
+tag push would; prefer pushing a tag on `main`.
 
 To rehearse publication without changing anything, run the publish script
 locally against the downloaded artifact:
@@ -167,65 +224,114 @@ locally against the downloaded artifact:
 ```sh
 GH_REPO=openappshq/openapps TAG=openreaction-v1.0.0 VERSION=1.0.0 \
 BUILT_COMMIT=$(git rev-parse openreaction-v1.0.0^{commit}) DIST=path/to/artifact \
-EXPECTED_SHA256=$(shasum -a 256 path/to/artifact/OpenReaction-1.0.0.dmg | cut -d' ' -f1) \
+EXPECTED_SHA256=$(shasum -a 256 path/to/artifact/OpenReaction-1.0.0.zip | cut -d' ' -f1) \
 RULESET_READ_TOKEN=$(gh auth token) \
 scripts/publish-release.sh --dry-run
 ```
 
-(`EXPECTED_SHA256` is normally the release job's output; computing it from
-the file only makes sense for a rehearsal. `gh auth token` works for an
-admin's own login, which sees the ruleset's bypass actors.)
-
 ## Verifying the download on a clean Mac
 
-Use a Mac (or a fresh user account) that has never run a development build,
-with the DMG downloaded through a browser so it carries the quarantine flag.
+Use a Mac (or a fresh user account) that has never run a development build.
 Every command must succeed.
 
 ```sh
-cd ~/Downloads
-shasum -a 256 -c OpenReaction-1.0.0.dmg.sha256          # OK
-
-spctl --assess --type open --context context:primary-signature -vv OpenReaction-1.0.0.dmg
-#   accepted, source=Notarized Developer ID
-xcrun stapler validate OpenReaction-1.0.0.dmg            # The validate action worked!
-
-open OpenReaction-1.0.0.dmg
-cp -R /Volumes/OpenReaction/OpenReaction.app /Applications/
-codesign --verify --deep --strict --verbose=2 /Applications/OpenReaction.app
+brew install --cask openappshq/tap/openreaction
+codesign --verify --deep --strict --verbose=2 ~/Applications/OpenReaction.app
 #   valid on disk / satisfies its Designated Requirement
-codesign --display --verbose=2 /Applications/OpenReaction.app 2>&1 | grep -E 'Authority|flags'
-#   Authority=Developer ID Application: …, flags=… (runtime)
-spctl --assess --type execute -vv /Applications/OpenReaction.app
-#   accepted, source=Notarized Developer ID
-xcrun stapler validate /Applications/OpenReaction.app     # The validate action worked!
-lipo -archs /Applications/OpenReaction.app/Contents/MacOS/OpenReaction   # x86_64 arm64
+codesign --display --verbose=2 ~/Applications/OpenReaction.app 2>&1 | grep -E 'Authority|flags'
+#   Authority=OpenApps HQ Release, flags=… (runtime)
+codesign --display -r- ~/Applications/OpenReaction.app 2>&1 | grep designated
+#   exactly the line in apps/openreaction/release/designated-requirement.txt
+lipo -archs ~/Applications/OpenReaction.app/Contents/MacOS/OpenReaction   # x86_64 arm64
 ```
 
-Then launch `/Applications/OpenReaction.app`: Gatekeeper must open it without
-the "cannot be opened" or "malicious software" dialog, the onboarding window
-asks for Accessibility and Input Monitoring, and after granting both,
-typing `:tada:` in TextEdit turns into 🎉. Settings must have a License
-section with the Buy link (a source build has no License section at all).
-Finally, turn Wi-Fi off, quit and relaunch: the stapled ticket means the app
-still opens offline.
+The cask launches the app: it opens without a Gatekeeper dialog (the cask
+cleared quarantine; a zip downloaded by hand instead needs right-click →
+Open once), the onboarding window asks for Accessibility and Input
+Monitoring, and after granting both, typing `:tada:` in TextEdit turns into
+🎉. Settings must have a License section with the Buy link and an Updates
+section with both toggles **off** and a working "Check Now" (a source build
+has neither section). Turning the toggles on, quitting and relaunching after
+the next release must install it without asking for permissions again.
+`brew upgrade --cask openreaction` must also work.
 
-The same checks, apart from the quarantine flag, run in the workflow's
-"Verify the download" step via `scripts/verify-release.sh --notarized`.
+## Updates
+
+Official builds embed Sparkle 2 (`OPENAPPS_OFFICIAL=1`; source builds have
+no updater at all). `Info.plist` pins
+`https://openapps.space/updates/openreaction/appcast.xml`, the public update
+key, `SURequireSignedFeed` and `SUVerifyUpdateBeforeExtraction`, so an
+unsigned or tampered feed or zip is ignored. **Both Settings toggles are off
+by default**: a fresh install never contacts the feed on its own, "Check
+Now" always works, and most users update with `brew upgrade --cask
+openreaction`. With "Check for updates automatically" on, the app checks on
+launch, every 24 hours and on wake when a check is overdue, retries a failed
+check once after an hour, and with "Download and install automatically" on
+installs the verified update when the app quits ("Update ready — Restart"
+in the menu installs it at once). Once an update is downloaded and staged,
+Sparkle installs it on the next quit whatever the toggles are set to
+afterwards; it has no way to retract a staged install, and Settings says so
+next to "Restart to Update". A copy running from a read-only volume or App
+Translocation shows "Move OpenReaction to Applications to enable updates"
+instead. Updates never depend on the license or trial state.
+
+Sparkle accepts an update when its EdDSA signature verifies with the pinned
+key, and additionally checks the new app's code signature against the old
+one's designated requirement, which the stable certificate keeps identical.
+`scripts/update-e2e.sh` proves the whole path locally (below).
 
 ## Local builds
 
-A signed local build needs the Developer ID identity in your keychain; an
-unsigned one is ad-hoc and only good for the packaging path:
+An unsigned build is ad-hoc and only good for the packaging path; the
+official flavour needs an update key, which a development build may pin as
+a throwaway:
 
 ```sh
-UNIVERSAL=1 OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test \
-OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… VERSION=1.0.0 scripts/bundle.sh
-scripts/make-dmg.sh
-scripts/verify-release.sh dist/OpenReaction-1.0.0.dmg    # Gatekeeper/stapler are reported, not required
+UNIVERSAL=1 OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1 OPENAPPS_DODO_ENV=test \
+OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… VERSION=1.0.0 \
+UPDATE_PUBLIC_ED_KEY="$(xcrun swift -e 'import CryptoKit; print(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString())')" \
+scripts/bundle.sh
+scripts/make-zip.sh
+scripts/verify-release.sh dist/OpenReaction-1.0.0.zip    # the requirement is reported, not compared
 ```
 
-With `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` and
-`APPLE_TEAM_ID` set, `scripts/notarize.sh build/OpenReaction.app` and
-`scripts/notarize.sh dist/OpenReaction-1.0.0.dmg` reproduce the release job
-end to end, and `scripts/verify-release.sh --notarized` then has to pass.
+To rehearse the release job's signing with a throwaway certificate and key,
+put their public halves into `release/` temporarily (do not commit them):
+
+```sh
+scripts/release/create-signing-certificate.sh /tmp/rehearsal-cert          # from the repository root
+apps/openreaction/scripts/create-update-key.sh /tmp/rehearsal-key apps/openreaction/release/sparkle-public-key.txt
+scripts/release/designated-requirement.sh com.openappshq.openreaction /tmp/rehearsal-cert/release-signing.cert.pem \
+    > apps/openreaction/release/designated-requirement.txt
+cd apps/openreaction
+RELEASE_SIGNING_P12_FILE=/tmp/rehearsal-cert/release-signing.p12 \
+RELEASE_SIGNING_P12_PASSWORD="$(cat /tmp/rehearsal-cert/release-signing.p12.password)" \
+UNIVERSAL=1 OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1 OPENAPPS_DODO_ENV=test OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… VERSION=1.0.0 \
+../../scripts/release/with-signing-keychain.sh scripts/bundle.sh
+scripts/make-zip.sh
+scripts/verify-release.sh --release dist/OpenReaction-1.0.0.zip
+SPARKLE_ED_KEY_FILE=/tmp/rehearsal-key/sparkle-ed25519.key scripts/make-appcast.sh dist/OpenReaction-1.0.0.zip
+git checkout release/   # restore the placeholders, or the real pins
+```
+
+### The update end-to-end test
+
+```sh
+scripts/update-e2e.sh
+```
+
+With no secrets and no network beyond `127.0.0.1`, it creates a throwaway
+certificate and update key in a temporary folder, builds versions 1.0.0 and
+1.0.1 of the update-test variant (bundle id
+`com.openappshq.openreaction.updatetest`, no URL scheme, the event tap and
+permission prompts disabled, so it is safe on any Mac), both signed with
+that certificate inside `with-signing-keychain.sh`, checks the keychain
+search list is unchanged and the identity gone afterwards, verifies both
+carry the same designated requirement and an ad-hoc re-signed copy does not,
+zips and update-signs 1.0.1, writes and verifies the signed appcast (and
+refuses a tampered one), serves both from a local port, runs 1.0.0 as a
+fresh install and asserts the server sees no request, then runs it with both
+toggles on and asserts 1.0.1 is downloaded, verified, reported ready and
+installed on quit with the requirement unchanged. Everything it created is
+removed afterwards. It needs OpenSSL 3 (`brew install openssl@3`), python3
+and a logged-in session.

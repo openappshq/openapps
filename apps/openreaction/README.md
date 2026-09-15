@@ -24,7 +24,7 @@ Free & open source · Mac native · No account · No telemetry
 
 ## License
 
-OpenReaction is MIT licensed and **a build from source is unrestricted**: licensing is compiled out, every feature works, and nothing contacts the license service. The license pays for the official build — the signed, notarized download with updates: $5 one-time per app, lifetime updates, 3 Macs. The official build works for 3 days right after download, no signup. Details in [LICENSING.md](../../LICENSING.md).
+OpenReaction is MIT licensed and **a build from source is unrestricted**: licensing is compiled out, every feature works, and nothing contacts the license service. The license pays for the official build — the signed download with in-app updates: $5 one-time per app, lifetime updates, 3 Macs. The official build works for 3 days right after download, no signup. Details in [LICENSING.md](../../LICENSING.md).
 
 > Official builds include a 3-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use OpenReaction are never sent. Builds from source never contact the license service.
 
@@ -54,16 +54,16 @@ OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_�
 
 The trial registers with `https://openapps.space/api/trial` (`env` follows `OPENAPPS_DODO_ENV`). A test build can use a local `wrangler dev` instead with `OPENAPPS_TRIAL_REGISTRY_BASE_URL=http://127.0.0.1:8787`. To run the whole trial in minutes, start a debug build with `OPENREACTION_DEBUG_TRIAL_DAY_SECONDS=60` (a trial "day" becomes a minute); release builds ignore it.
 
-The signed, notarized download is built by CI from an `openreaction-v*` tag; see [RELEASING.md](RELEASING.md).
+Official builds also compile in the updater (`OPENAPPS_OFFICIAL=1`; Sparkle, off by default, see [RELEASES.md](../../RELEASES.md)). The official download is built by CI from an `openreaction-v*` tag, published as a GitHub Release and installed with `brew install --cask openappshq/tap/openreaction`; see [RELEASING.md](RELEASING.md).
 
-`scripts/bundle.sh` signs with `APPLE_SIGNING_IDENTITY` when set, and ad-hoc otherwise:
+`scripts/bundle.sh` signs ad-hoc unless it runs inside `scripts/release/with-signing-keychain.sh` with the release certificate:
 
 ```sh
-APPLE_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)" scripts/bundle.sh
+scripts/bundle.sh
 open build/OpenReaction.app
 ```
 
-macOS ties Accessibility and Input Monitoring grants to the code signature. Ad-hoc signatures change with every build, so use a stable identity while developing, or grant the permissions again after each rebuild.
+macOS ties Accessibility and Input Monitoring grants to the code signature. Ad-hoc signatures change with every build, so expect to grant the permissions again after each rebuild; releases are signed with one stable certificate so users never do.
 
 To check the picker's look without permissions or the event tap:
 
