@@ -3,13 +3,13 @@ import HertzCore
 import SwiftUI
 
 /// The process tree grouped by app, sortable by CPU or memory. Rows with
-/// children expand on click; every row has copy, reveal and terminate in its
-/// context menu.
+/// children expand on click; every row has copy, reveal and Activity Monitor
+/// in its context menu. Hertz never terminates a process: a PID in a
+/// two-second-old snapshot is not a safe target.
 struct ProcessCard: View {
     let roots: [ProcessNode]
     @State private var sortByMemory = false
     @State private var expanded: Set<pid_t> = []
-    @State private var pendingTermination: ProcessActionTarget?
     @State private var message: String?
 
     private enum Layout {
@@ -62,16 +62,6 @@ struct ProcessCard: View {
                 Note(message)
             }
         }
-        .alert(item: $pendingTermination) { target in
-            Alert(
-                title: Text("Terminate \(target.title)?"),
-                message: Text(terminationMessage(for: target)),
-                primaryButton: .destructive(Text("Terminate")) {
-                    message = ProcessActions.terminate(target).message
-                },
-                secondaryButton: .cancel()
-            )
-        }
     }
 
     private func list(_ rows: [(node: ProcessNode, depth: Int)]) -> some View {
@@ -87,20 +77,12 @@ struct ProcessCard: View {
                     }
                 } onMessage: { text in
                     message = text
-                } onTerminate: { target in
-                    pendingTermination = target
                 }
                 .frame(height: Layout.rowHeight)
             }
         }
     }
 
-    private func terminationMessage(for target: ProcessActionTarget) -> String {
-        if target.includesDescendants {
-            return "Hertz sends SIGTERM to \(target.terminationSummary), children first. Processes that already exited or changed identity are skipped."
-        }
-        return "Hertz sends SIGTERM to \(target.terminationSummary). A process that already exited or changed identity is skipped."
-    }
 }
 
 /// The two column headings double as the sort control.
@@ -145,7 +127,6 @@ private struct ProcessRow: View {
     let sortByMemory: Bool
     let onToggle: () -> Void
     let onMessage: (String) -> Void
-    let onTerminate: (ProcessActionTarget) -> Void
 
     private var hasChildren: Bool { !node.children.isEmpty }
     private var target: ProcessActionTarget { node.processActionTarget }
@@ -211,10 +192,11 @@ private struct ProcessRow: View {
                 }
             }
             Divider()
-            Button(role: .destructive) {
-                onTerminate(target)
+            Button {
+                ProcessActions.openActivityMonitor()
+                onMessage("Opened Activity Monitor")
             } label: {
-                Label(target.includesDescendants ? "Terminate Process Tree…" : "Terminate Process…", systemImage: "xmark.circle")
+                Label("Open Activity Monitor", systemImage: "gauge.with.needle")
             }
         }
     }

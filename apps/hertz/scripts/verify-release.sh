@@ -60,8 +60,14 @@ test -f "$APP/Contents/Resources/NOTICE"
 test ! -d "$APP/Contents/Frameworks" || { echo "error: the app embeds frameworks; Hertz has none" >&2; exit 1; }
 [[ -z "$(info NSAppTransportSecurity)" ]] || { echo "error: App Transport Security exceptions in a release" >&2; exit 1; }
 # No in-app updater (RELEASES.md): nothing in the bundle may name a feed or a
-# release API.
-if strings "$APP/Contents/MacOS/${APP_NAME}" | grep -Eq 'api\.github\.com|/updates/hertz/|SUFeedURL'; then
+# release API. strings writes to a file first: piped straight into `grep -q`,
+# an early match closes the pipe, strings dies of SIGPIPE, and under pipefail
+# the whole test reads as "no match".
+STRINGS="$WORK/strings.txt"
+if ! strings "$APP/Contents/MacOS/${APP_NAME}" > "$STRINGS"; then
+    echo "error: could not read the binary's strings" >&2; exit 1
+fi
+if grep -Eq 'api\.github\.com|/updates/hertz/|SUFeedURL' "$STRINGS"; then
     echo "error: the binary references an update feed; Hertz updates through Homebrew only" >&2; exit 1
 fi
 

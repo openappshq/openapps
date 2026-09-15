@@ -105,8 +105,8 @@ struct DiskCard: View {
                 .foregroundStyle(Brand.textPrimary)
             Bar(fraction: disk.usedPercent / 100, color: level.color)
             HStack(spacing: Brand.Space.s12) {
-                Stat(label: "read", value: Format.rate(disk.readRate), icon: "arrow.down")
-                Stat(label: "write", value: Format.rate(disk.writeRate), icon: "arrow.up")
+                Stat(label: "read, all disks", value: Format.rate(disk.readRate), icon: "arrow.down")
+                Stat(label: "write, all disks", value: Format.rate(disk.writeRate), icon: "arrow.up")
             }
             DetailLine("\(Format.gigabytes(disk.used)) of \(Format.gigabytes(disk.total))\(disk.fsType.isEmpty ? "" : " · \(disk.fsType)")")
         }

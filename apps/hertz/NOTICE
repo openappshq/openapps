@@ -28,7 +28,6 @@ design/tokens.json comes from the OpenApps HQ "Tactile Studio" system
 -------------------------------------------------------------------------------
 Cleanup Scout
 -------------------------------------------------------------------------------
-The review-first safety model (known cache locations only, protected paths
-refused, destructive work behind explicit confirmation) is inspired by Mole
-(MIT). The scanner is an independent Swift implementation; no Mole source is
-included.
+The allowlist-only, review-first model (known cache locations only, protected
+paths refused) is inspired by Mole (MIT). The scanner is an independent Swift
+implementation that only measures and reports; no Mole source is included.

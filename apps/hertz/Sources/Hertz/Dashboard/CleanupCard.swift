@@ -2,12 +2,10 @@ import AppKit
 import HertzCore
 import SwiftUI
 
-/// Read-only scan of known regenerable developer caches, then a confirmed
-/// clean. Nothing is removed without the inline confirmation.
+/// A read-only scan of known regenerable developer caches: what they are,
+/// how big, and a way to reveal each in the Finder. Hertz removes nothing.
 struct CleanupCard: View {
     let model: CleanupModel
-    @State private var confirming = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var visible: [CleanupCandidate] {
         Array(model.scan.candidates.prefix(6))
@@ -27,27 +25,10 @@ struct CleanupCard: View {
                     .accessibilityLabel("Copy the cleanup report")
                 }
                 Button(model.hasCandidates ? "Rescan" : "Scan") {
-                    confirming = false
                     model.scanNow()
                 }
                 .buttonStyle(LinkButtonStyle())
-                .disabled(model.isScanning || model.isCleaning)
-                if model.hasCandidates {
-                    Button("Clean…") {
-                        withAnimation(Motion.standard(reduceMotion: reduceMotion)) { confirming = true }
-                    }
-                    .buttonStyle(LinkButtonStyle())
-                    .disabled(model.isCleaning || model.isScanning || confirming)
-                }
-            }
-
-            if confirming {
-                ConfirmPanel(count: model.scan.candidates.count, bytes: model.scan.totalBytes) {
-                    withAnimation(Motion.standard(reduceMotion: reduceMotion)) { confirming = false }
-                    model.cleanSafeCandidates()
-                } cancel: {
-                    withAnimation(Motion.standard(reduceMotion: reduceMotion)) { confirming = false }
-                }
+                .disabled(model.isScanning)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: Brand.Space.s8) {
@@ -64,7 +45,7 @@ struct CleanupCard: View {
             }
 
             if visible.isEmpty {
-                DetailLine("Known caches under your home folder only; protected paths are refused.")
+                DetailLine("Read-only: known caches under your home folder, sizes only.")
             } else {
                 VStack(alignment: .leading, spacing: Brand.Space.s4) {
                     ForEach(visible) { candidate in
@@ -74,37 +55,9 @@ struct CleanupCard: View {
                 if model.scan.candidates.count > visible.count {
                     Note("+\(model.scan.candidates.count - visible.count) more in the report")
                 }
+                DetailLine("Hertz never deletes; reveal a folder and decide in the Finder.")
             }
         }
-    }
-}
-
-private struct ConfirmPanel: View {
-    let count: Int
-    let bytes: UInt64
-    let clean: () -> Void
-    let cancel: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Brand.Space.s8) {
-            Text("Clean \(count) cache group\(count == 1 ? "" : "s"), \(Format.bytes(bytes))?")
-                .font(Brand.body(13, weight: 600))
-                .foregroundStyle(Brand.textPrimary)
-            Text("Only the listed regenerable cache contents are removed. Documents, preferences, app support and system paths are never touched.")
-                .font(Brand.body(12))
-                .foregroundStyle(Brand.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: Brand.Space.s8) {
-                Spacer()
-                Button("Cancel", action: cancel)
-                    .buttonStyle(SecondaryButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                Button("Clean Caches", action: clean)
-                    .buttonStyle(DestructiveButtonStyle())
-            }
-        }
-        .padding(Brand.Space.s12)
-        .background(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).fill(Brand.dangerSubtle))
     }
 }
 
@@ -114,7 +67,7 @@ private struct CleanupRow: View {
 
     var body: some View {
         HStack(spacing: Brand.Space.s8) {
-            Image(systemName: "checkmark.shield")
+            Image(systemName: "folder")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Brand.textSecondary)
                 .frame(width: 14)

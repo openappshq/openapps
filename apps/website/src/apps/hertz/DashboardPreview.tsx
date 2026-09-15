@@ -108,8 +108,8 @@ export default function DashboardPreview() {
             <div className="hz-big">412 GB free</div>
             <div className="hz-bar"><span style={{ width: "58%" }} /></div>
             <div className="hz-stats">
-              <span><b>↓ 0 KB/s</b>read</span>
-              <span><b>↑ 1.2 MB/s</b>write</span>
+              <span><b>↓ 0 KB/s</b>read, all disks</span>
+              <span><b>↑ 1.2 MB/s</b>write, all disks</span>
             </div>
           </Card>
           <Card label="Network">

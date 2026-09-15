@@ -21,11 +21,11 @@ One click in the menu bar opens a dashboard of glass cards, read straight from t
 - **Sleep blockers** — apps and daemons holding the Mac or the display awake, shown only while something does; read-only, with copy, reveal and Activity Monitor actions
 - **CPU** — overall %, a sparkline, per-core bars, load average, temperature, fan speed and thermal pressure
 - **Memory** — used, free and swap, with the kernel's pressure level and a trend graph
-- **Disk** — free space, usage bar and live read/write throughput
-- **Network** — up/down throughput with a trend graph, interface, Wi-Fi name, local IP and VPN state
+- **Disk** — free space and usage of the startup volume, plus live read/write throughput summed over every attached disk
+- **Network** — up/down throughput with a trend graph, interface, local IP, VPN state and the Wi-Fi name where macOS still reports it without Location access
 - **Battery** — charge, time to full or empty, live power draw, health, cycles, temperature, adapter wattage and connected accessories
-- **Processes** — a tree grouped by app with subtree CPU and memory totals, sortable, with copy, reveal and terminate in the context menu
-- **Cleanup Scout** — a read-only scan of known regenerable developer caches, then a confirmed clean; protected paths are refused
+- **Processes** — a tree grouped by app with subtree CPU and memory totals, sortable, with copy, reveal and Activity Monitor in the context menu; Hertz never terminates a process
+- **Cleanup Scout** — a read-only scan of known regenerable developer caches with their sizes, revealed in the Finder on request; Hertz never deletes anything
 
 The menu bar item shows the pulse and, by default, CPU usage; Settings can switch the readout to memory or the symbol alone, choose which cards appear, and turn Open at login on.
 
@@ -79,7 +79,7 @@ The reasoning, including the metric-accuracy details, is in [docs/architecture.m
 
 ## Credits
 
-Fonts: Bricolage Grotesque, Instrument Sans and IBM Plex Mono (SIL OFL). The Cleanup Scout's review-first safety model is inspired by Mole (MIT), implemented independently. See [NOTICE](NOTICE).
+Fonts: Bricolage Grotesque, Instrument Sans and IBM Plex Mono (SIL OFL). The Cleanup Scout's allowlist-only, review-first model is inspired by Mole (MIT), implemented independently. See [NOTICE](NOTICE).
 
 ---
 

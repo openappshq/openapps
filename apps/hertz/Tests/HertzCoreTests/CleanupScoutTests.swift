@@ -2,6 +2,8 @@ import XCTest
 @testable import HertzCore
 
 /// Runs the scout against a throwaway home directory, never the real one.
+/// The scout is read-only; every test also asserts that nothing it touched
+/// changed on disk.
 final class CleanupScoutTests: XCTestCase {
     private var home: URL!
 
@@ -14,13 +16,10 @@ final class CleanupScoutTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: home) }
     }
 
-    private func write(_ relativePath: String, bytes: Int = 4096, modified: Date? = nil) throws {
-        let url = home.appendingPathComponent(relativePath)
+    private func write(_ relativePath: String, bytes: Int = 4096, under root: URL? = nil) throws {
+        let url = (root ?? home).appendingPathComponent(relativePath)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(repeating: 0xAB, count: bytes).write(to: url)
-        if let modified {
-            try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
-        }
     }
 
     private func touch(_ relativePath: String, modified: Date) throws {
@@ -28,31 +27,37 @@ final class CleanupScoutTests: XCTestCase {
                                               ofItemAtPath: home.appendingPathComponent(relativePath).path)
     }
 
-    @MainActor func testScanFindsOnlyAllowlistedCachesAndCleansTheirContents() throws {
+    private func exists(_ relativePath: String, under root: URL? = nil) -> Bool {
+        FileManager.default.fileExists(atPath: (root ?? home).appendingPathComponent(relativePath).path)
+    }
+
+    /// Every regular file under `root`, relative, so a before/after comparison
+    /// proves the scan changed nothing.
+    private func listing(_ root: URL) -> Set<String> {
+        let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey],
+                                                        options: [], errorHandler: nil)!
+        var files: Set<String> = []
+        for case let url as URL in enumerator where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+            files.insert(String(url.path.dropFirst(root.path.count)))
+        }
+        return files
+    }
+
+    @MainActor func testScanFindsOnlyAllowlistedCachesAndChangesNothing() throws {
         try makeHome()
         try write("Library/Caches/org.swift.swiftpm/repositories/a/pack", bytes: 20_000)
         try write("Library/Caches/Homebrew/downloads/bottle.tar.gz", bytes: 10_000)
         try write("Documents/thesis.txt")
         try write("Library/Application Support/App/data.db")
-        let scout = CleanupScout(homeDirectory: home)
+        try write("Library/Caches/com.example.app/data")
+        let before = listing(home)
 
-        let scan = scout.scan()
+        let scan = CleanupScout(homeDirectory: home).scan()
         XCTAssertEqual(scan.candidates.map(\.title), ["SwiftPM cache", "Homebrew downloads"])
-        XCTAssertTrue(scan.candidates.allSatisfy(\.deleteContents))
         XCTAssertTrue(scan.skipped.isEmpty)
         XCTAssertGreaterThanOrEqual(scan.totalBytes, 30_000)
-
-        let result = scout.clean(scan.candidates)
-        XCTAssertTrue(result.failed.isEmpty)
-        XCTAssertEqual(result.cleanedItems, scan.itemCount)
-        // The cache folders survive; their contents are gone.
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("Library/Caches/org.swift.swiftpm").path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("Library/Caches/org.swift.swiftpm/repositories").path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("Library/Caches/Homebrew/downloads/bottle.tar.gz").path))
-        // Nothing outside the allowlist was touched.
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("Documents/thesis.txt").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("Library/Application Support/App/data.db").path))
-        XCTAssertTrue(scout.scan().candidates.isEmpty)
+        XCTAssertGreaterThanOrEqual(scan.itemCount, 2, "files and the folders holding them")
+        XCTAssertEqual(listing(home), before, "a scan is read-only")
     }
 
     @MainActor func testDerivedDataListsOnlyProjectsOlderThanTwelveHours() throws {
@@ -62,45 +67,7 @@ final class CleanupScoutTests: XCTestCase {
         try write("Library/Developer/Xcode/DerivedData/Fresh-def/Build/y.o")
         let scan = CleanupScout(homeDirectory: home).scan()
         XCTAssertEqual(scan.candidates.map(\.title), ["DerivedData: Old-abc"])
-        XCTAssertEqual(scan.candidates.first?.deleteContents, false, "a stale project folder is removed whole")
-
-        let result = CleanupScout(homeDirectory: home).clean(scan.candidates)
-        XCTAssertTrue(result.failed.isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("Library/Developer/Xcode/DerivedData/Old-abc").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("Library/Developer/Xcode/DerivedData/Fresh-def/Build/y.o").path))
-    }
-
-    @MainActor func testCleanRefusesPathsOutsideTheHomeOrInProtectedFolders() throws {
-        try makeHome()
-        try write("Documents/keep.txt")
-        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("hertz-outside-\(UUID().uuidString).txt")
-        try Data([1]).write(to: outside)
-        defer { try? FileManager.default.removeItem(at: outside) }
-        let forged = [
-            CleanupCandidate(title: "Documents", category: "x", reason: "", path: home.appendingPathComponent("Documents").path,
-                             bytes: 1, itemCount: 1, deleteContents: true),
-            CleanupCandidate(title: "Outside", category: "x", reason: "", path: outside.path,
-                             bytes: 1, itemCount: 1, deleteContents: false),
-            CleanupCandidate(title: "Escape", category: "x", reason: "",
-                             path: home.appendingPathComponent("Library/Caches/../../Documents/keep.txt").path,
-                             bytes: 1, itemCount: 1, deleteContents: false),
-            CleanupCandidate(title: "Unlisted cache", category: "x", reason: "", path: home.appendingPathComponent("Library/Caches/com.example.app").path,
-                             bytes: 1, itemCount: 1, deleteContents: true),
-            CleanupCandidate(title: "Too deep", category: "x", reason: "",
-                             path: home.appendingPathComponent("Library/Developer/Xcode/DerivedData/Proj/Build").path,
-                             bytes: 1, itemCount: 1, deleteContents: false),
-            CleanupCandidate(title: "Review", category: "x", reason: "", path: home.appendingPathComponent("Library/Caches/pip").path,
-                             bytes: 1, itemCount: 1, risk: .review, deleteContents: true),
-        ]
-        try write("Library/Caches/com.example.app/data")
-        try write("Library/Developer/Xcode/DerivedData/Proj/Build/x.o")
-        let result = CleanupScout(homeDirectory: home).clean(forged)
-        XCTAssertEqual(result.cleanedItems, 0)
-        XCTAssertEqual(Set(result.failed), Set(forged.prefix(5).map(\.path)), "review-risk candidates are skipped silently")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("Library/Caches/com.example.app/data").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("Library/Developer/Xcode/DerivedData/Proj/Build/x.o").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("Documents/keep.txt").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
+        XCTAssertTrue(exists("Library/Developer/Xcode/DerivedData/Old-abc/Build/x.o"))
     }
 
     @MainActor func testSymlinkedCacheIsNotFollowed() throws {
@@ -110,21 +77,49 @@ final class CleanupScoutTests: XCTestCase {
         try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: caches.appendingPathComponent("org.swift.swiftpm"),
                                                    withDestinationURL: home.appendingPathComponent("Documents"))
-        let scout = CleanupScout(homeDirectory: home)
-        let scan = scout.scan()
+        let scan = CleanupScout(homeDirectory: home).scan()
         XCTAssertTrue(scan.candidates.isEmpty)
         XCTAssertEqual(scan.skipped, [caches.appendingPathComponent("org.swift.swiftpm").path])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("Documents/precious.txt").path))
+        XCTAssertTrue(exists("Documents/precious.txt"))
     }
 
-    @MainActor func testReportNamesEveryCandidateAndSkippedPath() throws {
+    /// The reviewer's scenario: an ancestor of an allowlisted root replaced by
+    /// a symlink to a directory outside the home. Nothing behind it may be
+    /// listed, and nothing anywhere may change.
+    @MainActor func testAncestorSymlinkOutsideTheHomeIsRefused() throws {
+        try makeHome()
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("hertz-outside-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: outside) }
+        try write("DerivedData/project/precious.txt", under: outside)
+        try write("Homebrew/downloads/bottle.tar.gz", under: outside)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 86400)],
+                                              ofItemAtPath: outside.appendingPathComponent("DerivedData/project").path)
+        // ~/Library/Developer/Xcode → outside (a children-mode root behind the link)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("Library/Developer"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: home.appendingPathComponent("Library/Developer/Xcode"), withDestinationURL: outside)
+        // ~/Library/Caches → outside (a contents-mode root behind the link)
+        try FileManager.default.createSymbolicLink(at: home.appendingPathComponent("Library/Caches"), withDestinationURL: outside)
+        let before = listing(outside)
+
+        let scan = CleanupScout(homeDirectory: home).scan()
+        XCTAssertTrue(scan.candidates.isEmpty, "\(scan.candidates.map(\.path))")
+        // Every allowlisted root behind either link is reported as skipped,
+        // by the path Hertz would have scanned, never by where the link goes.
+        XCTAssertTrue(scan.skipped.contains(home.appendingPathComponent("Library/Developer/Xcode/DerivedData").path))
+        XCTAssertTrue(scan.skipped.contains(home.appendingPathComponent("Library/Caches/Homebrew/downloads").path))
+        XCTAssertTrue(scan.skipped.allSatisfy { $0.hasPrefix(home.path + "/Library/") }, "\(scan.skipped)")
+        XCTAssertEqual(listing(outside), before)
+    }
+
+    @MainActor func testReportNamesEveryCandidateAndSkippedPathAndSaysNothingWasRemoved() throws {
         try makeHome()
         let scan = CleanupScan(candidates: [
             CleanupCandidate(title: "npm logs", category: "Node", reason: "Log files.", path: "/h/.npm/_logs",
-                             bytes: 2 * 1_048_576, itemCount: 3, deleteContents: true),
+                             bytes: 2 * 1_048_576, itemCount: 3),
         ], skipped: ["/h/Library/Caches/link"])
         let report = CleanupScout(homeDirectory: home).report(for: scan)
-        XCTAssertTrue(report.contains("Reclaimable: 2 MB across 1 safe groups"))
+        XCTAssertTrue(report.contains("Regenerable: 2 MB across 1 cache groups (nothing was removed)"))
         XCTAssertTrue(report.contains("- npm logs: 2 MB\n  Log files.\n  /h/.npm/_logs"))
         XCTAssertTrue(report.contains("Skipped protected paths:\n- /h/Library/Caches/link"))
     }

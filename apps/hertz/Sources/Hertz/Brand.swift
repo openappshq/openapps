@@ -182,18 +182,3 @@ struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
-/// Filled danger button for the one destructive confirmation in the app.
-struct DestructiveButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Brand.body(14, weight: 600))
-            .foregroundStyle(Brand.accentOn)
-            .padding(.horizontal, Brand.Space.s16)
-            .frame(minHeight: 32)
-            .background(Brand.dangerSolid, in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.82 : 1) : 0.4)
-            .animation(.easeOut(duration: Brand.Motion.fast), value: configuration.isPressed)
-    }
-}

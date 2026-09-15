@@ -26,10 +26,10 @@ One scrolling stack of cards, top to bottom:
 | Sleep blockers | Which processes hold system or display sleep, for how long; copy, reveal, Activity Monitor; read-only | toggle, and only while something blocks |
 | CPU | Total %, sparkline, per-core bars, load average, temperature, fan, thermal pressure pill | yes |
 | Memory | Used %, sparkline of pressure, used / free / swap, the kernel's pressure level | yes |
-| Disk, Network | Half-width pair: free space, usage bar, read/write; throughput sparkline, down/up, interface, Wi-Fi, IP, VPN pill | yes |
+| Disk, Network | Half-width pair: startup-volume free space and usage bar, read/write summed over every attached disk; throughput sparkline, down/up, interface, IP, VPN pill, Wi-Fi name when macOS reports it (newer macOS withholds the SSID without Location access; the line omits it) | yes |
 | Battery | Charge, bar, time to full or empty, draw, cycles, health, temperature, adapter; connected accessories | when present |
-| Processes | Tree by app with subtree totals, top 8 roots, expand on click, sort by CPU or memory, context menu: copy, reveal, terminate (confirmed) | toggle |
-| Cleanup Scout | Scan → list of allowlisted caches with sizes → Clean… → inline confirmation → clean | toggle |
+| Processes | Tree by app with subtree totals, top 8 roots, expand on click, sort by CPU or memory, context menu: copy, reveal, open Activity Monitor. Hertz never terminates a process | toggle |
+| Cleanup Scout | Scan → list of allowlisted caches with sizes → reveal in the Finder or copy the report. Read-only: Hertz never deletes | toggle |
 
 Every card: mono label left, headline reading right, chart in the state color, one mono detail line. Charts and pills carry state; numbers stay in the text color.
 Refresh every two seconds; rates need two samples, so the first tick shows 0 for CPU and network.
@@ -53,9 +53,9 @@ Shown once, on the first launch of the packaged app: the icon, "Hertz is in your
 | --- | --- |
 | A reading is unavailable (no battery, no fan, no SMC key, no pressure sysctl) | The card or line is omitted or reads "—"; nothing is invented |
 | Thermal or memory pressure signal missing | Fall back to `ProcessInfo.thermalState` / usage-derived level; label says which |
-| Process terminate | SIGTERM, children first; protected, exited or re-used PIDs are skipped and reported; Hertz itself is never a target |
+| Process actions | Copy, reveal, open Activity Monitor only. A row is a snapshot of a PID and a path, not a process identity, so Hertz never signals anything; terminating happens in Activity Monitor |
 | Sleep blocker | Never cleared by Hertz; the row explains and offers copy, reveal, Activity Monitor |
-| Cleanup Scout | Only paths `scan()` produced (allowlisted cache roots or their direct children) under the home folder; protected folders, symlinks and anything else refused; nothing removed before the inline confirmation |
+| Cleanup Scout | Lists only allowlisted cache roots (or their direct children) under the home folder; protected folders and any path with a symbolic link between the home folder and the cache are refused. Nothing is ever removed by Hertz |
 | Login item registration fails | The toggle reverts and shows the error; Login Items can be opened directly |
 
 No permissions, no accounts, no network, no telemetry. Diagnostics are copied only on request and only to the pasteboard.

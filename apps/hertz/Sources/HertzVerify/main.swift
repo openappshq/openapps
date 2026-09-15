@@ -269,19 +269,19 @@ do {
     let protectedFile = protectedPrefs.appendingPathComponent("keep.plist")
     try? Data(repeating: 1, count: 4096).write(to: protectedFile)
 
+    // Read-only: the scan must find the cache, skip the protected folder and
+    // leave every file exactly where it was.
     let scout = CleanupScout(homeDirectory: tempHome)
     let scan = scout.scan()
     let foundNPM = scan.candidates.contains { $0.path == npmLogs.path }
     let foundProtected = scan.candidates.contains { $0.path.hasPrefix(protectedPrefs.path) }
-    let result = scout.clean(scan.candidates)
-    let cleanedLog = !fm.fileExists(atPath: logFile.path)
+    let keptLog = fm.fileExists(atPath: logFile.path)
     let keptProtected = fm.fileExists(atPath: protectedFile.path)
 
-    check("Cleanup Scout safe cache guard",
-          foundNPM && !foundProtected && cleanedLog && keptProtected
-          && result.cleanedBytes > 0,
-          "found npm logs \(foundNPM), protected prefs kept \(keptProtected), "
-          + "cleaned \(fmtGB(result.cleanedBytes))")
+    check("Cleanup Scout scan is read-only and skips protected paths",
+          foundNPM && !foundProtected && keptLog && keptProtected && scan.totalBytes > 0,
+          "found npm logs \(foundNPM), protected prefs listed \(foundProtected), "
+          + "files kept \(keptLog && keptProtected), measured \(fmtGB(scan.totalBytes))")
 }
 
 // MARK: - Sleep blocker assertions

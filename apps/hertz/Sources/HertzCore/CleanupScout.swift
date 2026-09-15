@@ -21,11 +21,9 @@ nonisolated public struct CleanupCandidate: Identifiable, Sendable {
     public let bytes: UInt64
     public let itemCount: Int
     public let risk: CleanupRisk
-    public let deleteContents: Bool
 
     public init(title: String, category: String, reason: String, path: String,
-                bytes: UInt64, itemCount: Int, risk: CleanupRisk = .low,
-                deleteContents: Bool) {
+                bytes: UInt64, itemCount: Int, risk: CleanupRisk = .low) {
         self.id = path
         self.title = title
         self.category = category
@@ -34,7 +32,6 @@ nonisolated public struct CleanupCandidate: Identifiable, Sendable {
         self.bytes = bytes
         self.itemCount = itemCount
         self.risk = risk
-        self.deleteContents = deleteContents
     }
 }
 
@@ -59,19 +56,9 @@ nonisolated public struct CleanupScan: Sendable {
     }
 }
 
-nonisolated public struct CleanupResult: Sendable {
-    public let cleanedBytes: UInt64
-    public let cleanedItems: Int
-    public let failed: [String]
-
-    public init(cleanedBytes: UInt64 = 0, cleanedItems: Int = 0,
-                failed: [String] = []) {
-        self.cleanedBytes = cleanedBytes
-        self.cleanedItems = cleanedItems
-        self.failed = failed
-    }
-}
-
+/// Read-only: finds known regenerable developer caches under the home
+/// directory and measures them. Hertz never deletes anything; the report and
+/// Reveal in Finder hand the decision to the user and the Finder.
 nonisolated public final class CleanupScout: @unchecked Sendable {
     private let homeDirectory: URL
 
@@ -85,7 +72,7 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
 
         for spec in Self.safeSpecs {
             let url = expand(spec.relativePath)
-            guard isCleanablePath(url) else {
+            guard isScannablePath(url) else {
                 skipped.append(url.path)
                 continue
             }
@@ -100,12 +87,11 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
                         reason: spec.reason,
                         path: url.path,
                         bytes: measured.bytes,
-                        itemCount: measured.items,
-                        deleteContents: true))
+                        itemCount: measured.items))
                 }
             case .children:
                 for child in children(of: url, olderThan: spec.minimumAge) {
-                    guard isCleanablePath(child) else {
+                    guard isScannablePath(child) else {
                         skipped.append(child.path)
                         continue
                     }
@@ -116,8 +102,7 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
                             reason: spec.reason,
                             path: child.path,
                             bytes: measured.bytes,
-                            itemCount: measured.items,
-                            deleteContents: false))
+                            itemCount: measured.items))
                     }
                 }
             }
@@ -129,48 +114,11 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
         }, skipped: skipped)
     }
 
-    public func clean(_ candidates: [CleanupCandidate]) -> CleanupResult {
-        var cleanedBytes: UInt64 = 0
-        var cleanedItems = 0
-        var failed: [String] = []
-
-        for candidate in candidates where candidate.risk == .low {
-            let url = URL(fileURLWithPath: candidate.path).standardizedFileURL
-            // A candidate is only ever a path scan() could have produced: an
-            // allowlisted cache root, or a direct child of one. Anything else
-            // is refused whatever else it looks like.
-            guard isAllowlisted(url, deleteContents: candidate.deleteContents),
-                  isCleanablePath(url), FileManager.default.fileExists(atPath: url.path) else {
-                failed.append(candidate.path)
-                continue
-            }
-
-            do {
-                if candidate.deleteContents {
-                    for child in children(of: url, includeHidden: true) {
-                        guard isCleanablePath(child) else { continue }
-                        try FileManager.default.removeItem(at: child)
-                    }
-                } else {
-                    try FileManager.default.removeItem(at: url)
-                }
-                cleanedBytes += candidate.bytes
-                cleanedItems += candidate.itemCount
-            } catch {
-                failed.append(candidate.path)
-            }
-        }
-
-        return CleanupResult(cleanedBytes: cleanedBytes,
-                             cleanedItems: cleanedItems,
-                             failed: failed)
-    }
-
     public func report(for scan: CleanupScan) -> String {
         var lines = [
             "Hertz Cleanup Scout",
             "Scanned: \(scan.scannedAt)",
-            "Reclaimable: \(Format.bytes(scan.totalBytes)) across \(scan.candidates.count) safe groups",
+            "Regenerable: \(Format.bytes(scan.totalBytes)) across \(scan.candidates.count) cache groups (nothing was removed)",
             ""
         ]
 
@@ -198,23 +146,7 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
         return homeDirectory.appendingPathComponent(trimmed).standardizedFileURL
     }
 
-    /// Whether `url` is exactly an allowlisted root (cleaned by contents) or a
-    /// direct child of an allowlisted root that is cleaned child by child.
-    private func isAllowlisted(_ url: URL, deleteContents: Bool) -> Bool {
-        let path = url.standardizedFileURL.path
-        return Self.safeSpecs.contains { spec in
-            let root = expand(spec.relativePath).path
-            switch spec.mode {
-            case .contents:
-                return deleteContents && path == root
-            case .children:
-                return !deleteContents && path.hasPrefix(root + "/")
-                    && !path.dropFirst(root.count + 1).contains("/")
-            }
-        }
-    }
-
-    private func isCleanablePath(_ url: URL) -> Bool {
+    private func isScannablePath(_ url: URL) -> Bool {
         let path = url.standardizedFileURL.path
         let home = homeDirectory.path
         guard path.hasPrefix(home + "/") else { return false }
@@ -226,23 +158,23 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
             return false
         }
 
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
-            return true
+        // Nothing on the way from the home directory to the path may be a
+        // symbolic link: a replaced ancestor would point the scan somewhere
+        // else entirely.
+        var current = homeDirectory
+        for component in path.dropFirst(home.count + 1).split(separator: "/") {
+            current.appendPathComponent(String(component))
+            if isSymbolicLink(current) { return false }
         }
-        guard !isSymbolicLink(url) else { return false }
         return true
     }
 
-    private func children(of url: URL, olderThan age: TimeInterval? = nil,
-                          includeHidden: Bool = false) -> [URL] {
-        let options: FileManager.DirectoryEnumerationOptions =
-            includeHidden ? [] : [.skipsHiddenFiles]
+    private func children(of url: URL, olderThan age: TimeInterval? = nil) -> [URL] {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.contentModificationDateKey,
                                          .isSymbolicLinkKey],
-            options: options)
+            options: [.skipsHiddenFiles])
         else { return [] }
 
         let cutoff = age.map { Date().addingTimeInterval(-$0) }
@@ -369,7 +301,7 @@ private extension CleanupScout {
         CleanupSpec(category: "Xcode",
                     title: "Xcode cache",
                     relativePath: "~/Library/Caches/com.apple.dt.Xcode",
-                    reason: "Xcode cache files; preserved folder, cleaned contents only.",
+                    reason: "Xcode cache files; rebuilt on the next build.",
                     mode: .contents,
                     minimumAge: nil),
         CleanupSpec(category: "Swift",

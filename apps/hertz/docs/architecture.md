@@ -103,7 +103,7 @@ sequenceDiagram
 | `ProcessTree.swift` | parent/child forest + subtree CPU/memory sums | (pure transform of the process list) |
 | `BatteryMetrics.swift` | charge, health, cycles, temperature, battery/adapter wattage | IOKit power sources + `AppleSmartBattery` registry |
 | `PowerAssertions.swift` | active sleep/display blockers grouped by process | IOKit `IOPMCopyAssertionsByProcess` |
-| `CleanupScout.swift` | read-only cache scan + confirmed cleanup of allowlisted safe paths | `FileManager` |
+| `CleanupScout.swift` | read-only scan and measurement of allowlisted cache paths; never deletes | `FileManager` |
 | `SMC.swift` | CPU temperature, fan speed | the `AppleSMC` user client |
 | `HealthScore.swift` | composite 0–100 score | (pure function of the snapshots) |
 | `Diagnostics.swift` | current bottleneck, shareable report text | (pure function of the snapshots) |
@@ -148,10 +148,10 @@ command and must report `ALL CHECKS PASSED`.
 | `Dashboard/VitalsCards.swift` | CPU, memory, disk, network, battery |
 | `Dashboard/DiagnosisCards.swift` | diagnosis with recent events; sleep blockers |
 | `Dashboard/ProcessCard.swift` | the process tree, sorting, context-menu actions |
-| `Dashboard/CleanupCard.swift`, `CleanupModel.swift` | Cleanup Scout: scan, inline confirmation, clean |
+| `Dashboard/CleanupCard.swift`, `CleanupModel.swift` | Cleanup Scout: scan, sizes, reveal in the Finder, copy the report |
 | `Settings/SettingsWindow.swift` | Settings: Open at login, readout, visible cards, the Homebrew update note, diagnostics |
 | `Onboarding/WelcomeWindow.swift` | the one-screen welcome shown after install |
-| `ProcessActions.swift`, `PowerAssertionActions.swift` | copy / reveal / terminate / Activity Monitor actions |
+| `ProcessActions.swift`, `PowerAssertionActions.swift` | copy / reveal / Activity Monitor actions; nothing that signals a process |
 
 ### Dropdown layout
 
@@ -168,7 +168,7 @@ command and must report `ALL CHECKS PASSED`.
 │ ╭ DISK ─────── ◔ ╮ ╭ NETWORK ────────────── ╮ │  two half-width cards
 │ ╭ BATTERY ──────────────────────────── ⚡ 100% ╮ │
 │ ╭ PROCESSES ───────────────────── ⌄CPU   MEM ╮ │  tree, expandable, context menu
-│ ╭ CLEANUP SCOUT ──────────────── Scan  Clean… ╮ │
+│ ╭ CLEANUP SCOUT ────────────────── ⧉  Rescan ╮ │
 ├────────────────────────────────────────────────┤
 │ ∿ HERTZ 0.2.0                 Settings…  Quit  │  footer
 └────────────────────────────────────────────────┘
@@ -183,11 +183,12 @@ and colours the chart, never the text alone, because the healthy colour is
 also the brand accent.
 
 Process rows expose contextual actions for troubleshooting: copy PID/path,
-reveal the executable or app bundle in Finder, and terminate the selected
-process tree after confirmation. Tree termination sends `SIGTERM` to
-descendants first and the parent last, skips protected or already-exited
-processes, and validates executable paths when possible so stale PIDs are not
-targeted accidentally.
+reveal the executable or app bundle in Finder, and open Activity Monitor.
+Hertz never signals a process. A row is a two-second-old snapshot of a PID
+and a path, and neither is an identity: a PID can be reused by another
+process, even one with the same executable, between the snapshot and a
+click, and re-reading the path before signalling only narrows that window.
+Terminating is Activity Monitor's job, where the target is what you see.
 
 Sleep Blocker Watch reads active IOKit power assertions and groups meaningful
 system/display sleep blockers by process. Hertz suppresses baseline "user is
@@ -198,12 +199,17 @@ open Activity Monitor. Hertz does not clear another process's assertion because
 it may be protecting real work such as a call, backup, transfer, render, or
 build.
 
-Cleanup Scout is deliberately not part of the 2-second metrics loop. Users
-start a scan manually, review low-risk cache groups, can reveal or copy a
-report, and then confirm cleanup. The scanner only emits allowlisted paths
-under the current user's home directory and refuses broad user-data roots such
-as Documents, Application Support, Containers, Preferences, Mail, Messages,
-Keychains, and system locations.
+Cleanup Scout is deliberately not part of the 2-second metrics loop and is
+read-only. Users start a scan manually, see the allowlisted cache groups and
+their sizes, and can reveal a folder in the Finder or copy the report; the
+deleting, if any, happens there. The scanner only lists allowlisted paths under
+the current user's home directory, refuses broad user-data roots such as
+Documents, Application Support, Containers, Preferences, Mail, Messages,
+Keychains and system locations, and refuses any path with a symbolic link
+anywhere between the home directory and the cache, so a replaced ancestor can
+never point it outside the home. Deleting from Hertz was removed on import:
+a pathname-based delete cannot be made safe against a directory that is
+swapped for a symlink between the scan and the click.
 
 ## Updates
 

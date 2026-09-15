@@ -16,13 +16,13 @@ import { brewCasks } from "../../../shared/licensing";
 const readings: [string, string][] = [
   ["CPU", "overall and per core, load average, temperature, fan speed and the kernel's thermal pressure"],
   ["Memory", "used, free and swap, with the pressure level macOS itself acts on"],
-  ["Disk", "free space and live read and write throughput on the startup volume"],
-  ["Network", "up and down, the interface, Wi-Fi name, local IP and whether a VPN is on"],
+  ["Disk", "free space on the startup volume, and live read and write throughput across every attached disk"],
+  ["Network", "up and down, the interface, local IP, whether a VPN is on, and the Wi-Fi name where macOS still shares it without Location access"],
   ["Battery", "charge, time left, live power draw, health, cycles, temperature, adapter wattage and your mouse, keyboard and trackpad"],
-  ["Processes", "a tree grouped by app with subtree totals, sortable by CPU or memory, with copy, reveal and terminate a right-click away"],
+  ["Processes", "a tree grouped by app with subtree totals, sortable by CPU or memory, with copy, reveal and Activity Monitor a right-click away"],
   ["Diagnosis", "what is slow right now, the last few pressure changes, and a copyable snapshot for a support thread"],
   ["Sleep blockers", "which app is keeping the Mac awake, shown only while one is"],
-  ["Cleanup Scout", "a read-only scan of known regenerable developer caches, then a confirmed clean; nothing else is touched"],
+  ["Cleanup Scout", "a read-only scan of known regenerable developer caches with their sizes; Hertz never deletes, you decide in the Finder"],
 ];
 
 const questions = [
@@ -52,7 +52,11 @@ const questions = [
   ],
   [
     "Can Cleanup Scout delete something I need?",
-    "It only lists paths on a short allowlist of regenerable caches under your home folder (Xcode's DerivedData, SwiftPM, Homebrew downloads, npm, pip, uv, Ruff) and refuses anything else, including Documents, Application Support and anything behind a symlink. Nothing is removed until you confirm.",
+    "No: it deletes nothing at all. It lists a short allowlist of regenerable caches under your home folder (Xcode's DerivedData, SwiftPM, Homebrew downloads, npm, pip, uv, Ruff) with their sizes, refuses anything else, and reveals a folder in the Finder when you ask. Removing it is your call, there.",
+  ],
+  [
+    "Can it quit a process?",
+    "No. A row in the list is a two-second-old snapshot, and a process ID can be reused by something else in that time, so Hertz never sends a signal. The context menu opens Activity Monitor instead, where what you quit is what you see.",
   ],
 ];
 
@@ -149,8 +153,8 @@ export default function App() {
                 </span>
                 <h3>Read from the kernel.</h3>
                 <p>
-                  No shelling out to <code>top</code>, no polling. Mach, libproc and IOKit, the way
-                  Activity Monitor does it, in a few megabytes of memory.
+                  No shelling out to <code>top</code>. Mach, libproc and IOKit, the way Activity
+                  Monitor does it, refreshed every 2 seconds in a few megabytes of memory.
                 </p>
               </article>
               <article>
