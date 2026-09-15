@@ -112,9 +112,9 @@ A license always wins over the trial: while a license record exists, the app is 
 4. Bundles and discounts: a bundle is one checkout containing several apps' paid products plus a discount code (percentage varies by offer, restricted to the included products). Each app receives its own key for its own product, so apps need no bundle awareness and the product check stays {paid} per app.
 
 ### Stored records
-Two Keychain items per app, never in plain preferences:
+Two records per app, in the app's encrypted record store (below), never in plain preferences and never in the Keychain:
 
-**License record**, service `space.openapps.<app>.license`:
+**License record**, file `license`:
 
 | Field | Source |
 | --- | --- |
@@ -127,7 +127,7 @@ Two Keychain items per app, never in plain preferences:
 | `revoked` | Set when Dodo answers `valid: false` for this activation; cleared only by `valid: true` for the same activation or a new activation |
 | `pending_cleanups` | Activations the app still owes a deactivation for (replaced, refused or abandoned); kept even with no record |
 
-**Trial record**, service `space.openapps.<app>.trial`:
+**Trial record**, file `trial`:
 
 | Field | Source |
 | --- | --- |
@@ -135,14 +135,25 @@ Two Keychain items per app, never in plain preferences:
 | `last_seen_at` | Highest local clock value the app has observed while the trial record exists; only ever raised |
 | `registered` | `true` once the trial registry has answered for this Mac; a provisional trial is `false` |
 
-The trial record is never deleted by the app: not by Remove this Mac, not by activating or losing a license. If it's deleted anyway (a Keychain wipe, a reinstall on a wiped account), the app asks the trial registry again and gets the original start back.
+The trial record is never deleted by the app: not by Remove this Mac, not by activating or losing a license. If it's deleted anyway (the store directory removed, a reinstall on a wiped account), the app asks the trial registry again and gets the original start back.
+
+### Record store
+Decided 2026-09-16: the apps store no records in the Keychain. Without an Apple Developer identity the apps are signed by a self-signed certificate, and a Keychain item's access list is tied to the signing identity; any identity change (a rebuilt certificate, a development build over a release install) makes macOS ask the user for the app's own records on every launch. A file the app owns never prompts.
+
+- **Where:** `~/Library/Application Support/OpenApps/<app id>/records/`, directory mode `0700`, one file per record (`license`, `trial`), mode `0600`. Written atomically: temporary file in the same directory, `fsync`, rename over the old file.
+- **Format:** `openapps-records-v1` magic, a 12-byte random nonce, then AES-256-GCM over the record's JSON with the app id and the file name as additional authenticated data. The key is HKDF-SHA256 (`info = "openapps-records-v1:<app id>"`) of the Mac's IOPlatformUUID; when the UUID can't be read, of the fixed string `no-hardware-uuid`. Nothing about the key is stored.
+- **What this protects:** casual reading and editing of the files, and copying them to another Mac (a different UUID can't open them). Not a determined local user: the source is public, so the key can be derived. That is the same limit the design already accepts (a patched app skips every check).
+- **Read outcomes** map onto the existing storage semantics: no file is *positively absent* (nil); a directory or file that can't be read is *unavailable*; a file that fails the magic, the authentication tag or JSON decoding is *corrupt*. Unavailable and corrupt are storage errors: no new trial, no registry call, nothing overwritten (shared case 17). A corrupt or foreign trial file is left in place and reported, never replaced by a fresh trial.
+- **Deletion:** `Remove this Mac` deletes `license`; nothing ever deletes `trial`. Removing the directory by hand is the "records deleted" case: the registry restores the trial start and a license key has to be entered again.
+- **Old Keychain items** from releases before 0.1.2 are ignored and never read, written or deleted: touching them is what prompts. They stay orphaned in the login keychain.
+- **Journal:** unchanged; it lives beside the records (user defaults or a plain file in the same support directory) and is not encrypted, since it holds no secret.
 
 ### Trial registry
-The one OpenApps backend. It remembers when each Mac started each app's trial, so a Keychain wipe or reinstall can't restart it. It knows nothing about licenses, purchases or people.
+The one OpenApps backend. It remembers when each Mac started each app's trial, so deleting the records or reinstalling can't restart it. It knows nothing about licenses, purchases or people.
 
 - **Where:** `POST https://openapps.space/api/trial`, a Cloudflare Worker in front of a Cloudflare D1 table. Development builds use the same endpoint with `env: "test"`, which is stored separately.
 - **Request:** `{"app": "<app id>", "device": "<device hash>", "env": "live" | "test"}`. Nothing else: no key, no email, no version, no locale.
-- **Device hash:** lowercase hex SHA-256 of `openapps-trial-v1:<app id>:<IOPlatformUUID>`. The app id salts it, so one Mac's hashes for two apps don't match, and the raw hardware UUID never leaves the Mac. If the hardware UUID can't be read, the app uses a random UUID saved in the trial record's Keychain item (weaker, but never blocks the trial).
+- **Device hash:** lowercase hex SHA-256 of `openapps-trial-v1:<app id>:<IOPlatformUUID>`. The app id salts it, so one Mac's hashes for two apps don't match, and the raw hardware UUID never leaves the Mac. If the hardware UUID can't be read, the app uses a random UUID saved in the trial record (weaker, but never blocks the trial).
 - **Response:** `200 {"started_at": "<ISO 8601>", "now": "<ISO 8601>"}`. The first request for an (app, env, device) stores `started_at = now`; every later request returns the stored value unchanged. The registry never moves a start later or earlier.
 - **Errors:** `400` malformed request, `429` rate limited (honor `Retry-After`), anything else or no answer counts as offline. The registry never answers with a trial state; the app computes that.
 - **Storage:** one row per (app, env, device): `started_at` and `created_at`. No IP addresses, user agents or logs of requests are stored.
@@ -151,10 +162,10 @@ The one OpenApps backend. It remembers when each Mac started each app's trial, s
 
 **Write order:** a change that removes access (revocation, trial end) takes effect in memory immediately, then is saved; a failed save is retried on every tick and shown as a storage error. A change that grants access is saved first and only then takes effect. Starting the trial grants access, so the trial record is saved before the core feature turns on.
 
-**Revocation journal:** so a revocation survives a failed Keychain save followed by a restart, each app also keeps a small non-secret journal outside the Keychain (user defaults or a file in its support directory), keyed by a SHA-256 hash of the activation ID, holding only the revocation time. It's written before the Keychain save. On load, a journal entry for the stored activation forces Revoked regardless of the Keychain record. The entry is cleared only when the revoked record is saved, on `valid: true` for that activation, or once a replacement or removal of that activation has been **durably** saved or deleted in the Keychain. Until then it stays as a tombstone that keeps the core off after a restart, and the pending delete or replace is retried. Journal writes and clears report success: if recording fails, the app still locks in memory and shows a storage error. **Never compare clocks to decide staleness.** The Keychain record carries a durable `event_seq` counter, incremented on every authoritative change (activation, `valid: true`, revocation, removal). A journal entry stores the `event_seq` of its revocation or tombstone, not a time. On load the entry is honored only if its sequence is greater than the stored record's `event_seq` (the saved record hasn't caught up yet); otherwise it's stale and dropped. **Journal operations are conditional on the sequence.** A clear removes an entry only if the entry's sequence is at or below the sequence being cleared, and recording a revocation writes only if its sequence is greater than the existing entry's. Pending retries are merged per activation, so a newer operation always supersedes older ones and a delayed retry can never delete or overwrite a newer revocation. "Newer" means queued later: each pending operation carries its own increasing operation counter. Its scope (the sequence it clears up to) never decides priority, and no sentinel value such as "clear everything" may outrank a later revocation. A replacement may clear a *different, earlier* activation's entry completely, but only after the new record has been saved.
+**Revocation journal:** so a revocation survives a failed record save followed by a restart, each app also keeps a small non-secret journal outside the record store (user defaults or a plain file in its support directory), keyed by a SHA-256 hash of the activation ID, holding only the revocation time. It's written before the record save. On load, a journal entry for the stored activation forces Revoked regardless of the stored record. The entry is cleared only when the revoked record is saved, on `valid: true` for that activation, or once a replacement or removal of that activation has been **durably** saved or deleted in the record store. Until then it stays as a tombstone that keeps the core off after a restart, and the pending delete or replace is retried. Journal writes and clears report success: if recording fails, the app still locks in memory and shows a storage error. **Never compare clocks to decide staleness.** The stored record carries a durable `event_seq` counter, incremented on every authoritative change (activation, `valid: true`, revocation, removal). A journal entry stores the `event_seq` of its revocation or tombstone, not a time. On load the entry is honored only if its sequence is greater than the stored record's `event_seq` (the saved record hasn't caught up yet); otherwise it's stale and dropped. **Journal operations are conditional on the sequence.** A clear removes an entry only if the entry's sequence is at or below the sequence being cleared, and recording a revocation writes only if its sequence is greater than the existing entry's. Pending retries are merged per activation, so a newer operation always supersedes older ones and a delayed retry can never delete or overwrite a newer revocation. "Newer" means queued later: each pending operation carries its own increasing operation counter. Its scope (the sequence it clears up to) never decides priority, and no sentinel value such as "clear everything" may outrank a later revocation. A replacement may clear a *different, earlier* activation's entry completely, but only after the new record has been saved.
 
 **Recovering from an unreadable journal.** A missing journal counts as empty. An unreadable or corrupt journal is a storage error and the core stays off, but the app must not strand the user:
-- keep the successfully read Keychain record as a recovery candidate, and scope the "journal unreadable" restriction to that activation, so a saved grant for a new activation retires it;
+- keep the successfully read record as a recovery candidate, and scope the "journal unreadable" restriction to that activation, so a saved grant for a new activation retires it;
 - immediately run an authoritative check for it;
 - `valid: true` rebuilds the journal and unlocks;
 - `valid: false` rebuilds the journal with the revocation recorded;
@@ -175,7 +186,7 @@ The corrupt journal is never overwritten before a replacement has been written. 
 - **Activation counts as a successful check.**
 - **One check at a time.** Failed checks retry with backoff from 1 minute up to 1 hour, then fall back to the daily schedule.
 - **Schedule on the local clock.** Keep a local `next_attempt_at`: any answer from Dodo (valid or not) or an activation sets it to now + 24 hours; a failure sets it by the backoff. Never compare server timestamps with the local clock to decide when to check, so a Mac whose clock runs ahead or behind still checks once a day.
-- **Deadlines don't wait on I/O.** Trial expiry, the end of grace and a detected clock rollback switch the core feature off on time, from a timer that only reads the in-memory state. They never wait for a Keychain save, a network call or a cleanup to finish.
+- **Deadlines don't wait on I/O.** Trial expiry, the end of grace and a detected clock rollback switch the core feature off on time, from a timer that only reads the in-memory state. They never wait for a record save, a network call or a cleanup to finish.
 
 ### Offline grace (paid licenses)
 - **Grace:** the core feature stays on while `now − last_success_at` is at most 7 days.
@@ -186,8 +197,8 @@ The corrupt journal is never overwritten before a replacement has been written. 
 ### Trial
 - **Starting:** on launch of an official build with no license record, if the trial record is positively absent, create a provisional one (`started_at = last_seen_at = now`, `registered = false`), save it, turn the core feature on, and ask the registry in the background. No button, no prompt, and launch never waits for the network. If the save fails, show a storage error, keep the core off and retry; don't run an unsaved trial.
 - **Registering:** while `registered` is `false`, ask the registry on launch, on every scheduler tick with backoff (1 minute up to 1 hour, honoring `Retry-After`), on wake and when the network comes back. On an answer, convert the registry's start to local time (`local_now − (registry_now − registry_started_at)`), keep the **earlier** of that and the provisional start, set `registered = true` and save. Registration follows the write order: if it extends access (the 24-hour offline limit no longer applies, or the trial is back on), save first and extend only once the save succeeds, keeping the provisional limit in memory until then. If it restricts access (an earlier start shortens or ends the trial), apply it in memory first, then save. A registered trial never contacts the registry again.
-- **Fallback device ID:** when the hardware UUID can't be read, the random fallback ID must be saved in the trial Keychain item before **every** registry request that uses it, so the registry never sees an ID that a restart could lose.
-- **Offline limit:** an unregistered trial runs for at most 24 hours of elapsed time. After that the core turns off with "Connect to the internet to continue your free trial" until the registry answers; the answer then decides how much trial is left. This stops a Mac that blocks the registry from getting a fresh trial after every Keychain wipe.
+- **Fallback device ID:** when the hardware UUID can't be read, the random fallback ID must be saved in the trial record before **every** registry request that uses it, so the registry never sees an ID that a restart could lose.
+- **Offline limit:** an unregistered trial runs for at most 24 hours of elapsed time. After that the core turns off with "Connect to the internet to continue your free trial" until the registry answers; the answer then decides how much trial is left. This stops a Mac that blocks the registry from getting a fresh trial after every deletion of the records.
 - **Elapsed time never goes backwards:** `elapsed = last_seen_at − started_at`, where `last_seen_at` only ever rises. Setting the clock back can't add trial time. A clock set far ahead and then corrected ends the trial early; that's accepted.
 - **Elapsed time never stops while the app runs:** on every tick, `last_seen_at = max(last_seen_at + monotonic time since the previous tick, now)`, using a monotonic clock that keeps counting through sleep (for example `mach_continuous_time`). A wall clock that's frozen or set back therefore doesn't pause the trial. Keep one trial clock with an anchor `(wall time, monotonic time, last_seen_at)` and a single observe step that advances `last_seen_at` **exactly once** per observation and then re-anchors. Every consumer goes through it: ticks, wake, snapshots, the deadline timer and applying the registry answer. A save failure never moves the anchor. Each observation samples wall and monotonic time inside the serialized section, after any lock wait or I/O that comes before it, never before. An observation whose monotonic time is older than the anchor's is ignored without changing anything, so the anchor only moves forward. Access and deadlines are computed from the monotonically projected `last_seen_at`, not from the stored wall time, and on wake the restriction is observed and applied before any I/O.
 - **Clock behind at launch or wake:** if `now` is more than 1 hour earlier than `last_seen_at` when the app launches or wakes, and there's no license record, the core turns off with "Your Mac's clock is behind. Set the correct date and time to keep using your free trial" until `now` is within 1 hour of `last_seen_at` again. The trial isn't ended and no time is added. While the clock is behind, **every trial write is frozen**: no trial saves, no change to the start or `last_seen_at`, and no registry answer applied. A registry answer that arrives meanwhile is kept in memory as raw `started_at` and `now` values, and converted and applied only once the clock is back within the hour. Leaving the "clock behind" state is a grant, so it happens only through a fresh observe step that re-establishes the monotonic anchor. A held or cached state still marked "behind" may restrict, but never unlocks, even if the wall clock already looks correct and storage or the network is still busy. This closes the gap where a Mac kept at a past date would never reach the trial end across restarts.
@@ -242,7 +253,7 @@ Every licensed app ships this text, adapted with its name, in the README, the we
 
 ## Shared test cases
 
-Every app implements these against a fake Dodo client, a fake Keychain and an injectable clock. `P` = this app's paid product, `X` = another app's product. "Fresh Mac" means no license record and a trial record that is positively absent.
+Every app implements these against a fake Dodo client, a fake record store and an injectable clock. `P` = this app's paid product, `X` = another app's product. "Fresh Mac" means no license record and a trial record that is positively absent.
 
 | # | Given | When | Then |
 | --- | --- | --- | --- |
@@ -263,8 +274,8 @@ Every app implements these against a fake Dodo client, a fake Keychain and an in
 | 15 | Trial, 2 days 23 h 59 min elapsed | app keeps running 2 min | Core switches off on time without waiting for any save or network call |
 | 16 | Fresh Mac, trial record save fails | launch | Storage error; core off; retried; no trial running |
 | 17 | Trial record unreadable (not "not found") | launch | Storage error; core off; no new trial created; registry not called; existing data not overwritten |
-| 18 | Keychain wiped, registry has a start 4 days ago | launch | Provisional trial, then the registry answer ends it: TrialEnded |
-| 19 | Keychain wiped, registry has a start 1 day ago | launch | Trial with 2 days left, not 3 |
+| 18 | Records deleted, registry has a start 4 days ago | launch | Provisional trial, then the registry answer ends it: TrialEnded |
+| 19 | Records deleted, registry has a start 1 day ago | launch | Trial with 2 days left, not 3 |
 | 20 | Fresh Mac, registry unreachable | 23 h, then 25 h of elapsed time | Trial on at 23 h; at 24 h core off with "connect to continue"; registry answer then restores the right remaining time |
 | 21 | Registry → `429 Retry-After: 120` or `500` | tick | No registry call for 120 s / backoff; state unchanged |
 | 22 | Licensed, trial ended earlier | Remove this Mac → `200` | TrialEnded; license record cleared; trial record unchanged |
@@ -275,8 +286,8 @@ Every app implements these against a fake Dodo client, a fake Keychain and an in
 | 27 | Same Mac, two apps | compute device hashes | Different hashes; neither equals the raw hardware UUID |
 | 28 | Trial, 1 day elapsed, app running | wall clock frozen (or set back) while 2 days of monotonic time pass | TrialEnded on time; elapsed advanced by the monotonic time |
 | 29 | Unregistered trial at 23 h | registry answers, then the save blocks past 24 h | Core off at 24 h; back on only after the save succeeds |
-| 30 | Fallback device ID, Keychain saves failing | registry tick | No registry request until the fallback ID is saved |
-| 31 | Keychain holds a license record from the old trial keys (`kind: trial` or a non-paid product) | launch | Not a license; the trial rules apply |
+| 30 | Fallback device ID, record saves failing | registry tick | No registry request until the fallback ID is saved |
+| 31 | The store holds a license record from the old trial keys (`kind: trial` or a non-paid product) | launch | Not a license; the trial rules apply |
 
 ## Adding licensing to a new app
 
