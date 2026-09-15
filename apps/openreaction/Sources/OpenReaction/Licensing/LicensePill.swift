@@ -50,12 +50,11 @@ private struct PillSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         let style = SurfaceStyle(reduceTransparency: reduceTransparency, increasedContrast: contrast == .increased)
-        let fill = tone == .trial ? Brand.accentSubtle : Brand.surface
         Group {
             if #available(macOS 26, *), style.usesGlass {
-                content.glassEffect(.regular.tint(fill).interactive(), in: Capsule())
+                content.glassEffect(.regular.tint(glassTint).interactive(), in: Capsule())
             } else {
-                content.background(fill, in: Capsule())
+                content.background(flatFill, in: Capsule())
             }
         }
         .overlay {
@@ -63,9 +62,21 @@ private struct PillSurface: ViewModifier {
         }
     }
 
+    /// Glass blends its tint with what is behind it, so the trial's tint is
+    /// the solid accent at low opacity rather than the already pale subtle
+    /// token: it reads at a glance on a white title bar and stays in the
+    /// same family in dark.
+    private var glassTint: Color {
+        tone == .trial ? Brand.accentSolid.opacity(0.2) : Brand.surface
+    }
+
+    private var flatFill: Color {
+        tone == .trial ? Brand.accentSubtle : Brand.surface
+    }
+
     private func rim(_ style: SurfaceStyle) -> Color {
         if style.increasedContrast { return Brand.textPrimary.opacity(0.6) }
-        return tone == .trial ? Brand.accentSolid.opacity(0.25) : Brand.borderSubtle
+        return tone == .trial ? Brand.accentSolid.opacity(0.35) : Brand.borderSubtle
     }
 }
 
