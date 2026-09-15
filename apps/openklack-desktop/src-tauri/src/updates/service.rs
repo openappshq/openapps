@@ -373,6 +373,18 @@ impl Updates {
         policy::may_install(automatic, &self.saved.lock().unwrap().settings)
     }
 
+    /// Records a verified bundle as ready, if the permission it was downloaded under still
+    /// holds. The check and the record happen under the settings lock, so a setting change
+    /// either sees the staged bundle and discards it, or is seen here and stops the staging.
+    fn stage(&self, staged: Staged) -> bool {
+        let saved = self.saved.lock().unwrap();
+        if !policy::may_install(staged.automatic, &saved.settings) {
+            return false;
+        }
+        *self.staged.lock().unwrap() = Some(staged);
+        true
+    }
+
     /// Drops the staged bundle, if any, and reports why.
     fn discard_staged(&self, app: &tauri::AppHandle, reason: &str) {
         let Some(staged) = self.staged.lock().unwrap().take() else {
@@ -566,20 +578,21 @@ async fn download(app: &tauri::AppHandle, updates: &Updates, automatic: bool) {
     };
     match staged {
         Err(error) => updates.failed(app, error),
-        // Permission is checked again here: it may have been withdrawn during the download.
-        Ok(_) if !updates.may_install(automatic) => {
-            let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
-            eprintln!(
-                "OpenKlack: dropped the automatic {version} download: {AUTOMATIC_INSTALL_OFF}"
-            );
-            updates.publish(app, |status| status.phase = "available");
-        }
         Ok(bundle) => {
-            *updates.staged.lock().unwrap() = Some(Staged {
-                version,
+            // Permission is checked again here: it may have been withdrawn during the download.
+            let staged = Staged {
+                version: version.clone(),
                 bundle,
                 automatic,
-            });
+            };
+            if !updates.stage(staged) {
+                let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
+                eprintln!(
+                    "OpenKlack: dropped the automatic {version} download: {AUTOMATIC_INSTALL_OFF}"
+                );
+                updates.publish(app, |status| status.phase = "available");
+                return;
+            }
             updates.publish(app, |status| status.phase = "ready");
             #[cfg(debug_assertions)]
             if std::env::var_os("OPENKLACK_DEV_QUIT_WHEN_UPDATE_READY").is_some() {
@@ -591,8 +604,9 @@ async fn download(app: &tauri::AppHandle, updates: &Updates, automatic: bool) {
 
 /// Installs a staged update while the app exits, before it quits or restarts. The bundle is
 /// verified again first, since it waited on disk, and an automatic one only installs if
-/// automatic installs are still on. The swap runs to completion on this thread: the process
-/// never exits in the middle of it.
+/// automatic installs are still on. The exchange runs to completion on this thread, and the
+/// app at its final path is verified once more before the old one is deleted, so a bundle
+/// altered between the check and the exchange is exchanged back out.
 pub fn install_on_exit(app: &tauri::AppHandle) {
     let Some(updates) = app.try_state::<Updates>() else {
         return;
@@ -611,8 +625,12 @@ pub fn install_on_exit(app: &tauri::AppHandle) {
         );
         return;
     }
+    let version = staged.version.clone();
+    // After the exchange the old bundle sits at the staged path, so it is the identity to
+    // verify against; before it, the installed app is.
+    let confirm = |app: &Path| install::verify_bundle(app, &staged.bundle, &version);
     let result = install::verify_bundle(&staged.bundle, &installed, &staged.version)
-        .and_then(|()| install::swap(&installed, &staged.bundle, &mut |_| Ok(())));
+        .and_then(|()| install::swap(&installed, &staged.bundle, &confirm, &mut |_| Ok(())));
     match result {
         Ok(()) => eprintln!("OpenKlack: installed the staged update."),
         Err(error) => {

@@ -1,38 +1,57 @@
-//! Replacing the installed bundle with a staged one. The swap is a transaction on one folder:
-//! the old bundle is moved aside, the new one moved in, and the old one is deleted only once the
-//! new one is in place. Any failure after the first move puts the old bundle back, and a crash in
-//! between leaves a copy that [`recover`] restores. The folder never ends up without an app.
+//! Replacing the installed bundle with a staged one. The staged bundle is unpacked into a private
+//! folder next to the app, verified there, and exchanged with the app in one atomic rename
+//! (`renamex_np` with `RENAME_SWAP`): at no instant is the folder without an app. The exchanged
+//! old bundle is deleted only after the app at its final path verifies again; if it doesn't, the
+//! exchange is undone.
 
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 
-/// Where a downloaded bundle is unpacked, next to the app so the final move is a rename.
+/// How long a `codesign` check may take before it counts as failed. Long enough for a slow disk,
+/// short enough that quitting never hangs on it. The exchange itself has no deadline.
+pub const VERIFY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Where a downloaded bundle is unpacked, next to the app so the exchange is a rename.
 pub fn staging_dir(app: &Path) -> PathBuf {
-    sibling(app, ".update")
-}
-
-/// Where the running bundle waits during the swap.
-pub fn previous(app: &Path) -> PathBuf {
-    sibling(app, ".previous")
-}
-
-fn sibling(app: &Path, suffix: &str) -> PathBuf {
     let name = app
         .file_name()
         .map(|n| n.to_string_lossy())
         .unwrap_or_default();
-    app.with_file_name(format!(".{name}{suffix}"))
+    app.with_file_name(format!(".{name}.update"))
+}
+
+/// A folder only this user can enter, created fresh: never a leftover, never a symlink.
+fn private_dir(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let _ = fs::remove_dir_all(path);
+    if fs::symlink_metadata(path).is_ok() {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(path)
+        .map_err(|e| format!("Could not create {}: {e}", path.display()))?;
+    let created = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if !created.is_dir()
+        || created.file_type().is_symlink()
+        || created.uid() != unsafe { libc::getuid() }
+        || created.mode() & 0o077 != 0
+    {
+        let _ = fs::remove_dir_all(path);
+        return Err(format!("{} is not a private folder.", path.display()));
+    }
+    Ok(())
 }
 
 /// Unpacks a verified `.app.tar.gz` into the staging folder and returns the bundle inside it.
-/// The archive must hold exactly one top-level bundle named like the installed app.
+/// The archive must hold exactly one top-level directory (not a link) named like the app.
 pub fn unpack(archive: &[u8], app: &Path) -> Result<PathBuf, String> {
     let staging = staging_dir(app);
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    private_dir(&staging)?;
     let unpacked = (|| {
         let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
         tar.set_preserve_permissions(true);
@@ -41,7 +60,10 @@ pub fn unpack(archive: &[u8], app: &Path) -> Result<PathBuf, String> {
         let expected = app.file_name().ok_or("The app has no bundle name.")?;
         let mut entries = fs::read_dir(&staging).map_err(|e| e.to_string())?;
         match (entries.next(), entries.next()) {
-            (Some(Ok(entry)), None) if entry.file_name() == expected && entry.path().is_dir() => {
+            (Some(Ok(entry)), None)
+                if entry.file_name() == expected
+                    && entry.file_type().is_ok_and(|kind| kind.is_dir()) =>
+            {
                 Ok(entry.path())
             }
             _ => Err("The update archive does not contain the app.".to_string()),
@@ -53,59 +75,100 @@ pub fn unpack(archive: &[u8], app: &Path) -> Result<PathBuf, String> {
     unpacked
 }
 
-/// What a staged bundle must satisfy before it may replace the installed one, checked with the
-/// same tools macOS uses: a valid signature and, unless the installed app is ad-hoc signed (a
-/// development build), the same designated requirement, so permissions and Keychain items survive.
+/// Runs a command with a deadline. A command still running at the deadline is killed and counts
+/// as failed, so a stuck check can never hang the caller.
+fn run(mut command: Command, timeout: Duration) -> Result<std::process::Output, String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().map_err(|e| e.to_string()),
+            Ok(None) if started.elapsed() < timeout => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Checking the app's signature took too long.".into());
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+fn codesign(args: &[&str], bundle: &Path) -> Result<std::process::Output, String> {
+    let mut command = Command::new("/usr/bin/codesign");
+    command.args(args).arg(bundle);
+    run(command, VERIFY_TIMEOUT)
+}
+
+/// The designated requirement macOS evaluates for a bundle's permissions and Keychain access.
+#[cfg(target_os = "macos")]
+pub fn designated_requirement(bundle: &Path) -> Result<String, String> {
+    let output = codesign(&["--display", "--requirements", "-"], bundle)?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // An implicit requirement (ad hoc, or none declared) is printed as a `# ` comment.
+    text.lines()
+        .map(|line| line.strip_prefix("# ").unwrap_or(line))
+        .find_map(|line| line.strip_prefix("designated => "))
+        .map(str::to_string)
+        .ok_or_else(|| "The app has no designated requirement.".into())
+}
+
+/// What a bundle must satisfy to be installed over `installed`, checked the way macOS checks it:
+/// its signature is intact, it *satisfies* the installed app's designated requirement (evaluated
+/// with `codesign -R`, never compared as text, so a copied requirement string from an ad-hoc
+/// signature fails), and it carries the expected version. A debug build installed with an ad-hoc
+/// signature has no stable identity to keep and skips the requirement; release builds never do.
 #[cfg(target_os = "macos")]
 pub fn verify_bundle(bundle: &Path, installed: &Path, version: &str) -> Result<(), String> {
-    let verified = Command::new("/usr/bin/codesign")
-        .args(["--verify", "--deep", "--strict"])
-        .arg(bundle)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let verified = codesign(&["--verify", "--deep", "--strict"], bundle)?;
     if !verified.status.success() {
         return Err(format!(
             "The downloaded app is not correctly signed: {}",
             String::from_utf8_lossy(&verified.stderr).trim()
         ));
     }
-    let current = designated_requirement(installed)?;
-    if !current.starts_with("cdhash") && designated_requirement(bundle)? != current {
-        return Err(
-            "The downloaded app is signed with a different identity. Nothing was installed.".into(),
-        );
-    }
-    let plist = bundle.join("Contents/Info.plist");
-    let found = Command::new("/usr/bin/plutil")
+    let mut plutil = Command::new("/usr/bin/plutil");
+    plutil
         .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
-        .arg(&plist)
-        .output()
-        .map_err(|e| e.to_string())?;
+        .arg(bundle.join("Contents/Info.plist"));
+    let found = run(plutil, VERIFY_TIMEOUT)?;
     let found = String::from_utf8_lossy(&found.stdout).trim().to_string();
     if found != version {
         return Err(format!(
             "The downloaded app is version {found}, not {version}. Nothing was installed."
         ));
     }
+    let requirement = designated_requirement(installed)?;
+    let ad_hoc_development = cfg!(debug_assertions) && requirement.starts_with("cdhash");
+    if !ad_hoc_development {
+        let satisfied = codesign(
+            &[
+                "--verify",
+                "--deep",
+                "--strict",
+                &format!("-R={requirement}"),
+            ],
+            bundle,
+        )?;
+        if !satisfied.status.success() {
+            return Err(
+                "The downloaded app is signed with a different identity. Nothing was installed."
+                    .into(),
+            );
+        }
+    }
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn designated_requirement(bundle: &Path) -> Result<String, String> {
-    let output = Command::new("/usr/bin/codesign")
-        .args(["--display", "--requirements", "-"])
-        .arg(bundle)
-        .output()
-        .map_err(|e| e.to_string())?;
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    text.lines()
-        .find_map(|line| line.strip_prefix("designated => "))
-        .map(str::to_string)
-        .ok_or_else(|| "The app has no designated requirement.".into())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -113,55 +176,71 @@ pub fn verify_bundle(_bundle: &Path, _installed: &Path, _version: &str) -> Resul
     Err("App updates are supported on macOS.".into())
 }
 
-/// The moves of a swap, in order, for failure injection in tests.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
-    MoveAside,
-    MoveIn,
+/// Exchanges the two paths in one atomic operation on the same volume. Afterwards `a` holds what
+/// was at `b` and the other way round; on failure neither changed.
+#[cfg(target_os = "macos")]
+fn exchange(a: &Path, b: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let a = std::ffi::CString::new(a.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    let b = std::ffi::CString::new(b.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    if unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
-/// Replaces `app` with `staged`, which must be in the same folder. `before` runs ahead of each
-/// move and may fail it. On success the old bundle is gone and the staging folder removed; on any
-/// failure the old bundle is back in place and the error says so.
+#[cfg(not(target_os = "macos"))]
+fn exchange(_a: &Path, _b: &Path) -> io::Result<()> {
+    Err(io::Error::other("atomic exchange is supported on macOS"))
+}
+
+/// The steps of an install, in order, for failure injection in tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// The atomic exchange of the two bundles.
+    Exchange,
+    /// Verification of the app at its final path, before the old one is deleted.
+    Confirm,
+}
+
+/// Replaces `app` with `staged`, which must be in the staging folder next to it. `confirm` checks
+/// the app at its final path after the exchange; if it fails, the exchange is undone and the
+/// staged bundle removed. `before` runs ahead of each step and may fail it (tests). The folder
+/// holds a complete app at every instant.
 pub fn swap(
     app: &Path,
     staged: &Path,
+    confirm: &dyn Fn(&Path) -> Result<(), String>,
     before: &mut dyn FnMut(Step) -> io::Result<()>,
 ) -> Result<(), String> {
-    let previous = previous(app);
-    if previous.exists() {
-        fs::remove_dir_all(&previous)
-            .map_err(|e| format!("Could not clear {}: {e}", previous.display()))?;
-    }
-    before(Step::MoveAside)
-        .and_then(|()| fs::rename(app, &previous))
-        .map_err(|e| format!("Could not move the current app aside: {e}"))?;
-    if let Err(error) = before(Step::MoveIn).and_then(|()| fs::rename(staged, app)) {
-        return match fs::rename(&previous, app) {
-            Ok(()) => Err(format!("Could not move the new app into place: {error}")),
-            Err(restore) => Err(format!(
-                "Could not move the new app into place ({error}), and the previous copy could not be put back ({restore}); it is at {}",
-                previous.display()
+    before(Step::Exchange)
+        .and_then(|()| exchange(staged, app))
+        .map_err(|e| format!("Could not exchange the app with the new one: {e}"))?;
+    // From here the new app is installed and the old one waits at the staged path.
+    let confirmed = before(Step::Confirm)
+        .map_err(|e| e.to_string())
+        .and_then(|()| confirm(app));
+    if let Err(error) = confirmed {
+        return match exchange(staged, app) {
+            Ok(()) => {
+                let _ = fs::remove_dir_all(staging_dir(app));
+                Err(format!("The new app failed its final check: {error}"))
+            }
+            Err(undo) => Err(format!(
+                "The new app failed its final check ({error}) and the previous one could not be put back ({undo}); it is at {}",
+                staged.display()
             )),
         };
     }
-    let _ = fs::remove_dir_all(&previous);
     let _ = fs::remove_dir_all(staging_dir(app));
     let _ = Command::new("/usr/bin/touch").arg(app).status();
     Ok(())
 }
 
-/// Cleans up after an interrupted or finished swap: an app that was moved aside but never
-/// replaced comes back, a leftover previous copy or staging folder goes away.
+/// Removes what an earlier run left next to the app: a staging folder, holding either a bundle
+/// that was never installed or the old one after an exchange whose cleanup was interrupted.
 pub fn recover(app: &Path) {
-    let previous = previous(app);
-    if previous.is_dir() {
-        if app.exists() {
-            let _ = fs::remove_dir_all(&previous);
-        } else {
-            let _ = fs::rename(&previous, app);
-        }
-    }
     let _ = fs::remove_dir_all(staging_dir(app));
 }
 
@@ -226,87 +305,210 @@ mod tests {
         builder.into_inner().unwrap().finish().unwrap()
     }
 
+    fn accept(_: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
     #[test]
-    fn a_swap_replaces_the_app_and_leaves_nothing_else() {
+    fn an_install_exchanges_the_bundles_and_leaves_only_the_new_app() {
         let folder = Folder::new();
         let app = folder.bundle("OpenKlack.app", "old");
         let staged = unpack(&archive("OpenKlack.app", "new"), &app).unwrap();
         assert_eq!(staged, staging_dir(&app).join("OpenKlack.app"));
-        swap(&app, &staged, &mut |_| Ok(())).unwrap();
+        let mut seen = Vec::new();
+        swap(&app, &staged, &accept, &mut |step| {
+            seen.push(step);
+            // At confirmation time the new app is already at its final path and the old one
+            // still exists at the staged path: nothing has been deleted yet.
+            if step == Step::Confirm {
+                assert_eq!(marker(&app), "new");
+                assert_eq!(marker(&staged), "old");
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, vec![Step::Exchange, Step::Confirm]);
         assert_eq!(marker(&app), "new");
         only_app(&folder.0, &app);
     }
 
     #[test]
-    fn a_failed_second_move_puts_the_old_app_back() {
+    fn a_failed_exchange_changes_nothing() {
         let folder = Folder::new();
         let app = folder.bundle("OpenKlack.app", "old");
         let staged = unpack(&archive("OpenKlack.app", "new"), &app).unwrap();
-        let error = swap(&app, &staged, &mut |step| match step {
-            Step::MoveIn => Err(io::Error::other("disk full")),
-            _ => Ok(()),
-        })
-        .unwrap_err();
-        assert!(error.contains("disk full"), "{error}");
-        assert_eq!(marker(&app), "old");
-        assert!(!previous(&app).exists());
-        // The staged bundle is untouched, so the next attempt can use it.
-        assert_eq!(marker(&staged), "new");
-    }
-
-    #[test]
-    fn a_failed_first_move_changes_nothing() {
-        let folder = Folder::new();
-        let app = folder.bundle("OpenKlack.app", "old");
-        let staged = unpack(&archive("OpenKlack.app", "new"), &app).unwrap();
-        let error = swap(&app, &staged, &mut |step| match step {
-            Step::MoveAside => Err(io::Error::other("busy")),
+        let error = swap(&app, &staged, &accept, &mut |step| match step {
+            Step::Exchange => Err(io::Error::other("busy")),
             _ => Ok(()),
         })
         .unwrap_err();
         assert!(error.contains("busy"), "{error}");
         assert_eq!(marker(&app), "old");
-        assert!(!previous(&app).exists());
+        assert_eq!(marker(&staged), "new");
+        // A staged path that isn't there fails the same way, with the app untouched.
+        let error = swap(&app, &folder.0.join("missing"), &accept, &mut |_| Ok(())).unwrap_err();
+        assert!(error.contains("exchange"), "{error}");
+        assert_eq!(marker(&app), "old");
     }
 
     #[test]
-    fn an_interrupted_swap_is_recovered_at_the_next_launch() {
+    fn a_new_app_that_fails_its_final_check_is_exchanged_back() {
         let folder = Folder::new();
         let app = folder.bundle("OpenKlack.app", "old");
         let staged = unpack(&archive("OpenKlack.app", "new"), &app).unwrap();
-        // The process died right after the first move.
-        fs::rename(&app, previous(&app)).unwrap();
-        assert!(!app.exists());
-        recover(&app);
+        let reject = |path: &Path| {
+            assert_eq!(marker(path), "new");
+            Err("tampered".to_string())
+        };
+        let error = swap(&app, &staged, &reject, &mut |_| Ok(())).unwrap_err();
+        assert!(error.contains("tampered"), "{error}");
         assert_eq!(marker(&app), "old");
         only_app(&folder.0, &app);
-        assert!(!staged.exists());
+    }
 
-        // The process died right after the second move, before cleaning up.
+    #[test]
+    fn an_install_interrupted_after_the_exchange_is_cleaned_up_at_the_next_launch() {
+        let folder = Folder::new();
+        let app = folder.bundle("OpenKlack.app", "old");
         let staged = unpack(&archive("OpenKlack.app", "new"), &app).unwrap();
-        fs::rename(&app, previous(&app)).unwrap();
-        fs::rename(&staged, &app).unwrap();
+        // The process died right after the exchange: the new app is installed, the old bundle
+        // is still in the staging folder. Whatever happens, the app path is never empty.
+        exchange(&staged, &app).unwrap();
+        assert_eq!(marker(&app), "new");
+        assert_eq!(marker(&staged), "old");
+        recover(&app);
+        assert_eq!(marker(&app), "new");
+        only_app(&folder.0, &app);
+
+        // The process died after unpacking, before any exchange.
+        let staged = unpack(&archive("OpenKlack.app", "newer"), &app).unwrap();
+        assert!(staged.exists());
         recover(&app);
         assert_eq!(marker(&app), "new");
         only_app(&folder.0, &app);
     }
 
     #[test]
-    fn only_an_archive_holding_exactly_the_app_is_unpacked() {
+    fn the_staging_folder_is_private_and_holds_exactly_the_app() {
+        use std::os::unix::fs::PermissionsExt;
         let folder = Folder::new();
         let app = folder.bundle("OpenKlack.app", "old");
+        let staged = unpack(&archive("OpenKlack.app", "new"), &app).unwrap();
+        let staging = staging_dir(&app);
+        assert_eq!(
+            fs::metadata(&staging).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(marker(&staged), "new");
+        // A leftover, even a symlink, is replaced by a fresh private folder.
+        fs::remove_dir_all(&staging).unwrap();
+        std::os::unix::fs::symlink(&folder.0, &staging).unwrap();
+        unpack(&archive("OpenKlack.app", "new"), &app).unwrap();
+        assert!(
+            !fs::symlink_metadata(&staging)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        // Wrong or unreadable archives leave nothing behind.
         assert!(unpack(&archive("Other.app", "new"), &app).is_err());
         assert!(unpack(b"not an archive", &app).is_err());
-        assert!(!staging_dir(&app).exists());
+        assert!(!staging.exists());
         assert_eq!(marker(&app), "old");
+    }
+
+    #[test]
+    fn slow_checks_are_cut_off() {
+        let mut sleep = Command::new("/bin/sleep");
+        sleep.arg("30");
+        let started = Instant::now();
+        assert!(run(sleep, Duration::from_millis(200)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// Bundles signed ad hoc with `codesign -s -`; no certificate or keychain involved.
+    #[cfg(target_os = "macos")]
+    fn signed_bundle(
+        folder: &Folder,
+        name: &str,
+        version: &str,
+        requirement: Option<&str>,
+    ) -> PathBuf {
+        let bundle = folder.0.join(name);
+        fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+        fs::copy(
+            "/usr/bin/true",
+            bundle.join("Contents/MacOS/openklack-desktop"),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("Contents/Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.openklack.desktop</string><key>CFBundleExecutable</key><string>openklack-desktop</string><key>CFBundleShortVersionString</key><string>{version}</string></dict></plist>"#
+            ),
+        )
+        .unwrap();
+        let mut command = Command::new("/usr/bin/codesign");
+        command.args(["--force", "--sign", "-"]);
+        if let Some(requirement) = requirement {
+            command.arg(format!("-r=designated => {requirement}"));
+        }
+        assert!(command.arg(&bundle).status().unwrap().success());
+        bundle
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn an_unsigned_bundle_never_verifies() {
+    fn a_copied_requirement_string_does_not_pass_as_the_signer() {
         let folder = Folder::new();
-        let app = folder.bundle("OpenKlack.app", "old");
-        let staged = unpack(&archive("OpenKlack.app", "new"), &app).unwrap();
-        assert!(verify_bundle(&staged, &app, "0.1.0").is_err());
+        // The "installed" app declares a certificate it doesn't have (an ad-hoc signature with
+        // an explicit requirement), exactly as a forger would copy an official one.
+        let claimed = r#"identifier "com.openklack.desktop" and certificate leaf = H"1111111111111111111111111111111111111111""#;
+        let installed = signed_bundle(&folder, "OpenKlack.app", "0.1.0", Some(claimed));
+        assert_eq!(designated_requirement(&installed).unwrap(), claimed);
+        let forged = signed_bundle(&folder, "Forged.app", "0.2.0", Some(claimed));
+        // Text matches, signature is intact, version matches — and it must still be refused,
+        // because it does not satisfy the requirement.
+        assert_eq!(designated_requirement(&forged).unwrap(), claimed);
+        assert!(
+            codesign(&["--verify", "--deep", "--strict"], &forged)
+                .unwrap()
+                .status
+                .success()
+        );
+        let error = verify_bundle(&forged, &installed, "0.2.0").unwrap_err();
+        assert!(error.contains("different identity"), "{error}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn signature_version_and_identity_are_all_required() {
+        let folder = Folder::new();
+        let installed = signed_bundle(&folder, "OpenKlack.app", "0.1.0", None);
+        assert!(
+            designated_requirement(&installed)
+                .unwrap()
+                .starts_with("cdhash")
+        );
+        let unsigned = folder.bundle("Unsigned.app", "new");
+        assert!(
+            verify_bundle(&unsigned, &installed, "0.2.0")
+                .unwrap_err()
+                .contains("not correctly signed")
+        );
+        let next = signed_bundle(&folder, "Next.app", "0.2.0", None);
+        assert!(
+            verify_bundle(&next, &installed, "0.3.0")
+                .unwrap_err()
+                .contains("version 0.2.0")
+        );
+        // Two ad-hoc signatures have different identities: only a debug build, which has no
+        // identity to keep, accepts that; a release build never does.
+        let result = verify_bundle(&next, &installed, "0.2.0");
+        if cfg!(debug_assertions) {
+            result.unwrap();
+        } else {
+            assert!(result.unwrap_err().contains("different identity"));
+        }
     }
 }
