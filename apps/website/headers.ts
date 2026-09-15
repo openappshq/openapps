@@ -20,6 +20,9 @@ export function siteHeaders(sitePages: SitePage[] = pages): string {
       "Permissions-Policy: camera=(), geolocation=(), microphone=(), payment=(), usb=()",
     ],
     ["/assets/*", "Cache-Control: public, max-age=31536000, immutable"],
+    // Update feeds (RELEASES.md): installed apps poll these, so a new release
+    // must show up within minutes and a pulled one must disappear as fast.
+    ["/updates/*", "Cache-Control: public, max-age=300"],
     ...sitePages
       .filter((page) => page.noindex)
       .map((page) => [

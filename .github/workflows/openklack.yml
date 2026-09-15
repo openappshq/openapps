@@ -1,23 +1,49 @@
 name: OpenKlack desktop
 
+# Checks on every change; a signed universal release when an
+# `openklack-v<MAJOR.MINOR.PATCH>` tag is pushed (or on manual dispatch, which
+# publishes only when asked). The release follows RELEASES.md: build, sign
+# with the stable OpenApps HQ Release certificate, verify the pinned
+# designated requirement, package and update-sign, publish the GitHub
+# Release, commit the signed feed to main, verify it live, bump the cask.
+# Setup and secrets: docs/development.md, "Releases and updates".
 on:
   pull_request:
   push:
     branches: [main]
+    tags: [openklack-v*]
+    # The release bot's feed commit deploys the website; it does not need the app checks.
+    paths-ignore:
+      - apps/website/public/updates/**
   workflow_dispatch:
     inputs:
-      notarize:
-        description: Build a signed, notarized release candidate (does not publish)
+      version:
+        description: Version to build as MAJOR.MINOR.PATCH (ignored when running from an openklack-v* tag)
+        type: string
+        default: ""
+      publish:
+        description: Publish the release (creates the openklack-v<version> tag at this commit if it does not exist), then the feed and the cask
+        type: boolean
+        default: false
+      allow_older:
+        description: Allow publishing a version lower than the newest published release (a back-port)
         type: boolean
         default: false
 
 permissions:
   contents: read
 
+env:
+  PNPM_VERSION: 12.4.1
+  RUST_TOOLCHAIN: 1.97.1
+  # The release tag this run is about: the pushed tag, or openklack-v<input>
+  # on a manual run from a branch. Build and publish serialise per tag.
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openklack-v{0}', inputs.version) || github.ref_name }}
+
 jobs:
   checks:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
@@ -25,10 +51,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-      - run: npm install --global pnpm@12.4.1
+      - run: npm install --global "pnpm@$PNPM_VERSION"
       - run: pnpm install --frozen-lockfile
-      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
-      - run: rustup default 1.97.1
+      - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+      - run: rustup default "$RUST_TOOLCHAIN"
       - run: pnpm exec vp lint
       - run: pnpm test
       - run: pnpm design:check
@@ -36,7 +62,11 @@ jobs:
       - run: cargo fmt --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml -- --check
       - run: cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml
       - run: cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - name: Test and lint the licensed build flavour
+      - name: Test and lint the updater flavour
+        run: |
+          cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features updater
+          cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features updater -- -D warnings
+      - name: Test and lint the licensed build flavours
         # Placeholder configuration: the shared test cases run against a fake Dodo client and a fake trial registry.
         env:
           OPENKLACK_LICENSE_ENV: test
@@ -46,6 +76,12 @@ jobs:
         run: |
           cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features licensing
           cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features licensing -- -D warnings
+          cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features licensing,updater
+          cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features licensing,updater -- -D warnings
+      - name: Lint the release scripts
+        run: |
+          brew install shellcheck >/dev/null
+          shellcheck scripts/release/*.sh apps/openklack-desktop/release/*.sh packaging/homebrew/bump-cask.sh
       - run: pnpm --filter @openapps/openklack-desktop tauri build --debug --bundles app
         env:
           APPLE_SIGNING_IDENTITY: "-"
@@ -57,114 +93,276 @@ jobs:
           path: OpenKlack-development.zip
           retention-days: 7
 
-  release-candidate:
-    if: github.event_name == 'workflow_dispatch' && inputs.notarize
+  # Builds, signs, verifies and packages the release. Read-only token: it
+  # never touches tags, releases, the feed or the tap.
+  release:
+    if: startsWith(github.ref, 'refs/tags/openklack-v') || github.event_name == 'workflow_dispatch'
     needs: checks
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 90
     environment: openklack-release
+    concurrency:
+      group: openklack-build-${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openklack-v{0}', inputs.version) || github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+      commit: ${{ steps.version.outputs.commit }}
+      build: ${{ steps.version.outputs.build }}
+      # The digest of the zip as verified here, and the id of the artifact it
+      # was uploaded as: later jobs trust these, not what they download.
+      sha256: ${{ steps.package.outputs.sha256 }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/openklack-desktop
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          # Full history: the build number is the commit count on HEAD.
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-      - run: npm install --global pnpm@12.4.1
+      - run: npm install --global "pnpm@$PNPM_VERSION"
       - run: pnpm install --frozen-lockfile
-      - run: rustup toolchain install 1.97.1 --profile minimal
-      - run: rustup default 1.97.1
-      - name: Configure signed updates
+        working-directory: .
+      - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin,x86_64-apple-darwin
+      - run: rustup default "$RUST_TOOLCHAIN"
+      - name: Resolve the release version
+        id: version
         env:
-          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
         run: |
-          node --input-type=module <<'JS'
-          import { writeFileSync } from 'node:fs';
-          import { join } from 'node:path';
-          const { TAURI_UPDATER_PUBLIC_KEY: pubkey, GITHUB_SERVER_URL, GITHUB_REPOSITORY, RUNNER_TEMP } = process.env;
-          if (!pubkey?.trim()) throw new Error('Configure TAURI_UPDATER_PUBLIC_KEY in openklack-release.');
-          const endpoint = new URL(`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/openklack-latest/latest.json`);
-          if (endpoint.protocol !== 'https:') throw new Error('Updates require HTTPS.');
-          writeFileSync(join(RUNNER_TEMP, 'openklack-release.json'), JSON.stringify({
-            bundle: { createUpdaterArtifacts: true },
-            plugins: { updater: { pubkey: pubkey.trim(), endpoints: [endpoint.href] } }
-          }));
-          JS
-      - name: Check licensing configuration
-        # Official builds compile the Dodo live product ID and checkout link in; the build fails without them.
-        # The trial registry defaults to https://openapps.space, and a live build refuses anything but https.
+          # A tag push always publishes; a manual run publishes only when asked.
+          if [ "$GITHUB_EVENT_NAME" = push ]; then publish=true; else publish="${INPUT_PUBLISH:-false}"; fi
+          case "$GITHUB_REF" in
+            refs/tags/openklack-v*)
+              version="${GITHUB_REF#refs/tags/openklack-v}"
+              if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$version" ]; then
+                echo "This run is on tag $GITHUB_REF_NAME; leave the version input empty or set it to $version."; exit 1
+              fi ;;
+            *)
+              version="$INPUT_VERSION"
+              if [ -z "$version" ]; then echo "Give a version, or run from an openklack-v* tag."; exit 1; fi ;;
+          esac
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Version must be MAJOR.MINOR.PATCH (got '$version')."; exit 1
+          fi
+          if [ "openklack-v$version" != "$RELEASE_TAG" ]; then
+            echo "Internal error: resolved openklack-v$version but this run is serialised as $RELEASE_TAG."; exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=openklack-v$version"
+            echo "publish=$publish"
+            echo "commit=$(git rev-parse HEAD)"
+            echo "build=$(git rev-list --count HEAD)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building OpenKlack $version from $(git rev-parse HEAD) (publish: $publish)"
+      - name: Check release configuration
+        # Everything the release needs is checked up front, so a missing
+        # secret fails here with its name and never produces a signed build
+        # that cannot be published. Only public material is committed: the
+        # pinned requirement and update public key must have been generated.
         env:
+          RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
+          RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          PUBLISH: ${{ steps.version.outputs.publish }}
           OPENKLACK_DODO_PAID_PRODUCT_ID: ${{ vars.OPENKLACK_DODO_PAID_PRODUCT_ID }}
           OPENKLACK_BUY_URL: ${{ vars.OPENKLACK_BUY_URL }}
         run: |
-          for name in OPENKLACK_DODO_PAID_PRODUCT_ID OPENKLACK_BUY_URL; do
-            if [ -z "${!name}" ]; then echo "Configure $name in the openklack-release environment."; exit 1; fi
+          missing=0
+          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD TAURI_SIGNING_PRIVATE_KEY; do
+            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openklack-release environment."; missing=1; fi
           done
-          case "$OPENKLACK_DODO_PAID_PRODUCT_ID" in pdt_*) ;; *) echo "OPENKLACK_DODO_PAID_PRODUCT_ID must be a Dodo product ID."; exit 1 ;; esac
-      - name: Import release certificate
+          if [ "$PUBLISH" = true ]; then
+            for name in RULESET_READ_TOKEN FEED_COMMIT_TOKEN HOMEBREW_TAP_TOKEN; do
+              if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openklack-release environment; publishing needs it."; missing=1; fi
+            done
+          fi
+          for name in OPENKLACK_DODO_PAID_PRODUCT_ID OPENKLACK_BUY_URL; do
+            if [ -z "${!name}" ]; then echo "::error::Variable $name is not set in the openklack-release environment."; missing=1; fi
+          done
+          for file in release/designated-requirement.txt release/updater-public-key.txt; do
+            if grep -q '^NOT GENERATED' "$file"; then echo "::error::$file has not been generated yet (RELEASES.md)."; missing=1; fi
+          done
+          [ "$missing" = 0 ] || exit 1
+          case "$OPENKLACK_DODO_PAID_PRODUCT_ID" in pdt_*) ;; *) echo "::error::OPENKLACK_DODO_PAID_PRODUCT_ID must be a Dodo product ID (pdt_…)."; exit 1 ;; esac
+          case "$OPENKLACK_BUY_URL" in https://*) ;; *) echo "::error::OPENKLACK_BUY_URL must be an https:// link."; exit 1 ;; esac
+      - name: Build, sign and verify the universal app
+        # The identity lives in a temporary keychain for exactly this step;
+        # with-signing-keychain.sh removes it before the step ends and fails
+        # if it can still be found. Verification of the designated requirement
+        # happens inside build-signed.sh, before that removal.
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          test -n "$APPLE_CERTIFICATE"
-          test -n "$KEYCHAIN_PASSWORD"
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/openklack.p12"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/openklack.keychain-db"
-          security set-keychain-settings -lut 3600 "$RUNNER_TEMP/openklack.keychain-db"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/openklack.keychain-db"
-          security import "$RUNNER_TEMP/openklack.p12" -k "$RUNNER_TEMP/openklack.keychain-db" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/openklack.keychain-db"
-          security list-keychains -d user -s "$RUNNER_TEMP/openklack.keychain-db"
-      - name: Build and notarize
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
+          RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUNDLE_DIR: src-tauri/target/universal-apple-darwin/release/bundle/macos
           OPENKLACK_LICENSE_ENV: live
           OPENKLACK_DODO_PAID_PRODUCT_ID: ${{ vars.OPENKLACK_DODO_PAID_PRODUCT_ID }}
           OPENKLACK_BUY_URL: ${{ vars.OPENKLACK_BUY_URL }}
+          OPENKLACK_SUPPORT_URL: ${{ vars.OPENKLACK_SUPPORT_URL }}
+        run: ../../scripts/release/with-signing-keychain.sh release/build-signed.sh "$VERSION" --target universal-apple-darwin
+      - name: Confirm the signing identity is gone
         run: |
-          case "$APPLE_SIGNING_IDENTITY" in 'Developer ID Application:'*) ;; *) exit 1 ;; esac
-          test -n "$APPLE_ID"
-          test -n "$APPLE_PASSWORD"
-          test -n "$APPLE_TEAM_ID"
-          test -n "$TAURI_SIGNING_PRIVATE_KEY"
-          pnpm --filter @openapps/openklack-desktop tauri build --config "$RUNNER_TEMP/openklack-release.json" --bundles app,dmg --features licensing
-          codesign --verify --deep --strict apps/openklack-desktop/src-tauri/target/release/bundle/macos/OpenKlack.app
-          xcrun stapler validate apps/openklack-desktop/src-tauri/target/release/bundle/macos/OpenKlack.app
-          spctl --assess --type execute apps/openklack-desktop/src-tauri/target/release/bundle/macos/OpenKlack.app
-      - name: Prepare update manifest
+          if security find-identity -p codesigning 2>/dev/null | grep -q 'OpenApps HQ Release'; then
+            echo "::error::The release signing identity is still available after the build."; exit 1
+          fi
+          lipo -archs "src-tauri/target/universal-apple-darwin/release/bundle/macos/OpenKlack.app/Contents/MacOS/openklack-desktop" | tee /dev/stderr | grep -q 'x86_64 arm64'
+      - name: Package and sign the update
+        id: package
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
         run: |
-          node --input-type=module <<'JS'
-          import { readFileSync, statSync, writeFileSync } from 'node:fs';
-          const { version } = JSON.parse(readFileSync('apps/openklack-desktop/src-tauri/tauri.conf.json', 'utf8'));
-          const directory = 'apps/openklack-desktop/src-tauri/target/release/bundle/macos';
-          const filename = 'OpenKlack.app.tar.gz';
-          const bytes = statSync(`${directory}/${filename}`).size;
-          if (!bytes || bytes > 128 * 1024 * 1024) throw new Error('Update archive exceeds the app download limit or is empty.');
-          const signature = readFileSync(`${directory}/${filename}.sig`, 'utf8').trim();
-          if (!signature) throw new Error('Missing update signature.');
-          const url = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/releases/download/openklack-v${version}/${filename}`;
-          writeFileSync(`${directory}/latest.json`, JSON.stringify({
-            version, pub_date: new Date().toISOString(),
-            platforms: { 'darwin-aarch64': { url, signature } }
-          }, null, 2) + '\n');
-          JS
+          release/package.sh src-tauri/target/universal-apple-darwin/release/bundle/macos "$VERSION" dist
+          release/write-feed.sh "$VERSION" dist dist/feed
+          echo "sha256=$(cut -d' ' -f1 "dist/OpenKlack-$VERSION.zip.sha256")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
+        id: upload
         with:
-          name: OpenKlack-release-candidate-apple-silicon
-          path: |
-            apps/openklack-desktop/src-tauri/target/release/bundle/dmg/*.dmg
-            apps/openklack-desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
-            apps/openklack-desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
-            apps/openklack-desktop/src-tauri/target/release/bundle/macos/latest.json
+          name: OpenKlack-${{ steps.version.outputs.version }}-signed
+          path: apps/openklack-desktop/dist
           if-no-files-found: error
-      - name: Remove temporary signing material
-        if: always()
+
+  # Publishes the verified files. The only job with a token that can write
+  # releases; it runs no build, only release/publish-release.sh, which
+  # requires the openklack-v* tag ruleset to be active with no bypass actors
+  # and refuses unless the tag names exactly the commit the files were built
+  # from and the zip has exactly the digest the release job verified.
+  publish:
+    if: needs.release.outputs.publish == 'true'
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: openklack-release
+    concurrency:
+      group: openklack-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          # By id, not by name: exactly the artifact the release job uploaded.
+          artifact-ids: ${{ needs.release.outputs.artifact_id }}
+          path: apps/openklack-desktop/dist
+          merge-multiple: true
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          BUILT_COMMIT: ${{ needs.release.outputs.commit }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+          CREATE_TAG: ${{ github.event_name == 'workflow_dispatch' }}
+          ALLOW_OLDER: ${{ inputs.allow_older == true }}
+          DIST: apps/openklack-desktop/dist
+        run: apps/openklack-desktop/release/publish-release.sh
+
+  # Once the release is public: commit the signed feed to main (the website
+  # deploy serves it), verify the live feed and zip, then bump the cask.
+  # No build runs here and no signing material is present.
+  feed:
+    needs: [release, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: openklack-release
+    concurrency:
+      group: openklack-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.release.outputs.artifact_id }}
+          path: apps/openklack-desktop/dist
+          merge-multiple: true
+      - name: Check the feed against the published release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
         run: |
-          security delete-keychain "$RUNNER_TEMP/openklack.keychain-db" || true
-          rm -f "$RUNNER_TEMP/openklack.p12"
+          cd apps/openklack-desktop
+          node release/verify-update-signature.mjs dist/feed/latest.json dist/feed/latest.json.sig
+          node --input-type=module - <<'JS'
+          import { readFileSync } from "node:fs";
+          const feed = JSON.parse(readFileSync("dist/feed/latest.json", "utf8"));
+          const { VERSION, EXPECTED_SHA256 } = process.env;
+          if (feed.version !== VERSION || feed.sha256 !== EXPECTED_SHA256) {
+            throw new Error(`dist/feed/latest.json names ${feed.version} ${feed.sha256}, not ${VERSION} ${EXPECTED_SHA256}`);
+          }
+          JS
+      - name: Commit the feed to main
+        env:
+          FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p apps/website/public/updates/openklack
+          cp apps/openklack-desktop/dist/feed/latest.json apps/openklack-desktop/dist/feed/latest.json.sig apps/website/public/updates/openklack/
+          git config user.name "openapps-release"
+          git config user.email "release@openapps.space"
+          git add apps/website/public/updates/openklack/latest.json apps/website/public/updates/openklack/latest.json.sig
+          if git diff --cached --quiet; then echo "The feed already names $VERSION."; exit 0; fi
+          git commit -m "Point OpenKlack's update feed at $VERSION"
+          # The token is passed per command and never written to .git/config.
+          for _ in 1 2 3; do
+            if git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" push "https://github.com/$REPO.git" HEAD:main; then exit 0; fi
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" pull --rebase "https://github.com/$REPO.git" main
+          done
+          echo "::error::Could not push the feed to main after 3 attempts."; exit 1
+      - name: Verify the live feed and download
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+          # The website deploys from main after the commit above.
+          WAIT_SECONDS: "1500"
+        run: apps/openklack-desktop/release/verify-live.sh "$VERSION" "$EXPECTED_SHA256"
+      - name: Bump the cask
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=$auth" clone --depth 1 https://github.com/openappshq/homebrew-tap.git tap
+          mkdir -p tap/Casks
+          if [ ! -f tap/Casks/openklack.rb ]; then cp packaging/homebrew/Casks/openklack.rb tap/Casks/openklack.rb; fi
+          packaging/homebrew/bump-cask.sh tap/Casks/openklack.rb "$VERSION" "$SHA256"
+          cd tap
+          git config user.name "openapps-release"
+          git config user.email "release@openapps.space"
+          git add Casks/openklack.rb
+          if git diff --cached --quiet; then echo "The cask already names $VERSION."; exit 0; fi
+          git commit -m "openklack $VERSION"
+          git -c "http.https://github.com/.extraheader=$auth" push origin HEAD

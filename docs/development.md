@@ -76,9 +76,9 @@ Start with the [design checklist](../design/system.md#adding-a-product) so the n
 5. Restart `pnpm dev`, or run `pnpm build`.
    The app card, page metadata, static routes, and asset copies come from the catalog automatically.
 
-New desktop apps can have their own native stack and release workflow; OpenReaction's is [`openreaction.yml`](../.github/workflows/openreaction.yml), documented in [its release guide](../apps/openreaction/RELEASING.md).
-Do not copy OpenKlack's signing identifier, preference storage, or keyboard dependencies into an unrelated app.
-Use app-specific release tags and updater channels so one app's release cannot become another app's update.
+New desktop apps can have their own native stack and release workflow, but every app follows [RELEASES.md](../RELEASES.md); OpenReaction's workflow is [`openreaction.yml`](../.github/workflows/openreaction.yml), documented in [its release guide](../apps/openreaction/RELEASING.md).
+Do not copy OpenKlack's bundle identifier, preference storage, or keyboard dependencies into an unrelated app.
+Use app-specific release tags, update keys and feeds so one app's release cannot become another app's update.
 
 ### Shared styling
 
@@ -160,8 +160,8 @@ pnpm openklack:build
 
 Global keyboard sound requires macOS Input Monitoring permission for OpenKlack.
 The home screen offers sound selection, starred favorites, one volume slider, and optional per-key customization. Settings contain muted apps, microphone pause, launch at login, appearance, file imports/exports, and local diagnostics. There is no desktop typing test or user-facing preset editor.
-App updates are checked manually and require a separate download-and-install action.
-Builds without a configured release service explain that under Settings → About & help.
+App updates follow [RELEASES.md](../RELEASES.md): official builds check a signed feed, download in the background and install on the next quit or restart; both automatic settings are off by default, and `brew upgrade --cask openklack` is the main update path (see [Releases and updates](#releases-and-updates)).
+Builds from source say under Settings → About & help that they don't include app updates.
 The native engine plays predecoded audio independently of the settings window.
 Closing settings destroys its WebView; typing sound continues in the menu bar.
 
@@ -199,15 +199,11 @@ Running debug, QA, and release bundles directly from the project lets macOS inde
 Archive unused bundles as ZIP files and unregister those bundle paths with `lsregister -u` to remove duplicate launcher entries.
 App bundles do not contain your saved sound preferences; those remain in Application Support.
 
-For a local release app and DMG without requiring Finder automation:
+For a local release app without a DMG (the release ships a zip, not a disk image):
 
 ```sh
-CI=true APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openapps/openklack-desktop tauri build --bundles app,dmg
+APPLE_SIGNING_IDENTITY='Your signing identity' pnpm --filter @openapps/openklack-desktop tauri build --bundles app
 ```
-
-Tauri's `CI=true` bundling mode skips Finder decoration while retaining the app and Applications link in the disk image.
-The `--ci` CLI flag alone does not select that behavior; the bundler checks the environment variable.
-See the [Tauri DMG bundler](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-bundler/src/bundle/macos/dmg/mod.rs).
 
 ### Licensed builds
 
@@ -242,23 +238,76 @@ Only a Mac with a license record calls Dodo; daily checks are scheduled on the l
 A paid license's time is anchored to Dodo's `Date` header at the last successful check; a clock set back more than an hour before the latest moment seen asks it to check again until Dodo answers.
 `openklack://activate?key=…` (registered in `Info.plist`) opens Settings with the key pre-filled; the user confirms before anything is sent. Other parameters are ignored. Source builds only open Settings.
 
-Public distribution requires Developer ID signing and notarization.
-The [desktop workflow](../.github/workflows/openklack.yml) runs checks on an Apple Silicon Mac runner and can produce a signed release candidate through manual dispatch.
-It does not publish a GitHub release or deploy the website.
-Configure the `openklack-release` environment with `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID` before running the notarization job.
-Use [Tauri's signing instructions](https://v2.tauri.app/distribute/sign/macos/) for the certificate and notarization setup.
-The workflow uses GitHub's documented [macOS ARM64 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+### Releases and updates
 
-The same environment needs the `TAURI_UPDATER_PUBLIC_KEY` variable and `TAURI_SIGNING_PRIVATE_KEY` secret, plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key is encrypted.
-Use a matching key pair generated with the [Tauri updater signing instructions](https://v2.tauri.app/plugin/updater/#signing-updates); these keys are separate from the Apple signing certificate.
-Keep the private key outside the repository and retain it for future releases.
-The workflow embeds the app-specific `/releases/download/openklack-latest/latest.json` HTTPS endpoint and produces the DMG, signed `.app.tar.gz`, `.sig`, and `latest.json` as candidate artifacts.
-After verification, publish those exact files together on a stable GitHub release tagged `openklack-v<app-version>`; the manifest points to that tag and its archive filename.
-After approving a release, also attach its `latest.json` to the `openklack-latest` channel release.
-Other apps must use their own channel tags.
-Publishing is a separate action and has not been performed from this checkout.
-The app verifies update signatures before installation, permits HTTPS only, and limits archives to 128 MiB.
-Test an actual upgrade on a separate Mac before offering the release to installed users.
+Releases follow the shared [release contract](../RELEASES.md): a Homebrew cask (`brew install --cask openappshq/tap/openklack`, into `~/Applications`), a zip on the GitHub Release `openklack-vX.Y.Z`, a stable self-signed certificate instead of Developer ID and notarization, and a signed update feed at `https://openapps.space/updates/openklack/latest.json`.
+The [desktop workflow](../.github/workflows/openklack.yml) runs the checks on every change and, on a pushed `openklack-vX.Y.Z` tag (or a manual run with a version and `publish`), the release: build → sign and verify → package → publish → feed → verify live → cask.
+The scripts it runs are the ones you can run locally:
+
+| Script | Does |
+| --- | --- |
+| `scripts/release/create-signing-certificate.sh <dir>` | One-time: creates the `OpenApps HQ Release` certificate shared by every app, as a `.p12` plus its password (never committed) |
+| `scripts/release/designated-requirement.sh <bundle id> <cert.pem>` | Prints the designated requirement to pin (public; committed) |
+| `scripts/release/with-signing-keychain.sh <command>` | Runs a command with the certificate in a temporary keychain and removes it afterwards, whatever happens |
+| `scripts/release/verify-designated-requirement.sh <App.app> <pinned.txt>` | `codesign --verify --deep --strict`, hardened runtime, and the exact pinned requirement |
+| `scripts/release/release-tag-ruleset.sh check\|apply <definition.json>` | Checks for, or creates, the ruleset that makes `openklack-v*` tags immutable |
+| `release/create-update-key.sh <dir>` | One-time: creates the Tauri updater key and pins its public half in `release/updater-public-key.txt` |
+| `release/updater-config.mjs <out.json> <version>` | The build's config overlay: version, updater artifacts, the pinned update key and feed |
+| `release/build-signed.sh <version>` | Builds the licensed, updater-enabled app signed with the release identity and verifies the pinned requirement (inside `with-signing-keychain.sh`) |
+| `release/package.sh <bundle dir> <version> <dist>` | Zip (`ditto -c -k --keepParent`), update archive, update-key signatures, SHA-256 |
+| `release/write-feed.sh <version> <dist> <feed dir>` | Writes and signs `latest.json` |
+| `release/verify-update-signature.mjs <file> <file.sig>` | Verifies a Tauri updater signature without the app |
+| `release/publish-release.sh [--dry-run]` | Publishes the GitHub Release only once the tag provably names the built commit |
+| `release/verify-live.sh <version> <sha256>` | Fetches the public zip, feed and signature and checks digest, signature and version |
+| `release/test-update-locally.sh` | The whole thing locally with throwaway keys and a feed on `127.0.0.1`, including install-on-quit |
+| `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>` | Sets the cask to a published release; `packaging/homebrew/Casks/openklack.rb` is the template for the tap |
+
+**Signing.** macOS ties Input Monitoring and Keychain access to the app's designated requirement, so every release is signed with the same self-signed certificate; a different identity would make an update look like a new app and lose the permission and the license and trial Keychain items.
+The requirement is pinned in `release/designated-requirement.txt` as `identifier "com.openklack.desktop" and certificate leaf = H"<certificate SHA-1>"`, and a release whose signature does not produce exactly that fails before anything is published.
+The app is not notarized: the cask clears the quarantine flag after install, and a zip downloaded by hand needs right-click → Open once.
+Both pinned files start as a `NOT GENERATED` marker; until the release owner has generated the material on their own Mac and committed the public halves, the release job stops before building and official builds report that updates aren't configured.
+
+**Setup, once, on the release owner's Mac** (the generators never touch the login keychain; back the output up offline, then delete it locally):
+
+```sh
+scripts/release/create-signing-certificate.sh ~/openapps-release            # shared by every app
+scripts/release/designated-requirement.sh com.openklack.desktop ~/openapps-release/release-signing.cert.pem \
+  > apps/openklack-desktop/release/designated-requirement.txt
+apps/openklack-desktop/release/create-update-key.sh ~/openapps-release      # pins release/updater-public-key.txt
+scripts/release/release-tag-ruleset.sh apply .github/rulesets/openklack-release-tags.json openappshq/openapps
+```
+
+Then create the GitHub environment `openklack-release` (deployment branches and tags restricted to `main` and `openklack-v*`) with:
+
+| Secret | Value |
+| --- | --- |
+| `RELEASE_SIGNING_P12` | `release-signing.p12.base64` from the certificate folder |
+| `RELEASE_SIGNING_P12_PASSWORD` | `release-signing.p12.password` |
+| `TAURI_SIGNING_PRIVATE_KEY` | `openklack-update.key` (the Tauri updater private key) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password, if one was set |
+| `RULESET_READ_TOKEN` | Fine-grained token, this repository only, Administration: read; lets the publish job see the tag ruleset's bypass actors |
+| `FEED_COMMIT_TOKEN` | A token that may push to `main` (a fine-grained token with Contents: write that bypasses `main`'s protection, or a GitHub App token); used only to commit `apps/website/public/updates/openklack/latest.json` and `.sig`, which then deploys the website |
+| `HOMEBREW_TAP_TOKEN` | Fine-grained token scoped to `openappshq/homebrew-tap` with Contents: write; used only to push the cask bump |
+
+and the licensing variables `OPENKLACK_DODO_PAID_PRODUCT_ID`, `OPENKLACK_BUY_URL` and optional `OPENKLACK_SUPPORT_URL` from [Licensed builds](#licensed-builds).
+The old `APPLE_*`, `KEYCHAIN_PASSWORD` and `TAURI_UPDATER_PUBLIC_KEY` entries and the `openklack-latest` channel release are no longer used.
+The tap repository `openappshq/homebrew-tap` must exist; the first release copies `packaging/homebrew/Casks/openklack.rb` into it.
+
+**Cutting a release.** Merge to `main`, then `git tag -a openklack-v1.0.0 -m "OpenKlack 1.0.0" && git push origin openklack-v1.0.0`.
+The version is stamped from the tag; `tauri.conf.json` and `Cargo.toml` keep the development version.
+`release` (read-only token) builds the universal licensed app, signs it inside a temporary keychain that is deleted as soon as the build ends, verifies the pinned requirement, packages `OpenKlack-1.0.0.zip` and `OpenKlack-1.0.0.app.tar.gz` with their update-key signatures, writes the signed feed and uploads everything as a workflow artifact.
+`publish` (the only job that can write releases) downloads that exact artifact by id, checks the zip against the digest the release job reported, requires the tag ruleset, requires the tag to name the built commit, creates a draft release, uploads the files, checks the tag again and publishes.
+`feed` commits the feed to `main` (the website deploy serves it), polls the live feed and zip until they match, then bumps the cask.
+A bad release is pulled by committing the previous feed back, and fixed with a new patch version; tags are never moved or reused.
+
+**Updates in the app.** Only builds with the `updater` cargo feature (official builds) contain the updater; `pnpm openklack:build` and `cargo test` without it never check, download or install anything, and the commands answer "Builds from source don't include app updates."
+The feed and its `latest.json.sig` are fetched with plain GETs (no identifiers), the signature is verified in Rust against the pinned key before any field is trusted, the feed must name downloads under `openklack-v<version>/` on the official releases and a newer version, and the update archive is verified again by Tauri's updater and once more before installing.
+With "Check for updates automatically" on, the app checks at launch, daily while running and, since the timer catches up after sleep, on wake when the last check is older than a day; a failed check backs off an hour, then a day.
+With "Download and install automatically" on, a found update is downloaded and staged in the app's data folder, the menu bar and Settings show "Update ready — Restart", and it is installed on the next quit or restart; sound playback is never interrupted.
+Both settings are off on a fresh install (`updates.json` in the app's data folder), so the app never contacts the feed on its own until asked; "Check now" always works.
+Updates never depend on the license or trial state.
+An app that runs from a read-only location or App Translocation shows "Move OpenKlack to Applications to enable updates" instead.
+Debug builds accept `OPENKLACK_DEV_UPDATE_FEED`, `OPENKLACK_DEV_UPDATE_PUBLIC_KEY`, `OPENKLACK_DEV_UPDATE_DOWNLOADS`, `OPENKLACK_DEV_QUIT_WHEN_UPDATE_READY` and `--no-input-listener` for `release/test-update-locally.sh`; release builds don't contain them.
 
 The [current product contract](../design/products/openklack.md) records approved behavior.
 The [original desktop plan](../design/archive/desktop-plan.md) preserves the interview and initial architecture proposal.

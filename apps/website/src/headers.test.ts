@@ -40,6 +40,7 @@ test("every response gets baseline security headers and hashed assets cache fore
     ]),
   );
   expect(headers.get("/assets/*")).toEqual(["Cache-Control: public, max-age=31536000, immutable"]);
+  expect(headers.get("/updates/*")).toEqual(["Cache-Control: public, max-age=300"]);
   // Cloudflare's limits: 100 rules, 2,000 characters per line.
   expect(headers.size).toBeLessThanOrEqual(100);
   for (const line of siteHeaders().split("\n")) expect(line.length).toBeLessThan(2000);

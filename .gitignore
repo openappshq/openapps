@@ -29,7 +29,9 @@ apps/*-desktop/src-tauri/gen/
 *.sw?
 
 # Product assets and route entries are generated from the website catalog.
+# Update feeds (RELEASES.md) are committed by the release workflows.
 apps/website/public/*/
+!apps/website/public/updates/
 apps/website/*/index.html
 apps/website/*/*/index.html
 apps/website/*/*/*/index.html

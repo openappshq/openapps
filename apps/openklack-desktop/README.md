@@ -9,13 +9,15 @@ pnpm openklack:test    # Rust tests
 pnpm openklack:build   # local app bundle
 ```
 
-Build requirements, signing, releases and the licensed build flavour are in the [development guide](../../docs/development.md#desktop-application-in-development).
+Build requirements, signing, releases and the licensed build flavour are in the [development guide](../../docs/development.md#desktop-application-in-development); the release process follows [RELEASES.md](../../RELEASES.md).
+
+Install the official build with Homebrew: `brew install --cask openappshq/tap/openklack`. Update with `brew upgrade --cask openklack`, or turn on automatic updates under Settings → About & help (off by default).
 
 ## Source builds are unrestricted
 
 OpenKlack is [MIT licensed](../../LICENSE). A build from source has licensing compiled out: every feature works, there is no License section in Settings, and nothing contacts the license service.
 
-The official download is the signed, notarized build with updates, sold for $5 through Dodo Payments. It works right after download for a free 3-day trial with no signup, then keyboard sounds stop until you buy. It is built with the `licensing` cargo feature, following the shared [licensing contract](../../LICENSING.md). Without a license or trial only keyboard sound playback stops; the menu bar, Settings, License and Quit always work.
+The official download is the signed build with updates, sold for $5 through Dodo Payments. It works right after download for a free 3-day trial with no signup, then keyboard sounds stop until you buy. It is built with the `licensing` cargo feature, following the shared [licensing contract](../../LICENSING.md). Without a license or trial only keyboard sound playback stops; the menu bar, Settings, License and Quit always work.
 
 ## Privacy
 
