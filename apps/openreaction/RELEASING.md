@@ -128,9 +128,9 @@ each.
 | `SPARKLE_ED_PRIVATE_KEY` | The update key (`sparkle-ed25519.key`, one base64 line) |
 | `RULESET_READ_TOKEN` | [Fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository only, Administration: Read-only, created by a repository admin; used only to read the tag ruleset before publishing |
 | `FEED_COMMIT_TOKEN` | Fine-grained token for this repository only, Contents: Read and write; used only to push the update feed commit to `main` |
-| `HOMEBREW_TAP_TOKEN` | Fine-grained token for `openappshq/homebrew-tap` only, Contents: Read and write; used only to push the cask bump |
+| `HOMEBREW_TAP_DEPLOY_KEY` | The private half of an SSH deploy key added to `openappshq/homebrew-tap` with write access (`gh repo deploy-key add --allow-write`); it can push only to the tap |
 
-`FEED_COMMIT_TOKEN` and `HOMEBREW_TAP_TOKEN` belong to a bot account or the
+`FEED_COMMIT_TOKEN` belongs to a bot account or the
 release owner; the commits they push are authored `openapps-release
 <release@openapps.space>`. If `main` requires status checks or reviews for
 pushes, allow that account to bypass them for the feed path only.

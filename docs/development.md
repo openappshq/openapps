@@ -294,7 +294,7 @@ Then create the GitHub environment `openklack-release` (deployment branches and 
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password, if one was set |
 | `RULESET_READ_TOKEN` | Fine-grained token, this repository only, Administration: read; lets the publish job see the tag ruleset's bypass actors |
 | `FEED_COMMIT_TOKEN` | A token that may push to `main` (a fine-grained token with Contents: write that bypasses `main`'s protection, or a GitHub App token); used only to commit `apps/website/public/updates/openklack/latest.json` and `.sig`, which then deploys the website |
-| `HOMEBREW_TAP_TOKEN` | Fine-grained token scoped to `openappshq/homebrew-tap` with Contents: write; used only to push the cask bump |
+| `HOMEBREW_TAP_DEPLOY_KEY` | Fine-grained token scoped to `openappshq/homebrew-tap` with Contents: write; used only to push the cask bump |
 
 and the licensing variables `OPENKLACK_DODO_PAID_PRODUCT_ID`, `OPENKLACK_BUY_URL` and optional `OPENKLACK_SUPPORT_URL` from [Licensed builds](#licensed-builds).
 The old `APPLE_*`, `KEYCHAIN_PASSWORD` and `TAURI_UPDATER_PUBLIC_KEY` entries and the `openklack-latest` channel release are no longer used.

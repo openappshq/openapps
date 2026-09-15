@@ -201,7 +201,7 @@ jobs:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
           FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           PUBLISH: ${{ steps.version.outputs.publish }}
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
           OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
@@ -213,7 +213,7 @@ jobs:
           done
           # Only publication uses these, but a missing token should fail before a 30-minute build, not after.
           if [ "$PUBLISH" = true ]; then
-            for name in RULESET_READ_TOKEN FEED_COMMIT_TOKEN HOMEBREW_TAP_TOKEN; do
+            for name in RULESET_READ_TOKEN FEED_COMMIT_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
               if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openreaction-release environment; publishing needs it."; missing=1; fi
             done
           fi
@@ -414,12 +414,16 @@ jobs:
       - name: Bump the cask
         if: steps.order.outputs.promote == 'true'
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           VERSION: ${{ needs.release.outputs.version }}
           SHA256: ${{ needs.release.outputs.sha256 }}
         run: |
-          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64 | tr -d '\n')"
-          git -c "http.https://github.com/.extraheader=$auth" clone --depth 1 https://github.com/openappshq/homebrew-tap.git tap
+          # The tap is pushed with a deploy key that can write only to that repository.
+          umask 077; install -d "$RUNNER_TEMP/tap-key"; printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$RUNNER_TEMP/tap-key/id"
+          ssh-keyscan -t ed25519 github.com > "$RUNNER_TEMP/tap-key/known_hosts" 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/tap-key/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/tap-key/known_hosts"
+          trap 'rm -rf "$RUNNER_TEMP/tap-key"' EXIT
+          git clone --depth 1 git@github.com:openappshq/homebrew-tap.git tap
           mkdir -p tap/Casks
           if [ ! -f tap/Casks/openreaction.rb ]; then cp packaging/homebrew/Casks/openreaction.rb tap/Casks/openreaction.rb; fi
           packaging/homebrew/bump-cask.sh tap/Casks/openreaction.rb "$VERSION" "$SHA256"
@@ -429,4 +433,4 @@ jobs:
           git add Casks/openreaction.rb
           if git diff --cached --quiet; then echo "The cask already names $VERSION."; exit 0; fi
           git commit -m "openreaction $VERSION"
-          git -c "http.https://github.com/.extraheader=$auth" push origin HEAD
+          git push origin HEAD

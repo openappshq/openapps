@@ -53,7 +53,7 @@ end
 
 - **Location:** installed into `~/Applications`, so updates never need an admin password.
 - **`auto_updates true`:** Homebrew doesn't fight the in-app updater.
-- **Bumping the cask:** the release workflow updates the cask right after a release is published, by pushing a commit to the tap with a token scoped to that repository only (`HOMEBREW_TAP_TOKEN`). There's no polling cron. The cask's `sha256` is the digest the release job verified.
+- **Bumping the cask:** the release workflow updates the cask right after a release is published, by pushing a commit to the tap with an SSH deploy key that can write only to that repository (`HOMEBREW_TAP_DEPLOY_KEY`). There's no polling cron. The cask's `sha256` is the digest the release job verified.
 
 ## Release flow (one GitHub Actions workflow per app)
 

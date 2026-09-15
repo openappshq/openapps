@@ -120,9 +120,9 @@ all run in this environment, so any required reviewers approve each.
 | `RELEASE_SIGNING_P12` | The certificate and key as a `.p12`, base64-encoded (`release-signing.p12.base64`) |
 | `RELEASE_SIGNING_P12_PASSWORD` | Its password (`release-signing.p12.password`) |
 | `RULESET_READ_TOKEN` | [Fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository only, Administration: Read-only, created by a repository admin; used only to read the tag ruleset before publishing |
-| `HOMEBREW_TAP_TOKEN` | Fine-grained token for `openappshq/homebrew-tap` only, Contents: Read and write; used only to push the cask bump |
+| `HOMEBREW_TAP_DEPLOY_KEY` | The private half of an SSH deploy key added to `openappshq/homebrew-tap` with write access (`gh repo deploy-key add --allow-write`); it can push only to the tap |
 
-`HOMEBREW_TAP_TOKEN` belongs to a bot account or the release owner; the
+`HOMEBREW_TAP_DEPLOY_KEY` is a deploy key on the tap repository; the
 commits it pushes are authored `openapps-release <release@openapps.space>`.
 Hertz has no licensing and no feed, so there are no variables and no
 `FEED_COMMIT_TOKEN`.

@@ -179,7 +179,7 @@ jobs:
           RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
           RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
           RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           PUBLISH: ${{ steps.version.outputs.publish }}
         run: |
           missing=0
@@ -187,7 +187,7 @@ jobs:
             if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the hertz-release environment."; missing=1; fi
           done
           if [ "$PUBLISH" = true ]; then
-            for name in RULESET_READ_TOKEN HOMEBREW_TAP_TOKEN; do
+            for name in RULESET_READ_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
               if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the hertz-release environment; publishing needs it."; missing=1; fi
             done
           fi
@@ -305,12 +305,16 @@ jobs:
       - name: Bump the cask
         working-directory: .
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           VERSION: ${{ needs.release.outputs.version }}
           SHA256: ${{ needs.release.outputs.sha256 }}
         run: |
-          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64 | tr -d '\n')"
-          git -c "http.https://github.com/.extraheader=$auth" clone --depth 1 https://github.com/openappshq/homebrew-tap.git "$RUNNER_TEMP/tap"
+          # The tap is pushed with a deploy key that can write only to that repository.
+          umask 077; install -d "$RUNNER_TEMP/tap-key"; printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$RUNNER_TEMP/tap-key/id"
+          ssh-keyscan -t ed25519 github.com > "$RUNNER_TEMP/tap-key/known_hosts" 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/tap-key/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/tap-key/known_hosts"
+          trap 'rm -rf "$RUNNER_TEMP/tap-key"' EXIT
+          git clone --depth 1 git@github.com:openappshq/homebrew-tap.git "$RUNNER_TEMP/tap"
           mkdir -p "$RUNNER_TEMP/tap/Casks"
           if [ ! -f "$RUNNER_TEMP/tap/Casks/hertz.rb" ]; then cp packaging/homebrew/Casks/hertz.rb "$RUNNER_TEMP/tap/Casks/hertz.rb"; fi
           packaging/homebrew/bump-cask.sh "$RUNNER_TEMP/tap/Casks/hertz.rb" "$VERSION" "$SHA256"
@@ -320,4 +324,4 @@ jobs:
           git add Casks/hertz.rb
           if git diff --cached --quiet; then echo "The cask already names $VERSION."; exit 0; fi
           git commit -m "hertz $VERSION"
-          git -c "http.https://github.com/.extraheader=$auth" push origin HEAD
+          git push origin HEAD
