@@ -94,8 +94,9 @@ jobs:
       - name: Lint and test the release scripts
         run: |
           brew install shellcheck actionlint
-          shellcheck scripts/*.sh ../../scripts/release/*.sh ../../scripts/release/tests/*.sh ../../packaging/homebrew/*.sh ../../packaging/homebrew/tests/*.sh
+          shellcheck scripts/*.sh scripts/tests/*.sh ../../scripts/release/*.sh ../../scripts/release/tests/*.sh ../../packaging/homebrew/*.sh ../../packaging/homebrew/tests/*.sh
           actionlint ../../.github/workflows/openreaction.yml
+          scripts/tests/scan-binary.test.sh
           ../../scripts/release/tests/with-signing-keychain.test.sh
           ../../packaging/homebrew/tests/bump-cask.test.sh
       # The official flavour (licensing and the updater) as an ad-hoc signed

@@ -21,6 +21,7 @@ The scripts the workflow runs are the ones you can run locally:
 | `scripts/bundle.sh` | `swift build -c release`, assembles and signs `build/OpenReaction.app` (hardened runtime, no sandbox, `scripts/OpenReaction.entitlements`); with `OPENAPPS_OFFICIAL=1` compiles the shared updater in and pins the feed and update key |
 | `scripts/make-zip.sh` | `ditto -c -k --keepParent` into `dist/OpenReaction-<version>.zip`, writes its `.sha256` |
 | `scripts/verify-release.sh [--release] <zip>` | Unpacks the zip and runs the checks a user's Mac and the updater run; `--release` requires the pinned designated requirement and the committed update key |
+| `scripts/scan-binary.sh <binary> <string>...` | Byte search behind verify-release's debug-only-code gates (the setup preview flag, the update-test hooks); fails closed, never a pipe into `grep -q`. `scripts/tests/scan-binary.test.sh` plants markers and checks they are caught |
 | `scripts/make-appcast.sh <zip>` | Signs the zip with the update key and writes the signed `dist/appcast.xml` |
 | `scripts/sign-update.sh <key> [--feed] <file>` | Ed25519 signing, byte-compatible with Sparkle's `sign_update` |
 | `scripts/verify-appcast.sh <appcast> [zip]` | Verifies a feed, and the zip it announces, with the public key only |

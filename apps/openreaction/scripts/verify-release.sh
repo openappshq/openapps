@@ -81,9 +81,11 @@ fi
 echo "==> Debug-only code"
 # The setup preview harness (`--preview-setup`) is compiled only into debug
 # builds; a bundle is always a release-configuration build, so the flag
-# must not survive into the binary.
-if strings "$APP/Contents/MacOS/${APP_NAME}" | grep -q -- '--preview-setup'; then
-    echo "error: the binary contains the debug-only setup preview" >&2; exit 1
+# must not survive into the binary. scan-binary.sh searches the file's
+# bytes directly and exits 0 only when it could read them all (never a
+# pipe into grep -q, which fails open under pipefail).
+if ! scripts/scan-binary.sh "$APP/Contents/MacOS/${APP_NAME}" '--preview-setup'; then
+    echo "error: the binary contains the debug-only setup preview (or could not be scanned)" >&2; exit 1
 fi
 echo "ok: no setup preview"
 
@@ -99,8 +101,8 @@ if [[ "$REQUIRE_RELEASE" == 1 || -n "$feed" ]]; then
         [[ "$key" == "$committed" ]] || { echo "error: SUPublicEDKey is not the committed update key" >&2; exit 1; }
     fi
     [[ -z "$(info CFBundleURLTypes)" ]] && { echo "error: the openreaction:// URL scheme is missing" >&2; exit 1; }
-    if strings "$APP/Contents/MacOS/${APP_NAME}" | grep -q 'OPENREACTION_UPDATE_TEST_ACTION\|OPENREACTION_DISABLE_TAP'; then
-        echo "error: the binary contains update-test hooks" >&2; exit 1
+    if ! scripts/scan-binary.sh "$APP/Contents/MacOS/${APP_NAME}" OPENREACTION_UPDATE_TEST_ACTION OPENREACTION_DISABLE_TAP; then
+        echo "error: the binary contains update-test hooks (or could not be scanned)" >&2; exit 1
     fi
     [[ -z "$(info NSAppTransportSecurity)" ]] || { echo "error: App Transport Security exceptions in a release" >&2; exit 1; }
     echo "ok: feed ${feed}, key pinned, updater compiled in (automatic checks off by default)"
