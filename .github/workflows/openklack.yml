@@ -78,10 +78,14 @@ jobs:
           cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features licensing -- -D warnings
           cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features licensing,updater
           cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features licensing,updater -- -D warnings
-      - name: Lint the release scripts
+      - name: Lint and test the release scripts
+        # The keychain wrapper test imports a throwaway certificate into a temporary keychain
+        # under bash and under zsh and checks that nothing of it is left afterwards.
         run: |
           brew install shellcheck >/dev/null
-          shellcheck scripts/release/*.sh apps/openklack-desktop/release/*.sh packaging/homebrew/bump-cask.sh
+          shellcheck scripts/release/*.sh scripts/release/tests/*.sh apps/openklack-desktop/release/*.sh packaging/homebrew/bump-cask.sh
+          scripts/release/tests/with-signing-keychain.test.sh
+          packaging/homebrew/tests/bump-cask.test.sh
       - run: pnpm --filter @openapps/openklack-desktop tauri build --debug --bundles app
         env:
           APPLE_SIGNING_IDENTITY: "-"
@@ -96,7 +100,8 @@ jobs:
   # Builds, signs, verifies and packages the release. Read-only token: it
   # never touches tags, releases, the feed or the tap.
   release:
-    if: startsWith(github.ref, 'refs/tags/openklack-v') || github.event_name == 'workflow_dispatch'
+    # Only the canonical repository releases; a fork keeps the checks and nothing else.
+    if: github.repository == 'openappshq/openapps' && (startsWith(github.ref, 'refs/tags/openklack-v') || github.event_name == 'workflow_dispatch')
     needs: checks
     runs-on: macos-15
     timeout-minutes: 90
@@ -247,7 +252,7 @@ jobs:
   # and refuses unless the tag names exactly the commit the files were built
   # from and the zip has exactly the digest the release job verified.
   publish:
-    if: needs.release.outputs.publish == 'true'
+    if: github.repository == 'openappshq/openapps' && needs.release.outputs.publish == 'true'
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -285,6 +290,7 @@ jobs:
   # deploy serves it), verify the live feed and zip, then bump the cask.
   # No build runs here and no signing material is present.
   feed:
+    if: github.repository == 'openappshq/openapps'
     needs: [release, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 45

@@ -82,6 +82,13 @@ pub fn automatic_check_due(saved: &Saved, now: i64, trigger: Trigger) -> bool {
     }
 }
 
+/// Whether an update may still be staged or installed. One the user asked for ("Download
+/// update") always may; one started by "Download and install automatically" only while that
+/// setting is on, so turning it off during the download or after staging withdraws it.
+pub fn may_install(automatic: bool, settings: &Settings) -> bool {
+    !automatic || settings.install_automatically
+}
+
 #[derive(Deserialize)]
 struct Feed {
     app: String,
@@ -267,6 +274,26 @@ mod tests {
         let mut off = enabled(History::default());
         off.settings.check_automatically = false;
         assert!(!automatic_check_due(&off, 10 * DAY, Trigger::Launch));
+    }
+
+    #[test]
+    fn turning_automatic_installs_off_withdraws_automatic_updates_only() {
+        let on = Settings {
+            check_automatically: true,
+            install_automatically: true,
+        };
+        let off = Settings {
+            check_automatically: true,
+            install_automatically: false,
+        };
+        // Automatic: allowed while on, withdrawn once off — whether the setting changes during
+        // the download (checked before staging) or after staging (checked before installing).
+        assert!(may_install(true, &on));
+        assert!(!may_install(true, &off));
+        // Requested by the user: installs whatever the setting says.
+        assert!(may_install(false, &on));
+        assert!(may_install(false, &off));
+        assert!(may_install(false, &Settings::default()));
     }
 
     #[test]

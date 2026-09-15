@@ -159,7 +159,10 @@ DR_B="$(codesign --display --requirements - "$INSTALLED" 2>&1 | sed -n 's/^desig
 [[ "$DR_A" == "$DR_B" ]] || { echo "error: designated requirement changed: $DR_A -> $DR_B" >&2; exit 1; }
 echo "ok: $INSTALLED is $VERSION_B with the designated requirement of $VERSION_A"
 node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(!s.history?.lastSuccessAt) throw new Error("history not saved")' "$DATA/updates.json"
-test -z "$(ls -A "$DATA/updates" 2>/dev/null)" || { echo "error: staged archive left behind" >&2; exit 1; }
+for leftover in "$WORK/Applications/.OpenKlack.app.update" "$WORK/Applications/.OpenKlack.app.previous"; do
+    test ! -e "$leftover" || { echo "error: $leftover left behind" >&2; exit 1; }
+done
+[[ "$(ls -A "$WORK/Applications")" == "OpenKlack.app" ]] || { echo "error: unexpected files next to the app:" >&2; ls -A "$WORK/Applications" >&2; exit 1; }
 
 step "3. The installed $VERSION_B starts"
 : > "$WORK/server.log"

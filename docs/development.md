@@ -248,7 +248,7 @@ The scripts it runs are the ones you can run locally:
 | --- | --- |
 | `scripts/release/create-signing-certificate.sh <dir>` | One-time: creates the `OpenApps HQ Release` certificate shared by every app, as a `.p12` plus its password (never committed) |
 | `scripts/release/designated-requirement.sh <bundle id> <cert.pem>` | Prints the designated requirement to pin (public; committed) |
-| `scripts/release/with-signing-keychain.sh <command>` | Runs a command with the certificate in a temporary keychain and removes it afterwards, whatever happens |
+| `scripts/release/with-signing-keychain.sh <command>` | Runs a command with the certificate in a temporary keychain and removes it afterwards, whatever happens (Bash; re-executes itself under Bash from any other shell; `scripts/release/tests/with-signing-keychain.test.sh` checks bash and zsh) |
 | `scripts/release/verify-designated-requirement.sh <App.app> <pinned.txt>` | `codesign --verify --deep --strict`, hardened runtime, and the exact pinned requirement |
 | `scripts/release/release-tag-ruleset.sh check\|apply <definition.json>` | Checks for, or creates, the ruleset that makes `openklack-v*` tags immutable |
 | `release/create-update-key.sh <dir>` | One-time: creates the Tauri updater key and pins its public half in `release/updater-public-key.txt` |
@@ -260,7 +260,7 @@ The scripts it runs are the ones you can run locally:
 | `release/publish-release.sh [--dry-run]` | Publishes the GitHub Release only once the tag provably names the built commit |
 | `release/verify-live.sh <version> <sha256>` | Fetches the public zip, feed and signature and checks digest, signature and version |
 | `release/test-update-locally.sh` | The whole thing locally with throwaway keys and a feed on `127.0.0.1`, including install-on-quit |
-| `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>` | Sets the cask to a published release; `packaging/homebrew/Casks/openklack.rb` is the template for the tap |
+| `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>` | Sets the cask to a published release (the template's `0.0.0` takes any first version; never a downgrade or a rewrite); `packaging/homebrew/Casks/openklack.rb` is the template for the tap |
 
 **Signing.** macOS ties Input Monitoring and Keychain access to the app's designated requirement, so every release is signed with the same self-signed certificate; a different identity would make an update look like a new app and lose the permission and the license and trial Keychain items.
 The requirement is pinned in `release/designated-requirement.txt` as `identifier "com.openklack.desktop" and certificate leaf = H"<certificate SHA-1>"`, and a release whose signature does not produce exactly that fails before anything is published.
@@ -303,7 +303,8 @@ A bad release is pulled by committing the previous feed back, and fixed with a n
 **Updates in the app.** Only builds with the `updater` cargo feature (official builds) contain the updater; `pnpm openklack:build` and `cargo test` without it never check, download or install anything, and the commands answer "Builds from source don't include app updates."
 The feed and its `latest.json.sig` are fetched with plain GETs (no identifiers), the signature is verified in Rust against the pinned key before any field is trusted, the feed must name downloads under `openklack-v<version>/` on the official releases and a newer version, and the update archive is verified again by Tauri's updater and once more before installing.
 With "Check for updates automatically" on, the app checks at launch, daily while running and, since the timer catches up after sleep, on wake when the last check is older than a day; a failed check backs off an hour, then a day.
-With "Download and install automatically" on, a found update is downloaded and staged in the app's data folder, the menu bar and Settings show "Update ready — Restart", and it is installed on the next quit or restart; sound playback is never interrupted.
+With "Download and install automatically" on, a found update is downloaded, unpacked into a hidden folder next to the app and verified there (`codesign --verify --deep --strict`, the same designated requirement as the installed app, the expected version), the menu bar and Settings show "Update ready — Restart", and it is swapped in while the app quits or restarts: the old bundle is moved aside, the new one moved in, and the old one deleted only then, so a failure puts the old app back and the folder is never without an app; sound playback is never interrupted.
+Turning "Download and install automatically" off discards an update that was staged automatically (a download the user asked for with "Download update" stays); the permission is checked again before staging and before installing.
 Both settings are off on a fresh install (`updates.json` in the app's data folder), so the app never contacts the feed on its own until asked; "Check now" always works.
 Updates never depend on the license or trial state.
 An app that runs from a read-only location or App Translocation shows "Move OpenKlack to Applications to enable updates" instead.

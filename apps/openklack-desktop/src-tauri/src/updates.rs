@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "updater")]
+mod install;
+#[cfg(feature = "updater")]
 mod policy;
 #[cfg(feature = "updater")]
 pub mod service;

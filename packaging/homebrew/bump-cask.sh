@@ -4,9 +4,10 @@
 #   packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>
 #
 # Refuses a version lower than the cask's current one (Homebrew users never
-# downgrade), and does nothing when the cask already names this release. The
-# sha256 is the digest the release job verified, never one recomputed from a
-# download.
+# downgrade), and does nothing when the cask already names this release. A
+# cask that names no release yet (the template's 0.0.0 with an all-zero
+# digest) takes any version. The sha256 is the digest the release job
+# verified, never one recomputed from a download.
 set -euo pipefail
 
 CASK="${1:?usage: bump-cask.sh <cask.rb> <version> <sha256>}"
@@ -23,7 +24,9 @@ if [[ "$version_lines" != 1 || "$sha_lines" != 1 ]]; then
 fi
 current="$(sed -nE 's/^  version "([^"]+)"$/\1/p' "$CASK")"
 current_sha="$(sed -nE 's/^  sha256 "([^"]+)"$/\1/p' "$CASK")"
-if [[ "$current" == "$VERSION" ]]; then
+if [[ "$current" == "0.0.0" && "$current_sha" =~ ^0{64}$ ]]; then
+    current="none yet"
+elif [[ "$current" == "$VERSION" ]]; then
     if [[ "$current_sha" == "$SHA256" ]]; then
         echo "ok: $CASK already names $VERSION"
         exit 0
@@ -31,7 +34,7 @@ if [[ "$current" == "$VERSION" ]]; then
     echo "error: $CASK already names $VERSION with a different sha256; a release is never rewritten" >&2
     exit 1
 fi
-if [[ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]]; then
+if [[ "$current" != "none yet" && "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]]; then
     echo "error: $CASK is at $current, newer than $VERSION" >&2
     exit 1
 fi

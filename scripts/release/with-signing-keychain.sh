@@ -19,6 +19,10 @@
 # The command sees RELEASE_SIGNING_IDENTITY (the certificate's SHA-1, for
 # `codesign --sign`) and RELEASE_SIGNING_KEYCHAIN (for `codesign --keychain`).
 # The script fails if the identity can still be found after cleanup.
+# Bash only: the cleanup relies on Bash arrays and traps, and zsh treats
+# some names as read-only. Run under any other shell and it re-executes itself
+# with Bash before touching anything.
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 if [[ $# -eq 0 ]]; then
@@ -46,14 +50,14 @@ keychain_entries() {
 }
 
 cleanup() {
-    local status=$? remaining=() entry
+    local exit_code=$? remaining=() entry
     trap - EXIT INT TERM
     while IFS= read -r entry; do
         [[ -z "$entry" || "$entry" == "$keychain" || ! -e "$entry" ]] || remaining+=("$entry")
     done < <(keychain_entries)
-    security list-keychains -d user -s "${remaining[@]}" || status=1
+    security list-keychains -d user -s "${remaining[@]}" || exit_code=1
     if [[ -e "$keychain" ]]; then
-        security delete-keychain "$keychain" || status=1
+        security delete-keychain "$keychain" || exit_code=1
     fi
     rm -rf "$work"
     if [[ -n "$identity" ]]; then
@@ -61,10 +65,10 @@ cleanup() {
         identities="$(security find-identity -p codesigning 2>/dev/null || true)"
         if grep -Fq "$identity" <<< "$identities"; then
             echo "error: the signing identity is still available after cleanup" >&2
-            status=1
+            exit_code=1
         fi
     fi
-    exit "$status"
+    exit "$exit_code"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM

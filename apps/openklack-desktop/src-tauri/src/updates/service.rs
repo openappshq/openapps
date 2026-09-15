@@ -1,8 +1,9 @@
 //! The updater in official builds: checks the signed feed, downloads and verifies the update
-//! archive in the background, and installs it when the app quits or restarts.
+//! archive in the background, unpacks and verifies the new bundle next to the app, and swaps it
+//! in when the app quits or restarts.
 
 use super::policy::{self, Offer, Saved, Source, Trigger};
-use super::{Release, Settings, Status};
+use super::{Release, Settings, Status, install};
 use semver::Version;
 use std::{
     path::{Path, PathBuf},
@@ -20,6 +21,7 @@ const UNREACHABLE: &str =
     "The update server could not be reached. Check your connection and try again.";
 const FEED_CHANGED: &str = "The update feed changed while checking. Try again.";
 const MOVE_TO_APPLICATIONS: &str = "Move OpenKlack to Applications to enable updates.";
+const AUTOMATIC_INSTALL_OFF: &str = "Automatic installs were turned off. Nothing was installed.";
 /// How often the background task wakes to see whether a check is due. Timers pause while the Mac
 /// sleeps, so a check that fell due during sleep runs at most this long after waking.
 const TIMER: Duration = Duration::from_secs(5 * 60);
@@ -207,15 +209,19 @@ fn location_blocked(bundle: &Path) -> bool {
         || !writable(bundle)
 }
 
+/// A verified bundle waiting next to the app. `automatic` means nobody asked for it: the
+/// "Download and install automatically" setting did, and turning that off discards it.
 struct Staged {
-    update: Update,
-    archive: PathBuf,
+    version: String,
+    bundle: PathBuf,
+    automatic: bool,
 }
 
 pub struct Updates {
     endpoint: Result<Endpoint, String>,
     store: PathBuf,
-    staging: PathBuf,
+    /// The installed bundle, when the app runs from one it can replace.
+    bundle: Option<PathBuf>,
     location_blocked: bool,
     busy: AsyncMutex<()>,
     saved: Mutex<Saved>,
@@ -234,9 +240,6 @@ fn load(store: &Path) -> Saved {
 
 pub fn init(app: &tauri::AppHandle) {
     let data = app.path().app_data_dir().unwrap_or_default();
-    let staging = data.join("updates");
-    // An archive staged by an earlier run has lost the verified update it belonged to.
-    let _ = std::fs::remove_dir_all(&staging);
     let store = data.join("updates.json");
     let saved = load(&store);
     #[cfg(debug_assertions)]
@@ -257,6 +260,11 @@ pub fn init(app: &tauri::AppHandle) {
         .and_then(|exe| tauri_plugin_updater::extract_path_from_executable(&exe).ok())
         .filter(|path| path.extension().is_some_and(|extension| extension == "app"));
     let location_blocked = bundle.as_deref().is_none_or(location_blocked);
+    // A swap interrupted last time, or a bundle staged by an earlier run, is cleaned up first;
+    // a staged bundle has lost the verified download it belonged to.
+    if let Some(bundle) = &bundle {
+        install::recover(bundle);
+    }
     let status = Status {
         revision: 0,
         supported: true,
@@ -275,7 +283,7 @@ pub fn init(app: &tauri::AppHandle) {
     app.manage(Updates {
         endpoint,
         store,
-        staging,
+        bundle,
         location_blocked,
         busy: AsyncMutex::new(()),
         saved: Mutex::new(saved),
@@ -332,22 +340,60 @@ impl Updates {
         next
     }
 
-    fn save(&self, saved: Saved) -> Result<(), String> {
+    /// Writes the file while holding the `saved` lock, so two changes can never race each other
+    /// onto disk with a stale snapshot.
+    fn write(&self, saved: &Saved) -> Result<(), String> {
         if let Some(parent) = self.store.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let bytes = serde_json::to_vec_pretty(&saved).map_err(|e| e.to_string())?;
+        let bytes = serde_json::to_vec_pretty(saved).map_err(|e| e.to_string())?;
         crate::library::write_atomic(&self.store, &bytes)
     }
 
     /// History is best effort: if it can't be saved, a restart may check a little early.
     fn record(&self, change: impl FnOnce(&mut policy::History)) {
-        let saved = {
-            let mut saved = self.saved.lock().unwrap();
-            change(&mut saved.history);
-            *saved
+        let mut saved = self.saved.lock().unwrap();
+        change(&mut saved.history);
+        let _ = self.write(&saved);
+    }
+
+    /// Saves the settings first; they take effect only once saved.
+    fn update_settings(&self, settings: Settings) -> Result<(), String> {
+        let mut saved = self.saved.lock().unwrap();
+        let next = Saved {
+            settings,
+            history: saved.history,
         };
-        let _ = self.save(saved);
+        self.write(&next)?;
+        *saved = next;
+        Ok(())
+    }
+
+    fn may_install(&self, automatic: bool) -> bool {
+        policy::may_install(automatic, &self.saved.lock().unwrap().settings)
+    }
+
+    /// Drops the staged bundle, if any, and reports why.
+    fn discard_staged(&self, app: &tauri::AppHandle, reason: &str) {
+        let Some(staged) = self.staged.lock().unwrap().take() else {
+            return;
+        };
+        if let Some(bundle) = &self.bundle {
+            let _ = std::fs::remove_dir_all(install::staging_dir(bundle));
+        }
+        eprintln!(
+            "OpenKlack: discarded the staged {} update: {reason}",
+            staged.version
+        );
+        self.publish(app, |status| {
+            if status.phase == "ready" {
+                status.phase = if status.available.is_some() {
+                    "available"
+                } else {
+                    "idle"
+                };
+            }
+        });
     }
 
     fn failed(&self, app: &tauri::AppHandle, error: String) {
@@ -435,23 +481,24 @@ async fn check(app: &tauri::AppHandle, updates: &Updates) {
                     notes: offer.notes,
                 });
             });
-            let automatic = updates.saved.lock().unwrap().settings.install_automatically;
-            if automatic && !updates.location_blocked {
-                download(app, updates).await;
+            if updates.may_install(true) && !updates.location_blocked {
+                download(app, updates, true).await;
             }
         }
     }
 }
 
-/// Downloads and verifies the pending update and stages it for the next quit. Callers hold
-/// `busy`. Nothing is installed here, so sound playback is never interrupted.
-async fn download(app: &tauri::AppHandle, updates: &Updates) {
+/// Downloads and verifies the pending update, unpacks it next to the app, verifies the bundle
+/// and stages it for the next quit. Callers hold `busy`. Nothing is installed here, so sound
+/// playback is never interrupted. An `automatic` download is dropped if automatic installs are
+/// turned off while it runs.
+async fn download(app: &tauri::AppHandle, updates: &Updates, automatic: bool) {
     let Ok(endpoint) = updates.endpoint.clone() else {
         return;
     };
-    if updates.location_blocked {
+    let Some(installed) = updates.bundle.clone().filter(|_| !updates.location_blocked) else {
         return updates.failed(app, MOVE_TO_APPLICATIONS.into());
-    }
+    };
     let Some(update) = updates.pending.lock().unwrap().clone() else {
         return;
     };
@@ -493,28 +540,46 @@ async fn download(app: &tauri::AppHandle, updates: &Updates) {
         Ok(()) = exceeded => Err(UPDATE_TOO_LARGE.to_string()),
         result = fetched => result.map_err(update_error),
     };
-    let staged = result
-        .and_then(|bytes| {
-            if oversized_update(bytes.len() as u64, None) {
-                return Err(UPDATE_TOO_LARGE.to_string());
-            }
-            policy::verify(&bytes, &update.signature, &endpoint.public_key)?;
-            std::fs::create_dir_all(&updates.staging).map_err(|e| e.to_string())?;
-            let archive = updates
-                .staging
-                .join(format!("OpenKlack-{}.app.tar.gz", update.version));
-            crate::library::write_atomic(&archive, &bytes)?;
-            Ok(archive)
-        })
-        .map(|archive| Staged {
-            update: update.clone(),
-            archive,
-        });
+    let version = update.version.clone();
+    let public_key = endpoint.public_key.clone();
+    let signature = update.signature.clone();
+    let staged = match result {
+        Ok(bytes) => {
+            let installed = installed.clone();
+            let version = version.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if oversized_update(bytes.len() as u64, None) {
+                    return Err(UPDATE_TOO_LARGE.to_string());
+                }
+                policy::verify(&bytes, &signature, &public_key)?;
+                let bundle = install::unpack(&bytes, &installed)?;
+                install::verify_bundle(&bundle, &installed, &version).inspect_err(|_| {
+                    let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
+                })?;
+                Ok(bundle)
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|result| result)
+        }
+        Err(error) => Err(error),
+    };
     match staged {
         Err(error) => updates.failed(app, error),
-        Ok(staged) => {
-            *updates.pending.lock().unwrap() = None;
-            *updates.staged.lock().unwrap() = Some(staged);
+        // Permission is checked again here: it may have been withdrawn during the download.
+        Ok(_) if !updates.may_install(automatic) => {
+            let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
+            eprintln!(
+                "OpenKlack: dropped the automatic {version} download: {AUTOMATIC_INSTALL_OFF}"
+            );
+            updates.publish(app, |status| status.phase = "available");
+        }
+        Ok(bundle) => {
+            *updates.staged.lock().unwrap() = Some(Staged {
+                version,
+                bundle,
+                automatic,
+            });
             updates.publish(app, |status| status.phase = "ready");
             #[cfg(debug_assertions)]
             if std::env::var_os("OPENKLACK_DEV_QUIT_WHEN_UPDATE_READY").is_some() {
@@ -524,36 +589,36 @@ async fn download(app: &tauri::AppHandle, updates: &Updates) {
     }
 }
 
-/// Installs a staged update while the app exits, before it quits or restarts. The archive is
-/// verified again first, since it waited on disk.
+/// Installs a staged update while the app exits, before it quits or restarts. The bundle is
+/// verified again first, since it waited on disk, and an automatic one only installs if
+/// automatic installs are still on. The swap runs to completion on this thread: the process
+/// never exits in the middle of it.
 pub fn install_on_exit(app: &tauri::AppHandle) {
     let Some(updates) = app.try_state::<Updates>() else {
         return;
     };
-    let Ok(endpoint) = &updates.endpoint else {
+    let Some(installed) = updates.bundle.clone() else {
         return;
     };
     let Some(staged) = updates.staged.lock().unwrap().take() else {
         return;
     };
-    let public_key = endpoint.public_key.clone();
-    let (done, finished) = std::sync::mpsc::channel();
-    // The plugin's privileged fallback waits on the main thread, which is busy exiting; a thread
-    // with a deadline keeps quitting from ever hanging on it.
-    std::thread::spawn(move || {
-        let result = std::fs::read(&staged.archive)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| {
-                policy::verify(&bytes, &staged.update.signature, &public_key)?;
-                staged.update.install(bytes).map_err(update_error)
-            });
-        let _ = std::fs::remove_file(&staged.archive);
-        let _ = done.send(result);
-    });
-    match finished.recv_timeout(Duration::from_secs(60)) {
-        Ok(Ok(())) => eprintln!("OpenKlack: installed the staged update."),
-        Ok(Err(error)) => eprintln!("OpenKlack: the staged update was not installed: {error}"),
-        Err(_) => eprintln!("OpenKlack: installing the staged update timed out."),
+    if !updates.may_install(staged.automatic) {
+        let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
+        eprintln!(
+            "OpenKlack: the staged {} update was not installed: {AUTOMATIC_INSTALL_OFF}",
+            staged.version
+        );
+        return;
+    }
+    let result = install::verify_bundle(&staged.bundle, &installed, &staged.version)
+        .and_then(|()| install::swap(&installed, &staged.bundle, &mut |_| Ok(())));
+    match result {
+        Ok(()) => eprintln!("OpenKlack: installed the staged update."),
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(install::staging_dir(&installed));
+            eprintln!("OpenKlack: the staged update was not installed: {error}");
+        }
     }
 }
 
@@ -594,24 +659,34 @@ pub async fn download_update(
     let Ok(_busy) = state.busy.try_lock() else {
         return Ok(state.snapshot());
     };
+    if state.staged.lock().unwrap().is_some() {
+        return Ok(state.snapshot());
+    }
     if state.pending.lock().unwrap().is_none() {
         return Err("Check for updates before downloading.".into());
     }
-    download(&app, &state).await;
+    download(&app, &state, false).await;
     Ok(state.snapshot())
 }
 
-/// Saves the choice first; it takes effect only once saved.
+/// Saves the choice first; it takes effect only once saved. Turning automatic installs off
+/// discards an update that was staged automatically; one the user asked for stays.
 #[tauri::command]
 pub fn set_update_settings(
     app: tauri::AppHandle,
     state: tauri::State<'_, Updates>,
     settings: Settings,
 ) -> Result<Status, String> {
-    let mut saved = *state.saved.lock().unwrap();
-    saved.settings = settings;
-    state.save(saved)?;
-    state.saved.lock().unwrap().settings = settings;
+    state.update_settings(settings)?;
+    if state
+        .staged
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|staged| !policy::may_install(staged.automatic, &settings))
+    {
+        state.discard_staged(&app, AUTOMATIC_INSTALL_OFF);
+    }
     let status = state.publish(&app, |status| status.settings = settings);
     if settings.check_automatically {
         state.wake.notify_one();
