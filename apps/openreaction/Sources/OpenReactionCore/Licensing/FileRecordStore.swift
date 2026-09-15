@@ -198,8 +198,9 @@ public struct FileRecordStore: LicenseStore, TrialStore, Sendable {
     /// by path, then each of `OpenApps`, `<app id>` and `records` with
     /// `openat(O_DIRECTORY | O_NOFOLLOW)`, so a symlink or a file in the
     /// chain is refused. nil when a component does not exist and `create`
-    /// is false. With `create`, missing components are made at `0700` (the
-    /// base too), and every ancestor — the base's parent, the base,
+    /// is false. With `create`, missing components are made at `0700` (a
+    /// missing base — Application Support itself — is created with the
+    /// system's default mode), and every ancestor — the base's parent, the base,
     /// `OpenApps`, `<app id>` — is `fsync`ed on every call, created now or
     /// not: a directory created by an earlier save whose parent sync failed
     /// then is made durable by the save that succeeds, whichever process
@@ -246,12 +247,13 @@ public struct FileRecordStore: LicenseStore, TrialStore, Sendable {
                 // ELOOP: a symlink; ENOTDIR: a file; anything else: can't open.
                 throw .unavailable(Self.describe("open", "the \(component) directory"))
             }
+            let child = Descriptor(fd, system: system) // owns the descriptor, whatever happens below
             if create {
                 // The entry is on disk before anything is put inside it — and
                 // so is one a failed earlier save left unsynced.
                 guard system.fsync(current.fd) == 0 else { throw .unavailable(Self.describe("sync", "the directory holding \(component)")) }
             }
-            current = Descriptor(fd, system: system)
+            current = child
         }
         return current
     }
