@@ -70,14 +70,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenu?.buttonScreenFrame
         }
         #if OPENAPPS_LICENSING
+        // Both records live in one encrypted file store the app owns, keyed
+        // to this Mac (LICENSING.md, "Record store"); never the Keychain.
+        let device = PlatformDeviceIdentity()
+        let records = FileRecordStore(appID: LicenseManager.trialAppID, device: device)
         let license = LicenseController(manager: LicenseManager(
             products: LicensingConfig.products,
             client: DodoLicenseClient(host: LicensingConfig.host),
-            store: KeychainLicenseStore(),
+            store: records,
             journal: DefaultsInvalidationJournal(),
-            trialStore: KeychainTrialStore(),
+            trialStore: records,
             registry: URLSessionTrialRegistryClient(endpoint: LicensingConfig.trialRegistryURL, environment: LicensingConfig.environment),
-            device: PlatformDeviceIdentity(),
+            device: device,
             trialTiming: Licensing.trialTiming
         ))
         self.license = license
