@@ -12,7 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: SettingsWindowController?
     private var loginItem: LoginItem?
     private var preview: PreviewHarness?
+    #if DEBUG
     private var setupPreview: SetupPreviewHarness?
+    #endif
     #if OPENAPPS_LICENSING
     private var license: LicenseController?
     #endif
@@ -44,12 +46,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preview = PreviewHarness(provider: provider, dataSourceSummary: emojiData.summary)
             return
         }
+        #if DEBUG
         if let index = CommandLine.arguments.firstIndex(of: "--preview-setup") {
             installMainMenu()
             let directory = CommandLine.arguments.indices.contains(index + 1) ? CommandLine.arguments[index + 1] : nil
             setupPreview = SetupPreviewHarness(provider: provider, dataSourceSummary: emojiData.summary, outputDirectory: directory)
             return
         }
+        #endif
 
         installMainMenu()
         registerURLHandler()

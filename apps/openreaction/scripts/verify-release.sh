@@ -78,6 +78,15 @@ if [[ "$REQUIRE_RELEASE" == 1 ]]; then
     grep -q '^Authority=OpenApps HQ Release$' <<< "$signature" || { echo "error: not signed by 'OpenApps HQ Release'" >&2; exit 1; }
 fi
 
+echo "==> Debug-only code"
+# The setup preview harness (`--preview-setup`) is compiled only into debug
+# builds; a bundle is always a release-configuration build, so the flag
+# must not survive into the binary.
+if strings "$APP/Contents/MacOS/${APP_NAME}" | grep -q -- '--preview-setup'; then
+    echo "error: the binary contains the debug-only setup preview" >&2; exit 1
+fi
+echo "ok: no setup preview"
+
 echo "==> Updater"
 feed="$(info SUFeedURL)"
 key="$(info SUPublicEDKey)"

@@ -104,11 +104,16 @@ final class PermissionMonitor {
     static let backgroundInterval: TimeInterval = 15
     private static let memoryKey = "permissionFlow"
 
-    init() {
-        let memory = UserDefaults.standard.data(forKey: Self.memoryKey)
+    @ObservationIgnored private let defaults: UserDefaults
+
+    /// `provider` and `defaults` are TCC and the app's own preferences,
+    /// except in the debug preview harness (a stub and a throwaway suite).
+    init(provider: any PermissionProvider = SystemPermissionProvider(), defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let memory = defaults.data(forKey: Self.memoryKey)
             .flatMap { try? JSONDecoder().decode(PermissionFlow.Memory.self, from: $0) }
         flow = PermissionFlow(
-            provider: SystemPermissionProvider(),
+            provider: provider,
             codeIdentity: CodeIdentity.current(),
             memory: memory ?? PermissionFlow.Memory()
         )
@@ -250,7 +255,7 @@ final class PermissionMonitor {
     private func commit() {
         publish()
         if let data = try? JSONEncoder().encode(flow.memory) {
-            UserDefaults.standard.set(data, forKey: Self.memoryKey)
+            defaults.set(data, forKey: Self.memoryKey)
         }
     }
 

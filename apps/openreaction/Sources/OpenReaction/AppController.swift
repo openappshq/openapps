@@ -26,7 +26,7 @@ final class FeatureLock: @unchecked Sendable {
 @MainActor
 @Observable
 final class AppController {
-    let permissions = PermissionMonitor()
+    let permissions: PermissionMonitor
     private(set) var isEnabled: Bool
     private(set) var exclusions: AppExclusions
     private(set) var isTapRunning = false
@@ -75,6 +75,7 @@ final class AppController {
     /// Which emoji data is in use, for About and diagnostics.
     @ObservationIgnored let dataSourceSummary: String
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private let defaults: UserDefaults
 
     private enum DefaultsKey {
         static let enabled = "enabled"
@@ -82,20 +83,28 @@ final class AppController {
         static let exclusions = "exclusions"
     }
 
-    init(provider: any SuggestionProvider, dataSourceSummary: String) {
+    /// `defaults` and `permissionProvider` are the app's own except in the
+    /// debug preview harness, which passes a throwaway suite and a stub.
+    init(
+        provider: any SuggestionProvider,
+        dataSourceSummary: String,
+        defaults: UserDefaults = .standard,
+        permissionProvider: any PermissionProvider = SystemPermissionProvider()
+    ) {
         self.provider = provider
         self.dataSourceSummary = dataSourceSummary
-        let defaults = UserDefaults.standard
+        self.defaults = defaults
+        permissions = PermissionMonitor(provider: permissionProvider, defaults: defaults)
         isEnabled = defaults.object(forKey: DefaultsKey.enabled) as? Bool ?? true
         hasStoredUsage = defaults.data(forKey: DefaultsKey.frecency) != nil
-        if let stored = Self.decode(Frecency.self, key: DefaultsKey.frecency) {
+        if let stored = Self.decode(Frecency.self, key: DefaultsKey.frecency, defaults: defaults) {
             frecency = stored
             // Rewrites entries from the first release in the day-based format.
-            Self.encode(stored, key: DefaultsKey.frecency)
+            Self.encode(stored, key: DefaultsKey.frecency, defaults: defaults)
         } else {
             frecency = Frecency()
         }
-        exclusions = Self.decode(AppExclusions.self, key: DefaultsKey.exclusions) ?? AppExclusions()
+        exclusions = Self.decode(AppExclusions.self, key: DefaultsKey.exclusions, defaults: defaults) ?? AppExclusions()
     }
 
     func start() {
@@ -135,7 +144,7 @@ final class AppController {
 
     func setEnabled(_ enabled: Bool) {
         isEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: DefaultsKey.enabled)
+        defaults.set(enabled, forKey: DefaultsKey.enabled)
         updateTap()
     }
 
@@ -163,7 +172,7 @@ final class AppController {
         change(&updated)
         guard updated != exclusions else { return }
         exclusions = updated
-        Self.encode(exclusions, key: DefaultsKey.exclusions)
+        Self.encode(exclusions, key: DefaultsKey.exclusions, defaults: defaults)
         pushFrontmostExclusion()
         resetTyping()
     }
@@ -396,7 +405,7 @@ final class AppController {
                 let suggestion = pendingSuggestions.removeValue(forKey: transaction)
                 if recordUse, let suggestion {
                     frecency.record(suggestion.id)
-                    Self.encode(frecency, key: DefaultsKey.frecency)
+                    Self.encode(frecency, key: DefaultsKey.frecency, defaults: defaults)
                     hasStoredUsage = true
                 }
             }
@@ -461,7 +470,7 @@ final class AppController {
     /// Forgets which emoji were picked. Nothing else about typing is ever kept.
     func clearUsageHistory() {
         frecency.removeAll()
-        UserDefaults.standard.removeObject(forKey: DefaultsKey.frecency)
+        defaults.removeObject(forKey: DefaultsKey.frecency)
         hasStoredUsage = false
     }
 
@@ -471,14 +480,14 @@ final class AppController {
 
     // MARK: - Persistence
 
-    private static func decode<T: Decodable>(_ type: T.Type, key: String) -> T? {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+    private static func decode<T: Decodable>(_ type: T.Type, key: String, defaults: UserDefaults) -> T? {
+        guard let data = defaults.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
 
-    private static func encode<T: Encodable>(_ value: T, key: String) {
+    private static func encode<T: Encodable>(_ value: T, key: String, defaults: UserDefaults) {
         if let data = try? JSONEncoder().encode(value) {
-            UserDefaults.standard.set(data, forKey: key)
+            defaults.set(data, forKey: key)
         }
     }
 }

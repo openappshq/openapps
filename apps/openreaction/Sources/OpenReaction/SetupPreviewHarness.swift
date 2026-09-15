@@ -1,18 +1,30 @@
+#if DEBUG
 import AppKit
 import OpenReactionCore
+import ServiceManagement
 import SwiftUI
 
-/// Shows the setup guide, the settings window and every license pill
-/// without the event tap, permissions, storage or the network, for visual
-/// checks: `OpenReaction --preview-setup [directory]`.
+/// Shows the setup guide, the settings window and every license pill for
+/// visual checks: `OpenReaction --preview-setup [directory]`. Debug builds
+/// only; release binaries contain none of it (scripts/verify-release.sh
+/// checks for the flag).
+///
+/// Nothing real is touched: a throwaway preferences suite (removed again on
+/// quit), a permission provider that reports nothing granted (TCC is never
+/// asked), a login item that registers only in memory, and — with licensing
+/// — an in-memory Keychain, a Dodo client and a trial registry that never
+/// answer, so Activate and Try again go nowhere. The event tap is never
+/// installed: `AppController.start()` is not called.
 ///
 /// ⌘] and ⌘[ move the guide between steps. With a directory, each window
 /// is rendered there in light and dark appearance and the app quits.
 @MainActor
 final class SetupPreviewHarness {
+    nonisolated static let suite = "space.openapps.openreaction.preview-setup"
+
     private let controller: AppController
-    private let loginItem = LoginItem(flags: MemoryFlags())
-    private let defaults = UserDefaults(suiteName: "space.openapps.openreaction.preview-setup")!
+    private let loginItem = LoginItem(flags: MemoryFlags(), service: PreviewLoginItemService())
+    private let defaults = UserDefaults(suiteName: SetupPreviewHarness.suite)!
     private let onboarding: OnboardingWindowController
     private let settings: SettingsWindowController
     private let pills: NSWindow
@@ -20,6 +32,7 @@ final class SetupPreviewHarness {
     private let states = PillStates()
     private var keyMonitor: Any?
     private var timer: Timer?
+    private var quitObserver: NSObjectProtocol?
 
     /// The pill states side by side; the title bar sample cycles through them.
     @MainActor
@@ -33,6 +46,8 @@ final class SetupPreviewHarness {
         var current: LicenseBadge.Label? { all[index % all.count] }
     }
 
+    // MARK: - Inert stand-ins
+
     private final class MemoryFlags: FlagStore {
         var values: [String: Bool] = [:]
         func bool(forKey key: String) -> Bool { values[key] ?? false }
@@ -40,25 +55,102 @@ final class SetupPreviewHarness {
         func removeObject(forKey key: String) { values[key] = nil }
     }
 
+    /// Nothing granted, nothing asked: the guide sits on its permission steps.
+    private struct NoPermissions: PermissionProvider {
+        func isGranted(_ kind: PermissionKind) -> Bool { false }
+    }
+
+    /// Registers in memory only.
+    private final class PreviewLoginItemService: LoginItemService {
+        private(set) var status: SMAppService.Status = .notRegistered
+        func register() throws { status = .enabled }
+        func unregister() throws { status = .notRegistered }
+        func openSystemSettings() { print("PREVIEW_OPEN_LOGIN_ITEMS") }
+    }
+
+    #if OPENAPPS_LICENSING
+    /// A licensed-flavour preview runs the real controller and manager over
+    /// these: the "Keychain" holds a registered trial with a day used, and
+    /// no service ever answers.
+    private final class MemoryLicenseStore: LicenseStore, @unchecked Sendable {
+        private let lock = NSLock()
+        private var record: LicenseRecord?
+        private var cleanups: [PendingCleanup] = []
+        func loadRecord() throws(LicenseStoreError) -> LicenseRecord? { lock.withLock { record } }
+        func saveRecord(_ record: LicenseRecord) throws(LicenseStoreError) { lock.withLock { self.record = record } }
+        func clearRecord() throws(LicenseStoreError) { lock.withLock { record = nil } }
+        func loadPendingCleanups() throws(LicenseStoreError) -> [PendingCleanup] { lock.withLock { cleanups } }
+        func savePendingCleanups(_ cleanups: [PendingCleanup]) throws(LicenseStoreError) { lock.withLock { self.cleanups = cleanups } }
+    }
+
+    private final class MemoryJournal: InvalidationJournal, @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: JournalEntry] = [:]
+        func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry? { lock.withLock { entries[instanceID] } }
+        func record(instanceID: String, entry: JournalEntry) -> Bool {
+            lock.withLock {
+                if let existing = entries[instanceID], existing.seq >= entry.seq { return true }
+                entries[instanceID] = entry
+                return true
+            }
+        }
+        func clear(instanceID: String, upTo seq: UInt64) -> Bool {
+            lock.withLock {
+                if let existing = entries[instanceID], existing.seq > seq { return true }
+                entries[instanceID] = nil
+                return true
+            }
+        }
+        func replaceUnreadable(instanceID: String, with entry: JournalEntry?) -> Bool { true }
+    }
+
+    private final class MemoryTrialStore: TrialStore, @unchecked Sendable {
+        private let lock = NSLock()
+        private var record: TrialRecord? = TrialRecord(startedAt: Date().addingTimeInterval(-86_400), registered: true)
+        func loadTrial() throws(LicenseStoreError) -> TrialRecord? { lock.withLock { record } }
+        func saveTrial(_ trial: TrialRecord) throws(LicenseStoreError) { lock.withLock { record = trial } }
+    }
+
+    private struct SilentClient: LicenseClient {
+        func activate(licenseKey: String, name: String) async -> ActivationResult { .unreachable }
+        func validate(licenseKey: String, instanceID: String) async -> ValidationResult { .unreachable }
+        func deactivate(licenseKey: String, instanceID: String) async -> DeactivationResult { .unreachable }
+    }
+
+    private struct SilentRegistry: TrialRegistryClient {
+        func register(device: String) async -> TrialRegistrationResult { .unreachable }
+    }
+
+    private struct PreviewDevice: DeviceIdentity {
+        func hardwareUUID() -> String? { "00000000-0000-0000-0000-000000000000" }
+    }
+    #endif
+
     init(provider: any SuggestionProvider, dataSourceSummary: String, outputDirectory: String?) {
-        defaults.removePersistentDomain(forName: "space.openapps.openreaction.preview-setup")
-        // Never started: no tap, no permission polling, no relaunch.
-        controller = AppController(provider: provider, dataSourceSummary: dataSourceSummary)
+        defaults.removePersistentDomain(forName: Self.suite)
+        quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+            UserDefaults(suiteName: SetupPreviewHarness.suite)?.removePersistentDomain(forName: SetupPreviewHarness.suite)
+        }
+        // Never started: no tap, no focus monitor, no relaunch.
+        controller = AppController(provider: provider, dataSourceSummary: dataSourceSummary, defaults: defaults, permissionProvider: NoPermissions())
         onboarding = OnboardingWindowController(controller: controller, loginItem: loginItem, defaults: defaults) { nil }
         #if OPENAPPS_LICENSING
-        // Never started: no storage, no registry, no Dodo. The pill reads
-        // "Starting your free trial…", the state before storage is read.
         let license = LicenseController(manager: LicenseManager(
-            products: LicensingConfig.products,
-            client: DodoLicenseClient(host: LicensingConfig.host),
-            store: KeychainLicenseStore(),
-            journal: DefaultsInvalidationJournal(),
-            trialStore: KeychainTrialStore(),
-            registry: URLSessionTrialRegistryClient(endpoint: LicensingConfig.trialRegistryURL, environment: LicensingConfig.environment),
-            device: PlatformDeviceIdentity(),
-            trialTiming: Licensing.trialTiming
+            products: LicenseProducts(paid: ["pdt_preview"]),
+            client: SilentClient(),
+            store: MemoryLicenseStore(),
+            journal: MemoryJournal(),
+            trialStore: MemoryTrialStore(),
+            registry: SilentRegistry(),
+            device: PreviewDevice(),
+            trialTiming: .standard
         ))
+        license.onChange = { [weak controller, weak license] in
+            guard let controller, let license else { return }
+            controller.setLicense(allowsFeature: license.isFeatureEnabled, badge: license.badge)
+        }
         controller.setLicense(allowsFeature: license.isFeatureEnabled, badge: license.badge)
+        license.start()
         settings = SettingsWindowController(controller: controller, loginItem: loginItem, license: license) { [onboarding] in
             onboarding.show()
         }
@@ -196,3 +288,4 @@ private struct PillGallery: View {
         .background(Brand.canvas)
     }
 }
+#endif
