@@ -111,6 +111,36 @@ fn startup_state(app: tauri::AppHandle, enabled: Option<bool>) -> Result<bool, S
     manager.is_enabled().map_err(|e| e.to_string())
 }
 
+/// "Open at login" is on by default: turned on once, on the first launch of a fresh install of
+/// an official build (no saved preferences, no trial and no license record), and remembered in
+/// the preferences. An upgrade only remembers the decision, so a user who had turned it off
+/// stays off; afterwards the toggle in Settings and System Settings → Login Items are the
+/// user's. If registering fails, it is tried again on the next launch. Called by the licensing
+/// runtime once it has read the records, which official builds always do.
+#[cfg(feature = "licensing")]
+pub fn default_login_item(app: &tauri::AppHandle, fresh_records: bool) {
+    let Some(controller) = app.try_state::<Arc<Controller>>() else {
+        return;
+    };
+    let fresh_install = controller.fresh_preferences && fresh_records;
+    let decision = model::login_item_default(
+        licensing::ENABLED,
+        fresh_install,
+        &controller.snapshot().preferences,
+    );
+    match decision {
+        model::LoginItemDefault::Leave => return,
+        model::LoginItemDefault::TurnOn => {
+            let manager = app.autolaunch();
+            if !(manager.is_enabled().unwrap_or(false) || manager.enable().is_ok()) {
+                return;
+            }
+        }
+        model::LoginItemDefault::Remember => {}
+    }
+    let _ = controller.update_preferences(|prefs| prefs.login_item_defaulted = true);
+}
+
 #[tauri::command]
 fn get_diagnostics(state: tauri::State<'_, Arc<Controller>>) -> Result<String, String> {
     serde_json::to_string_pretty(&state.metrics.report(&state)).map_err(|e| e.to_string())

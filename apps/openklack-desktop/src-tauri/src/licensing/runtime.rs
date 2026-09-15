@@ -21,7 +21,7 @@ use serde::Serialize;
 use std::{
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     time::{Duration, SystemTime},
@@ -586,6 +586,9 @@ pub trait Host: Send + Sync {
     fn registry_reachable(&self) -> bool;
     /// The Mac's hardware UUID, which never leaves the Mac; `None` if it can't be read.
     fn hardware_uuid(&self) -> Option<String>;
+    /// The records were read for the first time this launch. `fresh_mac` means there is no
+    /// license and the trial record is positively absent: this launch starts the trial.
+    fn records_loaded(&self, _fresh_mac: bool) {}
 }
 
 pub struct TauriHost {
@@ -650,6 +653,10 @@ impl Host for TauriHost {
 
     fn hardware_uuid(&self) -> Option<String> {
         platform_uuid()
+    }
+
+    fn records_loaded(&self, fresh_mac: bool) {
+        crate::default_login_item(&self.app, fresh_mac);
     }
 }
 
@@ -791,6 +798,8 @@ pub struct Service<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H
     generation: AtomicU64,
     /// One Keychain read at a time, automatic or manual.
     load: Mutex<()>,
+    /// The host hears about the first successful read only.
+    records_reported: AtomicBool,
     wake: (Mutex<bool>, Condvar),
     /// The deadline enforcer's own wake-up, so a stalled write never delays a restriction.
     deadline_wake: (Mutex<bool>, Condvar),
@@ -893,6 +902,7 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
             durable_trial: Mutex::new(TrialSlot::Unread),
             generation: AtomicU64::new(0),
             load: Mutex::new(()),
+            records_reported: AtomicBool::new(false),
             wake: (Mutex::new(false), Condvar::new()),
             deadline_wake: (Mutex::new(false), Condvar::new()),
             dodo,
@@ -1150,6 +1160,16 @@ impl<D: Dodo + Send + Sync, R: Registry + Send + Sync, V: Vault, H: Host, J: Jou
         }
         if let Some((hash, seq)) = stale_entry {
             self.journal_clear(hash, seq);
+        }
+        if !self.records_reported.swap(true, Ordering::SeqCst) {
+            let fresh_mac = self
+                .durable
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|s| s.license.is_none())
+                && *self.durable_trial.lock().unwrap() == TrialSlot::Absent;
+            self.host.records_loaded(fresh_mac);
         }
         self.ensure_trial(true);
         self.publish(|_| {});
@@ -2394,6 +2414,8 @@ mod tests {
         registry_reachable: AtomicBool,
         no_hardware_uuid: AtomicBool,
         unlock_pause: Pause,
+        /// Every `records_loaded` call, with its `fresh_mac`.
+        records: Mutex<Vec<bool>>,
     }
 
     impl FakeHost {
@@ -2425,6 +2447,9 @@ mod tests {
         }
         fn hardware_uuid(&self) -> Option<String> {
             (!self.no_hardware_uuid.load(Ordering::SeqCst)).then(|| HARDWARE_UUID.into())
+        }
+        fn records_loaded(&self, fresh_mac: bool) {
+            self.records.lock().unwrap().push(fresh_mac);
         }
     }
 
@@ -2602,6 +2627,28 @@ mod tests {
         service.tick();
         service.tick();
         assert_eq!(service.registry.calls(), 1);
+    }
+
+    /// The host hears once per launch whether this Mac is fresh (no license, no trial record):
+    /// what "Open at login by default" and the setup guide key off. A Mac with a trial record
+    /// or a license is an upgrade, and a manual reload never reports again.
+    #[test]
+    fn the_first_read_tells_the_host_once_whether_the_mac_is_fresh() {
+        let clock = Arc::new(AtomicI64::new(NOW));
+        let fresh = service(Stored::default(), clock.clone());
+        fresh.registry.started(NOW, NOW);
+        fresh.load();
+        assert_eq!(*fresh.host.records.lock().unwrap(), vec![true]);
+        fresh.load();
+        assert_eq!(*fresh.host.records.lock().unwrap(), vec![true]);
+
+        let upgraded = trial_service(trial_record(DAY, true), clock.clone());
+        upgraded.load();
+        assert_eq!(*upgraded.host.records.lock().unwrap(), vec![false]);
+
+        let licensed = service(with_paid(HOUR), clock);
+        licensed.load();
+        assert_eq!(*licensed.host.records.lock().unwrap(), vec![false]);
     }
 
     #[test]

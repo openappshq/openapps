@@ -47,6 +47,10 @@ pub struct Snapshot {
 pub struct Controller {
     pub library: Library,
     pub data_directory: PathBuf,
+    /// No saved preferences existed at launch: one half of "a fresh install", which official
+    /// builds use to turn "Open at login" on by default.
+    #[cfg_attr(not(feature = "licensing"), allow(dead_code))]
+    pub fresh_preferences: bool,
     pub sender: SyncSender<Message>,
     pub visible: AtomicBool,
     app: tauri::AppHandle,
@@ -69,7 +73,8 @@ impl Controller {
         fs::create_dir_all(&data_directory).map_err(|e| e.to_string())?;
         let library = Library::open(directory, &data_directory)?;
         let preferences_file = data_directory.join("settings.json");
-        let (mut prefs, recovery) = if preferences_file.exists() {
+        let fresh_preferences = !preferences_file.exists();
+        let (mut prefs, recovery) = if !fresh_preferences {
             let bytes = fs::read(&preferences_file).map_err(|e| e.to_string())?;
             match serde_json::from_slice::<Preferences>(&bytes)
                 .map_err(|e| e.to_string())
@@ -107,6 +112,7 @@ impl Controller {
         let controller = Arc::new(Self {
             library,
             data_directory,
+            fresh_preferences,
             sender,
             visible: AtomicBool::new(false),
             app,

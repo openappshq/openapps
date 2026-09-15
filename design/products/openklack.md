@@ -15,6 +15,8 @@ Expose no tone, pitch, stereo, release-volume, or variation knobs.
 ## Desktop
 
 Home: mark, sound toggle, Settings; a compact sound list beside current sound, volume, and the fixed 3D keyboard.
+Official builds add a license pill beside the sound toggle: "Free trial · N days left" ("less than a day left" on the last day), "Trial ended", or the menu bar's short reason (offline trial, clock behind, license needed); nothing while licensed. It opens Settings → License. Source builds show no pill.
+Official builds open a three-step setup guide once, on first launch (what OpenKlack does and that the trial has started; Input Monitoring with Open System Settings and live "Granted ✓"; tips), over the settings window: skippable at any point, never blocking the menu bar, remembered in the preferences, and available again from Settings → About & help → Show setup guide.
 Keys preview on click, with subtle travel and local glow; no pointer tilt or bounce.
 Native typing audio runs independently of the window.
 Customize a key reveals Key/Sound selectors and Reset; the model selects keys in this mode.
@@ -25,7 +27,7 @@ Automatic pauses show their cause and temporary Resume on home and menu.
 
 | Settings                | Behavior                                                                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Open at login           | Opt-in                                                                                                                               |
+| Open at login           | On by default from the first launch of an official build; the user can turn it off and is never overridden. Source builds: opt-in   |
 | Microphone pause        | Default on; includes calls, dictation, recording                                                                                     |
 | Muted apps              | Pause for a chosen foreground app; removal offers Undo                                                                               |
 | Appearance              | System / Light / Dark                                                                                                                |

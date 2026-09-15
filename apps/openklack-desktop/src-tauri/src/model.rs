@@ -174,6 +174,10 @@ pub struct Preferences {
     /// The setup guide was finished or skipped; official builds show it once, on first launch.
     #[serde(default, skip_serializing_if = "is_false")]
     pub onboarding_completed: bool,
+    /// "Open at login" has been turned on by default once, on the first launch of an official
+    /// build. After that the user's own choice, in Settings or in System Settings, stands.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub login_item_defaulted: bool,
 }
 
 fn is_zero(value: &f32) -> bool {
@@ -182,6 +186,37 @@ fn is_zero(value: &f32) -> bool {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+/// What the launch does about "Open at login" being on by default. Only official builds
+/// (the `licensing` feature) decide it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "licensing"), allow(dead_code))]
+pub enum LoginItemDefault {
+    /// A fresh install of an official build: register the login item, then remember it.
+    TurnOn,
+    /// An upgrade (there were preferences, a trial or a license before): remember that the
+    /// default was considered without touching the login item, so an earlier "off" stays off.
+    Remember,
+    /// Already decided, or a build from source: nothing to do.
+    Leave,
+}
+
+/// Decides once per install. Source builds never register a login item; a user who turns it
+/// off afterwards, in Settings or in System Settings, is never overridden.
+#[cfg_attr(not(feature = "licensing"), allow(dead_code))]
+pub fn login_item_default(
+    official: bool,
+    fresh_install: bool,
+    prefs: &Preferences,
+) -> LoginItemDefault {
+    if !official || prefs.login_item_defaulted {
+        LoginItemDefault::Leave
+    } else if fresh_install {
+        LoginItemDefault::TurnOn
+    } else {
+        LoginItemDefault::Remember
+    }
 }
 
 impl Default for Preferences {
@@ -207,6 +242,7 @@ impl Default for Preferences {
             app_rules: vec![],
             favorite_pack_ids: vec![],
             onboarding_completed: false,
+            login_item_defaulted: false,
         }
     }
 }
@@ -464,12 +500,43 @@ mod tests {
         // Untouched settings keep the 0.1.0 wire shape.
         let saved = serde_json::to_value(&fresh).unwrap();
         assert!(saved.get("onboardingCompleted").is_none());
+        assert!(saved.get("loginItemDefaulted").is_none());
         let mut done = fresh.clone();
         done.onboarding_completed = true;
         let saved = serde_json::to_string(&done).unwrap();
         let restored: Preferences = serde_json::from_str(&saved).unwrap();
         assert!(restored.onboarding_completed);
         assert!(!restored.only_mute_changed(&fresh));
+    }
+
+    #[test]
+    fn open_at_login_defaults_on_for_a_fresh_official_install_only() {
+        let mut prefs = Preferences::default();
+        assert!(!prefs.login_item_defaulted);
+        assert_eq!(
+            login_item_default(false, true, &prefs),
+            LoginItemDefault::Leave,
+            "source builds never register"
+        );
+        assert_eq!(
+            login_item_default(true, true, &prefs),
+            LoginItemDefault::TurnOn,
+            "a fresh install of an official build turns it on"
+        );
+        assert_eq!(
+            login_item_default(true, false, &prefs),
+            LoginItemDefault::Remember,
+            "an upgrade remembers the decision without touching the login item"
+        );
+        prefs.login_item_defaulted = true;
+        let restored: Preferences =
+            serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+        assert!(restored.login_item_defaulted);
+        assert_eq!(
+            login_item_default(true, true, &restored),
+            LoginItemDefault::Leave,
+            "a later launch never overrides the user's choice"
+        );
     }
 
     #[test]

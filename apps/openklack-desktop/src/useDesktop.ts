@@ -25,6 +25,8 @@ export type Preferences = {
   appRules: { bundleId: string; name: string; presetId: string | null; mute: boolean }[];
   /** The setup guide was finished or skipped; absent until then. */
   onboardingCompleted?: boolean;
+  /** "Open at login" was turned on by default on the first official launch; absent until then. */
+  loginItemDefaulted?: boolean;
 };
 export type Snapshot = {
   version: string;
