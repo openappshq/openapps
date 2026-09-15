@@ -1,131 +1,92 @@
+<div align="center">
+
+<img src="design/assets/app-icon.svg" alt="Hertz app icon" width="128" />
+
 # Hertz
 
-**A native macOS menu-bar system monitor.** CPU, memory, disk, network,
-battery, and a live process tree — read straight from the kernel, in one tidy
-dropdown.
+**Native macOS menu-bar system monitor.**
 
-Tiny, fast, no Electron. ~Few MB of RAM. Built in Swift.
+Free & open source · Mac native · No permissions · No telemetry
 
-![License](https://img.shields.io/github/license/pranshugupta54/hertz)
-![Release](https://img.shields.io/github/v/release/pranshugupta54/hertz?sort=semver)
-![Platform](https://img.shields.io/badge/macOS-14%2B-black)
+[Install](#install) · [Build and run](#build-and-run) · [Architecture](docs/architecture.md) · [Report a bug](https://github.com/openappshq/openapps/issues)
 
-## Install
-
-### Homebrew
-
-```sh
-brew install --cask pranshugupta54/tap/hertz
-```
-
-or, for the short name afterwards:
-
-```sh
-brew tap pranshugupta54/tap
-brew install --cask hertz
-```
-
-### One-line script
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/pranshugupta54/hertz/main/install.sh | bash
-```
-
-Either way: the prebuilt app lands in `~/Applications`, launches into your
-menu bar, and needs no Xcode and no admin password.
-
-> Hertz is ad-hoc signed (not Apple-notarized). Both installers clear the
-> download quarantine for you, so it opens with no Gatekeeper prompt.
-
-## Auto-update
-
-Once installed, Hertz **keeps itself current** — it checks GitHub Releases on
-launch and every 24 hours and silently installs new versions. There's also a
-manual check in the footer. Nothing to do.
+</div>
 
 ## What it shows
 
-- **CPU** — overall %, a live sparkline, per-core bars, load average, temperature,
-  and thermal pressure when macOS reports throttling risk
-- **Memory** — pressure, used / free / swap, with a trend graph
-- **Disk** — usage donut, free space, live read/write throughput, filesystem
-- **Network** — up / down throughput with a trend graph, local IP, Wi-Fi SSID, VPN state
-- **Battery** — charge, live power rate, health, cycle count, temperature, adapter wattage,
-  plus connected accessories (mouse, keyboard, trackpad)
-- **Diagnosis** — current bottleneck, recent pressure events, and a copyable
-  troubleshooting snapshot for support threads
-- **Sleep Blocker Watch** — shows apps or daemons currently preventing system
-  sleep, with copy, reveal, and Activity Monitor actions
-- **Processes** — a tree grouped by app, with subtree CPU/memory totals,
-  sortable by CPU or memory, plus right-click copy, reveal, and terminate actions
-- **Cleanup Scout** — read-only scan of safe developer caches, with review,
-  reveal, report copy, and confirmed cleanup buttons
-- **Health score** — a composite 0–100 at a glance
-- **Hardware header** — chip, cores, RAM, macOS version, uptime
+One click in the menu bar opens a dashboard of glass cards, read straight from the kernel every two seconds:
 
-## How it works
+- **Health** — a composite 0–100 score, plus chip, cores, memory, macOS version and uptime
+- **Diagnosis** — the current bottleneck, the last few pressure changes, and a copyable snapshot for support threads
+- **Sleep blockers** — apps and daemons holding the Mac or the display awake, shown only while something does; read-only, with copy, reveal and Activity Monitor actions
+- **CPU** — overall %, a sparkline, per-core bars, load average, temperature, fan speed and thermal pressure
+- **Memory** — used, free and swap, with the kernel's pressure level and a trend graph
+- **Disk** — free space, usage bar and live read/write throughput
+- **Network** — up/down throughput with a trend graph, interface, Wi-Fi name, local IP and VPN state
+- **Battery** — charge, time to full or empty, live power draw, health, cycles, temperature, adapter wattage and connected accessories
+- **Processes** — a tree grouped by app with subtree CPU and memory totals, sortable, with copy, reveal and terminate in the context menu
+- **Cleanup Scout** — a read-only scan of known regenerable developer caches, then a confirmed clean; protected paths are refused
 
-Everything is read directly from the OS — no shelling out, no polling `top`:
+The menu bar item shows the pulse and, by default, CPU usage; Settings can switch the readout to memory or the symbol alone, choose which cards appear, and turn Open at login on.
 
-| Metric | Source |
-| --- | --- |
-| CPU / memory | Mach — `host_processor_info`, `host_statistics64` |
-| Thermal pressure | Darwin notify — `com.apple.system.thermalpressurelevel` with `ProcessInfo` fallback |
-| Processes | `libproc` — `proc_listallpids`, `proc_pidinfo`, `proc_pid_rusage` |
-| Disk | `statfs` + IOKit `IOBlockStorageDriver` |
-| Battery | IOKit power sources + the `AppleSmartBattery` registry |
-| Temperature / fans | the `AppleSMC` user client |
-| Network | `getifaddrs` + CoreWLAN |
-| Sleep blockers | IOKit power assertions — `IOPMCopyAssertionsByProcess` |
-| Cleanup Scout | FileManager scan of allowlisted user cache paths |
+Hertz needs **no permissions**: everything comes from Mach, libproc, IOKit, the SMC and CoreWLAN. Nothing is stored beyond your settings and nothing leaves the Mac.
 
-Hertz also keeps a small local flight recorder of recent pressure changes, so
-the menu can explain what just became slow instead of only showing live gauges.
+## Install
 
-Per-process CPU and memory match Activity Monitor — CPU-time deltas converted
-from Mach absolute-time units, memory reported as physical footprint (not RSS).
+```sh
+brew install --cask openappshq/tap/hertz
+```
 
-Sleep Blocker Watch is read-only. It explains who is currently holding active
-power assertions, but it does not force-clear another app's assertion because
-those assertions may be protecting a call, transfer, backup, render, or build.
+The app lands in `~/Applications`, opens in the menu bar, and needs no admin password. It is signed with the OpenApps HQ Release certificate but not notarized; the cask clears the download quarantine so it opens without a Gatekeeper prompt. Updates come from Homebrew, never from the app:
 
-Cleanup Scout is inspired by Mole's MIT-licensed safety model: review first,
-known cache locations only, protected paths refused, and destructive work gated
-behind explicit confirmation. Hertz implements its scanner independently in
-Swift, with no Mole source copied, and starts with the safest regenerable
-developer caches only.
+```sh
+brew upgrade --cask hertz
+```
+
+Uninstall with `brew uninstall --cask hertz`; `brew uninstall --zap --cask hertz` also removes the saved settings.
 
 ## Requirements
 
-macOS 14 (Sonoma) or later, Apple silicon. Intel Macs can build from source.
+macOS 14 Sonoma or later. The release is a universal binary; per-core detail and temperatures are best on Apple silicon.
 
-## Build from source
+## Build and run
 
-Needs the Xcode Command Line Tools (`xcode-select --install`).
-
-```sh
-git clone https://github.com/pranshugupta54/hertz.git
-cd hertz
-swift run Hertz          # run it directly
-./scripts/bundle.sh      # or build Hertz.app
-```
-
-## Uninstall
+Requires Xcode 26 (Swift 6.2 or later).
 
 ```sh
-brew uninstall --cask pranshugupta54/tap/hertz
+swift build            # debug build
+swift test             # HertzCore: health score, diagnosis, process tree, formatting, cleanup rules
+swift run Hertz        # run from the terminal (no welcome window, no login item)
+swift run HertzVerify  # cross-check every metric against df, vm_stat, top, ps, pmset and ioreg
+scripts/bundle.sh      # release build → build/Hertz.app, ad-hoc signed
 ```
 
-or, if you used the script installer:
+`HertzVerify` must report `ALL CHECKS PASSED` after any change to a collector. The signed release is built by CI from a `hertz-v*` tag; see [RELEASING.md](RELEASING.md).
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/pranshugupta54/hertz/main/uninstall.sh | bash
-```
+Regenerate the app icon and menu-bar image from the SVG masters in `design/assets` with `scripts/make-icons.sh`.
 
-## Contributing
+## Architecture
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Cutting a release: [RELEASING.md](RELEASING.md).
+| Layer | Where | Notes |
+| --- | --- | --- |
+| Collectors | `HertzCore` | Mach `host_*`, Darwin notify, `sysctl`, `statfs`, IOKit, `getifaddrs`, CoreWLAN, libproc, the `AppleSMC` user client; plain synchronous code, no UI |
+| Model | `MetricsModel` | One two-second timer on the main actor; snapshots, sparkline history, the flight recorder of pressure changes |
+| Dashboard | `Dashboard/` | The `MenuBarExtra` window: one glass card per reading, in the shared brand type and colours |
+| Settings, welcome | `Settings/`, `Onboarding/` | Readout, visible cards, Open at login; the welcome window shown once after install |
+| Verifier | `HertzVerify` | A separate executable, never bundled into the app |
 
-## License
+The reasoning, including the metric-accuracy details, is in [docs/architecture.md](docs/architecture.md).
 
-MIT — see [LICENSE](LICENSE).
+## Credits
+
+Fonts: Bricolage Grotesque, Instrument Sans and IBM Plex Mono (SIL OFL). The Cleanup Scout's review-first safety model is inspired by Mole (MIT), implemented independently. See [NOTICE](NOTICE).
+
+---
+
+<div align="center">
+
+<img src="../../design/assets/openapps-hq/app-icon.svg" alt="OpenApps HQ" width="56" />
+
+**[MIT](LICENSE) · An [OpenApps HQ](https://github.com/openappshq) original.**
+
+</div>

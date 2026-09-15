@@ -9,6 +9,15 @@ public struct ProcSample {
     public let path: String   // executable path, for app-icon resolution
     public let memory: UInt64 // physical footprint, bytes — matches Activity Monitor
     public var cpu: Double    // percent of one core (can exceed 100 across cores)
+
+    public init(pid: pid_t, ppid: pid_t, name: String, path: String, memory: UInt64, cpu: Double) {
+        self.pid = pid
+        self.ppid = ppid
+        self.name = name
+        self.path = path
+        self.memory = memory
+        self.cpu = cpu
+    }
 }
 
 /// Reads the kernel process table directly through libproc — the same C API

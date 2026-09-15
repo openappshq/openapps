@@ -147,11 +147,11 @@ public func diagnosticReport(_ context: DiagnosticContext,
             + "\(context.cpu.thermalPressure.label)",
         "Memory: pressure \(whole(context.memory.pressurePercent))% · used "
             + "\(whole(context.memory.usedPercent))% · swap "
-            + "\(formatBytes(context.memory.swapUsed)) / \(formatBytes(context.memory.swapTotal))",
+            + "\(Format.bytes(context.memory.swapUsed)) / \(Format.bytes(context.memory.swapTotal))",
         "Disk: \(whole(context.disk.usedPercent))% used · "
-            + "\(formatBytes(context.disk.free)) free",
-        "Network: down \(formatRate(context.network.down)) · up "
-            + "\(formatRate(context.network.up))",
+            + "\(Format.bytes(context.disk.free)) free",
+        "Network: down \(Format.rate(context.network.down)) · up "
+            + "\(Format.rate(context.network.up))",
         batteryLine(context.battery),
         ""
     ]
@@ -165,13 +165,13 @@ public func diagnosticReport(_ context: DiagnosticContext,
     lines.append("Top CPU:")
     for node in topCPU {
         lines.append("- \(node.sample.name): \(oneDecimal(node.subtreeCPU))% CPU, "
-            + "\(formatBytes(node.subtreeMemory))")
+            + "\(Format.bytes(node.subtreeMemory))")
     }
 
     lines.append("")
     lines.append("Top Memory:")
     for node in topMemory {
-        lines.append("- \(node.sample.name): \(formatBytes(node.subtreeMemory)), "
+        lines.append("- \(node.sample.name): \(Format.bytes(node.subtreeMemory)), "
             + "\(oneDecimal(node.subtreeCPU))% CPU")
     }
 
@@ -184,10 +184,10 @@ private func memoryInsight(_ context: DiagnosticContext, topMemory: ProcessNode?
         ? "Memory pressure is critical"
         : "Memory pressure needs attention"
     var detail = "Pressure is \(whole(context.memory.pressurePercent))% with "
-        + "\(formatBytes(context.memory.swapUsed)) swap used."
+        + "\(Format.bytes(context.memory.swapUsed)) swap used."
     if let topMemory, topMemory.subtreeMemory >= 1_073_741_824 {
         detail += " \(topMemory.sample.name) is the largest app at "
-            + "\(formatBytes(topMemory.subtreeMemory))."
+            + "\(Format.bytes(topMemory.subtreeMemory))."
     }
     return DiagnosticInsight(id: "memory", severity: severity,
                              title: title, detail: detail)
@@ -223,7 +223,7 @@ private func diskInsight(_ context: DiagnosticContext,
         id: "disk",
         severity: severity,
         title: severity == .critical ? "Startup disk is almost full" : "Startup disk is getting tight",
-        detail: "\(formatBytes(context.disk.free)) free on \(context.disk.fsType.isEmpty ? "disk" : context.disk.fsType)."
+        detail: "\(Format.bytes(context.disk.free)) free on \(context.disk.fsType.isEmpty ? "disk" : context.disk.fsType)."
     )
 }
 
@@ -261,19 +261,6 @@ private let reportDate: DateFormatter = {
     formatter.timeStyle = .medium
     return formatter
 }()
-
-private func formatBytes(_ bytes: UInt64) -> String {
-    let mb = Double(bytes) / 1_048_576
-    if mb >= 1024 { return String(format: "%.1f GB", mb / 1024) }
-    return String(format: "%.0f MB", mb)
-}
-
-private func formatRate(_ bytesPerSec: Double) -> String {
-    let kb = bytesPerSec / 1024
-    if kb >= 1024 { return String(format: "%.1f MB/s", kb / 1024) }
-    if kb >= 1 { return String(format: "%.0f KB/s", kb) }
-    return "0 KB/s"
-}
 
 private func oneDecimal(_ value: Double) -> String {
     String(format: "%.1f", value)

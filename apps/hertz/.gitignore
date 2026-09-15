@@ -1,2 +1,11 @@
+.DS_Store
 .build/
-Hertz.app/
+.swiftpm/
+build/
+dist/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.vscode/*
+.idea
+*.local

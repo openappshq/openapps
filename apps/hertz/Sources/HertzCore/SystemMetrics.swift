@@ -89,6 +89,15 @@ public enum MemoryPressureLevel: Int {
     case warning = 2
     case critical = 4
 
+    public var label: String {
+        switch self {
+        case .unknown: return "unknown"
+        case .normal: return "normal"
+        case .warning: return "warning"
+        case .critical: return "critical"
+        }
+    }
+
     public static func fromKernelValue(_ rawValue: Int) -> MemoryPressureLevel {
         switch rawValue {
         case 1: return .normal

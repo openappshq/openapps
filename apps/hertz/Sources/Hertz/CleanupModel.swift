@@ -8,7 +8,7 @@ final class CleanupModel {
     var scan = CleanupScan()
     var isScanning = false
     var isCleaning = false
-    var status = "Scan safe caches before cleaning."
+    var status = "Scan for regenerable caches first."
 
     @ObservationIgnored private let scout = CleanupScout()
 
@@ -19,7 +19,7 @@ final class CleanupModel {
     func scanNow() {
         guard !isScanning, !isCleaning else { return }
         isScanning = true
-        status = "Scanning safe developer caches..."
+        status = "Scanning known caches…"
 
         let scout = scout
         Task {
@@ -29,15 +29,15 @@ final class CleanupModel {
             scan = result
             isScanning = false
             status = result.candidates.isEmpty
-                ? "No safe cleanup candidates found."
-                : "\(fmtMem(result.totalBytes)) reclaimable in \(result.candidates.count) safe groups."
+                ? "Nothing to clean."
+                : "\(Format.bytes(result.totalBytes)) reclaimable in \(result.candidates.count) group\(result.candidates.count == 1 ? "" : "s")."
         }
     }
 
     func cleanSafeCandidates() {
         guard hasCandidates, !isScanning, !isCleaning else { return }
         isCleaning = true
-        status = "Cleaning safe cache groups..."
+        status = "Cleaning…"
         let candidates = scan.candidates
         let scout = scout
 
@@ -51,9 +51,9 @@ final class CleanupModel {
             scan = freshScan
             isCleaning = false
             if result.failed.isEmpty {
-                status = "Cleaned \(fmtMem(result.cleanedBytes)) across \(result.cleanedItems) items."
+                status = "Cleaned \(Format.bytes(result.cleanedBytes)) across \(result.cleanedItems) items."
             } else {
-                status = "Cleaned \(fmtMem(result.cleanedBytes)); \(result.failed.count) paths failed."
+                status = "Cleaned \(Format.bytes(result.cleanedBytes)); \(result.failed.count) paths failed."
             }
         }
     }

@@ -1,7 +1,9 @@
 import Foundation
-import Observation
 import HertzCore
+import Observation
 
+/// One recorded change of the leading diagnosis, so the dashboard can say
+/// what became slow a moment ago instead of only showing live gauges.
 struct FlightRecord: Identifiable {
     let id = UUID()
     let date: Date
@@ -10,10 +12,12 @@ struct FlightRecord: Identifiable {
     let detail: String
 }
 
-/// Holds the latest metrics snapshot. Observed by the SwiftUI dashboard;
-/// refreshed on a timer.
+/// Holds the latest metrics snapshot. Observed by the dashboard and the menu
+/// bar readout; refreshed on a two-second timer on the main run loop.
 @Observable
 final class MetricsModel {
+    static let refreshInterval: TimeInterval = 2
+
     var cpu = CPUSnapshot()
     var memory = MemorySnapshot()
     var disk = DiskSnapshot()
@@ -44,10 +48,10 @@ final class MetricsModel {
     @ObservationIgnored private var timer: Timer?
 
     init() {
-        hardware = system.hardware() // static — read once
-        refresh() // first read: CPU/network show 0 until the second tick
-        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            // Timer fires on the main run loop.
+        hardware = system.hardware() // static: read once
+        refresh() // first read; CPU and network rates show 0 until the second tick
+        timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
+            // The timer fires on the main run loop.
             MainActor.assumeIsolated { self?.refresh() }
         }
     }
@@ -84,6 +88,7 @@ final class MetricsModel {
                           hardware: hardware, health: health)
     }
 
+    /// The copyable snapshot: the report plus the recent events.
     var diagnosticReport: String {
         var report = HertzCore.diagnosticReport(diagnosticContext)
         if !flightRecorder.isEmpty {

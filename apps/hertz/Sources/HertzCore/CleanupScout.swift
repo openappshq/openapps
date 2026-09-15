@@ -136,7 +136,11 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
 
         for candidate in candidates where candidate.risk == .low {
             let url = URL(fileURLWithPath: candidate.path).standardizedFileURL
-            guard isCleanablePath(url), FileManager.default.fileExists(atPath: url.path) else {
+            // A candidate is only ever a path scan() could have produced: an
+            // allowlisted cache root, or a direct child of one. Anything else
+            // is refused whatever else it looks like.
+            guard isAllowlisted(url, deleteContents: candidate.deleteContents),
+                  isCleanablePath(url), FileManager.default.fileExists(atPath: url.path) else {
                 failed.append(candidate.path)
                 continue
             }
@@ -166,12 +170,12 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
         var lines = [
             "Hertz Cleanup Scout",
             "Scanned: \(scan.scannedAt)",
-            "Reclaimable: \(formatBytes(scan.totalBytes)) across \(scan.candidates.count) safe groups",
+            "Reclaimable: \(Format.bytes(scan.totalBytes)) across \(scan.candidates.count) safe groups",
             ""
         ]
 
         for candidate in scan.candidates {
-            lines.append("- \(candidate.title): \(formatBytes(candidate.bytes))")
+            lines.append("- \(candidate.title): \(Format.bytes(candidate.bytes))")
             lines.append("  \(candidate.reason)")
             lines.append("  \(candidate.path)")
         }
@@ -192,6 +196,22 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
             ? String(relativePath.dropFirst(2))
             : relativePath
         return homeDirectory.appendingPathComponent(trimmed).standardizedFileURL
+    }
+
+    /// Whether `url` is exactly an allowlisted root (cleaned by contents) or a
+    /// direct child of an allowlisted root that is cleaned child by child.
+    private func isAllowlisted(_ url: URL, deleteContents: Bool) -> Bool {
+        let path = url.standardizedFileURL.path
+        return Self.safeSpecs.contains { spec in
+            let root = expand(spec.relativePath).path
+            switch spec.mode {
+            case .contents:
+                return deleteContents && path == root
+            case .children:
+                return !deleteContents && path.hasPrefix(root + "/")
+                    && !path.dropFirst(root.count + 1).contains("/")
+            }
+        }
     }
 
     private func isCleanablePath(_ url: URL) -> Bool {
@@ -285,14 +305,6 @@ nonisolated public final class CleanupScout: @unchecked Sendable {
                       ?? 0)
     }
 
-    private func formatBytes(_ bytes: UInt64) -> String {
-        if bytes < 1_048_576 {
-            return String(format: "%.0f KB", Double(bytes) / 1024)
-        }
-        let mb = Double(bytes) / 1_048_576
-        if mb >= 1024 { return String(format: "%.1f GB", mb / 1024) }
-        return String(format: "%.0f MB", mb)
-    }
 }
 
 nonisolated private enum CleanupMode: Sendable {

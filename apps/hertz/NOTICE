@@ -1,0 +1,34 @@
+Hertz
+Copyright (c) 2026 OpenApps HQ. Licensed under the MIT License (see LICENSE).
+
+Hertz includes the third-party material listed below. Each item keeps its
+original license.
+
+-------------------------------------------------------------------------------
+Fonts (SIL Open Font License 1.1)
+-------------------------------------------------------------------------------
+Directory: Sources/Hertz/Resources/Fonts (unmodified font binaries)
+Source:    https://github.com/google/fonts at revision
+           809e4d8b8d7e9364a914909bb777679606c178b8
+
+- Bricolage Grotesque  ofl/bricolagegrotesque/BricolageGrotesque[opsz,wdth,wght].ttf
+                       License text: Fonts/OFL-BricolageGrotesque.txt
+- Instrument Sans      ofl/instrumentsans/InstrumentSans[wdth,wght].ttf
+                       License text: Fonts/OFL-InstrumentSans.txt
+- IBM Plex Mono        ofl/ibmplexmono/IBMPlexMono-Regular.ttf, IBMPlexMono-Medium.ttf
+                       License text: Fonts/OFL-IBMPlexMono.txt
+
+-------------------------------------------------------------------------------
+Brand system
+-------------------------------------------------------------------------------
+design/tokens.json comes from the OpenApps HQ "Tactile Studio" system
+(openappshq/openapps, MIT). The green ramp beyond the shared green/50, 300,
+700 and 950 steps and the Hertz pulse mark are original to this app.
+
+-------------------------------------------------------------------------------
+Cleanup Scout
+-------------------------------------------------------------------------------
+The review-first safety model (known cache locations only, protected paths
+refused, destructive work behind explicit confirmation) is inspired by Mole
+(MIT). The scanner is an independent Swift implementation; no Mole source is
+included.
