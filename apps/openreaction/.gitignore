@@ -10,3 +10,6 @@ xcuserdata/
 .idea
 *.local
 Sources/OpenReaction/Licensing/LicensingConfig.swift
+# Official builds resolve Sparkle (pinned by revision in Package.swift);
+# source builds have no dependencies.
+Package.resolved

@@ -11,6 +11,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     #if OPENAPPS_LICENSING
     private let license: LicenseController
     #endif
+    #if OPENAPPS_OFFICIAL
+    var updates: UpdateController?
+    #endif
 
     #if OPENAPPS_LICENSING
     init(controller: AppController, loginItem: LoginItem, license: LicenseController, showOnboarding: @escaping () -> Void) {
@@ -34,7 +37,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             #else
             let root = SettingsView(controller: controller, loginItem: loginItem, showOnboarding: showOnboarding)
             #endif
+            #if OPENAPPS_OFFICIAL
+            let hostingView = NSHostingView(rootView: root.showingUpdates(updates))
+            #else
             let hostingView = NSHostingView(rootView: root)
+            #endif
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
                 styleMask: [.titled, .closable],
@@ -61,6 +68,15 @@ private struct SettingsView: View {
     let license: LicenseController
     #endif
     let showOnboarding: () -> Void
+    #if OPENAPPS_OFFICIAL
+    var updates: UpdateController? = nil
+
+    func showingUpdates(_ updates: UpdateController?) -> SettingsView {
+        var view = self
+        view.updates = updates
+        return view
+    }
+    #endif
     @State private var copied = false
 
     var body: some View {
@@ -99,6 +115,12 @@ private struct SettingsView: View {
             #endif
 
             AppExclusionsSection(controller: controller)
+
+            #if OPENAPPS_OFFICIAL
+            if let updates {
+                UpdatesSection(updates: updates)
+            }
+            #endif
 
             Section {
                 LabeledContent("Version") {

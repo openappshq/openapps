@@ -13,6 +13,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private lazy var badgedImage = Self.badged(baseImage)
     /// Frontmost app when the menu opened; opening a status menu does not activate OpenReaction.
     private var frontmostApp: NSRunningApplication?
+    #if OPENAPPS_OFFICIAL
+    var updates: UpdateController?
+    #endif
 
     init(controller: AppController, showOnboarding: @escaping () -> Void, showSettings: @escaping () -> Void) {
         self.controller = controller
@@ -54,6 +57,16 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         frontmostApp = NSWorkspace.shared.frontmostApplication
         menu.removeAllItems()
+
+        #if OPENAPPS_OFFICIAL
+        if let version = updates?.readyVersion {
+            let restart = item("Update ready — Restart", #selector(restartToUpdate))
+            restart.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
+            restart.toolTip = "Installs OpenReaction \(version) and opens it again"
+            menu.addItem(restart)
+            menu.addItem(.separator())
+        }
+        #endif
 
         if setupIncomplete {
             let finish = item("Finish Setup…", #selector(openOnboarding))
@@ -129,6 +142,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func showAbout() {
         Diagnostics.showAboutPanel(controller: controller)
     }
+
+    #if OPENAPPS_OFFICIAL
+    @objc private func restartToUpdate() {
+        updates?.restartToUpdate()
+    }
+    #endif
 
     @objc private func quit() {
         NSApp.terminate(nil)

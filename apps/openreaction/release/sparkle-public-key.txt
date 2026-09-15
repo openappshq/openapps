@@ -1,0 +1,1 @@
+NOT GENERATED: run apps/openreaction/scripts/create-update-key.sh <private key dir> on the release owner's own Mac; it writes this file (apps/openreaction/RELEASING.md, "Signing certificate and update key").

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Publishes a verified DMG as the GitHub Release for openreaction-v<version>,
-# and only when the tag names exactly the commit the DMG was built from and
-# the DMG is byte-for-byte the one that passed verification.
+# Publishes a verified zip as the GitHub Release for openreaction-v<version>,
+# and only when the tag names exactly the commit the zip was built from and
+# the zip is byte-for-byte the one that passed verification.
 #
 #   GH_REPO=owner/repo TAG=openreaction-v1.2.3 VERSION=1.2.3 \
 #   BUILT_COMMIT=<sha> EXPECTED_SHA256=<digest> RULESET_READ_TOKEN=<token> \
 #   DIST=dist scripts/publish-release.sh [--dry-run]
 #
-# EXPECTED_SHA256 is the digest the release job computed from the DMG it
-# verified, carried as a job output rather than as a file next to the DMG;
+# EXPECTED_SHA256 is the digest the release job computed from the zip it
+# verified, carried as a job output rather than as a file next to the zip;
 # a checksum file that travelled with the download proves nothing and is
 # ignored. RULESET_READ_TOKEN reads the tag ruleset as a caller that is
-# shown its bypass actors (scripts/release-tag-ruleset.sh).
+# shown its bypass actors (scripts/release/release-tag-ruleset.sh at the repository root).
 #
 # Optional: CREATE_TAG=true lets a missing tag be created at BUILT_COMMIT
 # (manual runs from a branch); ALLOW_OLDER=true permits publishing a version
@@ -19,7 +19,7 @@
 # and stops before the first change to the repository.
 #
 # Order of operations, each of which fails closed:
-#   1. the downloaded DMG has exactly the expected digest;
+#   1. the downloaded zip has exactly the expected digest;
 #   2. an active ruleset makes openreaction-v* tags immutable (moves and
 #      deletions blocked, nobody exempt) — the actual guarantee that the tag
 #      cannot change underneath this script;
@@ -40,7 +40,7 @@ if [[ "${1:-}" == "--dry-run" ]]; then DRY_RUN=1; fi
 : "${TAG:?release tag}"
 : "${VERSION:?MAJOR.MINOR.PATCH}"
 : "${BUILT_COMMIT:?commit the assets were built from}"
-: "${EXPECTED_SHA256:?SHA-256 of the verified DMG, from the release job}"
+: "${EXPECTED_SHA256:?SHA-256 of the verified zip, from the release job}"
 if [[ -z "${RULESET_READ_TOKEN:-}" ]]; then
     echo "error: RULESET_READ_TOKEN is not set; the tag ruleset cannot be checked for hidden bypass actors (RELEASING.md)" >&2
     exit 1
@@ -48,8 +48,8 @@ fi
 DIST="${DIST:-dist}"
 CREATE_TAG="${CREATE_TAG:-false}"
 ALLOW_OLDER="${ALLOW_OLDER:-false}"
-DMG="OpenReaction-${VERSION}.dmg"
-SUM="${DMG}.sha256"
+ZIP="OpenReaction-${VERSION}.zip"
+SUM="${ZIP}.sha256"
 [[ "$TAG" == "openreaction-v${VERSION}" ]] || { echo "error: TAG ${TAG} does not match VERSION ${VERSION}" >&2; exit 1; }
 [[ "$BUILT_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "error: BUILT_COMMIT must be a full commit SHA" >&2; exit 1; }
 [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "error: EXPECTED_SHA256 must be a lowercase hex SHA-256" >&2; exit 1; }
@@ -111,20 +111,20 @@ delete_drafts() {
     done
 }
 
-echo "==> Checking ${DIST}/${DMG} against the verified digest"
-test -f "$DIST/$DMG" || { echo "error: ${DIST}/${DMG} not found" >&2; exit 1; }
-actual="$(sha256_of "$DIST/$DMG")"
+echo "==> Checking ${DIST}/${ZIP} against the verified digest"
+test -f "$DIST/$ZIP" || { echo "error: ${DIST}/${ZIP} not found" >&2; exit 1; }
+actual="$(sha256_of "$DIST/$ZIP")"
 if [[ "$actual" != "$EXPECTED_SHA256" ]]; then
-    echo "error: ${DMG} has SHA-256 ${actual}, but the release job verified ${EXPECTED_SHA256}; this is not the verified build" >&2
+    echo "error: ${ZIP} has SHA-256 ${actual}, but the release job verified ${EXPECTED_SHA256}; this is not the verified build" >&2
     exit 1
 fi
-# The checksum published next to the DMG is written from the verified
+# The checksum published next to the zip is written from the verified
 # digest, never taken from whatever came with the download.
-printf '%s  %s\n' "$EXPECTED_SHA256" "$DMG" > "$DIST/$SUM"
-echo "ok: ${DMG} ${EXPECTED_SHA256}"
+printf '%s  %s\n' "$EXPECTED_SHA256" "$ZIP" > "$DIST/$SUM"
+echo "ok: ${ZIP} ${EXPECTED_SHA256}"
 
 echo "==> Checking tag protection on ${GH_REPO}"
-scripts/release-tag-ruleset.sh check "$GH_REPO"
+../../scripts/release/release-tag-ruleset.sh check .github/rulesets/openreaction-release-tags.json "$GH_REPO"
 
 echo "==> Resolving ${TAG}"
 existing="$(tag_commit)"
@@ -162,7 +162,7 @@ if printf '%s' "$releases" | jq -e --arg tag "$TAG" 'any(.[]; .tag_name == $tag 
     echo "error: $TAG is already published; a release is never rewritten. Fix forward with a new patch version." >&2
     exit 1
 fi
-stop_if_dry_run "create a draft release for $TAG (discarding any leftover draft), upload $DMG and $SUM, and publish"
+stop_if_dry_run "create a draft release for $TAG (discarding any leftover draft), upload $ZIP and $SUM, and publish"
 delete_drafts
 
 # From here until the draft is published, leaving for any reason — an error,
@@ -195,7 +195,7 @@ fi
 DRAFT_ID="$draft_ids"
 echo "ok: draft release #${DRAFT_ID}"
 
-gh release upload "$TAG" --repo "$GH_REPO" "$DIST/$DMG" "$DIST/$SUM"
+gh release upload "$TAG" --repo "$GH_REPO" "$DIST/$ZIP" "$DIST/$SUM"
 
 echo "==> Confirming ${TAG} still names ${BUILT_COMMIT}"
 now="$(tag_commit)"

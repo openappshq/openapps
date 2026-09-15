@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #if OPENAPPS_LICENSING
     private var license: LicenseController?
     #endif
+    #if OPENAPPS_OFFICIAL
+    private var updates: UpdateController?
+    #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppResources.registerFonts()
@@ -79,6 +82,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onboarding?.show()
         }
         #endif
+        #if OPENAPPS_OFFICIAL
+        // Independent of licensing: updates never depend on the license or trial state.
+        let updates = UpdateController()
+        self.updates = updates
+        settings.updates = updates
+        statusMenu.updates = updates
+        #endif
         controller.onStateChange = { [weak statusMenu] in statusMenu?.updateButton() }
         onboarding.model.onOpenSettings = { [weak settings] in settings?.show() }
         self.controller = controller
@@ -88,12 +98,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.settings = settings
 
         // Reads permissions and tries the tap once, so the launch decision
-        // below sees current state.
-        controller.start()
+        // below sees current state. Update-test builds never touch either.
+        let usesEventTap = !UpdateTesting.disablesEventTap
+        if usesEventTap {
+            controller.start()
+        }
         #if OPENAPPS_LICENSING
         license.start()
         #endif
-        if OnboardingWindowController.shouldShowOnLaunch(permissions: controller.permissions) {
+        #if OPENAPPS_OFFICIAL
+        updates.start()
+        #endif
+        if usesEventTap, OnboardingWindowController.shouldShowOnLaunch(permissions: controller.permissions) {
             onboarding.show()
         }
     }
