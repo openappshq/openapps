@@ -5,11 +5,30 @@ import OpenAppsUpdater
 #endif
 import SwiftUI
 
+/// A request to bring one part of the settings form into view.
+@MainActor
+@Observable
+final class SettingsNavigation {
+    enum Anchor: Hashable {
+        case license
+    }
+
+    /// Incremented per request, so asking for the same anchor twice scrolls twice.
+    private(set) var request = 0
+    private(set) var anchor: Anchor?
+
+    func reveal(_ anchor: Anchor) {
+        self.anchor = anchor
+        request += 1
+    }
+}
+
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let controller: AppController
     private let loginItem: LoginItem
     private let showOnboarding: () -> Void
+    private let navigation = SettingsNavigation()
     private var window: NSWindow?
     #if OPENAPPS_LICENSING
     private let license: LicenseController
@@ -36,9 +55,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show() {
         if window == nil {
             #if OPENAPPS_LICENSING
-            let root = SettingsView(controller: controller, loginItem: loginItem, license: license, showOnboarding: showOnboarding)
+            let root = SettingsView(controller: controller, loginItem: loginItem, license: license, navigation: navigation, showOnboarding: showOnboarding)
             #else
-            let root = SettingsView(controller: controller, loginItem: loginItem, showOnboarding: showOnboarding)
+            let root = SettingsView(controller: controller, loginItem: loginItem, navigation: navigation, showOnboarding: showOnboarding)
             #endif
             #if OPENAPPS_OFFICIAL
             let hostingView = NSHostingView(rootView: root.showingUpdates(updates))
@@ -54,6 +73,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.title = "OpenReaction Settings"
             window.isReleasedWhenClosed = false
             window.contentView = hostingView
+            #if OPENAPPS_LICENSING
+            // The trial pill, at the trailing end of the title bar.
+            window.addTitlebarAccessoryViewController(LicensePillAccessory(badge: { [license] in license.badge }) { [weak self] in
+                self?.showLicense()
+            })
+            #endif
             window.center()
             self.window = window
         }
@@ -61,6 +86,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         controller.permissions.refresh()
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Settings → License: the pill, the status menu's license line and the
+    /// setup guide land here.
+    func showLicense() {
+        show()
+        navigation.reveal(.license)
     }
 }
 
@@ -70,6 +102,7 @@ private struct SettingsView: View {
     #if OPENAPPS_LICENSING
     let license: LicenseController
     #endif
+    let navigation: SettingsNavigation
     let showOnboarding: () -> Void
     #if OPENAPPS_OFFICIAL
     var updates: Updater? = nil
@@ -81,8 +114,24 @@ private struct SettingsView: View {
     }
     #endif
     @State private var copied = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        ScrollViewReader { proxy in
+            form
+                .onChange(of: navigation.request) {
+                    guard let anchor = navigation.anchor else { return }
+                    withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                }
+        }
+        .formStyle(.grouped)
+        // The app list makes the form taller than a screen; the form scrolls.
+        .frame(width: 520, height: 640)
+    }
+
+    private var form: some View {
         Form {
             Section {
                 Toggle(isOn: Binding(get: { controller.isEnabled }, set: { controller.setEnabled($0) })) {
@@ -107,14 +156,14 @@ private struct SettingsView: View {
                             .disabled(!controller.canRelaunch)
                     }
                     Spacer()
-                    Button("Open Setup Guide…", action: showOnboarding)
+                    Button("Show setup guide", action: showOnboarding)
                 }
             } header: {
                 MonoLabel("Permissions")
             }
 
             #if OPENAPPS_LICENSING
-            LicenseSection(license: license)
+            LicenseSection(license: license, anchor: SettingsNavigation.Anchor.license)
             #endif
 
             AppExclusionsSection(controller: controller)
@@ -160,9 +209,6 @@ private struct SettingsView: View {
                 MonoLabel("About")
             }
         }
-        .formStyle(.grouped)
-        // The app list makes the form taller than a screen; the form scrolls.
-        .frame(width: 520, height: 640)
     }
 }
 

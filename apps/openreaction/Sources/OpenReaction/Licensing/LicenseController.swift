@@ -273,10 +273,10 @@ final class LicenseController {
     /// Re-evaluates the state from the snapshot and the clock — never from
     /// storage — and re-arms both timers. Cheap; called on every timer and event.
     private func refresh() {
-        let previous = state
+        let previous = (state, badge)
         state = snapshot.state(now: Date(), uptime: LicenseManager.continuousUptime(), wakeSince: pendingWake)
         scheduleTimers()
-        if previous != state { onChange?() }
+        if previous != (state, badge) { onChange?() }
     }
 
     // MARK: - Copy
@@ -288,27 +288,15 @@ final class LicenseController {
         days <= 1 ? "Free trial: less than a day left" : "Free trial: \(days) days left"
     }
 
-    /// One line for the status menu while not simply licensed. The end of
-    /// the trial is said here, in the menu bar item; nothing opens on its own.
-    var statusLine: String? {
-        switch state {
-        case .licensed: nil
-        case .trialUnavailable:
-            if snapshot.storageError != nil {
-                "Can’t read the license from the Keychain"
-            } else if snapshot.trialStorageError != nil {
-                "Can’t read or save the free trial in the Keychain"
-            } else {
-                "Starting your free trial…"
-            }
-        case .trial(let days): Self.trialText(daysLeft: days)
-        case .trialNeedsConnection: "Connect to the internet to continue your free trial"
-        case .trialClockBehind: Self.clockBehindText
-        case .trialEnded: "Your free trial has ended — buy in Settings"
-        case .grace(let days, let warn): warn ? "Connect to the internet within \(days) day\(days == 1 ? "" : "s") to keep using OpenReaction" : nil
-        case .checkRequired: "Connect to the internet to verify your license"
-        case .revoked: "License no longer active on this Mac"
-        }
+    /// The pill in the settings header and the line in the status menu,
+    /// while not simply licensed. The end of the trial is said here, in the
+    /// menu bar item; nothing opens on its own.
+    var badge: LicenseBadge.Label? {
+        LicenseBadge.label(
+            for: state,
+            storageError: snapshot.storageError != nil,
+            trialStorageError: snapshot.trialStorageError != nil
+        )
     }
 }
 #endif

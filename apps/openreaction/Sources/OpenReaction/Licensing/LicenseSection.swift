@@ -6,6 +6,8 @@ import SwiftUI
 /// Settings → License. States and copy follow LICENSING.md.
 struct LicenseSection: View {
     let license: LicenseController
+    /// Scroll target for "Settings → License" (the pill, the status menu).
+    let anchor: SettingsNavigation.Anchor
 
     @State private var key = ""
     @State private var showsKeyField = false
@@ -32,7 +34,7 @@ struct LicenseSection: View {
                 keyField
             }
         } header: {
-            MonoLabel("License")
+            MonoLabel("License").id(anchor)
         } footer: {
             Text(LicensingCopy.privacy)
                 .font(Brand.body(12))

@@ -12,6 +12,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let controller: AppController
     private let showOnboarding: () -> Void
     private let showSettings: () -> Void
+    private let showLicense: () -> Void
     private let baseImage = AppResources.menuBarImage()
     private lazy var badgedImage = Self.badged(baseImage)
     /// Frontmost app when the menu opened; opening a status menu does not activate OpenReaction.
@@ -20,10 +21,16 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     var updates: Updater?
     #endif
 
-    init(controller: AppController, showOnboarding: @escaping () -> Void, showSettings: @escaping () -> Void) {
+    init(
+        controller: AppController,
+        showOnboarding: @escaping () -> Void,
+        showSettings: @escaping () -> Void,
+        showLicense: @escaping () -> Void
+    ) {
         self.controller = controller
         self.showOnboarding = showOnboarding
         self.showSettings = showSettings
+        self.showLicense = showLicense
         super.init()
         menu.delegate = self
         menu.autoenablesItems = false
@@ -32,7 +39,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         observeChanges { [weak self] in
             guard let self else { return }
             _ = self.controller.isReady
-            _ = self.controller.licenseStatusLine
+            _ = self.controller.licenseBadge
             _ = self.controller.inputNotice
             _ = self.controller.permissions.snapshot
         } onChange: { [weak self] in
@@ -78,9 +85,22 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        let status = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
-        status.isEnabled = false
-        menu.addItem(status)
+        if let statusText {
+            let status = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            menu.addItem(status)
+        }
+
+        // Official builds: the trial's remaining time, or why the license
+        // keeps the picker off. Leads to Settings → License.
+        if let badge = controller.licenseBadge {
+            let license = item(badge.text, #selector(openLicense))
+            if badge.tone == .attention {
+                license.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: nil)
+            }
+            license.toolTip = "Opens License settings"
+            menu.addItem(license)
+        }
 
         if controller.permissions.allGranted {
             menu.addItem(item(controller.isEnabled ? "Pause OpenReaction" : "Resume OpenReaction", #selector(toggleEnabled)))
@@ -107,13 +127,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(quit)
     }
 
-    private var statusText: String {
+    /// Nil when the license line below says everything: the picker is off
+    /// for a license reason and nothing else needs attention.
+    private var statusText: String? {
         let permissions = controller.permissions
         if let notice = controller.inputNotice { return notice }
         if PermissionKind.allCases.contains(where: { permissions.status($0) == .stale }) { return "Permission needs a reset" }
         if controller.needsRelaunch { return "Needs a relaunch" }
         if !permissions.allGranted { return "Needs permissions" }
-        if let line = controller.licenseStatusLine { return line }
+        if !controller.isLicensedForFeature { return nil }
         if !controller.isEnabled { return "Paused" }
         if IsSecureEventInputEnabled() { return "Paused while macOS protects typing" }
         return "On — type :shortcode: anywhere"
@@ -140,6 +162,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     @objc private func openSettings() {
         showSettings()
+    }
+
+    @objc private func openLicense() {
+        showLicense()
     }
 
     @objc private func showAbout() {

@@ -44,11 +44,13 @@ final class AppController {
     /// licensing compiled out; official builds set it from the license state.
     /// A locked state stops only the picker: the tap is not started.
     private(set) var isLicensedForFeature = true
-    /// Status-menu line while the license needs attention, or nil.
-    private(set) var licenseStatusLine: String?
+    /// The trial's remaining time or the short reason the license keeps the
+    /// picker off, for the status menu and onboarding; nil while licensed
+    /// and in builds without licensing.
+    private(set) var licenseBadge: LicenseBadge.Label?
 
-    func setLicense(allowsFeature: Bool, statusLine: String?) {
-        licenseStatusLine = statusLine
+    func setLicense(allowsFeature: Bool, badge: LicenseBadge.Label?) {
+        licenseBadge = badge
         guard isLicensedForFeature != allowsFeature else { return }
         isLicensedForFeature = allowsFeature
         updateTap()
