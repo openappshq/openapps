@@ -23,4 +23,4 @@ The official download is the signed build with updates, sold for $5 through Dodo
 
 > Official builds include a 3-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac's hardware ID (it can't be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac's name, what you type, and how you use the app are never sent. Builds from source never contact the license service.
 
-The license and trial records are kept in the macOS Keychain (`space.openapps.openklack.license` and `space.openapps.openklack.trial`), never in plain preferences. Typed text is never stored or sent anywhere, licensed or not.
+The license and trial records are kept in encrypted files the app owns (`~/Library/Application Support/OpenApps/openklack/records/`, readable only by your user and only on this Mac), never in plain preferences and never in the Keychain. Typed text is never stored or sent anywhere, licensed or not.
