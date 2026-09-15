@@ -250,20 +250,23 @@ final class PermissionMonitor {
 
     /// Removes OpenReaction's own TCC entry for `kind` with `tccutil`, then
     /// asks again so a fresh entry matching this build appears in the list.
-    func reset(_ kind: PermissionKind) async {
-        guard canReset, resetInProgress == nil else { return }
+    /// Returns whether it got as far as asking again.
+    @discardableResult
+    func reset(_ kind: PermissionKind) async -> Bool {
+        guard canReset, resetInProgress == nil else { return false }
         resetInProgress = kind
         lastError = nil
         let result = await actions.reset(kind)
         resetInProgress = nil
         if let result {
             lastError = result
-            return
+            return false
         }
         flow.didReset(kind)
         commit()
         onPoll?()
         request(kind)
+        return true
     }
 
     func revealAppInFinder() {

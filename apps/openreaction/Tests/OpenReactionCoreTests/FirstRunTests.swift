@@ -57,7 +57,10 @@ struct OnboardingLaunchTests {
 
     @Test func closingTheWindowAfterAskingDoesNotReopenIt() {
         // Asked for a permission, then skipped or closed the window: the
-        // user's dismissal wins over the pending request.
+        // user's dismissal wins over the pending request. Which closes count
+        // as a dismissal (skip, finish, the close button — never a quit's
+        // close of every window) is AppKit delegate routing in the app
+        // target, not expressible here.
         let store = MemoryFlags()
         OnboardingLaunch.markShown(store: store)
         OnboardingLaunch.markAwaitingPermission(store: store)

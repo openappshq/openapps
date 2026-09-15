@@ -106,8 +106,13 @@ final class OnboardingModel {
         onRequest?(kind)
     }
 
+    /// A successful reset ends by asking again, so it is marked like
+    /// `request` — unless the user closed the window while it ran.
     func reset(_ kind: PermissionKind) {
-        Task { await permissions.reset(kind) }
+        Task {
+            guard await permissions.reset(kind), isVisible else { return }
+            OnboardingLaunch.markAwaitingPermission(store: defaults)
+        }
     }
 
     func relaunch() {
@@ -121,13 +126,24 @@ final class OnboardingModel {
     }
 
     func finish() {
+        didDismiss()
         onClose?()
     }
 
     /// Closes the window at any step. Progress is kept, so "Show setup
     /// guide" resumes where the user left off.
     func skip() {
+        didDismiss()
         onClose?()
+    }
+
+    /// The user closed the window themselves (skip, finish, the close
+    /// button): it will not come back on its own until it asks for a
+    /// permission again. Only these paths call it — a quit closes windows
+    /// too, but that is not a dismissal, and the marker must survive
+    /// macOS's "Quit & Reopen".
+    func didDismiss() {
+        OnboardingLaunch.clearAwaitingPermission(store: defaults)
     }
 
     func toggle(_ trouble: Trouble) {
@@ -250,12 +266,16 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    /// Closing (skip, finish, the close button) is the user's choice: the
-    /// window will not come back on its own until it asks for a permission
-    /// again. A quit does not close windows this way, so the marker survives
-    /// macOS's "Quit & Reopen".
+    /// The close button (and ⌘W) asks first; termination closes windows
+    /// without asking, so only the user's own close lands here.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        model.didDismiss()
+        return true
+    }
+
+    /// Reached by every close, a quit's included: nothing here may decide
+    /// whether the window comes back.
     func windowWillClose(_ notification: Notification) {
-        OnboardingLaunch.clearAwaitingPermission(store: defaults)
         model.didHide()
         model.permissions.setFastPolling(false, reason: "onboarding")
         menuBarHint.hide()
