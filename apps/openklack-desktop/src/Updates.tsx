@@ -2,28 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Button, ProgressBar } from "@heroui/react";
-import { Disclosure } from "./controls";
-import { Download, RefreshCw } from "lucide-react";
-
-type UpdateStatus = {
-  revision: number;
-  configured: boolean;
-  currentVersion: string;
-  phase:
-    | "idle"
-    | "checking"
-    | "available"
-    | "current"
-    | "downloading"
-    | "verifying"
-    | "installing"
-    | "restarting"
-    | "error";
-  available: { version: string; notes: string | null } | null;
-  received: number;
-  total: number | null;
-  error: string | null;
-};
+import { Disclosure, Toggle } from "./controls";
+import { Download, RefreshCw, RotateCw } from "lucide-react";
+import { updateMessage, type UpdateSettings, type UpdateStatus } from "./updateStatus";
 
 export function Updates({
   onError,
@@ -59,32 +40,40 @@ export function Updates({
     };
   }, [accept, onError]);
 
-  const working =
-    status &&
-    ["checking", "downloading", "verifying", "installing", "restarting"].includes(status.phase);
-  const messages: Record<string, string> = {
-    idle: "",
-    checking: "Checking for updates…",
-    current: "You have the latest version.",
-    available: "OpenKlack will restart. Your settings are kept.",
-    downloading: `Downloading ${((status?.received ?? 0) / 1_000_000).toFixed(1)} MB…`,
-    verifying: "Verifying the download…",
-    installing: "Installing the update…",
-    restarting: "Restarting OpenKlack…",
-    error: status?.available
-      ? "Could not finish installing the update."
-      : "Could not check for updates.",
-  };
+  const run = (command: string, args?: Record<string, unknown>) =>
+    void invoke<UpdateStatus>(command, args)
+      .then(accept)
+      .catch((e: unknown) => onError(String(e)));
+  const usable = !!status?.supported && status.configured;
+  const working = !!status && ["checking", "downloading", "verifying"].includes(status.phase);
+  const settings = status?.settings;
+  const changeSettings = (change: Partial<UpdateSettings>) =>
+    settings && run("set_update_settings", { settings: { ...settings, ...change } });
+
   return (
     <section className="app-updates" aria-label="App updates">
-      {status?.available && <h3>Version {status.available.version} is available</h3>}
-      <p role="status">
-        {!status
-          ? "Loading update settings…"
-          : status.configured
-            ? messages[status.phase]
-            : "Updates aren’t available in this development build."}
-      </p>
+      {status?.available && status.phase !== "current" && (
+        <h3>Version {status.available.version} is available</h3>
+      )}
+      {usable && settings && (
+        <>
+          <Toggle
+            label="Check for updates automatically"
+            description="Once a day and when OpenKlack opens. Off by default."
+            selected={settings.checkAutomatically}
+            disabled={disabled}
+            onChange={(checkAutomatically) => changeSettings({ checkAutomatically })}
+          />
+          <Toggle
+            label="Download and install automatically"
+            description="Downloads in the background and installs the next time OpenKlack quits or restarts. Off by default."
+            selected={settings.installAutomatically}
+            disabled={disabled}
+            onChange={(installAutomatically) => changeSettings({ installAutomatically })}
+          />
+        </>
+      )}
+      <p role="status">{updateMessage(status)}</p>
       {status?.phase === "downloading" && (
         <ProgressBar
           className="update-progress"
@@ -108,31 +97,37 @@ export function Updates({
           <p className="update-notes">{status.available.notes}</p>
         </Disclosure>
       )}
-      {status?.configured && (
+      {usable && (
         <div className="actions">
-          <Button
-            variant="secondary"
-            isDisabled={disabled || !!working || !status?.configured}
-            onPress={() =>
-              void invoke<UpdateStatus>("check_for_updates")
-                .then(accept)
-                .catch((e: unknown) => onError(String(e)))
-            }
-          >
-            <RefreshCw size={15} /> Check for updates
-          </Button>
-          {status?.available && (
+          {status.phase === "ready" ? (
             <Button
               variant="primary"
-              isDisabled={disabled || !!working}
+              isDisabled={disabled}
               onPress={() =>
-                void invoke<UpdateStatus>("install_update", { version: status.available!.version })
-                  .then(accept)
-                  .catch((e: unknown) => onError(String(e)))
+                void invoke("restart_to_update").catch((e: unknown) => onError(String(e)))
               }
             >
-              <Download size={15} /> Download and install
+              <RotateCw size={15} /> Update ready — Restart
             </Button>
+          ) : (
+            <>
+              <Button
+                variant="secondary"
+                isDisabled={disabled || working}
+                onPress={() => run("check_for_updates")}
+              >
+                <RefreshCw size={15} /> Check now
+              </Button>
+              {status.available && !status.locationBlocked && (
+                <Button
+                  variant="primary"
+                  isDisabled={disabled || working}
+                  onPress={() => run("download_update")}
+                >
+                  <Download size={15} /> Download update
+                </Button>
+              )}
+            </>
           )}
         </div>
       )}

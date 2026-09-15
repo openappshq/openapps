@@ -1,0 +1,1 @@
+NOT GENERATED: run apps/openklack-desktop/release/create-update-key.sh on the release owner's own Mac, then commit the public key it writes here (docs/development.md, "Releases and updates").

@@ -1,0 +1,17 @@
+{
+  "app": "openklack",
+  "channel": "stable",
+  "version": "0.2.0",
+  "build": 42,
+  "minimum_macos": "14.0",
+  "published_at": "2026-09-15T10:00:00Z",
+  "pub_date": "2026-09-15T10:00:00Z",
+  "notes": "Test release.",
+  "url": "https://example.com/OpenKlack-0.2.0.zip",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "signature": "c2lnbmF0dXJl",
+  "platforms": {
+    "darwin-aarch64": { "url": "https://github.com/openappshq/openapps/releases/download/openklack-v0.2.0/OpenKlack-0.2.0.app.tar.gz", "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTklSb3BYSE4rS0VmTElLK3RmZjNzY2FDekFqckV5V2lQM2FvNUhNOXBLQkJrdzJtbmkzbi9vNklwdmhQYmdnc0h5ZUtYUTNBM0x6Q3A2VnZOYlUrcjQ4SXVyRmRhZFFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDU1ODcyCWZpbGU6YXJjaGl2ZQo4RnJpSzl6SHdEZVNyeitoUTFTTks5emhpZHNzVFQxWkMrWGVaWWFEY0Fham9LQTVmck85NnFXbXZocHNBN3ZVQ29TZlJ1dnlWRWdQQW9qV0NPSDVEUT09Cg==" },
+    "darwin-x86_64": { "url": "https://github.com/openappshq/openapps/releases/download/openklack-v0.2.0/OpenKlack-0.2.0.app.tar.gz", "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTklSb3BYSE4rS0VmTElLK3RmZjNzY2FDekFqckV5V2lQM2FvNUhNOXBLQkJrdzJtbmkzbi9vNklwdmhQYmdnc0h5ZUtYUTNBM0x6Q3A2VnZOYlUrcjQ4SXVyRmRhZFFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDU1ODcyCWZpbGU6YXJjaGl2ZQo4RnJpSzl6SHdEZVNyeitoUTFTTks5emhpZHNzVFQxWkMrWGVaWWFEY0Fham9LQTVmck85NnFXbXZocHNBN3ZVQ29TZlJ1dnlWRWdQQW9qV0NPSDVEUT09Cg==" }
+  }
+}

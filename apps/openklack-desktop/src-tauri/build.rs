@@ -20,7 +20,35 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_LICENSING").is_some() {
         licensing_config();
     }
+    if std::env::var_os("CARGO_FEATURE_UPDATER").is_some() {
+        updater_key();
+    }
     tauri_build::build();
+}
+
+/// Official builds pin the update public key checked in at `release/updater-public-key.txt`. Until
+/// the key has been generated the file holds a `NOT GENERATED` marker: the app then reports that
+/// updates aren't configured, and the release workflow refuses to build.
+fn updater_key() {
+    const FILE: &str = "../release/updater-public-key.txt";
+    println!("cargo:rerun-if-changed={FILE}");
+    let text =
+        std::fs::read_to_string(FILE).unwrap_or_else(|e| panic!("Could not read {FILE}: {e}"));
+    let key = text.trim();
+    let key = if key.starts_with("NOT GENERATED") {
+        ""
+    } else if (40..=400).contains(&key.len())
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
+    {
+        key
+    } else {
+        panic!(
+            "{FILE} must hold the Tauri updater public key (the base64 contents of its .pub file) or the NOT GENERATED marker."
+        )
+    };
+    println!("cargo:rustc-env=OPENKLACK_UPDATE_PUBLIC_KEY={key}");
 }
 
 /// Official builds compile the Dodo host, the paid product ID and the trial registry in from the

@@ -386,6 +386,16 @@ pub fn show_settings(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 fn tray_menu(app: &tauri::AppHandle, state: &Snapshot) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
+    if updates::ready(app) {
+        menu.append(&MenuItem::with_id(
+            app,
+            "update-restart",
+            "Update ready — Restart",
+            true,
+            None::<&str>,
+        )?)?;
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
     menu.append(&MenuItem::with_id(
         app,
         "status",
@@ -519,9 +529,26 @@ pub fn run() {
             export_preset,
             refresh_official_packs,
             choose_application,
-            updates::updater_status,
-            updates::check_for_updates,
-            updates::install_update,
+            #[cfg(feature = "updater")]
+            updates::service::updater_status,
+            #[cfg(feature = "updater")]
+            updates::service::check_for_updates,
+            #[cfg(feature = "updater")]
+            updates::service::download_update,
+            #[cfg(feature = "updater")]
+            updates::service::set_update_settings,
+            #[cfg(feature = "updater")]
+            updates::service::restart_to_update,
+            #[cfg(not(feature = "updater"))]
+            updates::unavailable::updater_status,
+            #[cfg(not(feature = "updater"))]
+            updates::unavailable::check_for_updates,
+            #[cfg(not(feature = "updater"))]
+            updates::unavailable::download_update,
+            #[cfg(not(feature = "updater"))]
+            updates::unavailable::set_update_settings,
+            #[cfg(not(feature = "updater"))]
+            updates::unavailable::restart_to_update,
             #[cfg(feature = "licensing")]
             licensing::runtime::license_status,
             #[cfg(feature = "licensing")]
@@ -565,6 +592,10 @@ pub fn run() {
                         let _ = show_settings(app);
                         return;
                     }
+                    if id == "update-restart" {
+                        updates::restart(app);
+                        return;
+                    }
                     let controller = app.state::<Arc<Controller>>().inner().clone();
                     if id == "resume" {
                         controller.resume_temporarily();
@@ -603,7 +634,15 @@ pub fn run() {
             // background so it never delays launch.
             #[cfg(feature = "licensing")]
             licensing::runtime::Service::start(app.handle()).map_err(std::io::Error::other)?;
-            engine::start_input();
+            // Debug builds accept `--no-input-listener` so update tests can run the app without
+            // Input Monitoring or a global key listener. Release builds always listen.
+            #[cfg(debug_assertions)]
+            let listen = !std::env::args().any(|arg| arg == "--no-input-listener");
+            #[cfg(not(debug_assertions))]
+            let listen = true;
+            if listen {
+                engine::start_input();
+            }
             if !std::env::args().any(|arg| arg == "--background") {
                 show_settings(app.handle())?;
             }
@@ -641,9 +680,12 @@ pub fn run() {
                     let _ = show_settings(app);
                 }
             }
-            // The trial's `last_seen_at` is saved on quit.
-            #[cfg(feature = "licensing")]
-            tauri::RunEvent::Exit => licensing::runtime::quit(app),
+            // The trial's `last_seen_at` is saved on quit, then a staged update is installed.
+            tauri::RunEvent::Exit => {
+                #[cfg(feature = "licensing")]
+                licensing::runtime::quit(app);
+                updates::install_on_exit(app);
+            }
             _ => {}
         });
 }
