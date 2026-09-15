@@ -23,7 +23,7 @@ cask "openklack" do
   # Signed with the stable OpenApps HQ Release certificate but not notarized:
   # clear the download quarantine so it opens without a Gatekeeper prompt,
   # then start it in the menu bar.
-  postflight_steps do
+  postflight do
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{Dir.home}/Applications/OpenKlack.app"]
     system_command "/usr/bin/open",

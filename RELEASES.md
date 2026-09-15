@@ -42,7 +42,7 @@ cask "<app>" do
   auto_updates true
   depends_on macos: :sonoma
   app "<App>.app", target: "#{Dir.home}/Applications/<App>.app"
-  postflight_steps do
+  postflight do
     system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{Dir.home}/Applications/<App>.app"]
     system_command "/usr/bin/open", args: ["#{Dir.home}/Applications/<App>.app"]
   end
