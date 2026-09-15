@@ -58,14 +58,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let icon = AppResources.appIcon() { NSApp.applicationIconImage = icon }
         // Once, on the first launch of the packaged app. `swift run` builds
         // skip it so a development loop never opens a window.
-        if !preferences.didShowWelcome, Bundle.main.bundleURL.pathExtension == "app" {
+        let isFreshInstall = !preferences.didShowWelcome
+        if isFreshInstall, Bundle.main.bundleURL.pathExtension == "app" {
             preferences.didShowWelcome = true
             showWelcome()
         }
-        // Open at login by default, once; a user who later turns it off stays off.
-        if !preferences.didDefaultOpenAtLogin, loginItem.isAvailable {
+        // Open at login by default, but only on a fresh install: an upgrade from a
+        // version without this default keeps whatever the user chose (including
+        // "off"), so the flag is set without touching the login item.
+        if !preferences.didDefaultOpenAtLogin {
             preferences.didDefaultOpenAtLogin = true
-            if !loginItem.isOn { loginItem.setOn(true) }
+            if isFreshInstall, loginItem.isAvailable, !loginItem.isOn { loginItem.setOn(true) }
         }
     }
 
