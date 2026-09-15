@@ -102,6 +102,7 @@ draft_ids_for_tag() {
 delete_drafts() {
     local ids id
     ids="$(draft_ids_for_tag)" || return 1
+    if [[ -n "${DRAFT_ID:-}" ]] && ! printf '%s\n' "$ids" | grep -qx "$DRAFT_ID"; then ids="$DRAFT_ID"$'\n'"$ids"; fi
     for id in $ids; do
         echo "==> Discarding draft release #${id}"
         if ! gh api --method DELETE "repos/$GH_REPO/releases/$id" >/dev/null; then
@@ -183,16 +184,15 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 echo "==> Creating draft release ${TAG}"
-if ! gh release create "$TAG" --repo "$GH_REPO" --draft --verify-tag --title "OpenReaction ${VERSION}" --generate-notes >/dev/null; then
+# The list endpoint can lag a few seconds behind a just-created draft, so the
+# id comes from the creation response itself, never from a later listing.
+DRAFT_ID="$(gh api --method POST "repos/$GH_REPO/releases" \
+    -f tag_name="$TAG" -f target_commitish="$BUILT_COMMIT" -f name="OpenReaction ${VERSION}" \
+    -F draft=true -F prerelease=false -F generate_release_notes=true --jq .id)" || DRAFT_ID=""
+if [[ ! "$DRAFT_ID" =~ ^[0-9]+$ ]]; then
     echo "error: creating the draft release failed" >&2
     exit 1
 fi
-draft_ids="$(draft_ids_for_tag)"
-if [[ "$(printf '%s\n' "$draft_ids" | grep -c .)" != 1 ]]; then
-    echo "error: expected exactly one draft for $TAG after creating it, found: ${draft_ids:-none}" >&2
-    exit 1
-fi
-DRAFT_ID="$draft_ids"
 echo "ok: draft release #${DRAFT_ID}"
 
 gh release upload "$TAG" --repo "$GH_REPO" "$DIST/$ZIP" "$DIST/$SUM"
