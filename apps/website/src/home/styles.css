@@ -42,6 +42,9 @@
 .app-row[data-accent="orchid"] {
   --accent-line: var(--color-brand-orchid);
 }
+.app-row[data-accent="green"] {
+  --accent-line: var(--palette-green-300);
+}
 /* The backlight: the app's own colour lighting up along the key's edge. */
 .app-row::before {
   content: "";

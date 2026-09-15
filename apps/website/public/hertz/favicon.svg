@@ -1,0 +1,7 @@
+<svg width="224" height="224" viewBox="28 10 224 224" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Flat crop of ../../../hertz/design/assets/app-icon.svg: tile and mark only, no drop shadow, for small sizes. -->
+<rect x="28" y="12" width="224" height="220" rx="50" fill="#91DCB4"/>
+<g transform="translate(66 48) scale(1.16)">
+<path d="M16 66H38L50 36L64 94L78 44L88 66H112" stroke="#141414" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</svg>

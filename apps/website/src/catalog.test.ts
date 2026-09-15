@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vite-plus/test";
-import { findPage, pages, productPages, products } from "./catalog";
+import { findPage, pages, paidProducts, productPages, products } from "./catalog";
 import { preparePages } from "../scripts/pages";
 
 test("each product owns its routes and adding another product cannot shadow OpenKlack", () => {
@@ -15,13 +15,14 @@ test("each product owns its routes and adding another product cannot shadow Open
     "/openreaction/",
     "/openreaction/download/",
     "/openreaction/thanks/",
+    "/hertz/",
     "/another_route/",
     "/another_route/download/",
     "/another_route/thanks/",
   ]);
-  expect(combined[6]?.productId).toBe("another-app");
+  expect(combined[7]?.productId).toBe("another-app");
   expect(findPage("/openklack/download/")?.productId).toBe("openklack");
-  expect(combined[6]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(combined[7]?.module).toBe("./apps/another-app/pages/Home.tsx");
   expect(findPage("/openklack/thanks/trial/")).toBeUndefined();
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
   for (const path of ["/openklack", "/openklack/", "/openklack/index.html"])
@@ -33,6 +34,15 @@ test("each product owns its routes and adding another product cannot shadow Open
     "Duplicate product route",
   );
   expect(() => productPages([{ ...next, route: "/../escape" }])).toThrow("Invalid product");
+});
+
+test("a free app has a home page only: no download page, no checkout return, no licensing", () => {
+  const hertz = products.find((product) => product.id === "hertz")!;
+  expect(hertz.free).toBe(true);
+  expect(hertz.price).toBe("Free");
+  expect(hertz.pages.map((page) => page.path)).toEqual([""]);
+  expect(pages.filter((page) => page.productId === "hertz").some((page) => page.checkoutReturn)).toBe(false);
+  expect(paidProducts.map((product) => product.id)).toEqual(["openklack", "openreaction"]);
 });
 
 test("catalog routes emit separate static HTML entries with product metadata", () => {
@@ -92,6 +102,11 @@ test("catalog routes emit separate static HTML entries with product metadata", (
     const reaction = readFileSync(join(root, "openreaction/index.html"), "utf8");
     expect(reaction).toContain('content="/openreaction/og.png"');
     expect(reaction).toContain("/src/main.tsx");
+    const hertz = readFileSync(join(root, "hertz/index.html"), "utf8");
+    expect(hertz).toContain('content="/hertz/og.png"');
+    expect(hertz).toContain('property="og:site_name" content="Hertz"');
+    expect(hertz).not.toContain("__openappsCheckout");
+    expect(existsSync(join(root, "hertz/download/index.html"))).toBe(false);
     expect(inputs).toHaveLength(pages.length + 1);
   } finally {
     rmSync(root, { recursive: true });

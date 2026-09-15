@@ -1,0 +1,24 @@
+:root[data-product="hertz"] {
+  --palette-green-100: #d0f0df;
+  --palette-green-200: #b1e7ca;
+  --palette-green-400: #64ce95;
+  --palette-green-500: #3dc27b;
+  --palette-green-600: #309760;
+  --palette-green-800: #1b5536;
+  --color-accent-solid: var(--palette-green-700);
+  --color-accent-hover: var(--palette-green-800);
+  --color-accent-subtle: var(--palette-green-50);
+  --color-accent-text: var(--palette-green-700);
+  --color-accent-on: var(--palette-white);
+  --color-focus-ring: var(--palette-green-700);
+  --color-brand-hertz: var(--palette-green-300);
+  --color-brand-hertz-shade: var(--palette-green-500);
+}
+:root[data-product="hertz"][data-theme="dark"] {
+  --color-accent-solid: var(--palette-green-300);
+  --color-accent-hover: var(--palette-green-200);
+  --color-accent-subtle: var(--palette-green-950);
+  --color-accent-text: var(--palette-green-200);
+  --color-accent-on: var(--palette-neutral-950);
+  --color-focus-ring: var(--palette-green-300);
+}

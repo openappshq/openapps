@@ -1,6 +1,6 @@
 import { ArrowUpRight, ExternalLink } from "lucide-react";
 import { useState } from "react";
-import { products } from "../catalog";
+import { paidProducts } from "../catalog";
 import CopyRow from "./CopyRow";
 import InstallCommand from "./InstallCommand";
 import { licensingFor, MACS_PER_LICENSE, SUPPORT_URL, type AppLicensing } from "./licensing";
@@ -119,7 +119,7 @@ export default function ThanksPage({
                 </span>
               </>
             ) : (
-              products.map((product) => (
+              paidProducts.map((product) => (
                 <a
                   key={product.id}
                   className="button-link secondary"

@@ -1,4 +1,4 @@
-import { products } from "../catalog";
+import { paidProducts, products } from "../catalog";
 
 /** Where the site is served; checkout returns here. */
 export const SITE_ORIGIN = "https://openapps.space";
@@ -48,7 +48,7 @@ export function dodoConfigFrom(env: Env): DodoConfig {
     // An unknown origin could send buyers anywhere; sell nothing until it is fixed.
     return config;
   }
-  for (const product of products) {
+  for (const product of paidProducts) {
     const paid = envValue(env, `VITE_${product.id.toUpperCase()}_DODO_PAID_PRODUCT_ID`);
     if (PRODUCT_ID.test(paid)) config.products[product.id] = { paid };
   }
@@ -93,7 +93,7 @@ export function brewInstallCommand(cask: string): string {
  */
 export function macDownloadUrlsFrom(env: Env): Record<string, string> {
   const urls: Record<string, string> = {};
-  for (const product of products) {
+  for (const product of paidProducts) {
     const value = envValue(env, `VITE_${product.id.toUpperCase()}_MAC_DOWNLOAD_URL`);
     if (URL.canParse(value) && new URL(value).protocol === "https:") urls[product.id] = value;
   }
@@ -168,6 +168,8 @@ export interface LicensingOptions {
 export function licensingFor(appId: string, options: LicensingOptions = {}): AppLicensing {
   const product = products.find((p) => p.id === appId);
   if (!product) throw new Error(`Unknown app: ${appId}`);
+  // A free app has nothing here: no key, no trial, no checkout, no download page.
+  if (product.free) throw new Error(`${product.name} is free; it has no licensing`);
   const origin = options.origin ?? SITE_ORIGIN;
   const dodo = options.dodo ?? dodoConfig;
   const ids = dodo.products[appId];

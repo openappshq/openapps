@@ -14,7 +14,7 @@ const principles: { icon: ReactNode; title: string; body: string }[] = [
   {
     icon: <Gift size={18} />,
     title: "Pay once",
-    body: `One price per app, for ${MACS_PER_LICENSE} Macs. No subscriptions, no accounts.`,
+    body: `One price per app, for ${MACS_PER_LICENSE} Macs, or nothing at all. No subscriptions, no accounts.`,
   },
   { icon: <Code2 size={18} />, title: "Open source", body: "MIT licensed, built in the open." },
   {
@@ -43,7 +43,7 @@ function AppRow({ app, index }: { app: Product; index: number }) {
         <span className="app-row-meta">
           <span className="app-row-spec">{app.platform}</span>
           <span className="app-row-spec">
-            {app.price} · {TRIAL_DAYS}-day trial
+            {app.free ? "Free · Homebrew" : `${app.price} · ${TRIAL_DAYS}-day trial`}
           </span>
         </span>
         <span className="app-row-go" aria-hidden="true">

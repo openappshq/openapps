@@ -5,11 +5,11 @@ import { products } from "../catalog";
 import StarButton from "./StarButton";
 import { GITHUB_URL } from "./github";
 
-function Brand({ id, name }: { id: string; name: string }) {
+function Brand({ id, name, wordmark = true }: { id: string; name: string; wordmark?: boolean }) {
   return (
     <>
       <img className="brand-tile" src={`/brand/${id}/app-icon.svg`} alt="" width="44" height="44" />
-      {id === "openreaction" ? (
+      {!wordmark ? (
         <span className="brand-name">{name}</span>
       ) : (
         <span className="brand-wordmark">
@@ -61,7 +61,7 @@ export function MarketingHeader({
         href={product ? `${product.route}/` : "/"}
         aria-label={`${name} home`}
       >
-        <Brand id={product?.id ?? "openapps-hq"} name={name} />
+        <Brand id={product?.id ?? "openapps-hq"} name={name} wordmark={product?.wordmark !== false} />
       </Link>
       <nav aria-label="Main navigation">
         <div className="section-links">

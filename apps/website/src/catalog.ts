@@ -4,10 +4,18 @@ export type Product = {
   name: string;
   description: string;
   platform: string;
-  /** What this app costs, once. Apps are priced individually. */
+  /** What this app costs, once. Apps are priced individually; "Free" for a free one. */
   price: string;
+  /**
+   * Free and open source: no license, no trial and no Buy button. Installed
+   * with Homebrew (`brew install --cask openappshq/tap/<id>`), so it has no
+   * download page and no checkout return page either.
+   */
+  free?: boolean;
   icon: string;
-  accent: "cobalt" | "orchid";
+  accent: "cobalt" | "orchid" | "green";
+  /** Whether `/brand/<id>/wordmark-{ink,paper}.svg` exist; otherwise the name is set in type. */
+  wordmark?: boolean;
   brandSource: string;
   assets: { source: string; destination: string }[];
   pages: {
@@ -71,6 +79,7 @@ export const products: Product[] = [
     price: "$5",
     icon: "/brand/openreaction/app-icon.svg",
     accent: "orchid",
+    wordmark: false,
     brandSource: "apps/openreaction/design/assets",
     assets: [
       { source: "apps/openreaction/Sources/OpenReactionCore/Resources", destination: "data" },
@@ -102,7 +111,34 @@ export const products: Product[] = [
       },
     ],
   },
+  {
+    id: "hertz",
+    route: "/hertz",
+    name: "Hertz",
+    description: "Native macOS menu-bar system monitor.",
+    platform: "macOS",
+    price: "Free",
+    free: true,
+    icon: "/brand/hertz/app-icon.svg",
+    accent: "green",
+    wordmark: false,
+    brandSource: "apps/hertz/design/assets",
+    assets: [],
+    pages: [
+      {
+        path: "",
+        entry: "Home",
+        title: "Hertz · Native macOS menu-bar system monitor",
+        description:
+          "CPU, memory, disk, network, battery and thermals in your menu bar, read straight from the kernel. Hertz is a free, open-source Mac app. No permissions, no telemetry.",
+        template: "src/apps/hertz/template.html",
+      },
+    ],
+  },
 ];
+
+/** The apps that are sold: everything licensing, checkout and download pages apply to. */
+export const paidProducts = products.filter((product) => !product.free);
 
 export function productPages(catalog = products) {
   const paths = new Set<string>();

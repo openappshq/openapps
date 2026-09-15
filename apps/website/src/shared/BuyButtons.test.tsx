@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vite-plus/test";
-import { products } from "../catalog";
+import { paidProducts } from "../catalog";
 import BuyButtons from "./BuyButtons";
 import { dodoConfigFrom, licensingFor } from "./licensing";
 
@@ -18,7 +18,7 @@ const downloads = {
 };
 
 test("app pages offer the install with its trial and a priced purchase, and no trial checkout", () => {
-  for (const product of products) {
+  for (const product of paidProducts) {
     const html = renderToStaticMarkup(<BuyButtons app={product.id} />);
     expect(html, product.id).toContain(`href="${product.route}/download/"`);
     expect(html, product.id).toContain(`Buy for ${product.price}`);
@@ -29,7 +29,7 @@ test("app pages offer the install with its trial and a priced purchase, and no t
 
 test("without a configured product and cask, Buy is a coming-soon plate, not a checkout link", () => {
   // The test environment sets no VITE_ product IDs or casks.
-  for (const product of products) {
+  for (const product of paidProducts) {
     const html = renderToStaticMarkup(<BuyButtons app={product.id} />);
     expect(html, product.id).toContain("Coming soon");
     expect(html, product.id).toContain('aria-disabled="true"');
@@ -41,7 +41,7 @@ test("without a configured product and cask, Buy is a coming-soon plate, not a c
 });
 
 test("with a product and cask, the brew command is shown with a Copy button and Buy is live", () => {
-  for (const product of products) {
+  for (const product of paidProducts) {
     const licensing = licensingFor(product.id, { dodo, casks, downloads: {} });
     const html = renderToStaticMarkup(<BuyButtons app={product.id} licensing={licensing} />);
     expect(html, product.id).toContain(
@@ -60,7 +60,7 @@ test("with a product and cask, the brew command is shown with a Copy button and 
 });
 
 test("with a direct download too, the Download button stays beside the brew command", () => {
-  for (const product of products) {
+  for (const product of paidProducts) {
     const licensing = licensingFor(product.id, { dodo, casks, downloads });
     const html = renderToStaticMarkup(<BuyButtons app={product.id} licensing={licensing} />);
     expect(html, product.id).toContain("brew install --cask");
@@ -72,7 +72,7 @@ test("with a direct download too, the Download button stays beside the brew comm
 });
 
 test("a direct download alone never opens Buy", () => {
-  for (const product of products) {
+  for (const product of paidProducts) {
     const licensing = licensingFor(product.id, { dodo, casks: {}, downloads });
     const html = renderToStaticMarkup(<BuyButtons app={product.id} licensing={licensing} />);
     expect(html, product.id).toContain("Coming soon");

@@ -69,6 +69,10 @@
   --brand-solid: var(--palette-orchid-300);
   --brand-on: var(--palette-neutral-950);
 }
+:root[data-product="hertz"] {
+  --brand-solid: var(--palette-green-300);
+  --brand-on: var(--palette-neutral-950);
+}
 .page-width {
   width: min(var(--layout-wide), calc(100% - 96px));
   margin-inline: auto;

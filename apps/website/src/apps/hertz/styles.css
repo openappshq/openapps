@@ -1,0 +1,436 @@
+@import "./tokens.css";
+
+code {
+  font-family: var(--font-mono);
+}
+
+/* --- What it shows ---------------------------------------------------------
+   The list of readings on the left, the dashboard itself on the right, the
+   way the app puts the health score beside the machine. */
+.see-section {
+  padding-block: var(--section-pad);
+}
+.see-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 440px);
+  gap: 48px 72px;
+  align-items: start;
+}
+.see-text h2 {
+  font-size: clamp(38px, 4.6vw, 68px);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+  margin-top: 20px;
+}
+.see-lead {
+  max-width: 44ch;
+  margin-top: 20px;
+  font-size: 18px;
+  color: var(--muted);
+}
+.readings {
+  display: grid;
+  gap: 18px;
+  margin: 40px 0 0;
+}
+.readings > div {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+.readings dt {
+  font: 400 12px/1.6 var(--font-mono);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--color-accent-text);
+}
+.readings dd {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.see-stage {
+  position: sticky;
+  top: 40px;
+}
+
+/* --- The dashboard, drawn --------------------------------------------------
+   Sized like the real window (400pt wide) on a raised key. Card surfaces are
+   the page's canvas over the surface so the cards lift the way glass does. */
+.hz-window {
+  --hz-text: var(--foreground);
+  --hz-muted: var(--muted);
+  --hz-card: var(--keycap-face);
+  --hz-track: var(--color-bg-hover);
+  --hz-ok: var(--color-accent-solid);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-soft);
+  background: var(--surface-face);
+  box-shadow: var(--keycap-rest);
+  color: var(--hz-text);
+  overflow: hidden;
+}
+.hz-menubar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 6px 14px;
+  font: 400 12px/1 var(--font-system);
+  color: var(--hz-muted);
+  background: var(--color-bg-hover);
+}
+.hz-menubar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.hz-menubar-hertz {
+  color: var(--hz-text);
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--color-accent-subtle);
+  box-shadow: inset 0 0 0 1px var(--color-accent-solid);
+}
+.hz-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+.hz-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--hz-card);
+  box-shadow:
+    inset 0 0 0 1px oklch(0 0 0 / 0.06),
+    0 1px 2px oklch(0 0 0 / 0.04);
+}
+:root[data-theme="dark"] .hz-card {
+  box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.08);
+}
+.hz-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 20px;
+}
+.hz-label {
+  font: 500 11px/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hz-muted);
+}
+.hz-readout {
+  font: 500 15px/1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.hz-detail {
+  font: 400 11px/1.4 var(--font-mono);
+  color: var(--hz-muted);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hz-body {
+  font-size: 13px;
+}
+.hz-health-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.hz-score {
+  font: 800 34px/1 var(--font-heading);
+  letter-spacing: -0.04em;
+}
+.hz-score-word {
+  font-size: 15px;
+  font-weight: 600;
+}
+.hz-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hz-ok);
+  align-self: center;
+}
+.hz-uptime {
+  margin-left: auto;
+}
+.hz-insight {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.hz-insight-icon {
+  width: 14px;
+  color: var(--hz-ok);
+  font-weight: 700;
+  font-size: 12px;
+  padding-top: 1px;
+}
+.hz-insight strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.hz-insight span:not(.hz-insight-icon) {
+  display: block;
+  font-size: 12px;
+  color: var(--hz-muted);
+}
+.hz-spark-box {
+  height: 30px;
+  color: var(--hz-ok);
+}
+.hz-spark-net {
+  height: 22px;
+}
+.hz-spark {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.hz-cores {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 18px;
+}
+.hz-cores span {
+  flex: 1;
+  border-radius: 2px;
+  background: var(--hz-ok);
+}
+.hz-stats {
+  display: flex;
+  gap: 16px;
+  font: 400 10px/1.3 var(--font-mono);
+  color: var(--hz-muted);
+}
+.hz-stats span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.hz-stats b {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--hz-text);
+  font-variant-numeric: tabular-nums;
+}
+.hz-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.hz-big {
+  font: 500 15px/1.2 var(--font-mono);
+}
+.hz-ring {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  align-self: center;
+  background: conic-gradient(var(--hz-ok) 0 58%, var(--hz-track) 58% 100%);
+  -webkit-mask: radial-gradient(circle, transparent 5px, black 5.5px);
+  mask: radial-gradient(circle, transparent 5px, black 5.5px);
+}
+.hz-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--hz-track);
+  overflow: hidden;
+}
+.hz-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--hz-ok);
+}
+.hz-columns {
+  display: inline-flex;
+  gap: 4px;
+  font: 400 11px/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  color: var(--hz-muted);
+}
+.hz-columns b {
+  font-weight: 500;
+  color: var(--hz-text);
+  width: 52px;
+  text-align: right;
+}
+.hz-columns span {
+  width: 62px;
+  text-align: right;
+}
+.hz-processes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hz-processes li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 52px 62px;
+  gap: 8px;
+  align-items: center;
+  height: 22px;
+  font-size: 13px;
+}
+.hz-proc-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, var(--color-accent-subtle), var(--hz-track));
+}
+.hz-proc-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.hz-count {
+  font: 500 9px/1 var(--font-mono);
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--hz-track);
+  color: var(--hz-muted);
+}
+.hz-proc-cpu,
+.hz-proc-mem {
+  font: 500 12px/1 var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.hz-proc-mem {
+  font-weight: 400;
+  color: var(--hz-muted);
+}
+.hz-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+}
+.hz-footer-links {
+  display: flex;
+  gap: 12px;
+  font: 600 13px/1 var(--font-sans);
+  color: var(--color-accent-text);
+}
+
+/* --- The Mac app ----------------------------------------------------------- */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 48px;
+}
+.feature-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: oklch(1 0 0 / 0.07);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.08);
+  color: var(--palette-green-300);
+}
+.feature-grid h3 {
+  font-size: 26px;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+  margin: 20px 0 12px;
+}
+.feature-grid p {
+  color: var(--palette-neutral-400);
+}
+.feature-grid code {
+  font-size: 0.92em;
+}
+
+/* --- Install ---------------------------------------------------------------- */
+.install-section {
+  padding-block: var(--section-space) var(--section-pad);
+}
+.install-section .section-heading {
+  margin-bottom: 36px;
+}
+.hertz-install {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  max-width: 620px;
+}
+.hertz-install .install-command {
+  max-width: none;
+  width: 100%;
+}
+.hertz-install-note {
+  font-size: 15px;
+  color: var(--muted);
+}
+.hertz-install-note code {
+  font: 500 0.92em/1 var(--font-mono);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--surface-face);
+  color: var(--foreground);
+}
+.closing-wrap {
+  padding-block: var(--section-pad);
+}
+
+@media (max-width: 1000px) {
+  .see-grid {
+    grid-template-columns: 1fr;
+  }
+  .see-stage {
+    position: static;
+    max-width: 440px;
+  }
+}
+@media (max-width: 900px) {
+  .feature-grid {
+    gap: 24px;
+  }
+  .feature-grid h3 {
+    font-size: 24px;
+  }
+}
+@media (max-width: 600px) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .readings > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .hz-pair {
+    grid-template-columns: 1fr;
+  }
+}
+@media (forced-colors: active) {
+  .hz-window,
+  .hz-card {
+    border: 1px solid CanvasText;
+  }
+}

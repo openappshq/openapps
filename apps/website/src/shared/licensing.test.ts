@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { products } from "../catalog";
+import { paidProducts, products } from "../catalog";
 import {
   brewCasksFrom,
   brewInstallCommand,
@@ -119,8 +119,15 @@ describe("brewCasksFrom", () => {
 describe("licensingFor", () => {
   const dodo = dodoConfigFrom(liveEnv);
 
+  it("has nothing to say about a free app", () => {
+    expect(products.some((product) => product.free)).toBe(true);
+    for (const product of products.filter((product) => product.free)) {
+      expect(() => licensingFor(product.id, { dodo, casks })).toThrow("is free");
+    }
+  });
+
   it("sells an app once its paid product and cask are set, with brew as the install path", () => {
-    for (const product of products) {
+    for (const product of paidProducts) {
       const licensing = licensingFor(product.id, { dodo, casks, downloads: {} });
       expect(licensing.available, product.id).toBe(true);
       expect(licensing.buyUrl, product.id).not.toBeNull();
@@ -135,7 +142,7 @@ describe("licensingFor", () => {
   });
 
   it("adds the direct download beside brew when one is configured", () => {
-    for (const product of products) {
+    for (const product of paidProducts) {
       const licensing = licensingFor(product.id, { dodo, casks, downloads });
       expect(licensing.available, product.id).toBe(true);
       expect(licensing.brewCommand, product.id).not.toBeNull();
@@ -153,7 +160,7 @@ describe("licensingFor", () => {
     ["with only a direct download", { dodo: dodoConfigFrom({}), casks: {}, downloads }],
     ["with a product and a download but no cask", { casks: {}, downloads }],
   ])("fails closed %s: no checkout, no command, no download, not available", (_, override) => {
-    for (const product of products) {
+    for (const product of paidProducts) {
       const licensing = licensingFor(product.id, { dodo, casks, downloads, ...override });
       expect(licensing.available, product.id).toBe(false);
       expect(licensing.buyUrl, product.id).toBeNull();
@@ -180,7 +187,7 @@ describe("licensingFor", () => {
       VITE_OPENKLACK_MAC_DOWNLOAD_URL: "http://downloads.example/OpenKlack.dmg",
       VITE_OPENREACTION_MAC_DOWNLOAD_URL: "http://downloads.example/OpenReaction.dmg",
     });
-    for (const product of products) {
+    for (const product of paidProducts) {
       const licensing = licensingFor(product.id, { dodo, casks, downloads: http });
       expect(licensing.available, product.id).toBe(true);
       expect(licensing.downloadUrl, product.id).toBeNull();
@@ -194,7 +201,7 @@ describe("licensingFor", () => {
   });
 
   it("returns paid checkout to the thanks page and offers no trial checkout", () => {
-    for (const product of products) {
+    for (const product of paidProducts) {
       const licensing = licensingFor(product.id, { dodo, casks });
       const ids = dodo.products[product.id];
       expect(ids, product.id).toBeDefined();
@@ -208,7 +215,7 @@ describe("licensingFor", () => {
   });
 
   it("has no on/off list in code: the environment alone decides", () => {
-    for (const product of products) {
+    for (const product of paidProducts) {
       const licensing = licensingFor(product.id);
       // The test environment sets no VITE_ variables, so nothing is on sale.
       expect(licensing.available, product.id).toBe(false);
@@ -217,7 +224,7 @@ describe("licensingFor", () => {
   });
 
   it("quotes each app's own price rather than one price for the catalogue", () => {
-    for (const product of products) {
+    for (const product of paidProducts) {
       expect(product.price, product.id).toMatch(/^\$\d/);
       expect(licensingFor(product.id).price, product.id).toBe(product.price);
     }
