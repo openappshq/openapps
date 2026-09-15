@@ -59,7 +59,7 @@ export function guideLicenseLine(view: LicenseView | undefined): string | null {
     case "trial":
       return `Your free trial is running, with ${trialLeft(view.daysLeft)}. No signup needed.`;
     case "trialEnded":
-      return "Your free trial has ended. Settings → License is where to buy for $5 or paste a key.";
+      return "Your free trial has ended. Settings → License is where to buy a license or paste a key.";
     case "licensed":
     case "grace":
       return "This Mac is licensed.";

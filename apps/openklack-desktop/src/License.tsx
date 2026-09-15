@@ -155,7 +155,7 @@ export function License({
             isDisabled={busy}
             onPress={() => void run(() => invoke("open_license_link", { link: "buy" }))}
           >
-            Buy for $5
+            Buy a license
           </Button>
         </div>
       )}
@@ -166,7 +166,7 @@ export function License({
             isDisabled={busy}
             onPress={() => void run(() => invoke("open_license_link", { link: "buy" }))}
           >
-            Buy for $5
+            Buy a license
           </Button>
           <Button
             variant="ghost"
