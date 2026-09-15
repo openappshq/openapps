@@ -1,8 +1,10 @@
 # Template for Casks/openreaction.rb in openappshq/homebrew-tap. The release
-# workflow copies it there on the first release and bumps version and sha256
-# with packaging/homebrew/bump-cask.sh after every published release.
+# workflow copies it there on the first release and sets version and sha256
+# with packaging/homebrew/bump-cask.sh after every published release; until
+# then it names no release (version 0.0.0, an all-zero digest) and cannot be
+# installed.
 cask "openreaction" do
-  version "0.1.0"
+  version "0.0.0"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
   url "https://github.com/openappshq/openapps/releases/download/openreaction-v#{version}/OpenReaction-#{version}.zip"
