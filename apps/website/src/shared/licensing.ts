@@ -57,9 +57,39 @@ export function dodoConfigFrom(env: Env): DodoConfig {
 
 export const dodoConfig = dodoConfigFrom(import.meta.env);
 
+/** Where the install command's one prerequisite comes from. */
+export const HOMEBREW_URL = "https://brew.sh";
+
+/** A cask token as `brew` takes it: `owner/tap/name`, lowercase, no dots. */
+const BREW_CASK = /^[a-z0-9-]+\/[a-z0-9-]+\/[a-z0-9-]+$/;
+
 /**
- * Reads each app's official Mac installer from `VITE_<APP>_MAC_DOWNLOAD_URL`.
- * Only absolute `https:` URLs count; anything else is treated as unset.
+ * Reads each app's Homebrew cask from `VITE_<APP>_BREW_CASK`, e.g.
+ * `openappshq/tap/openreaction`. Anything that is not a full `owner/tap/name`
+ * token is treated as unset, so a typo shows "Coming soon" rather than a
+ * command that fails in Terminal.
+ */
+export function brewCasksFrom(env: Env): Record<string, string> {
+  const casks: Record<string, string> = {};
+  for (const product of products) {
+    const value = envValue(env, `VITE_${product.id.toUpperCase()}_BREW_CASK`);
+    if (BREW_CASK.test(value)) casks[product.id] = value;
+  }
+  return casks;
+}
+
+export const brewCasks = brewCasksFrom(import.meta.env);
+
+/** The exact line a visitor pastes into Terminal. */
+export function brewInstallCommand(cask: string): string {
+  return `brew install --cask ${cask}`;
+}
+
+/**
+ * Reads each app's optional direct Mac installer from
+ * `VITE_<APP>_MAC_DOWNLOAD_URL`. Only absolute `https:` URLs count; anything
+ * else is treated as unset. Homebrew is the install path; this only adds a
+ * download link beside it.
  */
 export function macDownloadUrlsFrom(env: Env): Record<string, string> {
   const urls: Record<string, string> = {};
@@ -71,16 +101,6 @@ export function macDownloadUrlsFrom(env: Env): Record<string, string> {
 }
 
 export const macDownloadUrls = macDownloadUrlsFrom(import.meta.env);
-
-/**
- * Whether an app is on sale. Set false to pull one. Being on sale alone never
- * enables buying: the paid product ID and the official installer must also be
- * configured, because a key with nothing to activate helps no one.
- */
-export const officialBuilds: Record<string, boolean> = {
-  openreaction: true,
-  openklack: true,
-};
 
 /**
  * Static payment link. Dodo appends `payment_id`, `status`, `email` and, for
@@ -109,21 +129,38 @@ export interface AppLicensing {
   thanksUrl: string;
   /** The app's download page on this site, e.g. `/openreaction/download/`. */
   downloadPageUrl: string;
-  /** True only when the app is on sale and both its paid product ID and installer are configured. */
-  officialBuildAvailable: boolean;
-  /** The official installer; null unless `officialBuildAvailable`. */
+  /**
+   * True only when both the paid product ID and the Homebrew cask are
+   * configured. There is no on/off list in code: pulling an app from sale means
+   * unsetting its cask variable and rebuilding.
+   */
+  available: boolean;
+  /** The Homebrew cask, e.g. `openappshq/tap/openreaction`; null unless `available`. */
+  brewCask: string | null;
+  /** `brew install --cask <cask>`; null unless `available`. */
+  brewCommand: string | null;
+  /** An optional direct installer; null unless `available` and a URL is configured. */
   downloadUrl: string | null;
-  /** Paid checkout; null unless `officialBuildAvailable`. */
+  /** Paid checkout; null unless `available`. */
   buyUrl: string | null;
   supportUrl: string;
 }
 
+/**
+ * What the buttons that lead to the install say: a download when there is a
+ * direct installer, Homebrew otherwise. The wording never promises a file the
+ * page cannot offer.
+ */
+export function installLabel(licensing: Pick<AppLicensing, "downloadUrl">): string {
+  return licensing.downloadUrl ? "Download for Mac" : "Install with Homebrew";
+}
+
 export interface LicensingOptions {
   origin?: string;
-  /** Overrides `officialBuilds` (tests). */
-  officialBuildAvailable?: boolean;
   /** Overrides the environment's Dodo settings (tests). */
   dodo?: DodoConfig;
+  /** Overrides the environment's Homebrew casks (tests). */
+  casks?: Record<string, string>;
   /** Overrides the environment's installer URLs (tests). */
   downloads?: Record<string, string>;
 }
@@ -134,10 +171,11 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
   const origin = options.origin ?? SITE_ORIGIN;
   const dodo = options.dodo ?? dodoConfig;
   const ids = dodo.products[appId];
+  const cask = (options.casks ?? brewCasks)[appId];
   const installer = (options.downloads ?? macDownloadUrls)[appId];
-  // Fail closed: on sale, a paid product and an official installer, or nothing.
-  const onSale = options.officialBuildAvailable ?? officialBuilds[appId] ?? false;
-  const available = onSale && !!ids && !!installer;
+  // Fail closed: a paid product and a cask to install, or nothing. A direct
+  // download alone never opens the gate; it is only offered beside brew.
+  const available = !!ids && !!cask;
   const thanksUrl = `${origin}${product.route}/thanks/`;
   return {
     id: appId,
@@ -147,8 +185,10 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
     price: product.price,
     thanksUrl,
     downloadPageUrl: `${product.route}/download/`,
-    officialBuildAvailable: available,
-    downloadUrl: available ? installer! : null,
+    available,
+    brewCask: available ? cask! : null,
+    brewCommand: available ? brewInstallCommand(cask!) : null,
+    downloadUrl: available && installer ? installer : null,
     buyUrl: available ? checkoutUrl(ids?.paid, thanksUrl, dodo.checkoutOrigin) : null,
     supportUrl: SUPPORT_URL,
   };

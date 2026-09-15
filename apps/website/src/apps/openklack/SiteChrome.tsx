@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { installAction } from "../../shared/installAction";
 import { MarketingFooter, MarketingHeader } from "../../shared/MarketingChrome";
 
 export function SiteFooter() {
@@ -14,11 +14,7 @@ export function SiteHeader() {
         { label: "The Mac app", href: "/openklack/#desktop" },
         { label: "Questions", href: "/openklack/#questions" },
       ]}
-      action={{
-        label: "Download for Mac",
-        href: "/openklack/download/",
-        icon: <Download size={16} />,
-      }}
+      action={installAction("openklack")}
     />
   );
 }

@@ -8,14 +8,18 @@ import { GITHUB_URL } from "./github";
 import { TRIAL_DAYS } from "./licensing";
 import KeyToken from "./KeyToken";
 import InstallAnimation from "./InstallAnimation";
+import InstallCommand from "./InstallCommand";
 import "./download.css";
 
 /**
- * Where an app's Download button lands. The file starts on its own; everything
- * here is for the person it did not start for, and for the minute after it did.
+ * Where an app's install button lands. The app ships as a Homebrew cask, so the
+ * page leads with the command; with a direct installer configured the file
+ * starts on its own and everything else is for the person it did not start for,
+ * and for the minute after it did.
  */
 export default function DownloadPage({
-  downloadUrl,
+  brewCommand,
+  downloadUrl: directUrl,
   app,
   name,
   permission,
@@ -25,7 +29,9 @@ export default function DownloadPage({
   header,
   footer,
 }: {
-  /** The official installer. Without one, the page says the release is coming soon and offers no file. */
+  /** `brew install --cask …`. Without one, the page says the release is coming soon. */
+  brewCommand?: string | null;
+  /** An optional direct installer, offered beside the command; never on its own. */
   downloadUrl?: string | null;
   /** Catalogue id, which selects the artwork and the icon. */
   app: string;
@@ -39,6 +45,9 @@ export default function DownloadPage({
   header: ReactNode;
   footer: ReactNode;
 }) {
+  // The cask is the gate; a file is only ever offered beside it.
+  const available = !!brewCommand;
+  const downloadUrl = available ? directUrl : null;
   const start = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
     if (!downloadUrl) return;
@@ -65,6 +74,10 @@ export default function DownloadPage({
                 <>
                   Thanks for <KeyToken>downloading</KeyToken>
                 </>
+              ) : available ? (
+                <>
+                  One line to <KeyToken>install</KeyToken>
+                </>
               ) : (
                 <>
                   Coming <KeyToken>soon</KeyToken>
@@ -75,9 +88,12 @@ export default function DownloadPage({
               <div className="hero-intro">
                 <p>
                   {downloadUrl
-                    ? `It should start on its own. Your ${TRIAL_DAYS}-day trial begins the first time you open the app.`
-                    : `The ${name} Mac release is coming soon. When it lands, it downloads from here with a ${TRIAL_DAYS}-day trial, no signup.`}
+                    ? `It should start on its own, or paste the command below. Your ${TRIAL_DAYS}-day trial begins the first time you open the app.`
+                    : available
+                      ? `Paste this into Terminal. Your ${TRIAL_DAYS}-day trial begins the first time you open the app.`
+                      : `The ${name} Mac release is coming soon. When it lands, it installs from here with a ${TRIAL_DAYS}-day trial, no signup.`}
                 </p>
+                {brewCommand && <InstallCommand command={brewCommand} />}
                 <div className="hero-actions">
                   {/* Only the configured official installer; never a guess. */}
                   {downloadUrl && (
@@ -99,15 +115,33 @@ export default function DownloadPage({
 
         <section className="install-section" aria-labelledby="install-title">
           <div className="page-width">
-            <h2 id="install-title" className="reveal">
-              Drag it in.
-            </h2>
-            <div className="install-figure reveal">
-              <InstallAnimation app={app} name={name} />
-              <p>
-                Then open {name} and allow {permission} when macOS asks. That is the whole setup.
-              </p>
-            </div>
+            {downloadUrl ? (
+              <>
+                <h2 id="install-title" className="reveal">
+                  Drag it in.
+                </h2>
+                <div className="install-figure reveal">
+                  <InstallAnimation app={app} name={name} />
+                  <p>
+                    Then open {name} and allow {permission} when macOS asks. That is the whole
+                    setup.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 id="install-title" className="reveal">
+                  Then say yes once.
+                </h2>
+                <div className="install-figure reveal">
+                  {/* No disk image to rehearse: Homebrew puts the app in place and opens it. */}
+                  <p>
+                    Homebrew puts {name} in your Applications folder and opens it. Allow{" "}
+                    {permission} when macOS asks. That is the whole setup.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         </section>
 

@@ -2,10 +2,11 @@ import { Button, Link } from "@heroui/react";
 import { useState } from "react";
 import { motion } from "motion/react";
 import { enter } from "@openapps/ui/transitions";
-import { Check, Download } from "lucide-react";
+import { Check } from "lucide-react";
 import Questions from "../../../shared/Questions";
 import HqBadge from "../../../shared/HqBadge";
 import BuyButtons from "../../../shared/BuyButtons";
+import InstallLink from "../../../shared/InstallLink";
 import { licensingFor, MACS_PER_LICENSE, OFFLINE_GRACE, TRIAL_DAYS } from "../../../shared/licensing";
 import SoundStudio from "../SoundStudio";
 import Marquee from "../../../shared/Marquee";
@@ -232,9 +233,7 @@ export default function App() {
               <br />
               good noise.
             </h2>
-            <Link className="button-link inverse" href="/openklack/download/">
-              Download for Mac <Download size={20} />
-            </Link>
+            <InstallLink app="openklack" className="button-link inverse" />
           </div>
             <img src="/brand/openklack/symbol-paper.svg" alt="" width="300" height="300" />
           </div>

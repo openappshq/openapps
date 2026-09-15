@@ -1,64 +1,10 @@
-import { ArrowUpRight, Check, Copy, ExternalLink } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowUpRight, ExternalLink } from "lucide-react";
+import { useState } from "react";
 import { products } from "../catalog";
-import { licensingFor, MACS_PER_LICENSE, SUPPORT_URL } from "./licensing";
+import CopyRow from "./CopyRow";
+import InstallCommand from "./InstallCommand";
+import { licensingFor, MACS_PER_LICENSE, SUPPORT_URL, type AppLicensing } from "./licensing";
 import { activateUrl, readCheckoutReturn } from "./thanks";
-
-function KeyRow({ licenseKey }: { licenseKey: string }) {
-  const [state, setState] = useState<"idle" | "copied" | "manual">("idle");
-  const code = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (state !== "copied") return;
-    const timer = setTimeout(() => setState("idle"), 1800);
-    return () => clearTimeout(timer);
-  }, [state]);
-
-  const selectKey = () => {
-    const node = code.current;
-    if (!node) return;
-    node.focus();
-    const range = document.createRange();
-    range.selectNodeContents(node);
-    const selection = getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-  };
-  const copy = async () => {
-    try {
-      if (!navigator.clipboard) throw new Error("Clipboard unavailable");
-      await navigator.clipboard.writeText(licenseKey);
-      setState("copied");
-    } catch {
-      setState("manual");
-      selectKey();
-    }
-  };
-
-  return (
-    <div className="license-key">
-      <code ref={code} tabIndex={-1}>
-        {licenseKey}
-      </code>
-      <button
-        type="button"
-        aria-label={state === "copied" ? "Copied" : "Copy license key"}
-        onClick={() => void copy()}
-      >
-        {state === "copied" ? (
-          <Check size={16} aria-hidden="true" />
-        ) : (
-          <Copy size={16} aria-hidden="true" />
-        )}
-        {state === "copied" ? "Copied" : "Copy"}
-      </button>
-      {state === "manual" && (
-        <p className="license-key-help" role="status">
-          Copying isn’t allowed here. The key is selected: press ⌘C to copy it manually.
-        </p>
-      )}
-    </div>
-  );
-}
 
 function Support({ size = 14 }: { size?: number }) {
   return (
@@ -74,8 +20,14 @@ function Support({ size = 14 }: { size?: number }) {
  * otherwise (several keys from a bundle, or the site-wide page) it lists every
  * key and points at each app.
  */
-export default function ThanksPage({ app }: { app?: string }) {
-  const licensing = app ? licensingFor(app) : null;
+export default function ThanksPage({
+  app,
+  licensing = app ? licensingFor(app) : null,
+}: {
+  app?: string;
+  /** Overrides the environment's licensing (tests). */
+  licensing?: AppLicensing | null;
+}) {
   const [checkout] = useState(() => readCheckoutReturn(window));
   const unconfirmed = checkout.status !== null && checkout.status !== "succeeded";
   const single = licensing && checkout.keys.length === 1 ? checkout.keys[0]! : null;
@@ -153,7 +105,7 @@ export default function ThanksPage({ app }: { app?: string }) {
           </p>
           <div className="license-keys">
             {checkout.keys.map((key) => (
-              <KeyRow key={key} licenseKey={key} />
+              <CopyRow key={key} value={key} label="license key" className="license-key" />
             ))}
           </div>
           <div className="thanks-actions">
@@ -187,19 +139,40 @@ export default function ThanksPage({ app }: { app?: string }) {
           <span>01</span>
           <div>
             <h2>Install {appName}</h2>
-            <p>
-              Move it to Applications and open it. Grant the permissions macOS asks for.
-              {licensing && (
-                <>
-                  {" "}
-                  Don’t have it yet?{" "}
-                  <a href={licensing.downloadPageUrl} referrerPolicy="no-referrer">
-                    Download {licensing.name}
-                  </a>
-                  .
-                </>
-              )}
-            </p>
+            {licensing?.brewCommand ? (
+              <>
+                {/* The buyer may not have the app yet: the install is one line, right here. */}
+                <p>Don’t have it yet? Paste this into Terminal, then open {licensing.name}.</p>
+                <InstallCommand command={licensing.brewCommand} />
+                <p>
+                  Grant the permissions macOS asks for.
+                  {licensing.downloadUrl && (
+                    <>
+                      {" "}
+                      Prefer a file?{" "}
+                      <a href={licensing.downloadPageUrl} referrerPolicy="no-referrer">
+                        Download {licensing.name}
+                      </a>
+                      .
+                    </>
+                  )}
+                </p>
+              </>
+            ) : (
+              <p>
+                Move it to Applications and open it. Grant the permissions macOS asks for.
+                {licensing && (
+                  <>
+                    {" "}
+                    Don’t have it yet?{" "}
+                    <a href={licensing.downloadPageUrl} referrerPolicy="no-referrer">
+                      Get {licensing.name}
+                    </a>
+                    .
+                  </>
+                )}
+              </p>
+            )}
           </div>
         </li>
         <li>

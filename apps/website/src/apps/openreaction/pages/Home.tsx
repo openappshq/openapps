@@ -3,12 +3,7 @@ import "../styles.css";
 import { useCallback, useRef } from "react";
 import { motion } from "motion/react";
 import { Link } from "@heroui/react";
-import {
-  AppWindow,
-  Download,
-  LockKeyhole,
-  ShieldCheck,
-} from "lucide-react";
+import { AppWindow, LockKeyhole, ShieldCheck } from "lucide-react";
 import { enter } from "@openapps/ui/transitions";
 import ReactionDemo from "../demo/ReactionDemo";
 import Marquee from "../../../shared/Marquee";
@@ -17,6 +12,8 @@ import HqBadge from "../../../shared/HqBadge";
 import { MarketingHeader, MarketingFooter, Legend } from "../../../shared/MarketingChrome";
 import Questions from "../../../shared/Questions";
 import BuyButtons from "../../../shared/BuyButtons";
+import InstallLink from "../../../shared/InstallLink";
+import { installAction } from "../../../shared/installAction";
 import {
   MACS_PER_LICENSE,
   OFFLINE_GRACE,
@@ -105,11 +102,7 @@ export default function App() {
           { label: "The Mac app", href: "#mac" },
           { label: "Questions", href: "#questions" },
         ]}
-        action={{
-          label: "Download for Mac",
-          href: "/openreaction/download/",
-          icon: <Download size={16} />,
-        }}
+        action={installAction("openreaction")}
       />
       <main>
         <section className="hero" aria-labelledby="hero-title">
@@ -211,9 +204,7 @@ export default function App() {
                 <br />
                 More <span className="emoji">🎉</span>.
               </h2>
-              <Link className="button-link inverse" href="/openreaction/download/">
-                Download for Mac <Download size={20} />
-              </Link>
+              <InstallLink app="openreaction" className="button-link inverse" />
             </div>
             <img src="/brand/openreaction/symbol-ink.svg" alt="" width="300" height="300" />
           </div>

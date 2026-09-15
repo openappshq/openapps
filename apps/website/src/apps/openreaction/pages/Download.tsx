@@ -1,5 +1,6 @@
-import { ArrowDown, Download } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import Page from "../../../shared/DownloadPage";
+import { installAction } from "../../../shared/installAction";
 import { licensingFor } from "../../../shared/licensing";
 import { MarketingFooter, MarketingHeader } from "../../../shared/MarketingChrome";
 import "../styles.css";
@@ -9,13 +10,16 @@ import "../styles.css";
 const SHARE_TEXT = "I can type :tada anywhere on my Mac now. OpenReaction, $5, open source.";
 
 export default function DownloadPage({
-  // Only when the app is on sale with its product and installer configured.
+  // Only when the app's product and cask are configured; the download is a bonus.
+  brewCommand = licensingFor("openreaction").brewCommand,
   downloadUrl = licensingFor("openreaction").downloadUrl,
 }: {
+  brewCommand?: string | null;
   downloadUrl?: string | null;
 }) {
   return (
     <Page
+      brewCommand={brewCommand}
       downloadUrl={downloadUrl}
       name="OpenReaction"
       app="openreaction"
@@ -35,11 +39,7 @@ export default function DownloadPage({
             { label: "The Mac app", href: "/openreaction/#mac" },
             { label: "Questions", href: "/openreaction/#questions" },
           ]}
-          action={{
-            label: "Download for Mac",
-            href: "/openreaction/download/",
-            icon: <Download size={16} />,
-          }}
+          action={installAction("openreaction")}
         />
       }
       footer={<MarketingFooter productId="openreaction" />}

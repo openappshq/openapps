@@ -78,11 +78,11 @@ Repository → Settings → Environments:
 
 | Environment | Deployment branches | Secrets | Variables |
 | --- | --- | --- | --- |
-| `website-live` | `main` only | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `TRIAL_REGISTRY_D1_ID` (live database), `VITE_DODO_CHECKOUT_ORIGIN` (empty or `https://checkout.dodopayments.com`), `VITE_OPENKLACK_DODO_PAID_PRODUCT_ID`, `VITE_OPENREACTION_DODO_PAID_PRODUCT_ID` (live products), `VITE_OPENKLACK_MAC_DOWNLOAD_URL`, `VITE_OPENREACTION_MAC_DOWNLOAD_URL` |
+| `website-live` | `main` only | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `TRIAL_REGISTRY_D1_ID` (live database), `VITE_DODO_CHECKOUT_ORIGIN` (empty or `https://checkout.dodopayments.com`), `VITE_OPENKLACK_DODO_PAID_PRODUCT_ID`, `VITE_OPENREACTION_DODO_PAID_PRODUCT_ID` (live products), `VITE_OPENKLACK_BREW_CASK`, `VITE_OPENREACTION_BREW_CASK` (`owner/tap/name`, e.g. `openappshq/tap/openklack`), optionally `VITE_OPENKLACK_MAC_DOWNLOAD_URL`, `VITE_OPENREACTION_MAC_DOWNLOAD_URL` (https, a direct download shown beside the brew command) |
 
 Put the Cloudflare secrets only in `website-live`, never as repository-level secrets, so no PR job can read them.
 
-Buying fails closed. An app's Buy button is live only when `officialBuilds` marks it on sale in `apps/website/src/shared/licensing.ts`, its paid product ID is set, **and** its `VITE_<APP>_MAC_DOWNLOAD_URL` is an https URL. Otherwise Buy shows "Coming soon", and the download page says the Mac release is coming soon.
+Buying fails closed. An app's Buy button and its `brew install --cask …` command are live only when its paid product ID is set **and** its `VITE_<APP>_BREW_CASK` is a well-formed `owner/tap/name` cask. Otherwise Buy shows "Coming soon", and the download page says the Mac release is coming soon. There is no on/off list in code: to pull an app from sale, clear its cask variable and redeploy. `VITE_<APP>_MAC_DOWNLOAD_URL` only adds a direct download link beside the command and never enables Buy on its own.
 
 ## DNS cutover
 

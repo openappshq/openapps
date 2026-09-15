@@ -9,13 +9,16 @@ import "../styles.css";
 const SHARE_TEXT = "I just gave my MacBook keyboard a Cherry MX Brown. OpenKlack, $5, open source.";
 
 export default function DownloadPage({
-  // Only when the app is on sale with its product and installer configured.
+  // Only when the app's product and cask are configured; the download is a bonus.
+  brewCommand = licensingFor("openklack").brewCommand,
   downloadUrl = licensingFor("openklack").downloadUrl,
 }: {
+  brewCommand?: string | null;
   downloadUrl?: string | null;
 }) {
   return (
     <Page
+      brewCommand={brewCommand}
       downloadUrl={downloadUrl}
       name="OpenKlack"
       app="openklack"

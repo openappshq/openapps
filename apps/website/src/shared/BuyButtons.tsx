@@ -1,22 +1,46 @@
-import { Download } from "lucide-react";
+import { Download, Terminal } from "lucide-react";
 import type { ReactNode } from "react";
-import { licensingFor, TRIAL_DAYS } from "./licensing";
+import InstallCommand from "./InstallCommand";
+import { installLabel, licensingFor, TRIAL_DAYS, type AppLicensing } from "./licensing";
 
 /**
- * The two ways in. Every app carries its own trial, so downloading and starting
+ * The two ways in. Every app carries its own trial, so installing and starting
  * one are a single act - but the button stays short and the trial is stated
  * under it, where a long label would only have weakened the call.
+ *
+ * The install is a Homebrew command, shown in full with a Copy button. A direct
+ * download, when one is configured, keeps its button beside it; without one the
+ * command is the primary action and nothing points at a page that just repeats it.
  */
-export default function BuyButtons({ app, small = false }: { app: string; small?: boolean }) {
-  const { buyUrl, downloadPageUrl, price } = licensingFor(app);
+export default function BuyButtons({
+  app,
+  small = false,
+  licensing = licensingFor(app),
+}: {
+  app: string;
+  small?: boolean;
+  /** Overrides the environment's licensing (tests). */
+  licensing?: AppLicensing;
+}) {
+  const { buyUrl, brewCommand, downloadUrl, downloadPageUrl, price } = licensing;
   const size = small ? " small" : "";
+  // Homebrew only: the command is the primary action, so Buy takes the primary plate.
+  const buyStyle = brewCommand && !downloadUrl ? "primary" : "secondary";
 
   return (
     <div className="buy-buttons">
-      <a className={`button-link primary${size}`} href={downloadPageUrl}>
-        Download for Mac <Download size={18} aria-hidden="true" />
-      </a>
-      <Action href={buyUrl} className={`button-link secondary${size}`}>
+      {brewCommand && <InstallCommand command={brewCommand} />}
+      {(downloadUrl || !brewCommand) && (
+        <a className={`button-link primary${size}`} href={downloadPageUrl}>
+          {installLabel(licensing)}{" "}
+          {downloadUrl ? (
+            <Download size={18} aria-hidden="true" />
+          ) : (
+            <Terminal size={18} aria-hidden="true" />
+          )}
+        </a>
+      )}
+      <Action href={buyUrl} className={`button-link ${buyStyle}${size}`}>
         Buy for {price}
       </Action>
       {/* Everything a spec sheet was carrying, in the one line where someone

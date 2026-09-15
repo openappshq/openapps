@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vite-plus/test";
 import { products } from "../catalog";
 import {
+  brewCasksFrom,
+  brewInstallCommand,
   checkoutUrl,
   DODO_CHECKOUT_ORIGINS,
   dodoConfigFrom,
+  installLabel,
   licensingFor,
   macDownloadUrlsFrom,
-  officialBuilds,
 } from "./licensing";
 
 const liveEnv = {
   VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
   VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
+};
+const casks = {
+  openreaction: "openappshq/tap/openreaction",
+  openklack: "openappshq/tap/openklack",
 };
 const downloads = {
   openreaction: "https://downloads.example/OpenReaction.dmg",
@@ -75,33 +81,84 @@ describe("dodoConfigFrom", () => {
   });
 });
 
+describe("brewCasksFrom", () => {
+  it("reads each app's cask as owner/tap/name, trimming whitespace", () => {
+    expect(
+      brewCasksFrom({
+        VITE_OPENKLACK_BREW_CASK: ` ${casks.openklack} `,
+        VITE_OPENREACTION_BREW_CASK: casks.openreaction,
+      }),
+    ).toEqual(casks);
+    expect(brewCasksFrom({ VITE_OPENKLACK_BREW_CASK: "open-apps/tap-2/open-klack" })).toEqual({
+      openklack: "open-apps/tap-2/open-klack",
+    });
+  });
+
+  it.each([
+    "",
+    "openklack",
+    "openappshq/openklack",
+    "openappshq/tap/openklack/extra",
+    "OpenAppsHQ/tap/openklack",
+    "openappshq/tap/open klack",
+    "openappshq/tap/openklack.rb",
+    "openappshq/tap/openklack; rm -rf /",
+    "/tap/openklack",
+    "openappshq//openklack",
+  ])("treats a malformed cask as unset: %j", (bad) => {
+    expect(brewCasksFrom({ VITE_OPENKLACK_BREW_CASK: bad })).toEqual({});
+  });
+
+  it("writes the exact command a visitor pastes", () => {
+    expect(brewInstallCommand(casks.openreaction)).toBe(
+      "brew install --cask openappshq/tap/openreaction",
+    );
+  });
+});
+
 describe("licensingFor", () => {
   const dodo = dodoConfigFrom(liveEnv);
 
-  it("sells an app only when it is on sale and both its paid product and installer are set", () => {
+  it("sells an app once its paid product and cask are set, with brew as the install path", () => {
     for (const product of products) {
-      expect(officialBuilds[product.id], product.id).toBe(true);
-      const licensing = licensingFor(product.id, { dodo, downloads });
-      expect(licensing.officialBuildAvailable, product.id).toBe(true);
+      const licensing = licensingFor(product.id, { dodo, casks, downloads: {} });
+      expect(licensing.available, product.id).toBe(true);
       expect(licensing.buyUrl, product.id).not.toBeNull();
+      expect(licensing.brewCask, product.id).toBe(casks[product.id as keyof typeof casks]);
+      expect(licensing.brewCommand, product.id).toBe(
+        `brew install --cask ${casks[product.id as keyof typeof casks]}`,
+      );
+      // No direct installer configured: brew is the only way in, and that is fine.
+      expect(licensing.downloadUrl, product.id).toBeNull();
+      expect(installLabel(licensing)).toBe("Install with Homebrew");
+    }
+  });
+
+  it("adds the direct download beside brew when one is configured", () => {
+    for (const product of products) {
+      const licensing = licensingFor(product.id, { dodo, casks, downloads });
+      expect(licensing.available, product.id).toBe(true);
+      expect(licensing.brewCommand, product.id).not.toBeNull();
       expect(licensing.downloadUrl, product.id).toBe(downloads[product.id as keyof typeof downloads]);
+      expect(installLabel(licensing)).toBe("Download for Mac");
     }
   });
 
   it.each([
-    ["taken off sale", { officialBuildAvailable: false }],
-    ["with no paid product ID", { dodo: dodoConfigFrom({}) }],
+    ["with no paid product ID (cask only)", { dodo: dodoConfigFrom({}) }],
     ["with a malformed paid product ID", { dodo: dodoConfigFrom({ VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "nope", VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "nope" }) }],
-    ["with no installer URL", { downloads: {} }],
-    ["with only an http installer URL", { downloads: macDownloadUrlsFrom({ VITE_OPENKLACK_MAC_DOWNLOAD_URL: "http://downloads.example/OpenKlack.dmg", VITE_OPENREACTION_MAC_DOWNLOAD_URL: "http://downloads.example/OpenReaction.dmg" }) }],
-    ["on sale but with neither product nor installer", { officialBuildAvailable: true, dodo: dodoConfigFrom({}), downloads: {} }],
-    ["off sale with only an installer", { officialBuildAvailable: false, dodo: dodoConfigFrom({}) }],
-    ["off sale with only a product", { officialBuildAvailable: false, downloads: {} }],
-  ])("fails closed %s: no checkout, no installer, not available", (_, override) => {
+    ["with no cask (product only)", { casks: {} }],
+    ["with a malformed cask", { casks: brewCasksFrom({ VITE_OPENKLACK_BREW_CASK: "openklack", VITE_OPENREACTION_BREW_CASK: "OpenAppsHQ/tap/openreaction" }) }],
+    ["with neither product nor cask", { dodo: dodoConfigFrom({}), casks: {} }],
+    ["with only a direct download", { dodo: dodoConfigFrom({}), casks: {}, downloads }],
+    ["with a product and a download but no cask", { casks: {}, downloads }],
+  ])("fails closed %s: no checkout, no command, no download, not available", (_, override) => {
     for (const product of products) {
-      const licensing = licensingFor(product.id, { dodo, downloads, ...override });
-      expect(licensing.officialBuildAvailable, product.id).toBe(false);
+      const licensing = licensingFor(product.id, { dodo, casks, downloads, ...override });
+      expect(licensing.available, product.id).toBe(false);
       expect(licensing.buyUrl, product.id).toBeNull();
+      expect(licensing.brewCask, product.id).toBeNull();
+      expect(licensing.brewCommand, product.id).toBeNull();
       expect(licensing.downloadUrl, product.id).toBeNull();
     }
   });
@@ -118,15 +175,27 @@ describe("licensingFor", () => {
     }
   });
 
+  it("offers no direct download for an http installer URL, but still sells via brew", () => {
+    const http = macDownloadUrlsFrom({
+      VITE_OPENKLACK_MAC_DOWNLOAD_URL: "http://downloads.example/OpenKlack.dmg",
+      VITE_OPENREACTION_MAC_DOWNLOAD_URL: "http://downloads.example/OpenReaction.dmg",
+    });
+    for (const product of products) {
+      const licensing = licensingFor(product.id, { dodo, casks, downloads: http });
+      expect(licensing.available, product.id).toBe(true);
+      expect(licensing.downloadUrl, product.id).toBeNull();
+    }
+  });
+
   it("links the configured product ID to the configured checkout", () => {
     const test = dodoConfigFrom({ ...liveEnv, VITE_DODO_CHECKOUT_ORIGIN: DODO_CHECKOUT_ORIGINS.test });
-    const licensing = licensingFor("openreaction", { officialBuildAvailable: true, dodo: test, downloads });
+    const licensing = licensingFor("openreaction", { dodo: test, casks });
     expect(licensing.buyUrl).toMatch(/^https:\/\/test\.checkout\.dodopayments\.com\/buy\/pdt_orPaid\?/);
   });
 
   it("returns paid checkout to the thanks page and offers no trial checkout", () => {
     for (const product of products) {
-      const licensing = licensingFor(product.id, { officialBuildAvailable: true, dodo, downloads });
+      const licensing = licensingFor(product.id, { dodo, casks });
       const ids = dodo.products[product.id];
       expect(ids, product.id).toBeDefined();
       expect(licensing.buyUrl, product.id).toContain(`${DODO_CHECKOUT_ORIGINS.live}/buy/${ids!.paid}?`);
@@ -135,6 +204,15 @@ describe("licensingFor", () => {
       expect(licensing.downloadPageUrl).toBe(`${product.route}/download/`);
       expect(licensing).not.toHaveProperty("trialUrl");
       expect(licensing).not.toHaveProperty("trialThanksUrl");
+    }
+  });
+
+  it("has no on/off list in code: the environment alone decides", () => {
+    for (const product of products) {
+      const licensing = licensingFor(product.id);
+      // The test environment sets no VITE_ variables, so nothing is on sale.
+      expect(licensing.available, product.id).toBe(false);
+      expect(licensing).not.toHaveProperty("officialBuildAvailable");
     }
   });
 
