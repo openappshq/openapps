@@ -1,1 +1,1 @@
-NOT GENERATED: run scripts/release/create-signing-certificate.sh on the release owner's own Mac, then scripts/release/designated-requirement.sh com.openappshq.openreaction <certificate.pem> > apps/openreaction/release/designated-requirement.txt (apps/openreaction/RELEASING.md, "Signing certificate and update key").
+identifier "com.openappshq.openreaction" and certificate leaf = H"82bf296958848358e55aab61dd81b9058a34df4a"

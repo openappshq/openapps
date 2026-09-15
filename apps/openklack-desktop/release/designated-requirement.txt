@@ -1,1 +1,1 @@
-NOT GENERATED: run scripts/release/create-signing-certificate.sh on the release owner's own Mac, then scripts/release/designated-requirement.sh com.openklack.desktop <certificate.pem> > apps/openklack-desktop/release/designated-requirement.txt (docs/development.md, "Releases and updates").
+identifier "com.openklack.desktop" and certificate leaf = H"82bf296958848358e55aab61dd81b9058a34df4a"
