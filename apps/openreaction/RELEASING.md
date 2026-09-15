@@ -292,15 +292,19 @@ installs immediately, independent of the toggles.
 
 The install is one atomic exchange of the two bundles (`renamex_np` with
 `RENAME_SWAP`), re-verified right before it: at no instant is the app
-missing, and the old bundle is deleted only afterwards. On a volume without
-atomic renames the updater falls back to move-aside/move-in with a marker
-file, rolls the old bundle back on failure, and if even that fails keeps
-it as a marked backup that nothing removes on its own (Settings shows it
-with "Remove Previous Copy"); an interrupted swap is recovered at the next
-launch. The installed bundle's version is re-read right before installing,
-so a newer copy put there by `brew upgrade` meanwhile is never replaced,
-and the install on quit runs under one deadline (10 s) past which it is
-skipped rather than delaying the quit. A copy running from a
+missing, and the old bundle is deleted only after a recorded, read-back
+"superseded" state. A volume without atomic exchanges cannot be updated in
+place: the install is refused with "Move OpenReaction to the Applications
+folder on your startup disk" and nothing changes. A state file written
+before every step lets the next launch clean up only what it knows is safe;
+a staging folder holding a bundle of uncertain provenance is kept, and
+Settings shows it with "Remove Previous Copy" until the user decides. The
+installed bundle's version is re-read right before installing, so a newer
+copy put there by `brew upgrade` meanwhile is never replaced. The install on
+quit is cooperative: past its deadline it is abandoned only before the
+commit point, and after it the quit waits for the exchange; "Restart to
+Update" runs through the normal quit (tap drain, license save, install)
+and reopens the app after it has exited. A copy running from a
 read-only volume or App Translocation shows "Move OpenReaction to
 Applications to enable updates" instead. Updates never depend on the
 license or trial state. `scripts/update-e2e.sh` proves the whole path
@@ -359,8 +363,10 @@ zips and update-signs 1.0.1, writes and verifies the signed appcast (and
 refuses a tampered one), serves both from a local port, runs 1.0.0 as a
 fresh install and asserts the server sees no request, runs it with both
 toggles on and turns "install automatically" off mid-download and again
-after staging (nothing may install or stay staged), then runs it with both
-on and asserts 1.0.1 is downloaded, verified, staged and installed on quit
-with the requirement unchanged and no leftovers. Everything it created is
+after staging (nothing may install or stay staged), runs it with both on
+and asserts 1.0.1 is downloaded, verified, staged and installed on quit
+with the requirement unchanged and no leftovers, then puts 1.0.0 back and
+takes "Restart to Update": the install runs through the quit path and the
+app reopens as 1.0.1. Everything it created is
 removed afterwards. It needs OpenSSL 3 (`brew install openssl@3`), python3
 and a logged-in session.

@@ -19,6 +19,7 @@ enum Updates {
         let updater = Updater(configuration: configuration)
         updater.onStaged = { staged in UpdateTesting.updateIsReady(installNow: { updater.restartToUpdate() }, version: staged.item.version.description) }
         updater.onCheckFinished = { error in UpdateTesting.cycleFinished(error: error) }
+        updater.onQuitFinished = { outcome, reopening in UpdateTesting.quitFinished(outcome: "\(outcome)", reopening: reopening) }
         updater.onPhaseChange = { [weak updater] phase in
             guard let updater else { return }
             UpdateTesting.phaseChanged(phase, revoke: { updater.setInstallsAutomatically(false) })

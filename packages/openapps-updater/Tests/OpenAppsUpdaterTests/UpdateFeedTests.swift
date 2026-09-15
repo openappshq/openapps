@@ -100,6 +100,16 @@ struct SignedFeedFixture {
         }
     }
 
+    @Test func aTrailerWithABogusLengthIsRefused() {
+        let body = Data(fixture.appcast().utf8)
+        for length in ["-1", "0", "\(body.count + 1)", "9223372036854775807", "x"] {
+            let feed = body + Data("<!-- sparkle-signatures:\nedSignature: \(fixture.sign(body))\nlength: \(length)\n-->\n".utf8)
+            #expect(throws: UpdateFeedError.self, "length \(length)") {
+                try UpdateFeed.verifiedAndParsed(feed, publicKey: fixture.publicKey)
+            }
+        }
+    }
+
     @Test func anItemMissingAFieldMakesTheFeedMalformed() {
         let xml = fixture.appcast().replacingOccurrences(of: "openapps:sha256>", with: "openapps:sha255>")
         #expect(throws: UpdateFeedError.malformed("item without openapps:sha256")) {

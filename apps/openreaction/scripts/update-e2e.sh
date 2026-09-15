@@ -23,7 +23,9 @@
 #      after staging: neither run may install anything or leave a staged copy;
 #   7. A runs with both toggles on: it must find B, verify it, report it
 #      staged, and install it when it quits;
-#   8. the installed app must be B, with the same designated requirement as A.
+#   8. the installed app must be B, with the same designated requirement as A;
+#   9. A is put back and "Restart to Update" is taken: the install goes
+#      through the quit path and the app reopens as B.
 #
 # Everything is removed afterwards: apps, keychain, certificate, key, the
 # test bundle's defaults and caches. Needs OpenSSL 3 (`openssl` on PATH,
@@ -62,7 +64,13 @@ BUNDLE_ID="com.openappshq.openreaction.updatetest"
 SCRATCH_PATH="${SCRATCH_PATH:-.build/update-test}"
 export SCRATCH_PATH OPENSSL
 
+if pgrep -f "openreaction-update-e2e\..*/OpenReaction\.app/Contents/MacOS/OpenReaction" >/dev/null; then
+    echo "error: an update-test app from an earlier run is still running; quit it first (pkill -f openreaction-update-e2e)" >&2
+    exit 1
+fi
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/openreaction-update-e2e.XXXXXX")"
+# Canonical: a reopened app reports its real path, which pgrep must match.
+TMP="$(cd "$TMP" && pwd -P)"
 SERVER_PID=""
 APP_PID=""
 cleanup() {
@@ -70,7 +78,9 @@ cleanup() {
     trap - EXIT
     set +e
     [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null
-    pkill -f "$TMP/Applications/OpenReaction.app/Contents/MacOS/OpenReaction" 2>/dev/null
+    # Any instance of the test bundle, from this run or an earlier one: a
+    # stale one would catch `open` by bundle id and break the restart step.
+    pkill -f "openreaction-update-e2e\..*/OpenReaction\.app/Contents/MacOS/OpenReaction" 2>/dev/null
     [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null
     defaults delete "$BUNDLE_ID" >/dev/null 2>&1
     rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/Application Support/$BUNDLE_ID" \
@@ -92,7 +102,7 @@ PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); p
 FEED_URL="http://127.0.0.1:${PORT}/appcast.xml"
 
 echo "==> 2. Building A and B, signed with the throwaway certificate"
-mkdir -p "$TMP/Applications" "$TMP/serve"
+mkdir -p "$TMP/Applications" "$TMP/serve" "$TMP/A"
 search_list_before="$(security list-keychains -d user)"
 RELEASE_SIGNING_P12_FILE="$TMP/cert/release-signing.p12" \
     RELEASE_SIGNING_P12_PASSWORD="$(cat "$TMP/cert/release-signing.p12.password")" \
@@ -124,6 +134,7 @@ if codesign --verify -R="$REQUIREMENT" "$TMP/wrong.app" 2>/dev/null; then
     echo "error: an ad-hoc signed app satisfies the release requirement" >&2; exit 1
 fi
 echo "ok: A and B carry the requirement; a re-signed app does not"
+ditto "$TMP/Applications/OpenReaction.app" "$TMP/A/OpenReaction.app"
 
 echo "==> 3. Zip, update-sign and announce B"
 (cd "$TMP/B" && ditto -c -k --sequesterRsrc --keepParent OpenReaction.app "$TMP/serve/OpenReaction-1.0.1.zip")
@@ -184,6 +195,8 @@ run_app() { # <log> <action>: runs A until it quits by itself (or 2 minutes pass
     if kill -0 "$APP_PID" 2>/dev/null; then
         echo "error: A did not quit within 2 minutes; its log:" >&2
         cat "$1" >&2
+        echo "--- main thread:" >&2
+        sample "$APP_PID" 1 2>/dev/null | sed -n '/Call graph/,/Total number/p' | head -60 >&2
         exit 1
     fi
     wait "$APP_PID" 2>/dev/null || true
@@ -240,4 +253,22 @@ codesign --verify --deep --strict "$APP"
 after="$(codesign --display -r- "$APP" 2>/dev/null | sed -n 's/^designated => //p')"
 [[ "$after" == "$REQUIREMENT" ]] || { echo "error: the installed app's requirement changed to '${after}'" >&2; exit 1; }
 echo "ok: 1.0.0 → 1.0.1 installed on quit; requirement unchanged"
+
+echo "==> 9. Restart to Update installs through the quit path and reopens the app"
+rm -rf "$APP"
+ditto "$TMP/A/OpenReaction.app" "$APP"
+[[ "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" == "1.0.0" ]]
+run_app "$TMP/run-restart.log" restart
+grep -q 'openreaction-update-test: ready 1.0.1' "$TMP/run-restart.log" || { echo "error: no update staged before the restart:" >&2; cat "$TMP/run-restart.log" >&2; exit 1; }
+[[ "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" == "1.0.1" ]] || { echo "error: the restart did not install 1.0.1" >&2; exit 1; }
+relaunched=""
+for _ in $(seq 1 30); do
+    if pgrep -f "$BIN" >/dev/null; then relaunched=1; break; fi
+    sleep 1
+done
+[[ -n "$relaunched" ]] || { echo "error: the app was not reopened after the restart:" >&2; cat "$TMP/run-restart.log" >&2; exit 1; }
+pkill -f "$BIN" 2>/dev/null || true
+sleep 1
+test ! -e "$TMP/Applications/.OpenReaction.app.update"
+echo "ok: restarted into 1.0.1"
 echo "==> Update end-to-end test passed"

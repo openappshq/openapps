@@ -232,6 +232,14 @@ final class AppController {
         return await stopTapDraining()
     }
 
+    /// A quit that was prepared but then refused (an update's restart
+    /// failed): the tap may run again.
+    func resumeAfterCancelledQuit() {
+        isRelaunching = false
+        updateTap()
+        onStateChange?()
+    }
+
     /// How long a deliberate stop waits for the tap's acknowledgements; past
     /// it what is owed is replayed unacknowledged (`.failed`) while the tap
     /// is still installed. Never "delivered".

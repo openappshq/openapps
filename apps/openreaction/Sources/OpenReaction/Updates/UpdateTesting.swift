@@ -40,7 +40,7 @@ enum UpdateTesting {
         report("ready \(version)")
         switch action {
         case "quit":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
+            Updater.terminateFromTheRunLoop(after: 1)
         case "restart":
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { installNow() }
         default:
@@ -62,13 +62,13 @@ enum UpdateTesting {
             DispatchQueue.main.async {
                 revoke()
                 report("revoked-during-download")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
+                Updater.terminateFromTheRunLoop(after: 1)
             }
         case ("revoke-after-staged", .staged):
             DispatchQueue.main.async {
                 revoke()
                 report("revoked-after-staged")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
+                Updater.terminateFromTheRunLoop(after: 1)
             }
         default:
             break
@@ -80,6 +80,10 @@ enum UpdateTesting {
         report("cycle-finished \(error.map { $0.localizedDescription } ?? "ok")")
     }
 
+    static func quitFinished(outcome: String, reopening: Bool) {
+        report("quit \(outcome) reopening=\(reopening)")
+    }
+
     private static func report(_ line: String) {
         FileHandle.standardError.write(Data("openreaction-update-test: \(line)\n".utf8))
     }
@@ -87,6 +91,7 @@ enum UpdateTesting {
     @MainActor
     static func updateIsReady(installNow: @escaping @MainActor () -> Void, version: String) {}
     static func cycleFinished(error: (any Error)?) {}
+    static func quitFinished(outcome: String, reopening: Bool) {}
     #if OPENAPPS_OFFICIAL
     @MainActor
     static func phaseChanged(_ phase: Updater.Phase, revoke: @escaping @MainActor () -> Void) {}

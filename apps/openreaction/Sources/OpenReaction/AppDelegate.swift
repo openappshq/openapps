@@ -125,16 +125,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// Official builds also save the trial's latest observed time, bounded
     /// by `LicenseController.quitSaveBound`, alongside the drain, and as the
-    /// very last thing swap in a staged update whose consent still holds: one
-    /// atomic rename, evaluated against the running app's identity first.
+    /// very last thing hand the quit to the updater: a staged update whose
+    /// consent still holds is exchanged in (one atomic rename, evaluated
+    /// against the running app's identity first), and after "Restart to
+    /// Update" the app is reopened; a failed restart install cancels the
+    /// quit so the user sees why.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let drain = controller?.isTapRunning == true ? controller : nil
         #if OPENAPPS_LICENSING
         let license = self.license
-        guard drain != nil || license != nil else { installStagedUpdate(); return .terminateNow }
         #else
-        guard drain != nil else { installStagedUpdate(); return .terminateNow }
+        let license: Never? = nil
         #endif
+        #if OPENAPPS_OFFICIAL
+        let updates = self.updates
+        #else
+        let updates: Never? = nil
+        #endif
+        guard drain != nil || license != nil || updates != nil else { return .terminateNow }
         Task {
             #if OPENAPPS_LICENSING
             let saved = Task { await license?.saveBeforeQuit() }
@@ -143,16 +151,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             #if OPENAPPS_LICENSING
             await saved.value
             #endif
-            installStagedUpdate()
+            #if OPENAPPS_OFFICIAL
+            if let updates, await !updates.finishQuit() {
+                // The tap was stopped for the quit; a relaunch that did not happen means the app stays.
+                controller?.resumeAfterCancelledQuit()
+                NSApp.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            #endif
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
-    }
-
-    private func installStagedUpdate() {
-        #if OPENAPPS_OFFICIAL
-        updates?.installStagedIfAllowed()
-        #endif
     }
 
     // MARK: - Deep link

@@ -75,6 +75,8 @@ public enum UpdaterError: Error, Equatable, LocalizedError {
     case alreadyInstalled(String)
     case installedBundleUnreadable
     case quitInstallTimedOut
+    /// The running code carries no designated requirement (an unsigned build): no update can be trusted against it.
+    case runningCodeUnsigned
 
     public var errorDescription: String? {
         switch self {
@@ -91,6 +93,7 @@ public enum UpdaterError: Error, Equatable, LocalizedError {
         case .alreadyInstalled(let version): "Version \(version) is already installed."
         case .installedBundleUnreadable: "The installed app's version couldn't be read."
         case .quitInstallTimedOut: "Installing on quit took too long and was skipped."
+        case .runningCodeUnsigned: "This copy of the app is not signed, so no update can be verified against it."
         }
     }
 }
@@ -135,13 +138,20 @@ public final class Updater {
     }
     /// Set once the staged update has been swapped in; the running process is the old version until it relaunches.
     public private(set) var installed = false
-    /// A previous copy kept next to the app after a failed update (RELEASES.md): shown in Settings until discarded.
+    /// A previous copy kept next to the app after an interrupted update (RELEASES.md): shown in Settings until discarded.
     public private(set) var preservedBackup: URL?
+    /// Set by "Restart to Update": the quit path installs, then reopens the app.
+    public private(set) var wantsRelaunch = false
+    /// The identity every update must satisfy, taken from the running code at
+    /// launch — never re-read from disk later.
+    @ObservationIgnored private let trustedRequirement: String?
 
     /// Test and diagnostics hooks.
     @ObservationIgnored public var onPhaseChange: ((Phase) -> Void)?
     @ObservationIgnored public var onStaged: ((StagedUpdate) -> Void)?
     @ObservationIgnored public var onCheckFinished: (((any Error)?) -> Void)?
+    /// What the quit path did: the install outcome and whether a reopen was arranged.
+    @ObservationIgnored public var onQuitFinished: ((InstallOutcome, Bool) -> Void)?
 
     @ObservationIgnored private var work: Task<Void, Never>?
     @ObservationIgnored private var schedule: Timer?
@@ -171,6 +181,7 @@ public final class Updater {
         sessionConfiguration.timeoutIntervalForResource = 15 * 60
         session = URLSession(configuration: sessionConfiguration)
         log = Logger(subsystem: Bundle.main.bundleIdentifier ?? configuration.appID, category: "updates")
+        trustedRequirement = try? CodeSignature.designatedRequirementOfRunningCode()
     }
 
     /// Recovers an interrupted swap, then starts the schedule if the user
@@ -179,12 +190,12 @@ public final class Updater {
         switch UpdateSwap.recover(app: configuration.bundleURL) {
         case .nothing:
             break
-        case .restored:
-            log.notice("Restored the app after an interrupted update")
+        case .cleaned:
+            log.notice("Cleaned up after an earlier update")
         case .backupPreserved(let backup):
             // Never removed on its own: the user decides once the installed app works.
             preservedBackup = backup
-            log.error("A previous copy is preserved at \(backup.path, privacy: .public) after a failed update")
+            log.error("A bundle of uncertain provenance is preserved at \(backup.path, privacy: .public) after an interrupted update")
         }
         guard location == .updatable else {
             log.notice("Updates are off: the app runs from a \(String(describing: self.location), privacy: .public) location")
@@ -220,10 +231,15 @@ public final class Updater {
     }
 
     /// Turning the toggle off revokes everything the schedule started: a
-    /// download in flight is cancelled and a staged automatic update is
-    /// discarded, so nothing installs on quit.
+    /// check or download in flight is cancelled and a staged automatic
+    /// update is discarded, so nothing installs on quit.
     private func withdrawAutomaticWork() {
         switch phase {
+        case .checking where currentConsent == .automatic:
+            work?.cancel()
+            work = nil
+            log.notice("Cancelled the automatic update check")
+            phase = .idle
         case .downloading(let item) where currentConsent == .automatic:
             work?.cancel()
             work = nil
@@ -241,16 +257,22 @@ public final class Updater {
 
     @ObservationIgnored private var currentConsent: UpdateConsent = .automatic
 
+    /// Removes what this updater staged. A preserved bundle of uncertain
+    /// provenance is never touched here; only the user's discard removes it.
     private func discardStaging() {
+        guard UpdateSwap.preservedBackup(for: configuration.bundleURL) == nil else { return }
         try? FileManager.default.removeItem(at: UpdateSwap.stagingDirectory(for: configuration.bundleURL))
+        try? FileManager.default.removeItem(at: UpdateSwap.stateLocation(for: configuration.bundleURL))
     }
 
     // MARK: - Checking
 
     /// "Check now": always allowed, never installs by itself. Ends in
-    /// `.available`, `.upToDate` or `.failed`.
+    /// `.available`, `.upToDate` or `.failed`. A staged update is kept as it
+    /// is; it installs on quit or on Restart.
     public func checkNow() {
         guard isAvailable, !isBusy else { return }
+        if case .staged = phase { return }
         run(consent: .manual, install: false)
     }
 
@@ -412,7 +434,7 @@ public final class Updater {
         let entries = try FileManager.default.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil, options: [])
         guard entries.count == 1, entries[0].lastPathComponent == app.lastPathComponent else { throw UpdaterError.notOneBundle }
         let bundle = entries[0]
-        try Self.verify(bundle, against: app, expecting: item)
+        try Self.verify(bundle, satisfying: trustedRequirement, expecting: item)
         return StagedUpdate(item: item, bundleURL: bundle, consent: consent)
     }
 
@@ -450,11 +472,11 @@ public final class Updater {
         }
     }
 
-    /// The staged bundle must be validly signed, satisfy the installed app's
+    /// The staged bundle must be validly signed, satisfy the running app's
     /// designated requirement (evaluated, not compared as text), and be the
     /// announced version and build.
-    nonisolated static func verify(_ bundle: URL, against installed: URL, expecting item: UpdateFeedItem) throws {
-        let requirement = try CodeSignature.designatedRequirement(of: installed)
+    nonisolated static func verify(_ bundle: URL, satisfying requirement: String?, expecting item: UpdateFeedItem) throws {
+        guard let requirement else { throw UpdaterError.runningCodeUnsigned }
         try CodeSignature.verify(bundle, satisfies: requirement)
         let plist = bundle.appendingPathComponent("Contents/Info.plist")
         guard let data = try? Data(contentsOf: plist),
@@ -478,86 +500,140 @@ public final class Updater {
 
     // MARK: - Installing
 
+    public enum InstallOutcome: Equatable, Sendable {
+        /// The staged update is in place; the running process is the old version until it relaunches.
+        case installed
+        /// Nothing was staged, consent was withdrawn, or the deadline passed before the commit point.
+        case skipped
+        case failed(String)
+    }
+
     /// Installs the staged update if its consent still holds. Called from
-    /// `applicationShouldTerminate`. The verification and the swap run off
-    /// the main thread under one deadline: past it the install is skipped
-    /// (the staged copy stays for next time) and the quit goes on. Returns
-    /// whether an install happened.
-    @discardableResult
-    public func installStagedIfAllowed(deadline: TimeInterval = 10) -> Bool {
+    /// the quit path. The verification and the exchange run off the main
+    /// thread; the main thread waits up to `deadline`, then cooperates with
+    /// the worker: before the commit point the install is abandoned with
+    /// nothing changed, after it (the exchange itself, one syscall, and the
+    /// bounded bookkeeping) the wait continues to completion, so the process
+    /// never exits in the middle of a swap.
+    public func installStagedIfAllowed(deadline: TimeInterval = 10) -> InstallOutcome {
         guard !installed, case .staged(let staged) = phase,
-              UpdatePolicy.mayInstallOnQuit(consent: staged.consent, automaticDownloads: installsAutomatically) else { return false }
+              UpdatePolicy.mayInstallOnQuit(consent: staged.consent, automaticDownloads: installsAutomatically) else { return .skipped }
         let bundleURL = configuration.bundleURL
-        let done = DispatchSemaphore(value: 0)
-        let box = InstallResult()
+        let requirement = trustedRequirement
+        let transaction = InstallTransaction()
         DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try Self.install(staged, at: bundleURL)
-                box.set(.success(()))
-            } catch {
-                box.set(.failure(error))
+            transaction.finish(Result { try Self.install(staged, at: bundleURL, satisfying: requirement, transaction: transaction) })
+        }
+        var result = transaction.wait(timeout: deadline)
+        if result == nil {
+            if transaction.abortUnlessCommitted() {
+                log.error("Installing \(staged.item.version.description, privacy: .public) on quit exceeded \(deadline, privacy: .public)s before the commit point; abandoned, nothing changed")
+                return .skipped
             }
-            done.signal()
+            // Past the commit point: the exchange is one syscall; wait it out.
+            result = transaction.wait(timeout: nil)
         }
-        guard done.wait(timeout: .now() + deadline) == .success else {
-            log.error("Installing \(staged.item.version.description, privacy: .public) on quit exceeded \(deadline, privacy: .public)s; skipped")
-            return false
-        }
-        switch box.get() {
-        case .success:
+        switch result {
+        case .success?:
             installed = true
             phase = .idle
             log.notice("Installed \(staged.item.version.description, privacy: .public) on quit")
-            return true
-        case .failure(let error):
+            return .installed
+        case .failure(let error)?:
             log.error("Installing \(staged.item.version.description, privacy: .public) on quit failed: \(error.localizedDescription, privacy: .public)")
-            return false
+            return .failed(error.localizedDescription)
         case nil:
+            return .skipped
+        }
+    }
+
+    /// "Update ready — Restart": asks the app to quit. The app's quit path
+    /// drains what it must, calls `finishQuit()`, which installs and reopens.
+    public func restartToUpdate() {
+        guard !installed, case .staged = phase else { return }
+        wantsRelaunch = true
+        Self.terminateFromTheRunLoop()
+    }
+
+    /// `terminate:` must not be called from inside a main-queue block (a
+    /// Task continuation, `DispatchQueue.main.async`): AppKit waits for the
+    /// delegate's deferred reply in a nested run loop that cannot re-enter
+    /// the main queue, and the reply never comes. Scheduling it on the run
+    /// loop itself avoids that.
+    public static func terminateFromTheRunLoop(after delay: TimeInterval = 0) {
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: delay)
+    }
+
+    /// The last step of the app's quit path: installs a staged update whose
+    /// consent holds and, after "Restart to Update", reopens the app.
+    /// Returns whether the quit may proceed; after a failed restart install
+    /// it must not, so the user sees why.
+    public func finishQuit() async -> Bool {
+        let relaunch = wantsRelaunch
+        wantsRelaunch = false
+        let outcome = installStagedIfAllowed(deadline: relaunch ? 60 : 10)
+        guard relaunch else {
+            onQuitFinished?(outcome, false)
+            return true
+        }
+        switch outcome {
+        case .installed:
+            var reopening = true
+            do {
+                try Self.reopenAfterExit(configuration.bundleURL)
+            } catch {
+                reopening = false
+                log.error("Installed; could not arrange to reopen the app: \(error.localizedDescription, privacy: .public)")
+            }
+            onQuitFinished?(outcome, reopening)
+            return true
+        case .skipped:
+            phase = .failed("The update could not be installed in time. Try again.")
+            onQuitFinished?(outcome, false)
+            return false
+        case .failed(let message):
+            phase = .failed(message)
+            onQuitFinished?(outcome, false)
             return false
         }
     }
 
-    /// "Update ready — Restart": installs the staged update and relaunches.
-    public func restartToUpdate() {
-        guard !installed, case .staged(let staged) = phase else { return }
-        do {
-            try install(staged)
-        } catch {
-            phase = .failed(error.localizedDescription)
-            return
-        }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: self.configuration.bundleURL, configuration: configuration) { _, error in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    if let error {
-                        self.phase = .failed("Installed; couldn't reopen: \(error.localizedDescription)")
-                    } else {
-                        NSApp.terminate(nil)
-                    }
-                }
-            }
-        }
-    }
-
-    private func install(_ staged: StagedUpdate) throws {
-        try Self.install(staged, at: configuration.bundleURL)
-        installed = true
-        phase = .idle
-        log.notice("Installed \(staged.item.version.description, privacy: .public)")
+    /// Opens the (now updated) bundle once this process has exited. A
+    /// running app that prohibits multiple instances cannot open a second
+    /// copy of itself — Launch Services hands back the running one — so a
+    /// small detached shell waits for this process to go, then `open`s the
+    /// app. It gives up after a minute.
+    nonisolated private static func reopenAfterExit(_ bundleURL: URL) throws {
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = [
+            "-c",
+            #"""
+            i=0
+            while kill -0 "$1" 2>/dev/null && [ "$i" -lt 300 ]; do sleep 0.2; i=$((i + 1)); done
+            exec /usr/bin/open "$2"
+            """#,
+            "reopen", String(ProcessInfo.processInfo.processIdentifier), bundleURL.path,
+        ]
+        helper.standardInput = FileHandle.nullDevice
+        helper.standardOutput = FileHandle.nullDevice
+        helper.standardError = FileHandle.nullDevice
+        try helper.run()
     }
 
     /// The install proper, safe off the main actor: the bundle on disk must
     /// still be older than the update (something else may have updated it
-    /// meanwhile), the staged bundle is re-evaluated against the installed
-    /// app's identity, then the two are swapped atomically.
-    nonisolated private static func install(_ staged: StagedUpdate, at bundleURL: URL) throws {
+    /// meanwhile), the staged bundle is re-evaluated against the running
+    /// app's identity, then — past the commit point — the two are exchanged
+    /// atomically.
+    nonisolated private static func install(_ staged: StagedUpdate, at bundleURL: URL, satisfying requirement: String?,
+                                            transaction: InstallTransaction) throws {
         let onDisk = try installedVersion(of: bundleURL)
         guard UpdatePolicy.mayReplace(installedVersion: onDisk.version, installedBuild: onDisk.build, with: staged.item) else {
             throw UpdaterError.alreadyInstalled(onDisk.version.description)
         }
-        try verify(staged.bundleURL, against: bundleURL, expecting: staged.item)
+        try verify(staged.bundleURL, satisfying: requirement, expecting: staged.item)
+        guard transaction.commit() else { throw CancellationError() }
         try UpdateSwap.swap(app: bundleURL, staged: staged.bundleURL)
     }
 
@@ -572,10 +648,46 @@ public final class Updater {
     }
 }
 
-/// A result handed from the install thread back to the main actor.
-private final class InstallResult: @unchecked Sendable {
+/// The hand-off between the quit path and the install worker: a commit
+/// point the worker passes only if no abort was requested, and a result
+/// the waiter reads once the worker is done.
+final class InstallTransaction: @unchecked Sendable {
     private let lock = NSLock()
+    private let done = DispatchSemaphore(value: 0)
+    private var aborted = false
+    private var committed = false
     private var result: Result<Void, any Error>?
-    func set(_ value: Result<Void, any Error>) { lock.withLock { result = value } }
-    func get() -> Result<Void, any Error>? { lock.withLock { result } }
+
+    /// Worker: passes the commit point unless an abort was requested first.
+    func commit() -> Bool {
+        lock.withLock {
+            guard !aborted else { return false }
+            committed = true
+            return true
+        }
+    }
+
+    /// Waiter: requests an abort; false if the worker already committed.
+    func abortUnlessCommitted() -> Bool {
+        lock.withLock {
+            guard !committed else { return false }
+            aborted = true
+            return true
+        }
+    }
+
+    func finish(_ value: Result<Void, any Error>) {
+        lock.withLock { result = value }
+        done.signal()
+    }
+
+    /// Waits for the worker; nil on timeout.
+    func wait(timeout: TimeInterval?) -> Result<Void, any Error>? {
+        if let timeout {
+            guard done.wait(timeout: .now() + timeout) == .success else { return nil }
+        } else {
+            done.wait()
+        }
+        return lock.withLock { result }
+    }
 }

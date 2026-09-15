@@ -28,7 +28,29 @@ public enum CodeSignature {
 
     /// The designated requirement of the bundle at `url`, as `codesign -d -r-` prints it.
     public static func designatedRequirement(of url: URL) throws -> String {
-        let requirement = try requirementObject(of: url)
+        try string(of: try requirementObject(of: url))
+    }
+
+    /// The designated requirement of the code this process is running — the
+    /// identity to trust, taken from the loaded image rather than re-read
+    /// from a path on disk that could change underneath the updater.
+    public static func designatedRequirementOfRunningCode() throws -> String {
+        var code: SecCode?
+        var status = SecCodeCopySelf([], &code)
+        guard status == errSecSuccess, let code else { throw Failure.unreadable(message(status)) }
+        var staticCode: SecStaticCode?
+        status = SecCodeCopyStaticCode(code, [], &staticCode)
+        guard status == errSecSuccess, let staticCode else { throw Failure.unreadable(message(status)) }
+        var requirement: SecRequirement?
+        status = SecCodeCopyDesignatedRequirement(staticCode, [], &requirement)
+        guard status == errSecSuccess, let requirement else {
+            if status == errSecCSUnsigned { throw Failure.noDesignatedRequirement }
+            throw Failure.unreadable(message(status))
+        }
+        return try string(of: requirement)
+    }
+
+    private static func string(of requirement: SecRequirement) throws -> String {
         var text: CFString?
         let status = SecRequirementCopyString(requirement, [], &text)
         guard status == errSecSuccess, let text else { throw Failure.unreadable(message(status)) }

@@ -35,19 +35,31 @@ What it guarantees:
 - **Consent.** Automatic staging happens only while "install automatically"
   is on; turning it off cancels a download and discards a staged update, and
   the quit path re-checks. A manual install keeps its consent.
-- **Atomic swap.** `renamex_np(RENAME_SWAP)` exchanges the bundles in one
-  step; the old one is deleted only afterwards. Without atomic renames, a
-  marked move-aside/move-in rolls the old bundle back on failure; if even
-  that fails the old bundle is *preserved* with a marker — nothing removes
-  it on its own, launch-time recovery reports it, no swap happens over it,
-  and the app shows it until the user discards it.
+- **Atomic swap, or nothing.** `renamex_np(RENAME_SWAP)` exchanges the
+  bundles in one step; a volume without it cannot be updated in place and
+  the install is refused with "Move the app to the Applications folder on
+  your startup disk". A state file (`staging` → `exchanging` → `superseded`)
+  is written and read back *before* each step; if it can't be, nothing
+  starts. Launch-time recovery removes a staging folder only when the state
+  says it holds a never-installed download or the superseded old bundle;
+  anything else with a bundle in it is preserved, reported, refused as a
+  swap target, and shown in the app until the user discards it.
 - **Never over a newer app.** The installed bundle's version is re-read at
   install time; if something else (`brew upgrade`) put an equal or newer
   version there, the staged update is not installed.
-- **Bounded quit.** `installStagedIfAllowed(deadline:)` runs the
-  verification and swap off the main thread under one deadline and skips
-  the install past it, so quitting never hangs.
+- **Bounded, cooperative quit.** `installStagedIfAllowed(deadline:)` runs
+  the verification and exchange off the main thread. Past the deadline the
+  install is abandoned only if the worker has not reached its commit point
+  (nothing changed); once it has, the quit waits for the exchange to finish,
+  so the process never exits mid-swap. "Restart to Update" goes through the
+  app's own quit path (`finishQuit()`) and reopens the app after exit via a
+  detached helper, since an app that prohibits multiple instances cannot
+  open a second copy of itself.
+- **Trusted identity.** The requirement every update must satisfy is taken
+  from the running code at launch (`SecCodeCopySelf`), never re-read from a
+  path on disk; symbolic links are refused as swap targets.
 
-`swift test` covers feed verification, version and consent rules, the swap
-with injected failures (including a kill between the fallback's moves), and
-a bundle re-signed with a copied requirement string.
+`swift test` covers feed verification (including bogus signature trailers),
+version and consent rules, the swap with injected failures at every step
+and the recovery of each recorded state, the commit/abort hand-off of the
+quit path, and a bundle re-signed with a copied requirement string.

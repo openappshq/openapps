@@ -58,7 +58,8 @@ public struct UpdateFeed: Equatable, Sendable {
     /// then parses the items from exactly those bytes.
     public static func verifiedAndParsed(_ data: Data, publicKey: String) throws -> UpdateFeed {
         guard let (signature, length) = trailingSignature(in: data) else { throw UpdateFeedError.unsigned }
-        guard length <= data.count else { throw UpdateFeedError.badSignature }
+        // The trailer is untrusted until verified: its length must describe a real prefix.
+        guard length >= 0, length <= data.count else { throw UpdateFeedError.badSignature }
         let signed = Data(data.prefix(length))
         // The trailer must be the signature comment itself: nothing may hide after the signed bytes.
         let trailer = String(decoding: data.dropFirst(length), as: UTF8.self)

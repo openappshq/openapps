@@ -1,58 +1,57 @@
 import Darwin
 import Foundation
 
-/// Replacing the installed bundle with a staged one that sits next to it.
-/// On APFS the two paths are exchanged in one atomic rename
-/// (`renamex_np(RENAME_SWAP)`): at no instant is the app missing, and
-/// nothing is deleted until the new bundle is in place. On a volume without
-/// atomic swaps the fallback moves the old bundle aside and the new one in;
-/// a marker written first makes an interrupted fallback recoverable at the
-/// next launch, and any failure puts the old bundle back — or, if even that
-/// fails, keeps it as a preserved backup that nothing deletes on its own.
+/// Replacing the installed bundle with a staged one that sits next to it,
+/// in one atomic exchange (`renamex_np(RENAME_SWAP)`): at no instant is the
+/// app missing, and the old bundle — which lands in the staging folder — is
+/// deleted only once the exchange is known to have succeeded. A volume
+/// without atomic exchanges cannot be updated in place; the install is
+/// refused and nothing changes.
+///
+/// A state file next to the staging folder records the transaction before
+/// any mutation, so recovery at the next launch knows what the folder
+/// holds: a download that was never installed (`staging`), the old bundle
+/// after a completed exchange (`superseded`), or something ambiguous
+/// (`exchanging`, missing, unreadable), which is preserved and reported,
+/// never deleted on the updater's own authority.
 public enum UpdateSwap {
     /// The operations of a swap, in order, for failure injection in tests.
     public enum Step: Equatable, Sendable {
+        /// Writing the `exchanging` state, before any mutation.
+        case mark
         /// The atomic exchange.
         case exchange
-        /// Fallback: moving the old bundle aside.
-        case moveAside
-        /// Fallback: moving the new bundle in.
-        case moveIn
+        /// Writing the `superseded` state, after the exchange.
+        case markSuperseded
     }
 
-    /// How a successful swap was done.
-    public enum Outcome: Equatable, Sendable {
-        /// One atomic exchange.
-        case exchanged
-        /// The fallback: moved aside, then moved in.
-        case moved
+    /// What the staging folder holds, as recorded before each step.
+    public enum State: String, Sendable {
+        /// A download being unpacked, or a staged update not yet installed. Safe to discard.
+        case staging
+        /// The exchange is about to run or has run without its completion being recorded. Ambiguous: preserved.
+        case exchanging
+        /// The exchange completed; the folder holds the old bundle. Safe to discard.
+        case superseded
     }
 
     public enum Failure: Error, Equatable, LocalizedError {
-        /// A preserved backup from an earlier failed swap is still in place;
-        /// nothing is swapped over it.
+        /// The staging folder holds a preserved bundle from an earlier
+        /// interrupted or failed swap; nothing is staged or swapped over it.
         case backupPreserved(URL)
-        case clearPrevious(String)
-        /// The exchange failed; nothing changed.
+        /// The transaction state could not be recorded; nothing was changed.
+        case cannotRecordState(String)
+        /// The volume has no atomic exchange; nothing was changed.
+        case atomicExchangeUnsupported
+        /// The exchange failed; nothing was changed.
         case exchange(String)
-        /// Fallback: the old bundle could not be moved aside; nothing changed.
-        case moveAside(String)
-        /// Fallback: the new bundle could not be moved in; the old one was rolled back into place.
-        case rolledBack(String)
-        /// Fallback: the new bundle could not be moved in and the old one
-        /// could not be put back either. It is preserved at `backup`, with a
-        /// marker, until someone removes it deliberately.
-        case rollbackFailed(moveIn: String, restore: String, backup: URL)
 
         public var errorDescription: String? {
             switch self {
-            case .backupPreserved(let backup): "A previous copy from a failed update is still at \(backup.path); remove it before updating again."
-            case .clearPrevious(let error): "Could not clear the previous copy: \(error)"
-            case .exchange(let error): "Could not exchange the apps: \(error)"
-            case .moveAside(let error): "Could not move the current app aside: \(error)"
-            case .rolledBack(let error): "Could not move the new app into place: \(error). The current version was put back."
-            case .rollbackFailed(let moveIn, let restore, let backup):
-                "Could not move the new app into place (\(moveIn)), and the current version could not be put back (\(restore)); it is kept at \(backup.path)"
+            case .backupPreserved(let backup): "A previous copy from an interrupted update is kept at \(backup.path); remove it before updating again."
+            case .cannotRecordState(let error): "Could not record the update's state next to the app: \(error). Nothing was changed."
+            case .atomicExchangeUnsupported: "This disk can't exchange the app in place. Move the app to the Applications folder on your startup disk to enable updates."
+            case .exchange(let error): "Could not exchange the apps: \(error). Nothing was changed."
             }
         }
     }
@@ -60,154 +59,146 @@ public enum UpdateSwap {
     /// What `recover` found at launch.
     public enum Recovery: Equatable, Sendable {
         case nothing
-        /// The app had been moved aside and never replaced; it is back.
-        case restored
-        /// A backup from a failed swap is preserved at this path; it was left alone.
+        /// A completed exchange's old bundle, or an uninstalled download, was cleaned up.
+        case cleaned
+        /// The staging folder holds a bundle of uncertain provenance; it was left alone.
         case backupPreserved(URL)
     }
 
     /// Where a downloaded bundle is unpacked: next to the app, so the swap is
     /// a rename on the same volume. Created mode 0700.
     public static func stagingDirectory(for app: URL) -> URL {
-        sibling(of: app, suffix: ".update")
+        app.deletingLastPathComponent().appendingPathComponent("." + app.lastPathComponent + ".update", isDirectory: true)
     }
 
-    /// Where the running bundle waits during a fallback swap, and stays as
-    /// the preserved backup if the swap fails both ways.
-    public static func previousLocation(for app: URL) -> URL {
-        sibling(of: app, suffix: ".previous")
+    /// The transaction state for the staging folder.
+    public static func stateLocation(for app: URL) -> URL {
+        app.deletingLastPathComponent().appendingPathComponent("." + app.lastPathComponent + ".update.state", isDirectory: false)
     }
 
-    /// Present while a fallback swap is in flight.
-    public static func markerLocation(for app: URL) -> URL {
-        sibling(of: app, suffix: ".swapping")
+    public static func state(for app: URL, fileManager: FileManager = .default) -> State? {
+        guard let data = fileManager.contents(atPath: stateLocation(for: app).path) else { return nil }
+        return State(rawValue: String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Present while `previousLocation` holds a preserved backup.
-    public static func backupMarkerLocation(for app: URL) -> URL {
-        sibling(of: app, suffix: ".backup")
+    /// Records the state durably; a failure means nothing further may happen.
+    static func record(_ state: State, for app: URL, fileManager: FileManager = .default) throws {
+        let url = stateLocation(for: app)
+        do {
+            try Data(state.rawValue.utf8).write(to: url, options: [.atomic])
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            // Read back: the state is what recovery relies on.
+            guard Self.state(for: app, fileManager: fileManager) == state else { throw Failure.cannotRecordState("read back a different state") }
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            throw Failure.cannotRecordState(error.localizedDescription)
+        }
     }
 
-    private static func sibling(of app: URL, suffix: String) -> URL {
-        app.deletingLastPathComponent().appendingPathComponent("." + app.lastPathComponent + suffix, isDirectory: true)
+    /// Whether the staging folder holds a bundle whose provenance is not
+    /// recorded as safe to discard.
+    public static func preservedBackup(for app: URL, fileManager: FileManager = .default) -> URL? {
+        let staging = stagingDirectory(for: app)
+        guard let bundle = bundle(in: staging, named: app.lastPathComponent, fileManager: fileManager) else { return nil }
+        switch state(for: app, fileManager: fileManager) {
+        case .staging, .superseded: return nil
+        case .exchanging, nil: return bundle
+        }
     }
 
-    /// Creates the staging directory, empty and private to this user.
+    private static func bundle(in directory: URL, named name: String, fileManager: FileManager) -> URL? {
+        var isDirectory: ObjCBool = false
+        let candidates = [directory.appendingPathComponent(name, isDirectory: true), directory.appendingPathComponent("unpacked/\(name)", isDirectory: true)]
+        return candidates.first { fileManager.fileExists(atPath: $0.path, isDirectory: &isDirectory) && isDirectory.boolValue }
+    }
+
+    /// Creates the staging directory, empty and private to this user, and
+    /// records the `staging` state first. Refuses while a preserved bundle
+    /// sits there.
     public static func prepareStagingDirectory(for app: URL, fileManager: FileManager = .default) throws -> URL {
+        if let preserved = preservedBackup(for: app, fileManager: fileManager) { throw Failure.backupPreserved(preserved) }
         let staging = stagingDirectory(for: app)
         try? fileManager.removeItem(at: staging)
+        try record(.staging, for: app, fileManager: fileManager)
         try fileManager.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         return staging
     }
 
-    /// Whether a backup from a failed swap is preserved next to `app`.
-    public static func preservedBackup(for app: URL, fileManager: FileManager = .default) -> URL? {
-        let previous = previousLocation(for: app)
-        guard fileManager.fileExists(atPath: backupMarkerLocation(for: app).path), fileManager.fileExists(atPath: previous.path) else { return nil }
-        return previous
-    }
-
-    /// Replaces `app` with `staged`, which must be on the same volume. `before`
-    /// runs ahead of each operation and may fail it. `atomic` forces or
-    /// forbids the atomic exchange (nil: try it, fall back when the volume
-    /// cannot). On success the old bundle is gone and the staging folder
-    /// removed; on any failure the old bundle is in place, or preserved and
-    /// the error says where.
-    @discardableResult
-    public static func swap(app: URL, staged: URL, fileManager: FileManager = .default, atomic: Bool? = nil,
-                            before: (Step) throws -> Void = { _ in }) throws -> Outcome {
-        if let backup = preservedBackup(for: app, fileManager: fileManager) { throw Failure.backupPreserved(backup) }
-        if atomic != false {
-            do { try before(.exchange) } catch { throw Failure.exchange(error.localizedDescription) }
-            if renamex_np(staged.path, app.path, UInt32(RENAME_SWAP)) == 0 {
-                finish(app: app, fileManager: fileManager)
-                return .exchanged
+    /// Exchanges `app` and `staged` (both on the same volume, `staged` inside
+    /// the staging folder) atomically. `before` runs ahead of each step and
+    /// may fail it. On success the staging folder, now holding the old
+    /// bundle, is removed; on any failure before the exchange nothing has
+    /// changed. Refuses without an atomic exchange and over a preserved bundle.
+    public static func swap(app: URL, staged: URL, fileManager: FileManager = .default, before: (Step) throws -> Void = { _ in }) throws {
+        if let preserved = preservedBackup(for: app, fileManager: fileManager) { throw Failure.backupPreserved(preserved) }
+        for url in [app, staged, stagingDirectory(for: app)] {
+            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+                throw Failure.exchange("\(url.lastPathComponent) is a symbolic link")
             }
+        }
+        // The state goes first: from here on, recovery knows the folder may hold either bundle.
+        do { try before(.mark) } catch { throw Failure.cannotRecordState(error.localizedDescription) }
+        try record(.exchanging, for: app, fileManager: fileManager)
+        do {
+            try before(.exchange)
+        } catch {
+            // Refused before the syscall: the folder still holds the download.
+            try? record(.staging, for: app, fileManager: fileManager)
+            throw Failure.exchange(error.localizedDescription)
+        }
+        if renamex_np(staged.path, app.path, UInt32(RENAME_SWAP)) != 0 {
             let code = errno
-            if atomic == true || !(code == ENOTSUP || code == EINVAL || code == EXDEV) {
-                throw Failure.exchange(String(cString: strerror(code)))
-            }
+            // Nothing changed: the folder still holds the download.
+            try? record(.staging, for: app, fileManager: fileManager)
+            if code == ENOTSUP || code == EINVAL || code == EXDEV { throw Failure.atomicExchangeUnsupported }
+            throw Failure.exchange(String(cString: strerror(code)))
         }
-        try fallbackSwap(app: app, staged: staged, fileManager: fileManager, before: before)
-        return .moved
-    }
-
-    private static func fallbackSwap(app: URL, staged: URL, fileManager: FileManager, before: (Step) throws -> Void) throws {
-        let previous = previousLocation(for: app)
-        let marker = markerLocation(for: app)
-        if fileManager.fileExists(atPath: previous.path) {
-            do { try fileManager.removeItem(at: previous) } catch { throw Failure.clearPrevious(error.localizedDescription) }
-        }
-        // The marker outlives a crash between the two moves, so recovery
-        // knows a swap was in flight even if the app itself is missing.
-        fileManager.createFile(atPath: marker.path, contents: Data(staged.path.utf8), attributes: [.posixPermissions: 0o600])
-        defer { try? fileManager.removeItem(at: marker) }
+        // The new app is in place. Only a recorded `superseded` lets the old bundle go.
         do {
-            try before(.moveAside)
-            try fileManager.moveItem(at: app, to: previous)
+            try before(.markSuperseded)
+            try record(.superseded, for: app, fileManager: fileManager)
         } catch {
-            throw Failure.moveAside(error.localizedDescription)
+            // The exchange stands; the old bundle stays preserved until recovery or the user resolves it.
+            return
         }
-        do {
-            try before(.moveIn)
-            try fileManager.moveItem(at: staged, to: app)
-        } catch {
-            do {
-                try fileManager.moveItem(at: previous, to: app)
-            } catch let restore {
-                // The old bundle stays where it is, marked, and nothing here or in `recover` deletes it.
-                fileManager.createFile(atPath: backupMarkerLocation(for: app).path,
-                                       contents: Data("\(restore.localizedDescription)\n".utf8), attributes: [.posixPermissions: 0o600])
-                throw Failure.rollbackFailed(moveIn: error.localizedDescription, restore: restore.localizedDescription, backup: previous)
-            }
-            throw Failure.rolledBack(error.localizedDescription)
-        }
-        try? fileManager.removeItem(at: previous)
         finish(app: app, fileManager: fileManager)
     }
 
     private static func finish(app: URL, fileManager: FileManager) {
         try? fileManager.removeItem(at: stagingDirectory(for: app))
+        try? fileManager.removeItem(at: stateLocation(for: app))
         // Launch Services notices a changed bundle by its modification date.
         try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: app.path)
     }
 
     /// Cleans up after an interrupted or finished swap, safe to call at every
-    /// launch: an app that was moved aside but never replaced comes back; a
-    /// leftover previous copy, marker or staging folder goes away — except a
-    /// preserved backup, which is reported and left alone.
+    /// launch. Only a folder whose recorded state says it holds a never-
+    /// installed download or an already-superseded old bundle is removed;
+    /// anything else with a bundle in it is preserved and reported.
     @discardableResult
     public static func recover(app: URL, fileManager: FileManager = .default) -> Recovery {
-        let previous = previousLocation(for: app)
-        var result = Recovery.nothing
-        var isDirectory: ObjCBool = false
-        if fileManager.fileExists(atPath: previous.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            if !fileManager.fileExists(atPath: app.path) {
-                // Whatever the marker says, an app that is missing comes back.
-                if (try? fileManager.moveItem(at: previous, to: app)) != nil {
-                    try? fileManager.removeItem(at: backupMarkerLocation(for: app))
-                    result = .restored
-                }
-            } else if fileManager.fileExists(atPath: backupMarkerLocation(for: app).path) {
-                result = .backupPreserved(previous)
-            } else {
-                try? fileManager.removeItem(at: previous)
-            }
-        } else {
-            try? fileManager.removeItem(at: backupMarkerLocation(for: app))
+        let staging = stagingDirectory(for: app)
+        let state = stateLocation(for: app)
+        guard fileManager.fileExists(atPath: staging.path) else {
+            try? fileManager.removeItem(at: state)
+            return .nothing
         }
-        try? fileManager.removeItem(at: markerLocation(for: app))
-        try? fileManager.removeItem(at: stagingDirectory(for: app))
-        return result
+        if let preserved = preservedBackup(for: app, fileManager: fileManager) {
+            return .backupPreserved(preserved)
+        }
+        try? fileManager.removeItem(at: staging)
+        try? fileManager.removeItem(at: state)
+        return .cleaned
     }
 
-    /// Removes a preserved backup once the user has decided the installed
-    /// app works.
+    /// Removes a preserved bundle once the user has decided the installed
+    /// app works. The state is cleared only after the folder is gone.
     public static func discardPreservedBackup(for app: URL, fileManager: FileManager = .default) throws {
-        try? fileManager.removeItem(at: backupMarkerLocation(for: app))
-        let previous = previousLocation(for: app)
-        if fileManager.fileExists(atPath: previous.path) {
-            try fileManager.removeItem(at: previous)
+        let staging = stagingDirectory(for: app)
+        if fileManager.fileExists(atPath: staging.path) {
+            try fileManager.removeItem(at: staging)
         }
+        try? fileManager.removeItem(at: stateLocation(for: app))
     }
 }
