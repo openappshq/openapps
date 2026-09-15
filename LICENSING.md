@@ -87,12 +87,14 @@ stateDiagram-v2
 
 | State | Core feature | What the user sees |
 | --- | --- | --- |
-| Trial | On | "Free trial: N days left", Buy for $5, key field |
-| TrialEnded | Off | "Your free trial has ended", Buy for $5, key field |
+| Trial | On | "Free trial: N days left", Buy a license, key field |
+| TrialEnded | Off | "Your free trial has ended", Buy a license, key field |
 | Licensed | On | "Licensed", Remove this Mac |
 | Grace | On | Nothing for the first 5 days offline, then "Connect to the internet within N days to keep using <App>" |
 | CheckRequired | Off | "Connect to the internet to verify your license", Try again |
 | Revoked | Off | "This license is no longer active on this Mac", Activate again, Buy, Contact support |
+
+The apps never show a price: the buy button says "Buy a license" and opens the website, the single place for pricing and offers.
 
 A license always wins over the trial: while a license record exists, the app is in a license state, and the trial record is ignored (but kept).
 
