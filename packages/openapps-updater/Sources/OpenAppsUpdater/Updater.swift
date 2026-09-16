@@ -101,7 +101,10 @@ public enum UpdaterError: Error, Equatable, LocalizedError {
 /// The in-app updater (RELEASES.md, "In-app updater"). Everything runs on the
 /// main actor; the network and unpacking happen in cancellable tasks.
 ///
-/// - Both toggles start off: the feed is contacted only for `checkNow()`.
+/// - Without a stored preference both toggles read off: the feed is
+///   contacted only for `checkNow()`. The app owns the fresh-install
+///   default (RELEASES.md: automatic checks on, decided once) and writes it
+///   through `setChecksAutomatically(_:)`.
 /// - With "check automatically" on: a check on launch when a day has passed,
 ///   every 24 hours while running, on wake when overdue, and one retry an
 ///   hour after a failure.
@@ -158,6 +161,8 @@ public final class Updater {
     @ObservationIgnored private var retry: Task<Void, Never>?
     @ObservationIgnored private var consecutiveFailures = 0
     @ObservationIgnored private var wakeObserver: NSObjectProtocol?
+    /// `start()` ran in an updatable location: the recovery is done and the schedule may check.
+    @ObservationIgnored private var started = false
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private let log: Logger
 
@@ -206,6 +211,7 @@ public final class Updater {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkIfDue() }
         }
+        started = true
         reschedule()
         checkIfDue()
     }
@@ -214,6 +220,10 @@ public final class Updater {
 
     // MARK: - Settings
 
+    /// Turning checks on after `start()` (from Settings, or an app's
+    /// fresh-install default once it has resolved) also runs the launch
+    /// check `start()` skipped, if one is due; the schedule carries on from
+    /// there. Turning them off cancels the automatic work in flight.
     public func setChecksAutomatically(_ enabled: Bool) {
         checksAutomatically = enabled
         configuration.defaults.set(enabled, forKey: Key.checks)
@@ -222,6 +232,7 @@ public final class Updater {
             setInstallsAutomatically(false)
         }
         reschedule()
+        if enabled, started { checkIfDue() }
     }
 
     public func setInstallsAutomatically(_ enabled: Bool) {

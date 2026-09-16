@@ -10,9 +10,10 @@ import OpenAppsUpdater
 // Info.plist carries SUFeedURL and SUPublicEDKey (the app's bundle script writes them).
 guard let configuration = UpdaterConfiguration(bundle: .main, appID: "openreaction", appName: "OpenReaction") else { return }
 let updater = Updater(configuration: configuration)   // @MainActor, @Observable
-updater.start()                                        // recovers an interrupted swap; checks only if the user opted in
+updater.start()                                        // recovers an interrupted swap; checks only if the toggle is on
 
-updater.setChecksAutomatically(true)    // Settings toggles, both off by default
+updater.setChecksAutomatically(true)    // Settings toggles; nothing stored reads as off. The app writes the
+                                        // fresh-install default (RELEASES.md); turning checks on after start() checks now if due
 updater.setInstallsAutomatically(true)
 updater.checkNow()                      // explicit; ends in .available / .upToDate / .failed
 updater.installAvailable()              // explicit consent: download, stage, swap, relaunch

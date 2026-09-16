@@ -72,11 +72,12 @@ public enum UpdateConsent: Equatable, Sendable {
 }
 
 /// When an official build looks for updates on its own (RELEASES.md, "In-app
-/// updater"). Automatic checks are off until the user turns them on, so a
-/// fresh install never contacts the update feed by itself; "Check now" is
-/// always a deliberate request.
+/// updater"). The package never contacts the feed until a toggle is on;
+/// "Check now" is always a deliberate request. The fresh-install default
+/// (automatic checks on, decided once, never for an upgrade) is the app's:
+/// it knows whether the install is fresh and writes the toggle.
 public enum UpdatePolicy {
-    /// Both Settings toggles start off.
+    /// What the Settings toggles read when nothing is stored.
     public static let automaticChecksByDefault = false
     public static let automaticDownloadsByDefault = false
 

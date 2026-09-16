@@ -5,7 +5,8 @@ import Testing
 @Suite struct UpdatePolicyTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    @Test func freshInstallNeverChecksOnItsOwn() {
+    @Test func nothingStoredReadsAsBothTogglesOff() {
+        // The app writes the fresh-install default; the package alone never checks.
         #expect(UpdatePolicy.automaticChecksByDefault == false)
         #expect(UpdatePolicy.automaticDownloadsByDefault == false)
         #expect(!UpdatePolicy.isAutomaticCheckDue(
