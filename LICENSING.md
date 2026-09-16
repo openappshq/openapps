@@ -229,7 +229,7 @@ The corrupt journal is never overwritten before a replacement has been written. 
 
 | Stack | How licensing is switched on |
 | --- | --- |
-| Swift apps | Compile condition `OPENAPPS_LICENSING` plus generated config (host and paid product ID) from the release script |
+| Swift apps | Compile condition `OPENAPPS_LICENSING` plus generated config (host and paid product ID) from the release script; the rules, the trial, the record store and the clients come from the shared package [`packages/openapps-licensing`](packages/openapps-licensing) |
 | Tauri / Rust apps | Cargo feature `licensing` plus build-time environment for host and paid product ID |
 
 ## Website and checkout
@@ -295,7 +295,7 @@ Every app implements these against a fake Dodo client, a fake record store and a
 
 1. Create the app's brand in Dodo: name, logo, website, statement descriptor.
 2. Create the `<App>` product under that brand ($5, purchasing power parity, license keys on, 3 activations, no expiry), in test mode, then copy to live. Read it back with `GET /products/{id}` and confirm those settings.
-3. Implement the states, rules and test cases above behind the app's licensing build flag.
+3. Implement the states, rules and test cases above behind the app's licensing build flag. A Swift app depends on [`packages/openapps-licensing`](packages/openapps-licensing) (a local path dependency, like `packages/openapps-updater`): every build links `OpenAppsLicensing` (the rules, the trial, `FileRecordStore`, `LicenseBadge`, tested with the package), a licensed build also `OpenAppsLicensingClients` (`DodoLicenseClient`, `URLSessionTrialRegistryClient`, `PlatformDeviceIdentity`, `DefaultsInvalidationJournal`). The app supplies its id, name, products, hosts and preferences suite through the initializers and keeps its own controller (timers, wake, network), License screen and copy — see the package README.
 4. Add the product ID and host to the app's official build configuration and the website's environment.
 5. Add the License screen, the privacy copy, and the website's download, buy and thanks pages.
 6. Run the shared test cases, then verify end to end in Dodo test mode:

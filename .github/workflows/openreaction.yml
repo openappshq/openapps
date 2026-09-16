@@ -12,6 +12,7 @@ on:
   pull_request:
     paths:
       - apps/openreaction/**
+      - packages/openapps-licensing/**
       - packages/openapps-updater/**
       - packaging/homebrew/**
       - scripts/release/**
@@ -22,6 +23,7 @@ on:
     tags: [openreaction-v*]
     paths:
       - apps/openreaction/**
+      - packages/openapps-licensing/**
       - packages/openapps-updater/**
       - packaging/homebrew/**
       - scripts/release/**
@@ -75,9 +77,10 @@ jobs:
           xcodebuild -version
           swift --version
       # Only suites that never post CGEvents or install an event tap run here:
-      # the whole core library, the gate runner shutdown suite and, in the
-      # licensed flavour, the preferences journal suite. KeyboardTapTests and
-      # anything else that touches real input stay out of CI.
+      # the whole core library and the gate runner shutdown suite.
+      # KeyboardTapTests and anything else that touches real input stay out
+      # of CI. The licensing rules, stores and clients (the preferences
+      # journal included) are tested with their package below.
       - name: Build and test the source flavour
         run: swift test --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests'
       - name: Build and test the licensed flavour
@@ -88,7 +91,9 @@ jobs:
         run: |
           scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
           swift test --scratch-path .build/licensed \
-            --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests|OpenReactionTests.DefaultsInvalidationJournalTests'
+            --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests'
+      - name: Test the licensing package
+        run: swift test --package-path ../../packages/openapps-licensing
       - name: Test the updater package
         run: swift test --package-path ../../packages/openapps-updater
       - name: Lint and test the release scripts

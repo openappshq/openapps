@@ -40,6 +40,7 @@ Shared with every app (repository root):
 | `scripts/release/verify-designated-requirement.sh <app> <pinned file>` | Fails unless an app has exactly the pinned requirement |
 | `scripts/release/release-tag-ruleset.sh check\|apply <definition> [repo]` | Checks for, or creates, the ruleset that makes `openreaction-v*` tags immutable |
 | `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>` | Sets the cask's version and digest; the template is `packaging/homebrew/Casks/openreaction.rb` |
+| `packages/openapps-licensing` | The licensing every Swift app compiles into official builds: rules, trial, record store, Dodo and registry clients (`swift test --package-path packages/openapps-licensing`) |
 | `packages/openapps-updater` | The in-app updater every Swift app compiles into official builds (`swift test --package-path packages/openapps-updater`) |
 
 ## One-time setup
@@ -267,8 +268,8 @@ the next release must install it without asking for permissions again.
 
 Official builds compile in the shared updater,
 [`packages/openapps-updater`](../../packages/openapps-updater)
-(`OPENAPPS_OFFICIAL=1`; source builds have no updater at all and no
-dependencies). `Info.plist` pins the feed
+(`OPENAPPS_OFFICIAL=1`; source builds have no updater at all and depend on
+nothing outside this repository). `Info.plist` pins the feed
 `https://openapps.space/updates/openreaction/appcast.xml` (`SUFeedURL`) and
 the public update key (`SUPublicEDKey`); the app trusts nothing in a feed
 before its Ed25519 signature verifies, and nothing in a zip before its

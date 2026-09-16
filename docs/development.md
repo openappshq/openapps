@@ -38,6 +38,8 @@ apps/
   openreaction/               OpenReaction's Swift app
   hertz/                      Hertz's Swift app (free; no licensing)
 packages/
+  openapps-licensing/         Swift: licensing rules, trial, record store and clients (LICENSING.md)
+  openapps-updater/           Swift: the in-app updater (RELEASES.md)
   ui/                         @openapps/ui: shared theme and motion
   openklack-ui/                @openklack/ui: keyboard, sound browser, typing
   keyboard-layout/            @openklack/keyboard-layout: logical key data
