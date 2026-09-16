@@ -280,7 +280,7 @@ struct AppModelTests {
         let hotkeys = HotkeyCenter()
         let text = Diagnostics.text(model: h.model, preferences: h.preferences, loginItem: LoginItem(flags: h.defaults, service: InertLoginItemService()), hotkeys: hotkeys)
         #expect(text.hasPrefix("macPaper dev (0)\n"))
-        #expect(text.contains("Licensing: compiled out (source build)"))
+        #expect(text.contains("Licensing: \(Licensing.flavourDescription)"))
         #expect(text.contains("- Built-in (1) · 32×20 pt @2x · 64×40 px · notch 10 pt · main"))
         #expect(text.contains("Hotkey: ⌃⌥⌘W"))
         #expect(text.contains("Applied:\n- nothing yet"))

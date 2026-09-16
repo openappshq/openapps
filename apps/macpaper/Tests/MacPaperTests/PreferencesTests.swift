@@ -71,15 +71,14 @@ struct PreferencesTests {
 }
 
 struct LicensingSeamTests {
-    @Test("The seam's facts for a source build")
+    @Test("The seam's facts follow the build's flavour")
     func facts() {
-        #expect(!Licensing.isCompiledIn)
         #expect(Licensing.appID == "macpaper")
         #expect(Licensing.appName == "macPaper")
         #expect(Licensing.journalSuite == "space.openapps.macpaper.license")
-        #expect(Licensing.flavourDescription == "compiled out (source build)")
-        #expect(LicensingCopy.network.contains("makes no network calls at all"))
-        #expect(!UpdateTesting.isCompiledIn)
+        #expect(Licensing.flavourDescription == (Licensing.isCompiledIn ? "official build" : "compiled out (source build)"))
+        #expect(LicensingCopy.network.contains("makes no network calls at all") == (!Licensing.isCompiledIn && !Updating.isCompiledIn))
+        #expect(!UpdateTesting.isCompiledIn || Updating.isCompiledIn)
     }
 
     @Test("The status asks its source each time and publishes changes")
