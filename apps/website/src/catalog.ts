@@ -20,7 +20,7 @@ export type Product = {
    */
   permissions?: readonly string[];
   icon: string;
-  accent: "cobalt" | "orchid" | "green" | "tangerine";
+  accent: "cobalt" | "orchid" | "green" | "tangerine" | "coral";
   /** Whether `/brand/<id>/wordmark-{ink,paper}.svg` exist; otherwise the name is set in type. */
   wordmark?: boolean;
   brandSource: string;
@@ -194,6 +194,48 @@ export const products: Product[] = [
         title: "Thank you · macPaper",
         description: "Your macPaper license key and how to activate it.",
         template: "src/apps/macpaper/template.html",
+        noindex: true,
+        checkoutReturn: true,
+      },
+    ],
+  },
+  {
+    id: "opennotes",
+    route: "/opennotes",
+    name: "OpenNotes",
+    description: "Sticky notes on the edge of your screen. Plain Markdown files underneath.",
+    platform: "macOS",
+    price: "$5",
+    permissions: [],
+    icon: "/brand/opennotes/app-icon.svg",
+    accent: "coral",
+    wordmark: false,
+    // Placeholders until the app lands; then `apps/opennotes/design/assets`
+    // (see src/apps/opennotes/brand/README.md).
+    brandSource: "apps/website/src/apps/opennotes/brand",
+    assets: [],
+    pages: [
+      {
+        path: "",
+        entry: "Home",
+        title: "OpenNotes · Sticky notes on the edge of your screen",
+        description:
+          "A deck of sticky notes docked to the edge of your screen: a thin pill at rest, a fan when you reach for it, one note out to write. Visible over full-screen apps, captured from anywhere with a hotkey, kept as plain Markdown files in a folder you choose. OpenNotes is an open-source Mac app. No permissions, no telemetry.",
+        template: "src/apps/opennotes/template.html",
+      },
+      {
+        path: "download",
+        entry: "Download",
+        title: "Install · OpenNotes",
+        description: "Install OpenNotes with one Terminal line. Nothing to grant, nothing to set up.",
+        template: "src/apps/opennotes/template.html",
+      },
+      {
+        path: "thanks",
+        entry: "Thanks",
+        title: "Thank you · OpenNotes",
+        description: "Your OpenNotes license key and how to activate it.",
+        template: "src/apps/opennotes/template.html",
         noindex: true,
         checkoutReturn: true,
       },
