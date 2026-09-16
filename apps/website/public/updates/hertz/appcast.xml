@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:openapps="https://openapps.space/xml-namespaces/releases">
+    <channel>
+        <title>Hertz</title>
+        <link>https://openapps.space/hertz/</link>
+        <description>Hertz releases</description>
+        <language>en</language>
+        <item>
+            <title>Hertz 0.2.0</title>
+            <openapps:app>hertz</openapps:app>
+            <openapps:channel>stable</openapps:channel>
+            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+            <sparkle:version>2000</sparkle:version>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <openapps:publishedAt>2026-09-16T10:14:57Z</openapps:publishedAt>
+            <pubDate>Wed, 16 Sep 2026 10:14:57 +0000</pubDate>
+            <description><![CDATA[Hertz 0.2.0. Release notes: https://github.com/openappshq/openapps/releases/tag/hertz-v0.2.0]]></description>
+            <openapps:sha256>13704f844482e01cc4938bf612d47208862324d5f3791ba48fcd822895db16d0</openapps:sha256>
+            <enclosure url="https://github.com/openappshq/openapps/releases/download/hertz-v0.2.0/Hertz-0.2.0.zip" length="2675145" type="application/octet-stream" sparkle:edSignature="4DiFhon5fsBRuu2PetJ/0KrrVWDGuu6twn5ngUJY+FRBgdNQwB48svQy51DBhAjDj9f3rIEAVg13KWjVAIuhCQ=="/>
+        </item>
+    </channel>
+</rss>
+<!-- sparkle-signatures:
+edSignature: pZVIC8xNzGmYa2IDbIbkZNGmazlfayZH3K3RoHB5u2Wxh/L85uT0RzzojAiBb+u8n66UghW7+sSf/ysNSdKnDQ==
+length: 1441
+-->
