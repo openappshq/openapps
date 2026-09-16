@@ -69,6 +69,35 @@ extension JSONDecoder {
     }
 }
 
+/// An array whose undecodable elements are dropped instead of failing the
+/// whole file: one hand-edited or newer favorite does not hide the rest.
+struct LossyArray<Element: Codable & Sendable>: Codable, Sendable {
+    var elements: [Element]
+
+    init(_ elements: [Element]) {
+        self.elements = elements
+    }
+
+    init(from decoder: any Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var elements: [Element] = []
+        while !container.isAtEnd {
+            if let element = try? container.decode(Element.self) {
+                elements.append(element)
+            } else {
+                _ = try? container.decode(Skip.self)
+            }
+        }
+        self.elements = elements
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        try elements.encode(to: encoder)
+    }
+
+    private struct Skip: Codable {}
+}
+
 // MARK: - Favorites
 
 public struct Favorite: Codable, Hashable, Identifiable, Sendable {
@@ -91,7 +120,7 @@ public struct Favorite: Codable, Hashable, Identifiable, Sendable {
 public final class FavoritesStore: @unchecked Sendable {
     private struct File: Codable, Sendable {
         var version = 1
-        var favorites: [Favorite]
+        var favorites: LossyArray<Favorite>
     }
 
     private let file: JSONFile<File>
@@ -100,7 +129,7 @@ public final class FavoritesStore: @unchecked Sendable {
 
     public init(fileURL: URL) {
         file = JSONFile(url: fileURL)
-        favorites = (try? file.load())?.favorites ?? []
+        favorites = (try? file.load())?.favorites.elements ?? []
     }
 
     public var all: [Favorite] {
@@ -119,7 +148,7 @@ public final class FavoritesStore: @unchecked Sendable {
             let favorite = Favorite(wallpaper: wallpaper, addedAt: date)
             var next = favorites
             next.insert(favorite, at: 0)
-            try file.save(File(favorites: next))
+            try file.save(File(favorites: LossyArray(next)))
             favorites = next
             return favorite
         }
@@ -129,7 +158,7 @@ public final class FavoritesStore: @unchecked Sendable {
         try lock.withLock {
             let next = favorites.filter { $0.wallpaper != wallpaper }
             guard next.count != favorites.count else { return }
-            try file.save(File(favorites: next))
+            try file.save(File(favorites: LossyArray(next)))
             favorites = next
         }
     }
@@ -179,11 +208,14 @@ public struct AppliedState: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case byDisplay, lastApplied, draft, fileByDisplay, perSpaceDisplays, fallbackDisplays }
 
+    /// A document that no longer decodes (hand-edited, or from a newer
+    /// version) is dropped on its own; the rest of the state stays.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        byDisplay = try container.decodeIfPresent([String: Wallpaper].self, forKey: .byDisplay) ?? [:]
+        let rawByDisplay = (try? container.decodeIfPresent([String: LossyDocument].self, forKey: .byDisplay)) ?? [:]
+        byDisplay = rawByDisplay.compactMapValues(\.wallpaper)
         lastApplied = try container.decodeIfPresent(Date.self, forKey: .lastApplied)
-        draft = try container.decodeIfPresent(Wallpaper.self, forKey: .draft)
+        draft = (try? container.decodeIfPresent(LossyDocument.self, forKey: .draft))??.wallpaper
         fileByDisplay = try container.decodeIfPresent([String: String].self, forKey: .fileByDisplay) ?? [:]
         perSpaceDisplays = try container.decodeIfPresent(Set<String>.self, forKey: .perSpaceDisplays) ?? []
         fallbackDisplays = try container.decodeIfPresent(Set<String>.self, forKey: .fallbackDisplays) ?? []
@@ -220,6 +252,19 @@ public struct AppliedState: Codable, Hashable, Sendable {
 
     public var perSpaceDisplayIDs: Set<DisplayID> { Set(perSpaceDisplays.compactMap(DisplayID.init)) }
     public var fallbackDisplayIDs: Set<DisplayID> { Set(fallbackDisplays.compactMap(DisplayID.init)) }
+}
+
+/// A document slot that decodes to nil instead of failing.
+struct LossyDocument: Codable, Sendable {
+    let wallpaper: Wallpaper?
+
+    init(from decoder: any Decoder) throws {
+        wallpaper = try? Wallpaper(from: decoder)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        try wallpaper?.encode(to: encoder)
+    }
 }
 
 public final class AppliedStore: @unchecked Sendable {

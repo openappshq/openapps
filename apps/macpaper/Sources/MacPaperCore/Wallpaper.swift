@@ -56,7 +56,7 @@ public struct Wallpaper: Codable, Hashable, Sendable {
             throw DecodingError.dataCorruptedError(forKey: .seed, in: container, debugDescription: "Not a seed: \(seedText)")
         }
         self.seed = seed
-        grain = min(max(try container.decodeIfPresent(Double.self, forKey: .grain) ?? 0, 0), 1)
+        grain = try container.decodeFiniteIfPresent(Double.self, forKey: .grain, in: 0...1, default: 0)
         finish = try container.decodeIfPresent(Finish.self, forKey: .finish) ?? Finish()
         pair = try container.decodeIfPresent(PairMode.self, forKey: .pair) ?? .still
         darkGenerator = try container.decodeIfPresent(Generator.self, forKey: .darkGenerator)
@@ -261,6 +261,13 @@ public struct Tint: Codable, Hashable, Sendable {
         self.color = color
         self.amount = min(max(amount, 0), 1)
     }
+
+    private enum CodingKeys: String, CodingKey { case color, amount }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(color: try container.decode(RGBAColor.self, forKey: .color), amount: try container.decodeFinite(Double.self, forKey: .amount, in: 0...1))
+    }
 }
 
 /// Luminance mapped between two colors.
@@ -298,7 +305,10 @@ public struct Finish: Codable, Hashable, Sendable {
         tint = try container.decodeIfPresent(Tint.self, forKey: .tint)
         duotone = try container.decodeIfPresent(Duotone.self, forKey: .duotone)
         gradientMap = try container.decodeIfPresent([ColorStop].self, forKey: .gradientMap)
-        topShade = min(max(try container.decodeIfPresent(Double.self, forKey: .topShade) ?? 0, 0), 1)
+        if let map = gradientMap, !GradientParameters.stopRange.contains(map.count) {
+            throw DecodingError.dataCorruptedError(forKey: .gradientMap, in: container, debugDescription: "A gradient map has \(GradientParameters.stopRange) stops, not \(map.count)")
+        }
+        topShade = try container.decodeFiniteIfPresent(Double.self, forKey: .topShade, in: 0...1, default: 0)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -498,6 +508,14 @@ public struct Point: Codable, Hashable, Sendable {
     }
 
     public static let center = Point(x: 0.5, y: 0.5)
+
+    private enum CodingKeys: String, CodingKey { case x, y }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        x = try container.decodeFinite(Double.self, forKey: .x, in: 0...1)
+        y = try container.decodeFinite(Double.self, forKey: .y, in: 0...1)
+    }
 }
 
 public enum GradientKind: String, Codable, CaseIterable, Hashable, Sendable {
@@ -548,12 +566,17 @@ public struct GradientParameters: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case kind, angle, center, stops, interpolation }
 
+    public static let angleRange: ClosedRange<Double> = -720...720
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         kind = try container.decode(GradientKind.self, forKey: .kind)
-        angle = try container.decodeIfPresent(Double.self, forKey: .angle) ?? 135
+        angle = try container.decodeFiniteIfPresent(Double.self, forKey: .angle, in: Self.angleRange, default: 135)
         center = try container.decodeIfPresent(Point.self, forKey: .center) ?? .center
         stops = try container.decode([ColorStop].self, forKey: .stops)
+        guard Self.stopRange.contains(stops.count) else {
+            throw DecodingError.dataCorruptedError(forKey: .stops, in: container, debugDescription: "A gradient has \(Self.stopRange) stops, not \(stops.count)")
+        }
         interpolation = try container.decodeIfPresent(ColorInterpolation.self, forKey: .interpolation) ?? .srgb
     }
 
@@ -585,6 +608,23 @@ public struct MeshParameters: Codable, Hashable, Sendable {
         self.colors = colors.isEmpty ? [.black, .white] : Array(colors.prefix(Self.colorRange.upperBound))
         self.jitter = min(max(jitter, 0), 1)
         self.softness = min(max(softness, 0), 1)
+    }
+
+    private enum CodingKeys: String, CodingKey { case columns, rows, colors, jitter, softness }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let colors = try container.decode([RGBAColor].self, forKey: .colors)
+        guard Self.colorRange.contains(colors.count) else {
+            throw DecodingError.dataCorruptedError(forKey: .colors, in: container, debugDescription: "A mesh has \(Self.colorRange) colors, not \(colors.count)")
+        }
+        self.init(
+            columns: try container.decodeBounded(Int.self, forKey: .columns, in: Self.gridRange),
+            rows: try container.decodeBounded(Int.self, forKey: .rows, in: Self.gridRange),
+            colors: colors,
+            jitter: try container.decodeFiniteIfPresent(Double.self, forKey: .jitter, in: 0...1, default: 0.5),
+            softness: try container.decodeFiniteIfPresent(Double.self, forKey: .softness, in: 0...1, default: 0.5)
+        )
     }
 }
 
@@ -618,6 +658,19 @@ public struct PatternParameters: Codable, Hashable, Sendable {
         self.background = background
         self.scale = min(max(scale, Self.scaleRange.lowerBound), Self.scaleRange.upperBound)
         self.angle = angle
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, foreground, background, scale, angle }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            kind: try container.decode(PatternKind.self, forKey: .kind),
+            foreground: try container.decode(RGBAColor.self, forKey: .foreground),
+            background: try container.decode(RGBAColor.self, forKey: .background),
+            scale: try container.decodeFiniteIfPresent(Double.self, forKey: .scale, in: Self.scaleRange, default: 48),
+            angle: try container.decodeFiniteIfPresent(Double.self, forKey: .angle, in: GradientParameters.angleRange, default: 0)
+        )
     }
 }
 
@@ -720,10 +773,14 @@ public struct PixelizeParameters: Codable, Hashable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let paletteSize = try container.decodeIfPresent(Int.self, forKey: .paletteSize)
+        if let paletteSize, !Self.paletteRange.contains(paletteSize) {
+            throw DecodingError.dataCorruptedError(forKey: .paletteSize, in: container, debugDescription: "\(paletteSize) is outside \(Self.paletteRange)")
+        }
         self.init(
             source: try container.decodeIfPresent(ImageReference.self, forKey: .source),
-            blockSize: try container.decodeIfPresent(Int.self, forKey: .blockSize) ?? 16,
-            paletteSize: try container.decodeIfPresent(Int.self, forKey: .paletteSize),
+            blockSize: try container.decodeBoundedIfPresent(Int.self, forKey: .blockSize, in: Self.blockRange, default: 16),
+            paletteSize: paletteSize,
             fit: try container.decodeIfPresent(ImageFit.self, forKey: .fit) ?? .fill,
             focus: try container.decodeIfPresent(Point.self, forKey: .focus) ?? .center,
             background: try container.decodeIfPresent(RGBAColor.self, forKey: .background) ?? .black
@@ -791,11 +848,15 @@ public struct DitherParameters: Codable, Hashable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let mode = try container.decodeIfPresent(DitherMode.self, forKey: .mode) ?? .floydSteinberg
+        let paletteSize = try container.decodeIfPresent(Int.self, forKey: .paletteSize)
+        if let paletteSize, !Self.paletteRange.contains(paletteSize) {
+            throw DecodingError.dataCorruptedError(forKey: .paletteSize, in: container, debugDescription: "\(paletteSize) is outside \(Self.paletteRange)")
+        }
         self.init(
             source: try container.decodeIfPresent(ImageReference.self, forKey: .source),
             mode: mode,
-            cell: try container.decodeIfPresent(Int.self, forKey: .cell) ?? 2,
-            paletteSize: try container.decodeIfPresent(Int.self, forKey: .paletteSize),
+            cell: try container.decodeBoundedIfPresent(Int.self, forKey: .cell, in: mode.cellRange, default: 2),
+            paletteSize: paletteSize,
             ink: try container.decodeIfPresent(RGBAColor.self, forKey: .ink) ?? .white,
             paper: try container.decodeIfPresent(RGBAColor.self, forKey: .paper) ?? .black,
             fit: try container.decodeIfPresent(ImageFit.self, forKey: .fit) ?? .fill,

@@ -36,9 +36,10 @@ struct WallpaperDocumentTests {
         #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"version\":3,\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\"}".utf8)) }
         #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"x\"}".utf8)) }
         #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"plasma\"},\"seed\":\"1\"}".utf8)) }
-        // Grain is optional and clamped.
-        let plain = try? Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\",\"grain\":4}".utf8))
-        #expect(plain?.grain == 1)
+        // Grain is optional; out of range is refused, not clamped.
+        #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\",\"grain\":4}".utf8)) }
+        let plain = try? Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\"}".utf8))
+        #expect(plain?.grain == 0)
     }
 
     @Test("Parameters clamp to their ranges")

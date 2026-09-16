@@ -44,7 +44,7 @@ enum Generators {
         let w = size.width, h = size.height
         let fw = Double(w), fh = Double(h)
         let cx = p.center.x * fw, cy = p.center.y * fh
-        let radians = p.angle * .pi / 180
+        let radians = (p.angle.isFinite ? p.angle.truncatingRemainder(dividingBy: 360) : 0) * .pi / 180
         let dx = cos(radians), dy = sin(radians)
         // Linear: the projection of the rect on the direction, so the first
         // stop touches one corner and the last the opposite one.
@@ -92,7 +92,9 @@ enum Generators {
     /// palette in a seeded order, so neighbours differ.
     static func meshPoints(_ p: MeshParameters, seed: UInt64) -> [ControlPoint] {
         var generator = SeededGenerator(seed: seed)
-        let order = p.colors.shuffled(using: &generator)
+        // Defence in depth: a document made by hand may carry no colors.
+        let palette = p.colors.isEmpty ? [RGBAColor.black, .white] : p.colors
+        let order = palette.shuffled(using: &generator)
         var points: [ControlPoint] = []
         var index = 0
         for row in 0..<p.rows {
@@ -151,8 +153,8 @@ enum Generators {
         var raster = Raster(size: size, fill: p.background)
         let w = size.width, h = size.height
         let fg = p.foreground, bg = p.background
-        let scale = max(2, p.scale)
-        let radians = p.angle * .pi / 180
+        let scale = p.scale.isFinite ? max(2, p.scale) : 48
+        let radians = (p.angle.isFinite ? p.angle.truncatingRemainder(dividingBy: 360) : 0) * .pi / 180
         let cosA = cos(radians), sinA = sin(radians)
         raster.pixels.withUnsafeMutableBufferPointer { out in
             for y in 0..<h {

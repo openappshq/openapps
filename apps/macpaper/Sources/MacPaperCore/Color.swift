@@ -95,6 +95,54 @@ public struct ColorStop: Codable, Hashable, Sendable {
         self.position = position
         self.color = color
     }
+
+    private enum CodingKeys: String, CodingKey { case position, color }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        position = try container.decodeFinite(Double.self, forKey: .position, in: 0...1)
+        color = try container.decode(RGBAColor.self, forKey: .color)
+    }
+}
+
+/// Numbers from documents: finite, and inside the range the memberwise
+/// initializer would clamp to. A document that carries NaN, infinity or a
+/// value far outside its range is refused rather than clamped, so a
+/// shared link can never make the renderer trap or spin.
+extension KeyedDecodingContainer {
+    func decodeFinite(_ type: Double.Type, forKey key: Key, in range: ClosedRange<Double>) throws -> Double {
+        let value = try decode(Double.self, forKey: key)
+        try check(value, key: key, in: range)
+        return value
+    }
+
+    func decodeFiniteIfPresent(_ type: Double.Type, forKey key: Key, in range: ClosedRange<Double>, default fallback: Double) throws -> Double {
+        guard let value = try decodeIfPresent(Double.self, forKey: key) else { return fallback }
+        try check(value, key: key, in: range)
+        return value
+    }
+
+    func decodeBounded(_ type: Int.Type, forKey key: Key, in range: ClosedRange<Int>) throws -> Int {
+        let value = try decode(Int.self, forKey: key)
+        guard range.contains(value) else {
+            throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "\(value) is outside \(range)")
+        }
+        return value
+    }
+
+    func decodeBoundedIfPresent(_ type: Int.Type, forKey key: Key, in range: ClosedRange<Int>, default fallback: Int) throws -> Int {
+        guard let value = try decodeIfPresent(Int.self, forKey: key) else { return fallback }
+        guard range.contains(value) else {
+            throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "\(value) is outside \(range)")
+        }
+        return value
+    }
+
+    private func check(_ value: Double, key: Key, in range: ClosedRange<Double>) throws {
+        guard value.isFinite, range.contains(value) else {
+            throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "\(value) is not a finite number in \(range)")
+        }
+    }
 }
 
 /// The built-in palettes the random documents draw from. Every palette is
