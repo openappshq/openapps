@@ -32,10 +32,10 @@ export default function HertzInstall({
     <div className="hertz-install">
       <InstallCommand command={brewCommand} />
       <p className="hertz-install-note">
-        Installs into <code>~/Applications</code> and opens Hertz in your menu bar; no admin
-        password, nothing to grant. Your {TRIAL_DAYS}-day trial starts then. Update with{" "}
-        <code>brew upgrade --cask {brewCask.split("/").pop()}</code>; the app never checks on its
-        own.
+        Installs into <code>/Applications</code> and opens Hertz in your menu bar; nothing to
+        grant. Your {TRIAL_DAYS}-day trial starts then. Hertz checks for updates itself and tells
+        you; installing one is your call, or run{" "}
+        <code>brew upgrade --cask {brewCask.split("/").pop()}</code>.
       </p>
     </div>
   );

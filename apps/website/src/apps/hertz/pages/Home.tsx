@@ -61,7 +61,7 @@ const questions = [
   ],
   [
     "What does the official build send anywhere?",
-    `Readings are shown and dropped; the only thing Hertz stores is your settings. Official builds include a ${TRIAL_DAYS}-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, its readings, and how you use the app are never sent. Builds from source never contact the license service. Hertz never checks for updates on its own, either: that is Homebrew's job.`,
+    `Readings are shown and dropped; the only thing Hertz stores is your settings. Official builds include a ${TRIAL_DAYS}-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, its readings, and how you use the app are never sent. Builds from source never contact the license service. Official builds also fetch our signed update feed once a day to tell you about a new version; that request carries no identifiers, and installing is your call.`,
   ],
   [
     "How accurate is it?",
@@ -180,8 +180,8 @@ export default function App() {
                 </span>
                 <h3>Asks for nothing.</h3>
                 <p>
-                  No permissions, no account, no telemetry, no update checks. Readings are shown and
-                  dropped, never stored or sent.
+                  No permissions, no account, no telemetry. Readings are shown and dropped, never
+                  stored or sent; the only calls are the license check and the update check.
                 </p>
               </article>
             </div>
