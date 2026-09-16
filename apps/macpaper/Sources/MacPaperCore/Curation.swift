@@ -541,17 +541,6 @@ public enum QualityGate {
         default: break
         }
 
-        // 2. The palette.
-        let colors = wallpaper.colors
-        let lightness = colors.map { OKLCH($0).l }
-        let separation = (lightness.max() ?? 0) - (lightness.min() ?? 0)
-        metrics["separation"] = separation
-        if separation < 0.25 { failures.append(.palette); score -= 20 }
-        if case .field(let p) = wallpaper.generator {
-            let ls = p.tones.map { OKLCH($0).l }
-            for i in 1..<ls.count where abs(ls[i] - ls[i - 1]) < 0.07 { failures.append(.palette); score -= 10; break }
-        }
-
         // 3. The structure, plain.
         let scale = Double(proxyWidth) / Double(context.size.width)
         var plain = wallpaper
@@ -559,6 +548,26 @@ public enum QualityGate {
         plain.finish = Finish()
         let structure = renderer.render(plain, side: .light, context: context, scale: scale)
         let l = Self.lightness(of: structure)
+
+        // 2. The palette: the document's colors — for a photo generator
+        // (pixelize, a dither with a source) the photo's own lightness
+        // range, read off the structure, since the document holds only a
+        // backdrop.
+        let colors = wallpaper.colors
+        let separation: Double
+        if wallpaper.generator.source != nil {
+            separation = Self.percentile(l, 0.95) - Self.percentile(l, 0.05)
+        } else {
+            let lightness = colors.map { OKLCH($0).l }
+            separation = (lightness.max() ?? 0) - (lightness.min() ?? 0)
+        }
+        metrics["separation"] = separation
+        if separation < 0.25 { failures.append(.palette); score -= 20 }
+        if case .field(let p) = wallpaper.generator {
+            let ls = p.tones.map { OKLCH($0).l }
+            for i in 1..<ls.count where abs(ls[i] - ls[i - 1]) < 0.07 { failures.append(.palette); score -= 10; break }
+        }
+
         // Texture: on the structure at cell resolution, where a dither is
         // still pixels and a bare gradient is still nothing.
         let cells = renderer.structure(wallpaper, side: .light, context: context)
