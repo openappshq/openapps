@@ -322,6 +322,7 @@ final class AppModel {
         if let saveProblem { return saveProblem }
         if let lastConflict, lastConflict.id == id { return "“\(lastConflict.original.fileName)” was changed outside; your text continues here, in \(id.fileName)." }
         guard let note = store.note(id) else { return "" }
+        if !note.bodyIsLoaded { return "Can’t read this note right now; shown in part." }
         if note.truncated { return "Too large to edit here; shown in part." }
         if store.hasUnsavedChanges(id) { return "Editing…" }
         return "Saved · \(Age.text(note.modified, now: now()))"

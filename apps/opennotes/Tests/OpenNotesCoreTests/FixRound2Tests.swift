@@ -393,6 +393,9 @@ final class NoteStoreFixRound2BudgetTests: XCTestCase {
         try writeFixture()
         let store = makeStore(bodyBudget: 3_000_000)
         let dirtyID = try XCTUnwrap(store.notes.keys.sorted().first)
+        // An edit starts from a loaded body (the app retains a note before
+        // it opens); an evicted body is never edited from its summary.
+        _ = store.body(of: dirtyID)
         try store.setText(String(repeating: "b", count: 900_000), for: dirtyID)
         XCTAssertTrue(store.hasUnsavedChanges(dirtyID))
         for id in store.notes.keys where id != dirtyID {

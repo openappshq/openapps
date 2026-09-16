@@ -223,8 +223,14 @@ final class DeckPanelController {
             license: model.license
         )
         // Every keystroke, paste and checkbox click asks the license as it
-        // happens, not the `readOnly` this render captured.
-        content.mayEdit = { [weak model] in model.map { !$0.readOnly } ?? false }
+        // happens, not the `readOnly` this render captured — and that the
+        // note's whole body is in memory: an editor showing a summary
+        // (the body could not be read back) never edits.
+        let openID = state.openNote
+        content.mayEdit = { [weak model] in
+            guard let model, !model.readOnly, let openID, let note = model.note(openID) else { return false }
+            return note.bodyIsLoaded && !note.truncated
+        }
         content.onTab = { [weak self] in self?.handle(.tabClicked($0)) }
         content.onPlus = { [weak self] in self?.handle(.plusClicked) }
         content.onMore = { [weak self] in self?.showAllNotes() }

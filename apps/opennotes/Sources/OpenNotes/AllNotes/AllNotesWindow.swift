@@ -257,7 +257,7 @@ struct AllNotesView: View {
                     }
                     .background(Brand.face(note.color))
                     Divider()
-                    Text("\(note.id.fileName) · \(note.color.title) · \(note.face.title) · created \(note.created.formatted(date: .abbreviated, time: .shortened))")
+                    Text("\(note.id.fileName) · \(note.color.title) · \(note.face.title) · created \(note.created.formatted(date: .abbreviated, time: .shortened))" + (note.bodyIsLoaded ? "" : " · can’t read the file right now; shown in part"))
                         .font(Brand.mono(10))
                         .foregroundStyle(Brand.textSecondary)
                         .lineLimit(1)

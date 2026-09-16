@@ -228,7 +228,7 @@ struct NoteCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 NoteEditor(
-                    text: note.text, face: note.face, isEditable: !content.readOnly && !note.truncated, focusToken: content.focusToken,
+                    text: note.text, face: note.face, isEditable: !content.readOnly && !note.truncated && note.bodyIsLoaded, focusToken: content.focusToken,
                     onTextChange: content.onTextChange, onCommand: content.onCommand, onFocus: content.onFocus, mayEdit: content.mayEdit
                 )
             }

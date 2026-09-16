@@ -37,6 +37,10 @@ nonisolated public enum StoreError: Error, LocalizedError, Hashable {
     /// The file is larger than `NoteStore.maximumFileSize`: shown truncated,
     /// never edited or written.
     case oversized(NoteID)
+    /// The note's body is not in memory and could not be read back (the
+    /// file is missing or unreadable right now): what is shown is the
+    /// summary, and it is never edited or written as if it were the text.
+    case bodyUnavailable(NoteID)
     /// A flush (folder switch, quit) could not save these notes; they stay
     /// unsaved in memory and the operation was not performed.
     case unsaved([NoteID: String])
@@ -50,6 +54,7 @@ nonisolated public enum StoreError: Error, LocalizedError, Hashable {
         case .noSuchNote(let id): return "No note named \(id.rawValue)."
         case .entryChanged(let id): return "\(id.fileName) is no longer a file; the note was not written."
         case .oversized(let id): return "\(id.fileName) is too large to edit here."
+        case .bodyUnavailable(let id): return "Can’t read \(id.fileName) right now; shown in part."
         case .unsaved(let problems):
             let names = problems.keys.sorted().map(\.fileName).joined(separator: ", ")
             return "Couldn’t save \(names): \(problems.values.sorted().first ?? "")"
@@ -206,7 +211,10 @@ public final class NoteStore {
     public var unsavedNotes: [NoteID] { dirty.sorted() }
 
     /// The note with its full body in memory (read from disk if it had
-    /// been evicted), moved to the front of the budget's line.
+    /// been evicted), moved to the front of the budget's line. When the
+    /// read fails the note comes back as it is, with `bodyIsLoaded` false
+    /// and the summary as its text: shown in part, never editable, and
+    /// asked again on the next call (the next render, keystroke or rescan).
     public func body(of id: NoteID) -> Note? {
         guard var note = notes[id] else { return nil }
         if !note.bodyIsLoaded {
@@ -516,9 +524,14 @@ public final class NoteStore {
     /// The text as the user has it now; the app saves it after the debounce.
     /// Refused while read-only; accepted, the buffer is stamped as typed
     /// under access, so its flush is allowed whatever the license says then.
+    /// The edit must start from a body that is in memory: a note whose
+    /// body is not loaded (an evicted body the disk would not give back)
+    /// is refused, never read back here — an editor holding the summary
+    /// would otherwise replace the whole file with it.
     public func setText(_ text: String, for id: NoteID) throws {
         guard !readOnly else { throw StoreError.readOnly }
-        guard var note = body(of: id) else { throw StoreError.noSuchNote(id) }
+        guard var note = notes[id] else { throw StoreError.noSuchNote(id) }
+        guard note.bodyIsLoaded else { throw StoreError.bodyUnavailable(id) }
         guard !note.truncated else { throw StoreError.oversized(id) }
         guard note.text != text else { return }
         unaccount(id)
@@ -583,7 +596,7 @@ public final class NoteStore {
     private func change(_ id: NoteID, _ mutate: (inout Note) -> Void) throws {
         guard !readOnly else { throw StoreError.readOnly }
         guard notes[id] != nil else { throw StoreError.noSuchNote(id) }
-        guard var note = body(of: id), note.bodyIsLoaded else { throw StoreError.entryChanged(id) }
+        guard var note = body(of: id), note.bodyIsLoaded else { throw StoreError.bodyUnavailable(id) }
         guard !note.truncated else { throw StoreError.oversized(id) }
         mutate(&note)
         note.modified = now()
