@@ -132,7 +132,10 @@ nonisolated struct LicenseRestriction: Equatable, Sendable {
 
     /// The one line the open note's footer and the status menu show while
     /// read-only: the title, and that the notes are read-only.
-    var notice: String { "Read-only: \(title.prefix(1).lowercased() + title.dropFirst()). Your notes stay readable; Settings → License." }
+    var notice: String {
+        let reason = title.prefix(1).lowercased() + title.dropFirst()
+        return "Read-only: \(reason)\(reason.hasSuffix("…") ? "" : ".") Your notes stay readable; Settings → License."
+    }
 
     /// nil while the feature runs (Trial, Licensed, Grace); a card otherwise.
     /// `storageError` and `trialStorageError` refine `trialUnavailable`, as
