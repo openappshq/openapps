@@ -308,6 +308,12 @@ nonisolated public enum NoteFileName {
         conflictStem(for: id, at: date) + ".md"
     }
 
+    /// `<name> (recovered 2026-09-16 10-30-05.123)`: a version found in a
+    /// temporary file a cut-short write left behind.
+    public static func recoveredStem(for stem: String, at date: Date) -> String {
+        "\(stem) (recovered \(conflictFormatter.string(from: date)))"
+    }
+
     nonisolated(unsafe) private static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

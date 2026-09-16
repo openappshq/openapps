@@ -143,7 +143,9 @@ final class DeckStateMachineTests: XCTestCase {
         var sut = machine()
         _ = sut.handle(.tabClicked(a))
         XCTAssertEqual(sut.handle(.openRequested(b)), [.closeNote(a), .openNote(b, focus: true)])
-        XCTAssertEqual(sut.handle(.openRequested(b)), [.openNote(b, focus: true)])
+        // Already open: the caret only, never a second open (the deck's
+        // hold on the note is taken once per open).
+        XCTAssertEqual(sut.handle(.openRequested(b)), [.focusNote(b)])
         XCTAssertEqual(sut.handle(.openRequested(NoteID("nope"))), [])
     }
 

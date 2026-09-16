@@ -18,6 +18,12 @@ nonisolated public enum StoreEvent: Hashable, Sendable {
     case conflict(NoteID, copy: URL)
     /// The chosen folder is not there; nothing is read or written.
     case folderMissing
+    /// A write ended in a state the store could not settle cleanly (a
+    /// rename the system refused mid-transaction): nothing was deleted,
+    /// every version is on disk under some name, and the message says
+    /// where; the note is written again only once the next rescan has
+    /// re-read it.
+    case storageProblem(String)
 }
 
 nonisolated public enum StoreError: Error, LocalizedError, Hashable {
@@ -65,8 +71,10 @@ nonisolated public enum SaveOutcome: Hashable, Sendable {
     case notWritten
 }
 
+#if DEBUG
 /// Points inside the store's transactions where a test can interleave an
-/// outside writer deterministically.
+/// outside writer deterministically. Debug builds only: a release binary
+/// carries neither the seam nor its names (verify-release.sh checks).
 nonisolated public enum StoreInterleaving: Hashable, Sendable {
     /// The existing file has been verified through its descriptor; the
     /// replacement is about to be swapped in.
@@ -77,6 +85,7 @@ nonisolated public enum StoreInterleaving: Hashable, Sendable {
     /// The destination was found absent; the exclusive create is next.
     case beforeCreate(NoteID)
 }
+#endif
 
 /// The notes folder: one `.md` file per note, read at launch and whenever
 /// the watcher or the app asks (`rescan`), written 250 ms after typing
@@ -119,8 +128,10 @@ public final class NoteStore {
     /// needed); reading, exporting, archiving and reordering still work.
     public var readOnly = false
     public var onEvent: (StoreEvent) -> Void = { _ in }
+    #if DEBUG
     /// Tests only: an outside writer run at a chosen point of a transaction.
     public var interleavingHook: ((StoreInterleaving) -> Void)?
+    #endif
     /// The budget for retained bodies, in bytes of UTF-8.
     public let bodyBudget: Int
     /// Bytes of full bodies held right now.
@@ -287,6 +298,7 @@ public final class NoteStore {
             return
         }
         folderIsMissing = false
+        recoverStrandedTemporaries()
         let urls = (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])) ?? []
         var seen: Set<NoteID> = []
         var updated: [NoteID] = []
@@ -335,6 +347,32 @@ public final class NoteStore {
     /// still covers every byte.
     private static func readCap(for info: stat) -> Int {
         Int(info.st_size) > maximumFileSize ? truncatedPreviewSize : maximumFileSize
+    }
+
+    /// A hidden `.<name>.md.tmp-<uuid>` left by a write the system cut
+    /// short holds a version nothing else has: it gets a visible name,
+    /// `<name> (recovered <time>).md`, never over an existing file, and
+    /// is read as a note like any other. One that cannot be moved stays.
+    private func recoverStrandedTemporaries() {
+        let names = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in names where name.hasPrefix(".") && name.contains(".md.tmp-") {
+            guard let range = name.range(of: ".md.tmp-") else { continue }
+            let stem = String(name[name.index(after: name.startIndex)..<range.lowerBound])
+            let base = NoteFileName.recoveredStem(for: stem, at: now())
+            var candidate = base
+            var counter = 2
+            while counter < 1000 {
+                do {
+                    try NoteFile.moveExclusively(folder.appendingPathComponent(name), to: folder.appendingPathComponent(candidate + ".md"))
+                    break
+                } catch NoteFile.Failure.exists {
+                    candidate = "\(base)-\(counter)"
+                    counter += 1
+                } catch {
+                    break
+                }
+            }
+        }
     }
 
     // MARK: - The body budget
@@ -584,7 +622,9 @@ public final class NoteStore {
                       contents.identity.hash == known.hash, contents.identity.size == known.size else {
                     return keepAsForeign(id)
                 }
+                #if DEBUG
                 interleavingHook?(.beforeUnlink(id))
+                #endif
                 guard (try? NoteFile.unlink(fileURL(for: id), verified: fd)) != nil else { return keepAsForeign(id) }
             }
         }
@@ -663,7 +703,9 @@ public final class NoteStore {
             attempts += 1
             switch NoteFile.open(url) {
             case .absent:
+                #if DEBUG
                 interleavingHook?(.beforeCreate(id))
+                #endif
                 do {
                     identities[id] = try NoteFile.createExclusively(url, contents: contents)
                     dirty.remove(id)
@@ -685,7 +727,9 @@ public final class NoteStore {
                       onDisk.identity.size <= Self.maximumFileSize else {
                     return try divert(id, note: note)
                 }
+                #if DEBUG
                 interleavingHook?(.beforeReplace(id))
+                #endif
                 let temporary: (url: URL, identity: NoteFile.Identity)
                 do {
                     temporary = try NoteFile.writeTemporary(beside: url, contents: contents)
@@ -698,23 +742,90 @@ public final class NoteStore {
                     NoteFile.removeTemporary(temporary.url)
                     throw StoreError.io("\(url.lastPathComponent): \(error)")
                 }
-                // The displaced file must be the very one that was verified
-                // (the inode now under the temporary name), holding the very
-                // bytes (re-hashed through the descriptor still open on it,
-                // so an in-place edit in the gap shows too).
-                if let displaced = NoteFile.identity(at: temporary.url), displaced == known.sameInode,
-                   let again = NoteFile.read(fd: fd, stat: info, cap: 0), again.identity.hash == known.hash, again.identity.size == known.size {
-                    NoteFile.removeTemporary(temporary.url)
-                    identities[id] = temporary.identity
-                    dirty.remove(id)
-                    return .saved
-                }
-                // An outside edit landed between the check and the swap: put
-                // it back, and ours goes beside it.
-                try? NoteFile.swap(temporary.url, url)
-                return try divert(id, note: note, ours: temporary.url)
+                return try settle(id, note: note, url: url, temporary: temporary, known: known, fd: fd, info: info)
             }
         }
+    }
+
+    /// After the swap: the happy path (the displaced inode is the verified
+    /// one, still holding the verified bytes), the outside-edit path (swap
+    /// back, ours to a conflict copy), and the indeterminate path — a
+    /// rename the system refused after the first swap. There nothing is
+    /// ever deleted: both files are re-read and hashed, whichever names
+    /// they ended up under, memory is re-derived from disk, and the note
+    /// is not written again until a rescan has re-read it (its identity is
+    /// dropped, so any later write diverts instead of replacing).
+    private func settle(_ id: NoteID, note: Note, url: URL, temporary: (url: URL, identity: NoteFile.Identity), known: NoteFile.Identity, fd: Int32, info: stat) throws -> SaveOutcome {
+        if let displaced = NoteFile.identity(at: temporary.url), displaced == known.sameInode,
+           let again = NoteFile.read(fd: fd, stat: info, cap: 0), again.identity.hash == known.hash, again.identity.size == known.size {
+            NoteFile.removeTemporary(temporary.url)
+            identities[id] = temporary.identity
+            dirty.remove(id)
+            return .saved
+        }
+        // An outside edit landed between the check and the swap: put it
+        // back, and ours goes beside it.
+        do {
+            try NoteFile.swap(temporary.url, url)
+        } catch {
+            return try settleIndeterminate(id, note: note, url: url, temporary: temporary, known: known, cause: "\(error)")
+        }
+        return try divert(id, note: note, ours: temporary.url)
+    }
+
+    private func settleIndeterminate(_ id: NoteID, note: Note, url: URL, temporary: (url: URL, identity: NoteFile.Identity), known: NoteFile.Identity, cause: String) throws -> SaveOutcome {
+        let ours = temporary.identity.hash
+        let atName = NoteFile.open(url).identity(cap: 0)
+        let atTemporary = NoteFile.open(temporary.url).identity(cap: 0)
+        if atName?.hash == known.hash, atTemporary?.hash == ours {
+            // The restoring swap did happen after all: the regular path.
+            return try divert(id, note: note, ours: temporary.url)
+        }
+        if atName?.hash == ours, let theirs = atTemporary, theirs.hash != ours {
+            // Ours stayed under the name; the outside version is in the
+            // temporary. It is given a visible name beside the note.
+            let base = NoteFileName.conflictStem(for: id, at: now())
+            var candidate = NoteID(base)
+            var counter = 2
+            while counter < 1000 {
+                if notes[candidate] == nil {
+                    do {
+                        try NoteFile.moveExclusively(temporary.url, to: fileURL(for: candidate))
+                        identities[id] = temporary.identity
+                        dirty.remove(id)
+                        if case .file(let fd, let info) = NoteFile.open(fileURL(for: candidate)) {
+                            defer { NoteFile.close(fd) }
+                            if let contents = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info)), let text = contents.text {
+                                identities[candidate] = contents.identity
+                                store(Self.parse(id: candidate, contents: text, fileDate: contents.identity.modified, fallbackCreated: contents.identity.modified, truncated: contents.truncated))
+                            }
+                        }
+                        onEvent(.updated([id, candidate]))
+                        onEvent(.storageProblem("\(url.lastPathComponent) could not be restored after an outside edit (\(cause)); the outside version is kept as \(candidate.fileName)."))
+                        return .saved
+                    } catch NoteFile.Failure.exists {
+                        // Taken: the next suffix.
+                    } catch {
+                        break
+                    }
+                }
+                candidate = NoteID("\(base)-\(counter)")
+                counter += 1
+            }
+            // The outside version stays in the hidden temporary until a
+            // rescan can give it a name; ours is on disk under the note's
+            // name, and memory matches it. Any later write diverts.
+            identities[id] = nil
+            dirty.remove(id)
+            let message = "\(url.lastPathComponent): an outside edit could not be given a name (\(cause)); it is kept as \(temporary.url.lastPathComponent) until the folder is read again."
+            onEvent(.storageProblem(message))
+            throw StoreError.io(message)
+        }
+        // Neither arrangement can be told: touch nothing, trust nothing.
+        identities[id] = nil
+        let message = "\(url.lastPathComponent) could not be settled after a write (\(cause)); both versions are on disk, nothing was removed, and the note is read again before it is written."
+        onEvent(.storageProblem(message))
+        throw StoreError.io(message)
     }
 
     /// Ours to a new note beside the original (from the already-written
@@ -794,14 +905,16 @@ public final class NoteStore {
                 } catch NoteFile.Failure.exists {
                     // Taken: the next suffix.
                 } catch {
-                    if let temporary { NoteFile.removeTemporary(temporary) }
-                    throw StoreError.io("\(candidate.fileName): \(error)")
+                    // The temporary (ours, verified) is not deleted: ours is
+                    // kept in memory, dirty, and written when the next save
+                    // succeeds; the temporary is recovered by a rescan.
+                    onEvent(.storageProblem("\(candidate.fileName) could not be written (\(error)); your text is kept in the app and \(temporary?.lastPathComponent ?? "") on disk."))
+                    return (candidate, nil)
                 }
             }
             candidate = NoteID("\(base)-\(counter)")
             counter += 1
         }
-        if let temporary { NoteFile.removeTemporary(temporary) }
         throw StoreError.io("No free name for a copy of \(id.fileName).")
     }
 

@@ -36,6 +36,9 @@ final class DeckPanelController {
     /// (a first-close rename, a conflict copy): later effects in the same
     /// list follow them.
     private var redirects: [NoteID: NoteID] = [:]
+    /// The note whose body the deck holds retained: taken once per open,
+    /// released once per close, moved with a redirect.
+    private var held: NoteID?
     private var layout: DeckLayout
 
     /// The window level: above the status bar, so a full-screen app's
@@ -103,6 +106,7 @@ final class DeckPanelController {
     /// follow, and so do the effects still being performed.
     func noteRedirected(from: NoteID, to: NoteID) {
         redirects[from] = to
+        if held == from { held = to }
         _ = machine.handle(.noteRenamed(from: from, to: to))
         render()
     }
@@ -161,7 +165,9 @@ final class DeckPanelController {
             if panel.isKeyWindow { panel.resignKey() }
             model.clearConflictNotice()
         case .openNote(let id, let focus):
-            model.retain(id)
+            if let held, held != id { model.release(held) }
+            if held != id { model.retain(id) }
+            held = id
             installMonitors()
             if focus {
                 focusCounter += 1
@@ -170,10 +176,17 @@ final class DeckPanelController {
             } else {
                 focusToken = nil
             }
+        case .focusNote:
+            focusCounter += 1
+            focusToken = focusCounter
+            panel.makeKey()
         case .closeNote(let id):
             let id = current(id)
             let kept = model.closeNote(id)
-            model.release(kept ?? id)
+            if let held, held == id || held == kept {
+                model.release(kept ?? held)
+                self.held = nil
+            }
             if kept == nil {
                 _ = machine.handle(.notesChanged(model.deckOrder))
             }

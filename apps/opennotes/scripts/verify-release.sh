@@ -82,6 +82,13 @@ fi
 if grep -Fq 'PREVIEW_RENDERED' "$STRINGS"; then
     echo "error: the binary contains the debug preview harness; a release is a release build" >&2; exit 1
 fi
+# The store's test seams (NoteStore.interleavingHook, StoreInterleaving)
+# are compiled into debug builds only.
+for needle in 'interleavingHook' 'StoreInterleaving' 'beforeReplace' 'beforeUnlink'; do
+    if grep -Fq "$needle" "$STRINGS"; then
+        echo "error: the binary contains the test seam '${needle}'; a release is a release build" >&2; exit 1
+    fi
+done
 
 echo "==> Licensing"
 # The compiled-in configuration (LICENSING.md, "Build flavours"): a release

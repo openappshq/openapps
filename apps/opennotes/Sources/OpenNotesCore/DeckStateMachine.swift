@@ -82,6 +82,8 @@ nonisolated public enum DeckEffect: Hashable, Sendable {
     case showFan
     /// Slide the note out; `focus` puts the caret in it (activating the app).
     case openNote(NoteID, focus: Bool)
+    /// The note is already open: only the caret goes into it.
+    case focusNote(NoteID)
     /// Save and slide the note back; an empty new note is dropped.
     case closeNote(NoteID)
     /// Make a note (the store answers with `.noteCreated`).
@@ -156,7 +158,14 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
             effects.append(.openNote(id, focus: false))
         case .openRequested(let id):
             guard order.contains(id) else { break }
-            if case .open(let current, _) = state, current != id {
+            if case .open(let current, _) = state {
+                if current == id {
+                    // Already out: the caret only, so the deck's hold on the
+                    // note is taken once per open and released once per close.
+                    state = .open(id, editing: true)
+                    effects.append(.focusNote(id))
+                    break
+                }
                 effects.append(.closeNote(current))
             }
             cancelPendingOpen(&effects)

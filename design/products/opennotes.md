@@ -90,6 +90,7 @@ A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes�
 | An outside edit lands while the note has unsaved edits | The file keeps theirs; ours continues as `<name> (conflict <time>).md`, the open note switches to it, the footer says so once |
 | A save fails (folder gone, disk full, the path is now a folder) | The text stays in the app, dirty; the footer says why; retried every 5 s and on the next keystroke; a folder switch or quit waits (Try Again / Keep Editing) |
 | A file over 1 MB | Shown truncated and read-only; never written |
+| The system refuses a rename in the middle of a write (a full disk, a provider hiccup) | Nothing is deleted: every version stays on disk under some name (the outside version as `<name> (conflict …).md`, or in a hidden temporary that the next folder read gives a `<name> (recovered …).md` name), the footer says so, and the note is read again before it is written again |
 | Hotkey taken by another app | Settings → General shows "⌥⌘N is taken by another app" under the recorder; the menu-bar item still creates notes |
 | The display hosting the deck goes away | The deck moves to the next host by the Display setting; an open note is saved first |
 | Read-only (trial ended, license needed) | See "The deck": visible, readable, exportable, archivable; not editable, no new notes |
