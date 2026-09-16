@@ -46,6 +46,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Official builds: the updater, before this launch writes any
         // preferences (Updates/UpdatesLaunch.swift).
         startUpdates()
+        // Licensing (Licensing/LicensingLaunch.swift), before the model
+        // reads the folder: in an official build the record store, the
+        // manager and the controller bound to `licenseStatus` — which
+        // answers "restricted" until then — and the fresh-install defaults
+        // decided once storage says whether the install is fresh; from
+        // source, everything on and the defaults decided now. So the first
+        // thing the model may write (an auto-archive sweep at launch) asks
+        // the projected license, never a status nobody has bound yet.
+        startLicensing()
         model.start()
 
         let statusItem = StatusItemController(model: model, preferences: preferences)
@@ -71,13 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.register(preferences.hotkey)
         observeChanges({ [preferences] in _ = preferences.hotkey }, onChange: { [weak self, preferences] in self?.hotkeys?.register(preferences.hotkey) })
 
-        // Licensing (Licensing/LicensingLaunch.swift): in an official build
-        // the record store, the manager and the controller bound to
-        // `licenseStatus`, and the fresh-install defaults decided once
-        // storage says whether the install is fresh; from source, everything
-        // on and the defaults decided now. Then the updater's schedule and,
-        // once, the setup guide.
-        startLicensing()
+        // The updater's schedule and, once, the setup guide.
         startUpdaterSchedule()
         showGuideOnFirstLaunchIfNeeded()
     }

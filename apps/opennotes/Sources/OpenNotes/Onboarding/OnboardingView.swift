@@ -131,7 +131,7 @@ private struct WelcomeStep: View {
                     .buttonStyle(LinkButtonStyle())
             }
             Spacer(minLength: 0)
-            MonoLabel("Under a minute · Notes never leave this Mac")
+            MonoLabel("Under a minute · Nothing is uploaded")
         }
         .padding(Brand.Space.s48)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -185,7 +185,7 @@ private struct PermissionsStep: View {
             }
 
             VStack(alignment: .leading, spacing: Brand.Space.s12) {
-                fact("The notes folder you chose", "The only thing OpenNotes reads and writes: one .md file per note, watched for changes you make elsewhere. Nothing else on this Mac is touched.")
+                fact("The notes folder you chose", "Where your notes live: one .md file per note, watched for changes you make elsewhere. Beyond it OpenNotes keeps only its own settings and, in official builds, its license and update records under Library.")
                 fact("What you paste", "Pasted text lands in the note as plain text; the pasteboard is read only when you paste.")
             }
             .padding(Brand.Space.s16)
@@ -226,7 +226,7 @@ private struct FilesStep: View {
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text("Each note is one Markdown file with a short front matter for its color, order and dates. Open them in any editor, back them up, grep them; OpenNotes notices changes made elsewhere and never deletes a file.")
+                Text("Each note is one Markdown file with a short front matter for its color, order and dates. Open them in any editor, back them up, grep them; OpenNotes notices changes made elsewhere and never deletes a note you wrote (the one file it removes is a new note you closed empty).")
                     .font(Brand.body(16))
                     .lineSpacing(4)
                     .foregroundStyle(Brand.textSecondary)

@@ -63,7 +63,7 @@ nonisolated enum LicensingCopy {
     /// the trial registry with licensing, the update check (a plain GET of
     /// the signed feed, RELEASES.md) with the updater, none from source.
     static var network: String {
-        let stays = "OpenNotes reads and writes the notes folder you chose and nothing else; every note is a plain file there, and nothing is copied anywhere."
+        let stays = "OpenNotes reads and writes your notes only in the folder you chose — every note is a plain file there — and uploads nothing; its settings, and in official builds its license and update records, stay under Library."
         switch (Licensing.isCompiledIn, Updating.isCompiledIn) {
         case (true, true):
             return stays + " The only network calls are the license check and the trial registry, described under License, and the update check, described under Updates."
@@ -209,7 +209,11 @@ nonisolated struct LicenseRestriction: Equatable, Sendable {
 /// view body or an action evaluated after a deadline sees the lapse even
 /// before any timer has fired. `revision` is what a view observes; the
 /// controller bumps it on every published change so SwiftUI re-reads. A
-/// build with licensing compiled out never binds anything: always on.
+/// build with licensing compiled out never binds anything: always on. A
+/// build with licensing starts **restricted** — the state the controller
+/// itself projects until storage has answered — so nothing the launch
+/// path runs before the binding (the auto-archive sweep, a flush) can
+/// write on a status nobody has bound yet.
 @Observable
 final class LicenseStatus {
     /// Bumped whenever the source published a change; read by the accessors
@@ -220,10 +224,10 @@ final class LicenseStatus {
     /// The website has a page to buy on (`LicensingConfig.buyURL`).
     private(set) var canBuy = false
 
-    @ObservationIgnored private var currentAccess: () -> Bool = { true }
-    @ObservationIgnored private var currentState: () -> LicenseState? = { nil }
-    @ObservationIgnored private var currentRestriction: () -> LicenseRestriction? = { nil }
-    @ObservationIgnored private var currentBadge: () -> LicenseBadge.Label? = { nil }
+    @ObservationIgnored private var currentAccess: () -> Bool = { !Licensing.isCompiledIn }
+    @ObservationIgnored private var currentState: () -> LicenseState? = { Licensing.isCompiledIn ? .trialUnavailable : nil }
+    @ObservationIgnored private var currentRestriction: () -> LicenseRestriction? = { Licensing.isCompiledIn ? LicenseRestriction.card(for: .trialUnavailable) : nil }
+    @ObservationIgnored private var currentBadge: () -> LicenseBadge.Label? = { Licensing.isCompiledIn ? LicenseBadge.label(for: .trialUnavailable, appName: Licensing.appName) : nil }
 
     /// Opens the website's OpenNotes page.
     @ObservationIgnored var buy: () -> Void = {}
