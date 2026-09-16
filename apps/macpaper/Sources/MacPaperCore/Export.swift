@@ -32,12 +32,14 @@ struct SVGWriter {
     let wallpaper: Wallpaper
     let size: PixelSize
     let renderer: WallpaperRenderer
+    var side: Side = .light
+    var context: RenderContext { RenderContext(size: size) }
 
     func document() -> String {
         var defs: [String] = []
         var body: [String] = []
         let w = size.width, h = size.height
-        switch wallpaper.generator {
+        switch wallpaper.generator(for: side) {
         case .gradient(let p):
             gradient(p, defs: &defs, body: &body)
         case .mesh(let p):
@@ -46,7 +48,14 @@ struct SVGWriter {
             pattern(p, defs: &defs, body: &body)
         case .solid(let p):
             body.append("<rect width=\"\(w)\" height=\"\(h)\" fill=\"\(p.color.hexString)\"/>")
-        case .pixelize:
+        case .pixelize, .dither:
+            embedRender(body: &body)
+        }
+        if wallpaper.composition != .none || !wallpaper.finish.isEmpty {
+            // Compositions and the color finishes are raster work: the
+            // whole render goes in as an image instead.
+            defs.removeAll()
+            body.removeAll()
             embedRender(body: &body)
         }
         if wallpaper.grain > 0 {
@@ -75,7 +84,9 @@ struct SVGWriter {
 
     private func gradient(_ p: GradientParameters, defs: inout [String], body: inout [String]) {
         let w = Double(size.width), h = Double(size.height)
-        let stops = p.normalizedStops.map { "<stop offset=\"\(format($0.position * 100))%\" stop-color=\"\($0.color.hexString)\"/>" }.joined()
+        // OKLCH interpolation has no SVG form: the stops are subdivided so
+        // the browser's sRGB blend follows the same curve closely.
+        let stops = svgStops(p).map { "<stop offset=\"\(format($0.position * 100))%\" stop-color=\"\($0.color.hexString)\"/>" }.joined()
         switch p.kind {
         case .linear:
             // The same line the raster uses: through the center along the
@@ -97,7 +108,7 @@ struct SVGWriter {
             // SVG has no conic gradient: 90 wedges around the center, each
             // filled with the color at its middle angle.
             let cx = p.center.x * w, cy = p.center.y * h
-            let table = ColorTable(stops: p.normalizedStops)
+            let table = ColorTable(stops: p.normalizedStops, interpolation: p.interpolation)
             let radius = (w * w + h * h).squareRoot()
             let wedges = 90
             var paths: [String] = []
@@ -115,6 +126,23 @@ struct SVGWriter {
             defs.append("<clipPath id=\"c\"><rect width=\"\(size.width)\" height=\"\(size.height)\"/></clipPath>")
             body.append("<g clip-path=\"url(#c)\">" + paths.joined() + "</g>")
         }
+    }
+
+    /// The stops as written: as they are in sRGB, or with seven intermediate
+    /// OKLCH-mixed stops per segment when the document interpolates in OKLCH.
+    private func svgStops(_ p: GradientParameters) -> [ColorStop] {
+        let stops = p.normalizedStops
+        guard p.interpolation == .oklch else { return stops }
+        var out: [ColorStop] = []
+        for i in 0..<(stops.count - 1) {
+            let a = stops[i], z = stops[i + 1]
+            for step in 0..<8 {
+                let f = Double(step) / 8
+                out.append(ColorStop(position: a.position + (z.position - a.position) * f, color: OKLCH.mix(a.color, z.color, amount: f)))
+            }
+        }
+        out.append(stops[stops.count - 1])
+        return out
     }
 
     private func mesh(_ p: MeshParameters, defs: inout [String], body: inout [String]) {
@@ -164,7 +192,7 @@ struct SVGWriter {
     private func embedRender(body: inout [String]) {
         var plain = wallpaper
         plain.grain = 0
-        let raster = renderer.render(plain, size: size)
+        let raster = renderer.render(plain, side: side, context: context)
         guard let png = raster.pngData() else { return }
         body.append("<image width=\"\(size.width)\" height=\"\(size.height)\" style=\"image-rendering:pixelated\" xlink:href=\"data:image/png;base64,\(png.base64EncodedString())\"/>")
     }

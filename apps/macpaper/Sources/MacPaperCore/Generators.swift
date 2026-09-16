@@ -6,7 +6,7 @@ struct ColorTable {
     static let size = 1024
     let r: [Double], g: [Double], b: [Double]
 
-    init(stops: [ColorStop]) {
+    init(stops: [ColorStop], interpolation: ColorInterpolation = .srgb) {
         var r = [Double](repeating: 0, count: Self.size)
         var g = r, b = r
         var index = 0
@@ -16,7 +16,7 @@ struct ColorTable {
             let a = stops[index], z = stops[index + 1]
             let span = z.position - a.position
             let f = span <= 0 ? (t >= z.position ? 1.0 : 0.0) : min(max((t - a.position) / span, 0), 1)
-            let c = a.color.mixed(with: z.color, amount: f)
+            let c = interpolation == .oklch ? OKLCH.mix(a.color, z.color, amount: f) : a.color.mixed(with: z.color, amount: f)
             r[i] = c.red; g[i] = c.green; b[i] = c.blue
         }
         self.r = r; self.g = g; self.b = b
@@ -39,7 +39,7 @@ enum Generators {
     // MARK: - Gradient
 
     static func gradient(_ p: GradientParameters, size: PixelSize) -> Raster {
-        let table = ColorTable(stops: p.normalizedStops)
+        let table = ColorTable(stops: p.normalizedStops, interpolation: p.interpolation)
         var raster = Raster(size: size)
         let w = size.width, h = size.height
         let fw = Double(w), fh = Double(h)
@@ -85,6 +85,7 @@ enum Generators {
     struct ControlPoint {
         var x: Double, y: Double
         var r: Double, g: Double, b: Double
+        var weight: Double = 1
     }
 
     /// The seed places one point per grid cell (jittered) and walks the
@@ -109,9 +110,14 @@ enum Generators {
 
     /// Inverse-distance blend of the control points, computed at most 640
     /// pixels wide and resampled up: a mesh has no detail finer than that,
-    /// and the display's 6 megapixels would only cost time.
-    static func mesh(_ p: MeshParameters, seed: UInt64, size: PixelSize) -> Raster {
-        let points = meshPoints(p, seed: seed)
+    /// and the display's 6 megapixels would only cost time. `emergeAt` adds
+    /// the palette's brightest color as a strong point at that unit
+    /// position (the notch's bottom center), so the field grows out of it.
+    static func mesh(_ p: MeshParameters, seed: UInt64, size: PixelSize, emergeAt: Point? = nil) -> Raster {
+        var points = meshPoints(p, seed: seed)
+        if let emergeAt, let brightest = p.colors.max(by: { $0.luminance < $1.luminance }) {
+            points.append(ControlPoint(x: emergeAt.x, y: emergeAt.y, r: brightest.red, g: brightest.green, b: brightest.blue, weight: 3))
+        }
         let small = size.fitting(width: 640)
         var raster = Raster(size: small)
         let w = small.width, h = small.height
@@ -128,7 +134,7 @@ enum Generators {
                     for point in points {
                         let dx = px - point.x, dy = py - point.y * aspect
                         let d = dx * dx + dy * dy + eps
-                        let weight = 1 / (d * d)
+                        let weight = point.weight / (d * d)
                         sr += point.r * weight; sg += point.g * weight; sb += point.b * weight; sw += weight
                     }
                     let o = (y * w + x) * 4
@@ -241,6 +247,165 @@ enum Generators {
                     for c in 0..<3 {
                         out[o + c] = byte(Double(out[o + c]) / 255 + n)
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Compositions
+
+    /// The ink contour lines are drawn in: white over a dark generator,
+    /// black over a light one, from the mean of its colors.
+    static func contrastingInk(for generator: Generator) -> RGBAColor {
+        let colors = generator.colors
+        let mean = colors.isEmpty ? 0.5 : colors.reduce(0) { $0 + $1.luminance } / Double(colors.count)
+        return mean > 0.35 ? .black : .white
+    }
+
+    /// Signed distance from a pixel (in unit-of-width coordinates) to the
+    /// notch pill: a rounded rectangle hanging from the top edge, its lower
+    /// corners rounded by half its height.
+    @inline(__always)
+    static func notchDistance(px: Double, py: Double, notch: NotchSpec, aspect: Double) -> Double {
+        // Everything in units of the width; y runs 0…aspect.
+        let halfW = notch.width / 2, height = notch.height * aspect
+        let radius = min(halfW, height) * 0.9
+        // The pill's rectangle spans x ∈ [cx − halfW, cx + halfW], y ∈ (−∞, height]; corners at the bottom.
+        let dx = abs(px - notch.centerX) - (halfW - radius)
+        let dy = py - (height - radius)
+        let outsideX = max(dx, 0), outsideY = max(dy, 0)
+        let outside = (outsideX * outsideX + outsideY * outsideY).squareRoot()
+        let inside = min(max(dx, dy), 0)
+        return outside + inside - radius
+    }
+
+    /// Contour lines around the notch pill: bands every `spacing` pixels
+    /// of distance, anti-aliased, fading with distance so the far field
+    /// stays the generator's.
+    static func drawContours(on raster: inout Raster, notch: NotchSpec, ink: RGBAColor, spacing: Double) {
+        let w = raster.width, h = raster.height
+        let aspect = Double(h) / Double(w)
+        let unit = 1 / Double(w)
+        let ir = ink.red, ig = ink.green, ib = ink.blue
+        raster.pixels.withUnsafeMutableBufferPointer { out in
+            for y in 0..<h {
+                let py = (Double(y) + 0.5) * unit
+                for x in 0..<w {
+                    let px = (Double(x) + 0.5) * unit
+                    let d = notchDistance(px: px, py: py, notch: notch, aspect: aspect) / unit
+                    guard d > 0 else { continue }
+                    let band = d.truncatingRemainder(dividingBy: spacing)
+                    let line = min(smoothstep(-0.9, 0.9, band), smoothstep(spacing * 0.22 + 0.9, spacing * 0.22 - 0.9, band))
+                    // Strongest at the notch, gone after ten bands.
+                    let fade = max(0, 1 - d / (spacing * 10))
+                    let coverage = line * fade * 0.5
+                    guard coverage > 0.002 else { continue }
+                    let o = (y * w + x) * 4
+                    out[o] = byte(Double(out[o]) / 255 + (ir - Double(out[o]) / 255) * coverage)
+                    out[o + 1] = byte(Double(out[o + 1]) / 255 + (ig - Double(out[o + 1]) / 255) * coverage)
+                    out[o + 2] = byte(Double(out[o + 2]) / 255 + (ib - Double(out[o + 2]) / 255) * coverage)
+                }
+            }
+        }
+    }
+
+    /// A black pill of the notch's proportion at the top center: the
+    /// painted notch a display without one gets.
+    static func paintPill(on raster: inout Raster, notch: NotchSpec) {
+        let w = raster.width, h = raster.height
+        let aspect = Double(h) / Double(w)
+        let unit = 1 / Double(w)
+        let rows = min(h, Int((notch.height * Double(h)).rounded(.up)) + 2)
+        raster.pixels.withUnsafeMutableBufferPointer { out in
+            for y in 0..<rows {
+                let py = (Double(y) + 0.5) * unit
+                for x in 0..<w {
+                    let px = (Double(x) + 0.5) * unit
+                    let d = notchDistance(px: px, py: py, notch: notch, aspect: aspect) / unit
+                    let coverage = smoothstep(0.7, -0.7, d)
+                    guard coverage > 0.002 else { continue }
+                    let o = (y * w + x) * 4
+                    out[o] = byte(Double(out[o]) / 255 * (1 - coverage))
+                    out[o + 1] = byte(Double(out[o + 1]) / 255 * (1 - coverage))
+                    out[o + 2] = byte(Double(out[o + 2]) / 255 * (1 - coverage))
+                }
+            }
+        }
+    }
+
+    // MARK: - Finishes
+
+    /// Tint, duotone, gradient map, grain, then the top shade, in that
+    /// order; each only when set, so a plain document's bytes are the
+    /// generator's own.
+    static func applyFinish(_ finish: Finish, seed: UInt64, grain: Double, strip: Int, side: Side, to raster: inout Raster) {
+        if let tint = finish.tint, tint.amount > 0 { applyTint(tint, to: &raster) }
+        if let duotone = finish.duotone { applyDuotone(duotone, to: &raster) }
+        if let map = finish.gradientMap, !map.isEmpty { applyGradientMap(map, to: &raster) }
+        applyGrain(grain, seed: seed, to: &raster)
+        if finish.topShade > 0 { applyTopShade(finish.topShade, strip: strip, side: side, to: &raster) }
+    }
+
+    static func applyTint(_ tint: Tint, to raster: inout Raster) {
+        let t = tint.amount
+        let tr = tint.color.red * 255, tg = tint.color.green * 255, tb = tint.color.blue * 255
+        raster.pixels.withUnsafeMutableBufferPointer { out in
+            var o = 0
+            while o < out.count {
+                out[o] = UInt8(min(255, max(0, Double(out[o]) + (tr - Double(out[o])) * t + 0.5)))
+                out[o + 1] = UInt8(min(255, max(0, Double(out[o + 1]) + (tg - Double(out[o + 1])) * t + 0.5)))
+                out[o + 2] = UInt8(min(255, max(0, Double(out[o + 2]) + (tb - Double(out[o + 2])) * t + 0.5)))
+                o += 4
+            }
+        }
+    }
+
+    /// Rec. 601 luma of a pixel, 0…1.
+    @inline(__always)
+    private static func luma(_ out: UnsafeMutableBufferPointer<UInt8>, _ o: Int) -> Double {
+        (0.299 * Double(out[o]) + 0.587 * Double(out[o + 1]) + 0.114 * Double(out[o + 2])) / 255
+    }
+
+    static func applyDuotone(_ duotone: Duotone, to raster: inout Raster) {
+        let table = ColorTable(stops: [ColorStop(position: 0, color: duotone.shadow), ColorStop(position: 1, color: duotone.highlight)], interpolation: .oklch)
+        applyTable(table, to: &raster)
+    }
+
+    static func applyGradientMap(_ stops: [ColorStop], to raster: inout Raster) {
+        let table = ColorTable(stops: GradientParameters(kind: .linear, stops: stops).normalizedStops, interpolation: .oklch)
+        applyTable(table, to: &raster)
+    }
+
+    private static func applyTable(_ table: ColorTable, to raster: inout Raster) {
+        raster.pixels.withUnsafeMutableBufferPointer { out in
+            var o = 0
+            while o < out.count {
+                let i = table.index(luma(out, o))
+                out[o] = byte(table.r[i]); out[o + 1] = byte(table.g[i]); out[o + 2] = byte(table.b[i])
+                o += 4
+            }
+        }
+    }
+
+    /// Shades the top rows toward the menu bar's own tone — toward white on
+    /// the light side (dark text), toward black on the dark side (light
+    /// text) — evenly over the strip, then fading out over one more strip,
+    /// by up to `amount`.
+    static func applyTopShade(_ amount: Double, strip: Int, side: Side, to raster: inout Raster) {
+        let w = raster.width
+        let strip = max(1, strip)
+        let rows = min(raster.height, strip * 2)
+        let target = side == .light ? 255.0 : 0.0
+        raster.pixels.withUnsafeMutableBufferPointer { out in
+            for y in 0..<rows {
+                let t = y < strip ? 0 : Double(y - strip) / Double(strip)
+                let mix = amount * (1 - t) * (1 - t)
+                var o = y * w * 4
+                for _ in 0..<w {
+                    for c in 0..<3 {
+                        out[o + c] = UInt8(Double(out[o + c]) + (target - Double(out[o + c])) * mix + 0.5)
+                    }
+                    o += 4
                 }
             }
         }

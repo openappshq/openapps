@@ -60,6 +60,21 @@ struct WorkspaceDesktopApplier: DesktopApplier {
         }
     }
 
+    /// What the display shows now, for the pin. Off the main thread this
+    /// hops over and waits like `apply`.
+    func currentImageURL(for display: DisplayID) -> URL? {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { current(for: display) }
+        }
+        return DispatchQueue.main.sync { MainActor.assumeIsolated { current(for: display) } }
+    }
+
+    @MainActor
+    private func current(for display: DisplayID) -> URL? {
+        guard let screen = ScreenCatalog.screen(for: display) else { return nil }
+        return NSWorkspace.shared.desktopImageURL(for: screen)
+    }
+
     @MainActor
     private func set(_ url: URL, for display: DisplayID) throws {
         guard let screen = ScreenCatalog.screen(for: display) else { throw NoSuchDisplay(display: display) }

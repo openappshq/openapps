@@ -11,7 +11,7 @@ public enum Pixelizer {
         let block = max(1, p.blockSize)
         let columns = (size.width + block - 1) / block
         let rows = (size.height + block - 1) / block
-        let placement = Placement(source: source.size, target: size, fit: p.fit)
+        let placement = Placement(source: source.size, target: size, fit: p.fit, focus: p.focus)
         var colors = blockAverages(source: source, placement: placement, block: block, columns: columns, rows: rows, background: p.background)
         if let count = p.paletteSize, count > 0 {
             let palette = MedianCut.palette(of: colors, count: count)
@@ -38,21 +38,42 @@ public enum Pixelizer {
         return raster
     }
 
-    /// Where the source sits on the target, in target pixels.
+    /// Where the source sits on the target, in target pixels: fill covers
+    /// and crops around the focal point (the source point that stays in
+    /// view: focus 0 keeps the left/top edge, 1 the right/bottom), fit
+    /// letterboxes, stretch scales the axes independently.
     public struct Placement: Equatable, Sendable {
-        /// Target pixels per source pixel.
-        public let scale: Double
+        /// Target pixels per source pixel, per axis.
+        public let scaleX: Double
+        public let scaleY: Double
         /// Target-space origin of the source's top-left corner.
         public let originX: Double
         public let originY: Double
 
-        public init(source: PixelSize, target: PixelSize, fit: ImageFit) {
+        public init(source: PixelSize, target: PixelSize, fit: ImageFit, focus: Point = .center) {
             let sx = Double(target.width) / Double(source.width)
             let sy = Double(target.height) / Double(source.height)
-            scale = fit == .fill ? max(sx, sy) : min(sx, sy)
-            originX = (Double(target.width) - Double(source.width) * scale) / 2
-            originY = (Double(target.height) - Double(source.height) * scale) / 2
+            switch fit {
+            case .fill:
+                let scale = max(sx, sy)
+                scaleX = scale; scaleY = scale
+                let fx = min(max(focus.x, 0), 1), fy = min(max(focus.y, 0), 1)
+                // The overflow is split by the focus: all of it on one side at 0 or 1.
+                originX = -(Double(source.width) * scale - Double(target.width)) * fx
+                originY = -(Double(source.height) * scale - Double(target.height)) * fy
+            case .fit:
+                let scale = min(sx, sy)
+                scaleX = scale; scaleY = scale
+                originX = (Double(target.width) - Double(source.width) * scale) / 2
+                originY = (Double(target.height) - Double(source.height) * scale) / 2
+            case .stretch:
+                scaleX = sx; scaleY = sy
+                originX = 0; originY = 0
+            }
         }
+
+        /// The uniform scale, for callers that only place squares.
+        public var scale: Double { scaleX }
     }
 
     /// The average source color under each block; blocks outside the source
@@ -61,15 +82,15 @@ public enum Pixelizer {
         var result: [RGBAColor] = []
         result.reserveCapacity(columns * rows)
         let sw = source.width, sh = source.height
-        let inv = 1 / placement.scale
+        let invX = 1 / placement.scaleX, invY = 1 / placement.scaleY
         source.pixels.withUnsafeBufferPointer { s in
             for row in 0..<rows {
                 for column in 0..<columns {
                     // The block's rect in source pixels.
                     let tx0 = Double(column * block), ty0 = Double(row * block)
                     let tx1 = tx0 + Double(block), ty1 = ty0 + Double(block)
-                    let sx0 = (tx0 - placement.originX) * inv, sy0 = (ty0 - placement.originY) * inv
-                    let sx1 = (tx1 - placement.originX) * inv, sy1 = (ty1 - placement.originY) * inv
+                    let sx0 = (tx0 - placement.originX) * invX, sy0 = (ty0 - placement.originY) * invY
+                    let sx1 = (tx1 - placement.originX) * invX, sy1 = (ty1 - placement.originY) * invY
                     let x0 = max(0, Int(sx0.rounded(.down))), y0 = max(0, Int(sy0.rounded(.down)))
                     let x1 = min(sw, Int(sx1.rounded(.up))), y1 = min(sh, Int(sy1.rounded(.up)))
                     var r = 0.0, g = 0.0, b = 0.0, n = 0.0

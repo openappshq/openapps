@@ -16,37 +16,52 @@ public struct DisplayInfo: Hashable, Identifiable, Sendable {
     public let notchWidth: CGFloat?
     /// The main display: the one with the menu bar and the Dock.
     public let isMain: Bool
+    /// The top safe-area inset in points: the notch's height, or the menu
+    /// bar's on a display without one (0 when unknown).
+    public let topInset: CGFloat
 
-    public init(id: DisplayID, name: String, pointSize: CGSize, scale: CGFloat, notchWidth: CGFloat? = nil, isMain: Bool = false) {
+    public init(id: DisplayID, name: String, pointSize: CGSize, scale: CGFloat, notchWidth: CGFloat? = nil, isMain: Bool = false, topInset: CGFloat = 0) {
         self.id = id
         self.name = name
         self.pointSize = pointSize
         self.scale = scale
         self.notchWidth = notchWidth
         self.isMain = isMain
+        self.topInset = topInset
     }
 
     public var pixelSize: PixelSize { PixelSize(points: pointSize, scale: scale) }
     public var hasNotch: Bool { notchWidth != nil }
 }
 
-/// Sets a display's desktop picture. The app's applier calls
-/// `NSWorkspace.shared.setDesktopImageURL`; tests and the preview harness
-/// use a fake, so nothing but the running app can change a desktop.
+/// Sets a display's desktop picture, and says which file it shows. The
+/// app's applier calls `NSWorkspace.shared.setDesktopImageURL` and
+/// `desktopImageURL(for:)`; tests and the preview harness use a fake, so
+/// nothing but the running app can change a desktop.
 public protocol DesktopApplier: Sendable {
     func apply(imageAt url: URL, to display: DisplayID) throws
+    /// The file the display shows now, nil when unknown.
+    func currentImageURL(for display: DisplayID) -> URL?
 }
 
-/// Records every call, and can be told to fail.
+/// Records every call, can be told to fail, and can refuse HEIC files (a
+/// display that only takes stills).
 public final class RecordingApplier: DesktopApplier, @unchecked Sendable {
     public struct Call: Equatable, Sendable {
         public let url: URL
         public let display: DisplayID
     }
 
+    public struct RefusedHEIC: Error, LocalizedError, Sendable {
+        public var errorDescription: String? { "This display takes no dynamic desktop." }
+    }
+
     private let lock = NSLock()
     private var recorded: [Call] = []
     public var failure: (any Error)?
+    public var refusesHEIC = false
+    /// What `currentImageURL` answers: the last applied by default.
+    public var currentOverride: [DisplayID: URL?] = [:]
 
     public init() {}
 
@@ -54,8 +69,27 @@ public final class RecordingApplier: DesktopApplier, @unchecked Sendable {
 
     public func apply(imageAt url: URL, to display: DisplayID) throws {
         if let failure { throw failure }
+        if refusesHEIC, url.pathExtension == "heic" { throw RefusedHEIC() }
         lock.withLock { recorded.append(Call(url: url, display: display)) }
     }
+
+    public func currentImageURL(for display: DisplayID) -> URL? {
+        if let override = currentOverride[display] { return override }
+        return lock.withLock { recorded.last { $0.display == display }?.url }
+    }
+}
+
+/// What kind of file an apply handed over.
+public enum AppliedFormat: String, Codable, Hashable, Sendable {
+    /// A PNG still.
+    case still
+    /// A HEIC with the light/dark appearance record.
+    case appearancePair
+    /// A HEIC with the time-of-day record.
+    case timeOfDay
+    /// The display refused the HEIC: a PNG of one side, swapped by the app
+    /// on theme change while it runs.
+    case fallbackStill
 }
 
 /// One apply of one document to one display: the file that was written and
@@ -64,6 +98,7 @@ public struct AppliedImage: Equatable, Sendable {
     public let display: DisplayID
     public let wallpaper: Wallpaper
     public let url: URL
+    public let format: AppliedFormat
 }
 
 /// Renders a document for each display and hands the files to the
@@ -104,23 +139,45 @@ public struct WallpaperApplier: Sendable {
         self.keptPerDisplay = max(1, keptPerDisplay)
     }
 
-    /// Applies each display's document. Displays with the same document and
-    /// pixel size share one render (and, through the cache, the same
-    /// document applied again shares it too).
-    public func apply(_ plan: [DisplayInfo: Wallpaper]) throws -> [AppliedImage] {
+    /// Applies each display's document. A still is a PNG of the light side;
+    /// a light/dark document is a HEIC appearance pair and a time-of-day
+    /// document a HEIC with its frames — and where the display refuses the
+    /// HEIC, a PNG of the side (or the moment) that fits now, marked so the
+    /// app swaps it on theme change. `side` forces one side as a PNG (the
+    /// swap itself). Displays with the same document and context share a
+    /// render through the cache.
+    public func apply(_ plan: [DisplayInfo: Wallpaper], side forcedSide: Side? = nil, now: Date = Date()) throws -> [AppliedImage] {
         var applied: [AppliedImage] = []
         var failures: [(DisplayID, String)] = []
         try prepareDirectory()
         var manifest = AppliedManifest.load(in: directory)
         for (display, wallpaper) in plan.sorted(by: { $0.key.id < $1.key.id }) {
             do {
-                let raster = cache.render(RenderCache.Key(wallpaper: wallpaper, size: display.pixelSize)) {
-                    renderer.render(wallpaper, size: display.pixelSize)
+                let context = display.renderContext
+                let image: AppliedImage
+                switch (wallpaper.pair, forcedSide) {
+                case (.still, _), (_, .some):
+                    let side = forcedSide ?? .light
+                    let url = try writeStill(wallpaper, side: side, context: context, display: display.id, manifest: &manifest)
+                    try applier.apply(imageAt: url, to: display.id)
+                    image = AppliedImage(display: display.id, wallpaper: wallpaper, url: url, format: forcedSide == nil ? .still : .fallbackStill)
+                case (.lightDark, nil):
+                    let light = render(wallpaper, side: .light, context: context)
+                    let dark = render(wallpaper, side: .dark, context: context)
+                    let heic = try DynamicDesktop.appearancePair(light: light, dark: dark)
+                    image = try applyDynamic(heic, format: .appearancePair, wallpaper: wallpaper, display: display, manifest: &manifest) { manifest in
+                        try writeStill(wallpaper, side: .light, context: context, display: display.id, manifest: &manifest)
+                    }
+                case (.timeOfDay(let frames), nil):
+                    let rendered = renderer.renderFrames(wallpaper, frames: frames, context: context)
+                    let heic = try DynamicDesktop.timeOfDay(frames: rendered)
+                    image = try applyDynamic(heic, format: .timeOfDay, wallpaper: wallpaper, display: display, manifest: &manifest) { manifest in
+                        let moment = renderer.renderMoment(wallpaper, dayFraction: DayClock.fraction(of: now), context: context)
+                        guard let png = moment.pngData() else { throw ApplyError.encoding }
+                        return try write(png, for: display.id, extension: "png", manifest: &manifest)
+                    }
                 }
-                guard let png = raster.pngData() else { throw ApplyError.encoding }
-                let url = try write(png, for: display.id, extension: "png", manifest: &manifest)
-                try applier.apply(imageAt: url, to: display.id)
-                applied.append(AppliedImage(display: display.id, wallpaper: wallpaper, url: url))
+                applied.append(image)
                 prune(display: display.id, manifest: &manifest)
             } catch {
                 failures.append((display.id, error.localizedDescription))
@@ -131,12 +188,43 @@ public struct WallpaperApplier: Sendable {
         return applied
     }
 
-    enum ApplyError: Error, LocalizedError {
+    /// Re-applies a file that was applied before (the pin): no render, the
+    /// same URL handed over again.
+    public func reapply(_ url: URL, to display: DisplayID) throws {
+        try applier.apply(imageAt: url, to: display)
+    }
+
+    private func render(_ wallpaper: Wallpaper, side: Side, context: RenderContext) -> Raster {
+        let key = RenderCache.Key(wallpaper: wallpaper, side: side, context: context)
+        return cache.render(key) { renderer.render(wallpaper, side: side, context: context) }
+    }
+
+    private func writeStill(_ wallpaper: Wallpaper, side: Side, context: RenderContext, display: DisplayID, manifest: inout AppliedManifest) throws -> URL {
+        let raster = render(wallpaper, side: side, context: context)
+        guard let png = raster.pngData() else { throw ApplyError.encoding }
+        return try write(png, for: display, extension: "png", manifest: &manifest)
+    }
+
+    /// Hands a HEIC over; when the display refuses it, writes and applies
+    /// the still `fallback` makes and marks the image as a fallback.
+    private func applyDynamic(_ heic: Data, format: AppliedFormat, wallpaper: Wallpaper, display: DisplayInfo, manifest: inout AppliedManifest, fallback: (inout AppliedManifest) throws -> URL) throws -> AppliedImage {
+        let url = try write(heic, for: display.id, extension: "heic", manifest: &manifest)
+        do {
+            try applier.apply(imageAt: url, to: display.id)
+            return AppliedImage(display: display.id, wallpaper: wallpaper, url: url, format: format)
+        } catch {
+            let still = try fallback(&manifest)
+            try applier.apply(imageAt: still, to: display.id)
+            return AppliedImage(display: display.id, wallpaper: wallpaper, url: still, format: .fallbackStill)
+        }
+    }
+
+    public enum ApplyError: Error, LocalizedError {
         case encoding
         case directoryIsSymlink
         case noFreeName
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .encoding: "The wallpaper could not be encoded as PNG."
             case .directoryIsSymlink: "The applied folder is a symbolic link; refusing to write through it."
@@ -241,6 +329,23 @@ struct AppliedManifest: Codable, Sendable {
     /// Every name the manifest holds for a display, newest last.
     func names(for display: DisplayID) -> [String] {
         (files[String(display)] ?? []).map(\.name)
+    }
+}
+
+// MARK: - Pin so it stays
+
+/// Which displays show something other than the file recorded for them,
+/// and are not excluded (a display applied "this Space only"). Pure: the
+/// app asks on launch, wake, unlock, Space and display changes and
+/// re-applies exactly these.
+public enum PinPolicy {
+    public static func displaysToReapply(recorded: [DisplayID: URL], current: (DisplayID) -> URL?, excluded: Set<DisplayID>, connected: Set<DisplayID>) -> [DisplayID] {
+        recorded.keys.sorted().filter { display in
+            guard connected.contains(display), !excluded.contains(display), let file = recorded[display] else { return false }
+            guard FileManager.default.fileExists(atPath: file.path) else { return false }
+            guard let shown = current(display) else { return true }
+            return shown.standardizedFileURL.path != file.standardizedFileURL.path
+        }
     }
 }
 

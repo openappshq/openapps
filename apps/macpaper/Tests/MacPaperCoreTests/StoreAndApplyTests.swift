@@ -220,7 +220,7 @@ struct ApplyTests {
         #expect(first[0].url.lastPathComponent == "1-1.png" && first[1].url.lastPathComponent == "2-1.png")
         let raster = try #require(Raster.decode(try Data(contentsOf: first[0].url)))
         #expect(raster.size == PixelSize(width: 32, height: 20), "points × scale")
-        #expect(cache.count == 1, "both displays are 32×20 pixels: one render, shared")
+        #expect(cache.count == 2, "both displays are 32×20 pixels, but one has a notch: two contexts")
         // Applying again writes new files: macOS ignores a changed image at a URL it shows.
         let second = try wallpapers.apply([Self.a: .starter.reseeded(2)])
         #expect(second[0].url.lastPathComponent == "1-2.png")
@@ -311,6 +311,7 @@ struct ApplyTests {
                 if display == 2 { throw Refused() }
                 applied.append(display)
             }
+            func currentImageURL(for display: DisplayID) -> URL? { nil }
         }
         let applier = FlakyApplier()
         let wallpapers = WallpaperApplier(applier: applier, renderer: WallpaperRenderer(), cache: RenderCache(), directory: directory.url)

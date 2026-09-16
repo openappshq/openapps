@@ -19,6 +19,8 @@ struct ParametersView: View {
                 SolidEditor(parameters: binding(p) { .solid($0) })
             case .pixelize(let p):
                 PixelizeEditor(parameters: binding(p) { .pixelize($0) }, model: model)
+            case .dither(let p):
+                DitherEditor(parameters: binding(p) { .dither($0) }, model: model)
             }
         }
     }
@@ -224,5 +226,14 @@ private struct PixelizeEditor: View {
                 ColorWell(title: "Background", color: $parameters.background)
             }
         }
+    }
+}
+
+private struct DitherEditor: View {
+    @Binding var parameters: DitherParameters
+    let model: AppModel
+
+    var body: some View {
+        Text("Dither").font(Brand.body(12))
     }
 }

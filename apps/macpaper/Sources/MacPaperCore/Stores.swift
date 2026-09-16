@@ -22,6 +22,7 @@ public struct AppPaths: Sendable {
 
     public var favorites: URL { root.appendingPathComponent("favorites.json") }
     public var applied: URL { root.appendingPathComponent("applied.json") }
+    public var blocklist: URL { root.appendingPathComponent("never.json") }
     public var imports: URL { root.appendingPathComponent("imports", isDirectory: true) }
     public var appliedImages: URL { root.appendingPathComponent("applied", isDirectory: true) }
 
@@ -149,27 +150,76 @@ public final class FavoritesStore: @unchecked Sendable {
 // MARK: - Applied documents
 
 /// Which document each display shows, by display id, in `applied.json`,
-/// so the panel opens on the current wallpaper after a relaunch. The
+/// so the panel opens on the current wallpaper after a relaunch, plus the
+/// file handed to macOS for it (the pin re-applies it), which displays
+/// were applied "this Space only" (the pin leaves them alone) and which
+/// got a fallback still (the app swaps it on theme change). The
 /// `lastApplied` date drives the shuffle schedule.
 public struct AppliedState: Codable, Hashable, Sendable {
     public var byDisplay: [String: Wallpaper]
     public var lastApplied: Date?
     /// The document the panel edits, applied or not.
     public var draft: Wallpaper?
+    /// The applied file's path per display.
+    public var fileByDisplay: [String: String]
+    /// Displays applied "this Space only": off the pin until the next
+    /// every-Space apply.
+    public var perSpaceDisplays: Set<String>
+    /// Displays showing a fallback still of a pair.
+    public var fallbackDisplays: Set<String>
 
-    public init(byDisplay: [String: Wallpaper] = [:], lastApplied: Date? = nil, draft: Wallpaper? = nil) {
+    public init(byDisplay: [String: Wallpaper] = [:], lastApplied: Date? = nil, draft: Wallpaper? = nil, fileByDisplay: [String: String] = [:], perSpaceDisplays: Set<String> = [], fallbackDisplays: Set<String> = []) {
         self.byDisplay = byDisplay
         self.lastApplied = lastApplied
         self.draft = draft
+        self.fileByDisplay = fileByDisplay
+        self.perSpaceDisplays = perSpaceDisplays
+        self.fallbackDisplays = fallbackDisplays
+    }
+
+    private enum CodingKeys: String, CodingKey { case byDisplay, lastApplied, draft, fileByDisplay, perSpaceDisplays, fallbackDisplays }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        byDisplay = try container.decodeIfPresent([String: Wallpaper].self, forKey: .byDisplay) ?? [:]
+        lastApplied = try container.decodeIfPresent(Date.self, forKey: .lastApplied)
+        draft = try container.decodeIfPresent(Wallpaper.self, forKey: .draft)
+        fileByDisplay = try container.decodeIfPresent([String: String].self, forKey: .fileByDisplay) ?? [:]
+        perSpaceDisplays = try container.decodeIfPresent(Set<String>.self, forKey: .perSpaceDisplays) ?? []
+        fallbackDisplays = try container.decodeIfPresent(Set<String>.self, forKey: .fallbackDisplays) ?? []
     }
 
     public func wallpaper(for display: DisplayID) -> Wallpaper? {
         byDisplay[String(display)]
     }
 
+    public func file(for display: DisplayID) -> URL? {
+        fileByDisplay[String(display)].map { URL(fileURLWithPath: $0) }
+    }
+
     public mutating func set(_ wallpaper: Wallpaper, for display: DisplayID) {
         byDisplay[String(display)] = wallpaper
     }
+
+    /// Records an apply: the document, the file, the pin exclusion and the
+    /// fallback mark for the display.
+    public mutating func record(_ image: AppliedImage, perSpace: Bool) {
+        let key = String(image.display)
+        byDisplay[key] = image.wallpaper
+        fileByDisplay[key] = image.url.path
+        if perSpace { perSpaceDisplays.insert(key) } else { perSpaceDisplays.remove(key) }
+        if image.format == .fallbackStill { fallbackDisplays.insert(key) } else { fallbackDisplays.remove(key) }
+    }
+
+    /// The recorded files by display id, for the pin.
+    public var recordedFiles: [DisplayID: URL] {
+        var out: [DisplayID: URL] = [:]
+        for (key, path) in fileByDisplay { if let id = DisplayID(key) { out[id] = URL(fileURLWithPath: path) } }
+        return out
+    }
+
+    public var perSpaceDisplayIDs: Set<DisplayID> { Set(perSpaceDisplays.compactMap(DisplayID.init)) }
+    public var fallbackDisplayIDs: Set<DisplayID> { Set(fallbackDisplays.compactMap(DisplayID.init)) }
 }
 
 public final class AppliedStore: @unchecked Sendable {
@@ -320,11 +370,17 @@ public final class ImportStore: ImageSource, @unchecked Sendable {
 public final class RenderCache: @unchecked Sendable {
     public struct Key: Hashable, Sendable {
         public let wallpaper: Wallpaper
-        public let size: PixelSize
+        public let side: Side
+        public let context: RenderContext
+
+        public init(wallpaper: Wallpaper, side: Side = .light, context: RenderContext) {
+            self.wallpaper = wallpaper
+            self.side = side
+            self.context = context
+        }
 
         public init(wallpaper: Wallpaper, size: PixelSize) {
-            self.wallpaper = wallpaper
-            self.size = size
+            self.init(wallpaper: wallpaper, context: RenderContext(size: size))
         }
     }
 

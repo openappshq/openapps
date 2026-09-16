@@ -25,15 +25,15 @@ struct WallpaperDocumentTests {
     @Test("The JSON shape is the documented one")
     func shape() throws {
         let json = try String(decoding: Wallpaper.starter.jsonData(), as: UTF8.self)
-        #expect(json.hasPrefix("{\"generator\":{\"angle\":135,\"center\":{\"x\":0.5,\"y\":0.5},\"kind\":\"linear\",\"stops\":[{\"color\":\"#FF7A2F\",\"position\":0}"))
+        #expect(json.hasPrefix("{\"composition\":\"none\",\"finish\":{\"topShade\":0},\"generator\":{\"angle\":135,\"center\":{\"x\":0.5,\"y\":0.5},\"interpolation\":\"oklch\",\"kind\":\"linear\",\"stops\":[{\"color\":\"#FF7A2F\",\"position\":0}"))
         #expect(json.contains("\"type\":\"gradient\""))
-        #expect(json.contains("\"seed\":\"20260916\""))
-        #expect(json.hasSuffix("\"version\":1}"))
+        #expect(json.contains("\"seed\":\"20260916\"") && json.contains("\"pair\":{\"mode\":\"still\"}"))
+        #expect(json.hasSuffix("\"version\":2}"))
     }
 
     @Test("A newer version, a bad seed and an unknown generator are refused")
     func refusals() {
-        #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"version\":2,\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\"}".utf8)) }
+        #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"version\":3,\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\"}".utf8)) }
         #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"x\"}".utf8)) }
         #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"plasma\"},\"seed\":\"1\"}".utf8)) }
         // Grain is optional and clamped.

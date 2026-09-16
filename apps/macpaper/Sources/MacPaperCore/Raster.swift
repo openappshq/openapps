@@ -4,6 +4,13 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+extension Data {
+    /// SHA-256 as 64 lowercase hex characters.
+    public var sha256Hex: String {
+        SHA256.hash(data: self).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 /// A size in pixels, the unit renders are made in: a display's points times
 /// its backing scale.
 public struct PixelSize: Codable, Hashable, Sendable {
@@ -80,7 +87,7 @@ public struct Raster: Hashable, Sendable {
 
     /// SHA-256 of the pixel bytes: the golden value the tests pin per seed.
     public var contentHash: String {
-        SHA256.hash(data: Data(pixels)).map { String(format: "%02x", $0) }.joined()
+        Data(pixels).sha256Hex
     }
 
     /// Bilinear resampling to another size, in software: used to bring a
