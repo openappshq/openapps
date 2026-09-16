@@ -1,5 +1,5 @@
 import Foundation
-import OpenReactionCore
+import OpenAppsLicensing
 import Testing
 
 /// Random sequences of wall-clock jumps, monotonic advances, sleeps, save

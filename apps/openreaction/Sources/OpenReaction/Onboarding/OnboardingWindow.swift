@@ -1,4 +1,5 @@
 import AppKit
+import OpenAppsLicensing
 import OpenReactionCore
 import SwiftUI
 

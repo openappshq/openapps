@@ -1,5 +1,5 @@
 import Foundation
-import OpenReactionCore
+import OpenAppsLicensing
 
 /// Compile-time facts about licensing in this build. Present in every build
 /// so the rest of the app can ask without `#if`.
@@ -9,6 +9,13 @@ enum Licensing {
     #else
     static let isCompiledIn = false
     #endif
+
+    /// The app id the record store, the trial registry and the device hash use.
+    static let appID = "openreaction"
+    /// The app as the License screen and the badge name it.
+    static let appName = "OpenReaction"
+    /// The preferences suite the invalidation journal lives in.
+    static let journalSuite = "space.openapps.openreaction.license"
 
     /// The trial's length. A debug build can shorten it to run the whole
     /// flow (start, "less than a day left", the offline limit, the end) in

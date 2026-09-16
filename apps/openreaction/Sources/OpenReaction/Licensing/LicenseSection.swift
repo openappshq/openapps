@@ -1,5 +1,6 @@
 #if OPENAPPS_LICENSING
 import AppKit
+import OpenAppsLicensing
 import OpenReactionCore
 import SwiftUI
 
@@ -16,14 +17,14 @@ struct LicenseSection: View {
         Section {
             statusRow
             if let error = license.storageError {
-                note(LicenseMessage.storageUnavailable.text + " (\(Self.describe(error)))")
+                note(LicenseMessage.storageUnavailable.text(appName: Licensing.appName) + " (\(Self.describe(error)))")
             } else if let error = license.trialStorageError {
                 note("OpenReaction can’t read or save its free trial record right now. It keeps retrying; check that its Application Support folder is readable and writable. (\(Self.describe(error)))")
             } else if license.journalError {
                 note("OpenReaction couldn’t save its license notes in Preferences. It keeps retrying.")
             }
             if let message = license.message {
-                note(message.text)
+                note(message.text(appName: Licensing.appName))
                     .accessibilityAddTraits(.updatesFrequently)
             }
             if let pending = license.pendingKey {

@@ -1,6 +1,6 @@
 import CryptoKit
 import Foundation
-@testable import OpenReactionCore
+@testable import OpenAppsLicensing
 import Testing
 
 /// The encrypted file store (LICENSING.md, "Record store") against a

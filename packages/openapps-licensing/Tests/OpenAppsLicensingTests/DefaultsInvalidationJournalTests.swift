@@ -1,8 +1,7 @@
-#if OPENAPPS_LICENSING
 import Foundation
-import OpenReactionCore
+import OpenAppsLicensing
+import OpenAppsLicensingClients
 import Testing
-@testable import OpenReaction
 
 /// The real preferences journal against a throwaway suite.
 @Suite("Defaults invalidation journal", .serialized)
@@ -110,4 +109,3 @@ struct DefaultsInvalidationJournalTests {
         #expect(fixture.versions(hash) == [6])
     }
 }
-#endif

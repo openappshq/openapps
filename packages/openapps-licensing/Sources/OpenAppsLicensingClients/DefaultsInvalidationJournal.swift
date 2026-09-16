@@ -1,7 +1,6 @@
-#if OPENAPPS_LICENSING
 import CryptoKit
 import Foundation
-import OpenReactionCore
+import OpenAppsLicensing
 
 /// The invalidation journal as plain preferences: nothing secret is in it.
 ///
@@ -14,23 +13,27 @@ import OpenReactionCore
 /// under `revoked.<hash>` (a revocation time, read as `.legacy`) and count
 /// as version 0. A version that is neither `{seq}` nor `{none}` is corrupt:
 /// reported, never overwritten by a read or a clear.
-struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
-    static let suiteName = "space.openapps.openreaction.license"
+public struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
     /// UserDefaults is thread-safe; the manager only ever calls from the main actor.
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults? = UserDefaults(suiteName: DefaultsInvalidationJournal.suiteName)) {
+    /// The app's own preferences suite (`space.openapps.openreaction.license`).
+    public init(suiteName: String) {
+        self.init(defaults: UserDefaults(suiteName: suiteName))
+    }
+
+    public init(defaults: UserDefaults?) {
         self.defaults = defaults ?? .standard
     }
 
     // MARK: Protocol
 
-    func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry? {
+    public func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry? {
         guard let newest = newestVersion(instanceID) else { return nil }
         return try Self.parse(newest.value)
     }
 
-    func record(instanceID: String, entry new: JournalEntry) -> Bool {
+    public func record(instanceID: String, entry new: JournalEntry) -> Bool {
         if let newest = newestVersion(instanceID), newest.number > 0,
            case .readable(let existing?) = Self.read(newest.value), existing.seq >= new.seq {
             return true // a newer (versioned) revocation is never downgraded
@@ -38,7 +41,7 @@ struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
         return install(["seq": NSNumber(value: new.seq)], instanceID: instanceID)
     }
 
-    func clear(instanceID: String, upTo seq: UInt64) -> Bool {
+    public func clear(instanceID: String, upTo seq: UInt64) -> Bool {
         guard let newest = newestVersion(instanceID) else { return true }
         switch Self.read(newest.value) {
         case .unreadable: return false // a clear never touches what it cannot read
@@ -47,7 +50,7 @@ struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
         }
     }
 
-    func replaceUnreadable(instanceID: String, with entry: JournalEntry?) -> Bool {
+    public func replaceUnreadable(instanceID: String, with entry: JournalEntry?) -> Bool {
         guard let newest = newestVersion(instanceID), case .unreadable = Self.read(newest.value) else { return true }
         return install(entry.map { ["seq": NSNumber(value: $0.seq)] } ?? ["none": true], instanceID: instanceID)
     }
@@ -127,4 +130,3 @@ struct DefaultsInvalidationJournal: InvalidationJournal, @unchecked Sendable {
         return defaults.synchronize() && keys.allSatisfy { defaults.object(forKey: $0) == nil }
     }
 }
-#endif

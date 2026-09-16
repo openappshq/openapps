@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import OpenAppsLicensing
 import OpenReactionCore
 import os
 

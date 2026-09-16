@@ -1,5 +1,5 @@
 import Foundation
-import OpenReactionCore
+import OpenAppsLicensing
 import Testing
 
 /// Shared test cases 12–27 from LICENSING.md (the in-app trial and the
@@ -13,7 +13,7 @@ extension LicensingTests {
     }
 
     private var hardwareHash: String {
-        TrialDevice.hash(app: LicenseManager.trialAppID, hardwareID: device.uuid!)
+        TrialDevice.hash(app: Self.appID, hardwareID: device.uuid!)
     }
 
     // MARK: 12–15 — starting, ending, elapsed time

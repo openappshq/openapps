@@ -22,9 +22,10 @@ public enum LicenseBadge {
         }
     }
 
+    /// `appName` is the app as the user knows it (`OpenReaction`).
     /// `storageError` and `trialStorageError` refine `trialUnavailable`: a
     /// record that cannot be read is said instead of "starting".
-    public static func label(for state: LicenseState, storageError: Bool = false, trialStorageError: Bool = false) -> Label? {
+    public static func label(for state: LicenseState, appName: String, storageError: Bool = false, trialStorageError: Bool = false) -> Label? {
         switch state {
         case .licensed:
             return nil
@@ -43,7 +44,7 @@ public enum LicenseBadge {
         case .trialClockBehind:
             return Label(text: "Your Mac’s clock is behind", tone: .attention)
         case .grace(let days, showWarning: true):
-            return Label(text: "Connect to the internet within \(days) day\(days == 1 ? "" : "s") to keep using OpenReaction", tone: .attention)
+            return Label(text: "Connect to the internet within \(days) day\(days == 1 ? "" : "s") to keep using \(appName)", tone: .attention)
         case .checkRequired:
             return Label(text: "Connect to the internet to verify your license", tone: .attention)
         case .revoked:

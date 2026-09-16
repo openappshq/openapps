@@ -1,5 +1,5 @@
 import Foundation
-import OpenReactionCore
+import OpenAppsLicensing
 import Testing
 
 /// Enforcement never waits on storage: the manager runs on its own actor
@@ -212,7 +212,7 @@ struct LicenseEnforcementTests {
         registry: any TrialRegistryClient = Registry(), clock: Clock? = nil
     ) -> LicenseManager {
         LicenseManager(
-            products: LicenseProducts(paid: ["pdt_P"]), client: Client(), store: store, journal: journal,
+            appID: "app", products: LicenseProducts(paid: ["pdt_P"]), client: Client(), store: store, journal: journal,
             trialStore: trialStore, registry: registry, device: Device(), now: { clock?.now ?? Date() },
             uptime: { clock?.uptime ?? LicenseManager.continuousUptime() }
         )

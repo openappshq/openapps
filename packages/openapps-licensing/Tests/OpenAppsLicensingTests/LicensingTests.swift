@@ -1,5 +1,5 @@
 import Foundation
-import OpenReactionCore
+import OpenAppsLicensing
 import Testing
 
 /// The shared test cases from LICENSING.md, numbered as there, against a
@@ -9,6 +9,8 @@ import Testing
 @Suite("Licensing")
 @LicenseActor
 struct LicensingTests {
+    static let appID = "openreaction"
+    static let appName = "OpenReaction"
     static let paid = "pdt_openreaction_PAID"
     /// The retired Dodo trial product: refused like any other product.
     static let retiredTrial = "pdt_openreaction_TRIAL"
@@ -186,7 +188,7 @@ struct LicensingTests {
     func makeManager() -> LicenseManager {
         let clock = self.clock
         let manager = LicenseManager(
-            products: Self.products, client: client, store: store, journal: journal,
+            appID: Self.appID, products: Self.products, client: client, store: store, journal: journal,
             trialStore: trialStore, registry: registry, device: device, now: { clock.now }, uptime: { clock.uptime }
         )
         manager.load()
@@ -237,7 +239,7 @@ struct LicensingTests {
         let manager = makeManager()
         let message = await manager.activate(key: "KEY-X")
         #expect(message == .wrongProduct(productName: "OpenKlack"))
-        #expect(message.text == "This key is for OpenKlack, not OpenReaction.")
+        #expect(message.text(appName: Self.appName) == "This key is for OpenKlack, not OpenReaction.")
         #expect(store.record == nil)
         #expect(manager.state == .trialEnded)
         #expect(client.calls == [.activate(key: "KEY-X", name: "Mac"), .deactivate(instance: "inst_x")])
@@ -260,7 +262,7 @@ struct LicensingTests {
         let manager = makeManager()
         let message = await manager.activate(key: "KEY-PAID")
         #expect(message == .allMacsActivated)
-        #expect(message.text.contains("All 3 Macs"))
+        #expect(message.text(appName: Self.appName).contains("All 3 Macs"))
         #expect(manager.state == .trialEnded)
         #expect(store.record == nil)
     }
@@ -283,7 +285,7 @@ struct LicensingTests {
         let manager = makeManager()
         let message = await manager.activate(key: "KEY-PAID")
         #expect(message == .unreachable)
-        #expect(message.text.hasPrefix("Couldn’t reach the license service"))
+        #expect(message.text(appName: Self.appName).hasPrefix("Couldn’t reach the license service"))
         #expect(manager.state == .trialEnded)
         #expect(store.record == nil)
     }

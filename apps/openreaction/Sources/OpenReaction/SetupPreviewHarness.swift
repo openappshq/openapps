@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import OpenAppsLicensing
 import OpenReactionCore
 import ServiceManagement
 import SwiftUI
@@ -43,7 +44,7 @@ final class SetupPreviewHarness {
         let all: [LicenseBadge.Label] = [
             .trial(daysLeft: 3), .trial(daysLeft: 2), .trial(daysLeft: 1), .trialUnavailable, .trialEnded,
             .trialNeedsConnection, .trialClockBehind, .grace(daysLeft: 2, showWarning: true), .checkRequired, .revoked,
-        ].compactMap { LicenseBadge.label(for: $0) }
+        ].compactMap { LicenseBadge.label(for: $0, appName: Licensing.appName) }
         var index = 0
         var current: LicenseBadge.Label? { all[index % all.count] }
     }
@@ -155,6 +156,7 @@ final class SetupPreviewHarness {
         onboarding = OnboardingWindowController(controller: controller, loginItem: loginItem, defaults: defaults) { nil }
         #if OPENAPPS_LICENSING
         let license = LicenseController(manager: LicenseManager(
+            appID: Licensing.appID,
             products: LicenseProducts(paid: ["pdt_preview"]),
             client: SilentClient(),
             store: MemoryLicenseStore(),

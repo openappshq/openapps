@@ -1,4 +1,8 @@
 import AppKit
+import OpenAppsLicensing
+#if OPENAPPS_LICENSING
+import OpenAppsLicensingClients
+#endif
 import OpenReactionCore
 #if OPENAPPS_OFFICIAL
 import OpenAppsUpdater
@@ -73,14 +77,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Both records live in one encrypted file store the app owns, keyed
         // to this Mac (LICENSING.md, "Record store"); never the Keychain.
         let device = PlatformDeviceIdentity()
-        let records = FileRecordStore(appID: LicenseManager.trialAppID, device: device)
+        let records = FileRecordStore(appID: Licensing.appID, device: device)
         let license = LicenseController(manager: LicenseManager(
+            appID: Licensing.appID,
             products: LicensingConfig.products,
             client: DodoLicenseClient(host: LicensingConfig.host),
             store: records,
-            journal: DefaultsInvalidationJournal(),
+            journal: DefaultsInvalidationJournal(suiteName: Licensing.journalSuite),
             trialStore: records,
-            registry: URLSessionTrialRegistryClient(endpoint: LicensingConfig.trialRegistryURL, environment: LicensingConfig.environment),
+            registry: URLSessionTrialRegistryClient(
+                endpoint: LicensingConfig.trialRegistryURL, appID: Licensing.appID, environment: LicensingConfig.environment
+            ),
             device: device,
             trialTiming: Licensing.trialTiming
         ))

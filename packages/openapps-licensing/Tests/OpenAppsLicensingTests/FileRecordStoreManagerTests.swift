@@ -1,5 +1,5 @@
 import Foundation
-@testable import OpenReactionCore
+@testable import OpenAppsLicensing
 import Testing
 
 /// The manager over the real file store: what the store reports is what
@@ -29,18 +29,18 @@ struct FileRecordStoreManagerTests {
 
     /// The store the manager uses, with failures injectable.
     var store: FileRecordStore {
-        FileRecordStore(appID: LicenseManager.trialAppID, device: device, baseDirectory: sandbox.root, system: failing.system)
+        FileRecordStore(appID: LicensingTests.appID, device: device, baseDirectory: sandbox.root, system: failing.system)
     }
 
     /// The same files through the live system calls: what is really there.
     var disk: FileRecordStore {
-        FileRecordStore(appID: LicenseManager.trialAppID, device: device, baseDirectory: sandbox.root)
+        FileRecordStore(appID: LicensingTests.appID, device: device, baseDirectory: sandbox.root)
     }
 
     func makeManager() -> LicenseManager {
         let clock = self.clock
         let manager = LicenseManager(
-            products: LicensingTests.products, client: client, store: store, journal: journal,
+            appID: LicensingTests.appID, products: LicensingTests.products, client: client, store: store, journal: journal,
             trialStore: store, registry: registry, device: device, now: { clock.now }, uptime: { clock.uptime }
         )
         manager.load()
@@ -358,7 +358,7 @@ struct FileRecordStoreManagerTests {
         #expect(manager.trial?.startedAt == written?.startedAt, "the same trial, not a new one")
         #expect(manager.trial?.fallbackDeviceID == written?.fallbackDeviceID)
         #expect(try disk.loadTrial()?.startedAt == written?.startedAt)
-        #expect(registry.devices == [TrialDevice.hash(app: LicenseManager.trialAppID, hardwareID: written!.fallbackDeviceID!)])
+        #expect(registry.devices == [TrialDevice.hash(app: LicensingTests.appID, hardwareID: written!.fallbackDeviceID!)])
     }
 
     // MARK: Removal

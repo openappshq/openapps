@@ -368,20 +368,21 @@ public enum LicenseMessage: Equatable, Sendable {
     /// Dodo's answer was missing something the contract requires.
     case malformedResponse
 
-    public var text: String {
+    /// `appName` is the app as the user knows it (`OpenReaction`).
+    public func text(appName: String) -> String {
         switch self {
         case .keyNotFound: "Key not found. Check for typos, or paste the key from your email."
         case .keyDisabledOrExpired: "This key is disabled or has expired."
-        case .allMacsActivated: "All 3 Macs for this license are already activated. Remove one in OpenReaction on that Mac, or contact support."
+        case .allMacsActivated: "All 3 Macs for this license are already activated. Remove one in \(appName) on that Mac, or contact support."
         case .unreachable: "Couldn’t reach the license service. Check your connection and try again."
         case .rateLimited(let seconds): "Too many attempts. Try again in \(seconds) seconds."
-        case .wrongProduct(let productName): "This key is for \(productName), not OpenReaction."
+        case .wrongProduct(let productName): "This key is for \(productName), not \(appName)."
         case .removeFailedOffline: "Couldn’t reach the license service to remove this Mac. Try again when you’re online."
-        case .activated: "OpenReaction is licensed on this Mac."
+        case .activated: "\(appName) is licensed on this Mac."
         case .removed: "This Mac was removed from the license."
-        case .storageFailed: "OpenReaction couldn’t save the license on this Mac (its records folder refused the write). The activation was released; check that Application Support is writable and try again."
-        case .storageUnavailable: "OpenReaction can’t read or update its license records right now. It keeps retrying; check that its Application Support folder is readable and writable."
-        case .cleanupPending: "A previous activation couldn’t be released yet; OpenReaction will retry. If a Mac stays counted, contact support."
+        case .storageFailed: "\(appName) couldn’t save the license on this Mac (its records folder refused the write). The activation was released; check that Application Support is writable and try again."
+        case .storageUnavailable: "\(appName) can’t read or update its license records right now. It keeps retrying; check that its Application Support folder is readable and writable."
+        case .cleanupPending: "A previous activation couldn’t be released yet; \(appName) will retry. If a Mac stays counted, contact support."
         case .alreadyActivated: "This key is already active on this Mac."
         case .malformedResponse: "The license service sent an unexpected answer. Try again later."
         }

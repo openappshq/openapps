@@ -1,6 +1,7 @@
 #if OPENAPPS_LICENSING
 import AppKit
 import Network
+import OpenAppsLicensing
 import OpenReactionCore
 import SwiftUI
 
@@ -67,7 +68,7 @@ final class LicenseController {
         let initialState = initial.state(now: Date(), uptime: LicenseManager.continuousUptime())
         snapshot = initial
         state = initialState
-        published = Published(state: initialState, badge: LicenseBadge.label(for: initialState), freshInstall: nil)
+        published = Published(state: initialState, badge: LicenseBadge.label(for: initialState, appName: Licensing.appName), freshInstall: nil)
     }
 
     /// Wires the snapshot feed, then loads storage on the license actor.
@@ -313,6 +314,7 @@ final class LicenseController {
     var badge: LicenseBadge.Label? {
         LicenseBadge.label(
             for: state,
+            appName: Licensing.appName,
             storageError: snapshot.storageError != nil,
             trialStorageError: snapshot.trialStorageError != nil
         )

@@ -1,15 +1,14 @@
-#if OPENAPPS_LICENSING
 import Foundation
-import OpenReactionCore
+import OpenAppsLicensing
 
 /// Dodo Payments' public license endpoints over URLSession. Sends only the
 /// license key, the activation name "Mac" and the activation id; never the
 /// Mac's name, user, hardware ids or anything typed.
-struct DodoLicenseClient: LicenseClient {
-    let host: URL
+public struct DodoLicenseClient: LicenseClient {
+    public let host: URL
     private let session: URLSession
 
-    init(host: URL) {
+    public init(host: URL) {
         self.host = host
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
@@ -18,7 +17,7 @@ struct DodoLicenseClient: LicenseClient {
         session = URLSession(configuration: configuration)
     }
 
-    func activate(licenseKey: String, name: String) async -> ActivationResult {
+    public func activate(licenseKey: String, name: String) async -> ActivationResult {
         let response = await post("licenses/activate", body: ["license_key": licenseKey, "name": name])
         switch response {
         case .failure: return .unreachable
@@ -36,7 +35,7 @@ struct DodoLicenseClient: LicenseClient {
         }
     }
 
-    func validate(licenseKey: String, instanceID: String) async -> ValidationResult {
+    public func validate(licenseKey: String, instanceID: String) async -> ValidationResult {
         let response = await post("licenses/validate", body: ["license_key": licenseKey, "license_key_instance_id": instanceID])
         switch response {
         case .failure: return .unreachable
@@ -52,7 +51,7 @@ struct DodoLicenseClient: LicenseClient {
         }
     }
 
-    func deactivate(licenseKey: String, instanceID: String) async -> DeactivationResult {
+    public func deactivate(licenseKey: String, instanceID: String) async -> DeactivationResult {
         let response = await post("licenses/deactivate", body: ["license_key": licenseKey, "license_key_instance_id": instanceID])
         switch response {
         case .failure: return .unreachable
@@ -134,4 +133,3 @@ struct DodoLicenseClient: LicenseClient {
         return formatter.date(from: value)
     }
 }
-#endif

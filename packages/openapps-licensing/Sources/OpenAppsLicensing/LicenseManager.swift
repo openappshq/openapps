@@ -30,8 +30,8 @@ public final class LicenseManager {
     /// How often pending cleanups and durable writes are retried.
     public static let cleanupRetryInterval: TimeInterval = 5 * 60
 
-    /// The app id the trial registry and the device hash use.
-    public nonisolated static let trialAppID = "openreaction"
+    /// The app id the trial registry and the device hash use (`openreaction`).
+    public nonisolated let appID: String
 
     public let products: LicenseProducts
     public nonisolated let trialTiming: TrialTiming
@@ -192,12 +192,13 @@ public final class LicenseManager {
     /// Creates the manager without touching storage; call `load()` on the
     /// license actor to read what is stored.
     public nonisolated init(
-        products: LicenseProducts, client: any LicenseClient, store: any LicenseStore,
+        appID: String, products: LicenseProducts, client: any LicenseClient, store: any LicenseStore,
         journal: any InvalidationJournal, trialStore: any TrialStore, registry: any TrialRegistryClient,
         device: any DeviceIdentity, trialTiming: TrialTiming = .standard, now: @escaping @Sendable () -> Date = Date.init,
         uptime: @escaping @Sendable () -> TimeInterval = LicenseManager.continuousUptime
     ) {
         self.uptime = uptime
+        self.appID = appID
         self.products = products
         self.client = client
         self.store = store
@@ -1285,7 +1286,7 @@ public final class LicenseManager {
         defer { isRegistering = false }
         registryLastAttemptMono = uptime()
         registryCallCount += 1
-        let result = await registry.register(device: TrialDevice.hash(app: Self.trialAppID, hardwareID: deviceID))
+        let result = await registry.register(device: TrialDevice.hash(app: appID, hardwareID: deviceID))
         guard generation == trialGeneration, trialApplies, trial?.registered == false else {
             notify()
             return
