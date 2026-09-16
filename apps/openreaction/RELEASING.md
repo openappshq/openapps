@@ -245,13 +245,13 @@ Every command must succeed.
 
 ```sh
 brew install --cask openappshq/tap/openreaction
-codesign --verify --deep --strict --verbose=2 ~/Applications/OpenReaction.app
+codesign --verify --deep --strict --verbose=2 /Applications/OpenReaction.app
 #   valid on disk / satisfies its Designated Requirement
-codesign --display --verbose=2 ~/Applications/OpenReaction.app 2>&1 | grep -E 'Authority|flags'
+codesign --display --verbose=2 /Applications/OpenReaction.app 2>&1 | grep -E 'Authority|flags'
 #   Authority=OpenApps HQ Release, flags=… (runtime)
-codesign --display -r- ~/Applications/OpenReaction.app 2>&1 | grep designated
+codesign --display -r- /Applications/OpenReaction.app 2>&1 | grep designated
 #   exactly the line in apps/openreaction/release/designated-requirement.txt
-lipo -archs ~/Applications/OpenReaction.app/Contents/MacOS/OpenReaction   # x86_64 arm64
+lipo -archs /Applications/OpenReaction.app/Contents/MacOS/OpenReaction   # x86_64 arm64
 ```
 
 The cask launches the app: it opens without a Gatekeeper dialog (the cask
@@ -291,7 +291,7 @@ With "Check for updates automatically" on, the app checks on launch, every
 24 hours and on wake when a check is overdue, and retries a failed check
 once after an hour. With "Download and install automatically" on as well, a
 found update is downloaded, verified and unpacked into a private staging
-folder next to the app (`~/Applications/.OpenReaction.app.update`, mode
+folder next to the app (`/Applications/.OpenReaction.app.update`, mode
 0700); the staged bundle must be validly signed and *satisfy the running
 app's designated requirement* (evaluated with the Security framework, the
 same check as `codesign --verify --strict -R=`, never compared as text) and

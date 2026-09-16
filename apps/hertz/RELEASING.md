@@ -266,7 +266,7 @@ With "Check for updates automatically" on, the app checks on launch, every
 24 hours and on wake when a check is overdue, and retries a failed check
 once after an hour. With "Download and install automatically" on as well, a
 found update is downloaded, verified and unpacked into a private staging
-folder next to the app (`~/Applications/.Hertz.app.update`, mode 0700); the
+folder next to the app (`/Applications/.Hertz.app.update`, mode 0700); the
 staged bundle must be validly signed and *satisfy the running app's
 designated requirement* (evaluated with the Security framework, the same
 check as `codesign --verify --strict -R=`, never compared as text) and

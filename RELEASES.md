@@ -47,17 +47,17 @@ cask "<app>" do
   homepage "https://openapps.space/<app>/"
   auto_updates true
   depends_on macos: :sonoma
-  app "<App>.app", target: "#{Dir.home}/Applications/<App>.app"
+  app "<App>.app"
   postflight do
-    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{Dir.home}/Applications/<App>.app"]
-    system_command "/usr/bin/open", args: ["#{Dir.home}/Applications/<App>.app"]
+    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/<App>.app"]
+    system_command "/usr/bin/open", args: ["#{appdir}/<App>.app"]
   end
   uninstall quit: "<bundle id>"
   zap trash: ["~/Library/Preferences/<bundle id>.plist", "~/Library/Application Support/<App>"]
 end
 ```
 
-- **Location:** installed into `~/Applications`, so updates never need an admin password.
+- **Location:** `/Applications`, Homebrew's default `appdir` and where a dragged disk image lands (decided 2026-09-16; before that `~/Applications`). Admin accounts write there without a password, so the in-app updater needs none either; a non-admin account installs with `--appdir`. The System Settings privacy pickers open on `/Applications`, which is why it matters.
 - **`auto_updates true`:** Homebrew doesn't fight the in-app updater.
 - **Bumping the cask:** the release workflow updates the cask right after a release is published, by pushing a commit to the tap with an SSH deploy key that can write only to that repository (`HOMEBREW_TAP_DEPLOY_KEY`). There's no polling cron. The cask's `sha256` is the digest the release job verified.
 

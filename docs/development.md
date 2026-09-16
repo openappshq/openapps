@@ -250,7 +250,7 @@ A paid license's time is anchored to Dodo's `Date` header at the last successful
 
 ### Releases and updates
 
-Releases follow the shared [release contract](../RELEASES.md): a Homebrew cask (`brew install --cask openappshq/tap/openklack`, into `~/Applications`), a zip on the GitHub Release `openklack-vX.Y.Z`, a stable self-signed certificate instead of Developer ID and notarization, and a signed update feed at `https://openapps.space/updates/openklack/latest.json`.
+Releases follow the shared [release contract](../RELEASES.md): a Homebrew cask (`brew install --cask openappshq/tap/openklack`, into `/Applications`), a zip on the GitHub Release `openklack-vX.Y.Z`, a stable self-signed certificate instead of Developer ID and notarization, and a signed update feed at `https://openapps.space/updates/openklack/latest.json`.
 The [desktop workflow](../.github/workflows/openklack.yml) runs the checks on every change and, on a pushed `openklack-vX.Y.Z` tag (or a manual run with a version and `publish`), the release: build → sign and verify → package → publish → feed → verify live → cask.
 The scripts it runs are the ones you can run locally:
 
