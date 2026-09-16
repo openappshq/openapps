@@ -1,0 +1,327 @@
+/* --- "How do I install this?" ------------------------------------------------
+   The link above the install line, and the guide it opens. HeroUI draws the
+   dialog (backdrop, focus, Escape); this restyles it onto the site's surfaces
+   and lays out the steps. Pictures are SVG coloured here, so they follow the
+   theme. */
+.install-guide-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin: -12px 0 -6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+  transition: none;
+}
+.install-guide-link svg {
+  flex-shrink: 0;
+}
+/* HeroUI presses its triggers; a text link stays still. */
+.install-guide-link:active,
+.install-guide-link[data-pressed="true"] {
+  transform: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .install-guide-link:hover {
+    color: var(--color-text-primary);
+  }
+}
+
+/* The dialog, on the site's surfaces. */
+.install-guide {
+  width: min(600px, 100%);
+  max-width: none;
+  padding: 28px 28px 24px;
+  border-radius: var(--radius-soft);
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+  box-shadow: var(--keycap-lift);
+}
+.install-guide-header {
+  gap: 8px;
+  padding-right: 40px;
+}
+.install-guide-heading {
+  font: 800 30px/1.05 var(--font-heading);
+  letter-spacing: -0.045em;
+  color: var(--color-text-primary);
+}
+.install-guide-lead {
+  max-width: 48ch;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+}
+.install-guide-body {
+  margin-top: 8px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+}
+.install-guide-close {
+  top: 20px;
+  right: 20px;
+}
+
+/* --- Steps --------------------------------------------------------------- */
+.install-guide-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: install-step;
+}
+.install-guide-step {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 10px 12px;
+  padding-block: 20px;
+  border-top: 1px solid var(--color-border-subtle);
+  counter-increment: install-step;
+}
+.install-guide-step::before {
+  content: counter(install-step, decimal-leading-zero);
+  grid-row: 1 / span 2;
+  padding-top: 5px;
+  font: 14px var(--font-mono);
+  color: var(--color-accent-text);
+}
+.install-guide-step h3 {
+  font-size: 19px;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+}
+.install-guide-step p {
+  margin-top: 6px;
+  color: var(--color-text-secondary);
+}
+.install-guide-step p strong {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.install-guide-step p code {
+  font: 500 0.92em/1.4 var(--font-mono);
+  padding: 2px 6px;
+  border-radius: var(--radius-small);
+  background: var(--color-bg-surface);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.install-guide-step-art {
+  grid-column: 2;
+  max-width: 400px;
+}
+.install-guide-copy .copy-row-help {
+  font-size: 13px;
+}
+.install-guide-copy code {
+  font-size: 13px;
+}
+
+/* Keys as keycaps, small enough to sit in a sentence. */
+.install-guide-keys {
+  display: inline-flex;
+  gap: 3px;
+  vertical-align: baseline;
+}
+.install-guide-keys kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 6px 2px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--keycap-face);
+  box-shadow: var(--keycap-rest);
+  font: 600 12px/1.4 var(--font-sans);
+  color: var(--color-text-primary);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* --- Scenes ---------------------------------------------------------------
+   One desktop and one window, the same in every picture. */
+.ig-scene {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.ig-desktop {
+  fill: var(--color-bg-surface);
+}
+/* Lighter than the desktop in both themes, like a control raised on a surface. */
+.ig-bar {
+  fill: var(--keycap-face);
+}
+.ig-glyph {
+  fill: var(--color-text-secondary);
+  opacity: 0.45;
+}
+.ig-field {
+  fill: var(--color-bg-canvas);
+  stroke: var(--color-border-control);
+}
+.ig-field-glyph {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.ig-field-text {
+  font: 500 15px var(--font-sans);
+  fill: var(--color-text-primary);
+}
+.ig-caret {
+  fill: var(--color-text-primary);
+}
+.ig-window {
+  fill: var(--color-bg-canvas);
+  stroke: var(--color-border-subtle);
+}
+.ig-window-dark {
+  fill: var(--palette-neutral-950);
+  stroke: oklch(1 0 0 / 0.12);
+}
+.ig-titlebar {
+  fill: oklch(1 0 0 / 0.07);
+}
+.ig-light-close {
+  fill: #ff5f57;
+}
+.ig-light-min {
+  fill: #febc2e;
+}
+.ig-light-max {
+  fill: #28c840;
+}
+.ig-term-title {
+  font: 500 10px var(--font-sans);
+  fill: var(--palette-neutral-400);
+}
+.ig-term-prompt,
+.ig-term-text {
+  font: 400 9.5px var(--font-mono);
+  fill: var(--palette-neutral-100);
+}
+.ig-term-prompt {
+  fill: var(--palette-neutral-400);
+}
+.ig-term-dim {
+  fill: var(--palette-neutral-400);
+}
+.ig-term-ok {
+  fill: var(--palette-green-300);
+}
+.ig-caret-dark {
+  fill: var(--palette-neutral-100);
+}
+.ig-arrival-icon {
+  fill: var(--brand-solid);
+}
+.ig-arrival-halo {
+  fill: var(--brand-solid);
+  opacity: 0;
+}
+.ig-prompt {
+  fill: var(--color-bg-canvas);
+  stroke: var(--color-border-subtle);
+  filter: drop-shadow(0 6px 12px oklch(0 0 0 / 0.12));
+}
+.ig-prompt-glyph {
+  fill: var(--color-accent-solid);
+  opacity: 0.9;
+}
+.ig-prompt-line {
+  fill: var(--color-text-primary);
+  opacity: 0.5;
+}
+.ig-prompt-line-2 {
+  opacity: 0.25;
+}
+.ig-switch {
+  fill: var(--color-accent-solid);
+}
+.ig-switch-knob {
+  fill: var(--palette-white);
+}
+
+/* Immediate state, quiet motion: a cursor blinks, an icon arrives. The site's
+   reduced-motion rule stops both. */
+@media (prefers-reduced-motion: no-preference) {
+  .ig-caret {
+    animation: ig-blink 1.1s steps(1, end) infinite;
+  }
+  .ig-arrival {
+    animation: ig-arrive 5s var(--ease-spring) infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  .ig-arrival-halo {
+    animation: ig-halo 5s ease-out infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  @keyframes ig-blink {
+    50% {
+      opacity: 0;
+    }
+  }
+  /* Gone only long enough to be seen arriving; the rest of the loop it is
+     simply there, which is the point. */
+  @keyframes ig-arrive {
+    0%,
+    10% {
+      scale: 0;
+    }
+    22%,
+    100% {
+      scale: 1;
+    }
+  }
+  @keyframes ig-halo {
+    0%,
+    14% {
+      opacity: 0;
+      scale: 0.4;
+    }
+    24% {
+      opacity: 0.35;
+    }
+    48%,
+    100% {
+      opacity: 0;
+      scale: 1.6;
+    }
+  }
+}
+
+@media (max-width: 600px) {
+  .install-guide {
+    padding: 22px 18px 18px;
+    border-radius: 18px;
+  }
+  .install-guide-heading {
+    font-size: 26px;
+  }
+  .install-guide-step {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding-block: 16px;
+  }
+  .install-guide-step::before {
+    grid-row: auto;
+    padding-top: 0;
+  }
+  .install-guide-step-art {
+    grid-column: 1;
+  }
+}
+@media (forced-colors: active) {
+  .install-guide {
+    border: 1px solid CanvasText;
+  }
+}

@@ -22,7 +22,7 @@ Every app ships the same surface. This skill is the order of work and the defini
 
 ## 2. Repository and website
 
-Follow [Add another app](../../../docs/development.md#add-another-app) exactly: app directory, `apps/website/src/catalog.ts` entry (id, route, price, `brandSource`, pages), `apps/website/src/apps/<app-id>/pages/Home.tsx` on the design system, `docs/development.md` section for the app's build/run, and the app's own `README.md` + `RELEASING.md`.
+Follow [Add another app](../../../docs/development.md#add-another-app) exactly: app directory, `apps/website/src/catalog.ts` entry (id, route, price, `permissions`, `brandSource`, pages), `apps/website/src/apps/<app-id>/pages/Home.tsx` on the design system, `docs/development.md` section for the app's build/run, and the app's own `README.md` + `RELEASING.md`. The install line, its Copy button and the "How do I install this?" step-by-step guide come with `InstallCommand` for free: the guide reads the app's name, commands and `permissions` from the catalog, so there is nothing to write per app.
 
 **README every time.** `README.md` at the root lists every app in the "Our apps" table with one line, a screenshot or icon, links to the website page and source, and the install command; keep the intro sentence true (what is free, what is paid). A new app or a change of price/status updates it in the same branch.
 

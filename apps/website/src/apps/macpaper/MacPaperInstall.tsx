@@ -14,10 +14,15 @@ export default function MacPaperInstall({
 }: {
   licensing: Pick<
     AppLicensing,
-    "name" | "brewCask" | "brewCommand" | "installCommand" | "installScriptSourceUrl"
+    | "name"
+    | "brewCask"
+    | "brewCommand"
+    | "installCommand"
+    | "installScriptSourceUrl"
+    | "permissions"
   >;
 }) {
-  const { name, brewCommand, installCommand, installScriptSourceUrl } = licensing;
+  const { name, brewCommand, installCommand, installScriptSourceUrl, permissions } = licensing;
   if (!installCommand || !brewCommand) {
     return (
       <div className="mp-install">
@@ -39,6 +44,7 @@ export default function MacPaperInstall({
         name={name}
         sourceUrl={installScriptSourceUrl}
         brewCommand={brewCommand}
+        permissions={permissions}
       />
       <p className="mp-install-note">
         macPaper lands in <code>/Applications</code> and opens from the notch, or in your menu bar

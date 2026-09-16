@@ -43,6 +43,7 @@ test("without a configured product and cask, Buy is a coming-soon plate, not a c
     expect(html, product.id).not.toContain("Download for Mac");
     expect(html, product.id).not.toContain("curl ");
     expect(html, product.id).not.toContain("brew install");
+    expect(html, product.id).not.toContain("How do I install this?");
     expect(html, product.id).not.toContain("dodopayments.com");
   }
 });
@@ -55,6 +56,9 @@ test("with a product and cask, the install line is shown with a Copy button, Hom
       `<code tabindex="-1">curl -fsSL https://openapps.space/install/${product.id} | sh</code>`,
     );
     expect(html, product.id).toContain('aria-label="Copy install command"');
+    // "How do I install this?" above the line, on the same gate.
+    expect(html, product.id).toContain("How do I install this?");
+    expect(html.indexOf("How do I install this?"), product.id).toBeLessThan(html.indexOf("curl "));
     expect(html, product.id).toContain(
       `Prefer Homebrew? <code>brew install --cask ${casks[product.id as keyof typeof casks]}</code>`,
     );
@@ -90,6 +94,7 @@ test("a direct download alone never opens Buy", () => {
     expect(html, product.id).toContain("Coming soon");
     expect(html, product.id).not.toContain("curl ");
     expect(html, product.id).not.toContain("brew install");
+    expect(html, product.id).not.toContain("How do I install this?");
     expect(html, product.id).not.toContain("dodopayments.com");
   }
 });

@@ -6,7 +6,7 @@ import { ArrowUpRight, Download, Star } from "lucide-react";
 import { enter } from "@openapps/ui/transitions";
 import { DEFAULT_REQUIREMENTS } from "./BuyButtons";
 import { GITHUB_URL } from "./github";
-import { TRIAL_DAYS } from "./licensing";
+import { licensingFor, TRIAL_DAYS } from "./licensing";
 import KeyToken from "./KeyToken";
 import InstallAnimation from "./InstallAnimation";
 import InstallCommand from "./InstallCommand";
@@ -27,6 +27,7 @@ export default function DownloadPage({
   app,
   name,
   permission,
+  permissions = licensingFor(app).permissions,
   requirements = DEFAULT_REQUIREMENTS,
   shareText,
   playgroundHref,
@@ -47,6 +48,8 @@ export default function DownloadPage({
   name: string;
   /** The one macOS permission the app needs on first launch; none for an app that asks for nothing. */
   permission?: string;
+  /** Everything macOS asks for, as the catalog lists it; the install guide names each. */
+  permissions?: readonly string[];
   /** The system line under the actions, for an app whose needs differ from the default. */
   requirements?: ReactNode;
   /** The post someone would actually send. Shown in full before they send it. */
@@ -110,6 +113,7 @@ export default function DownloadPage({
                     name={name}
                     sourceUrl={installScriptSourceUrl}
                     brewCommand={brewCommand}
+                    permissions={permissions}
                   />
                 )}
                 <div className="hero-actions">
