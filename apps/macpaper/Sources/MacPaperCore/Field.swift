@@ -205,17 +205,23 @@ public struct FieldParameters: Codable, Hashable, Sendable {
     public static let toneRange = 2...6
 
     public var family: FieldFamily
-    /// Ground first, loudest last.
-    public var tones: [RGBAColor]
+    /// Ground first, loudest last: always 2–6 distinct tones, whatever is
+    /// assigned (one color becomes a ramp of itself, `Palettes.usable`).
+    public var tones: [RGBAColor] {
+        didSet { if !Self.isUsable(tones) { tones = Palettes.usable(tones) } }
+    }
     public private(set) var values: [ParameterKey: Double]
 
     public init(family: FieldFamily, tones: [RGBAColor], values: [ParameterKey: Double] = [:]) {
         self.family = family
-        var tones = tones.isEmpty ? [.black, .white] : Array(tones.prefix(Self.toneRange.upperBound))
-        if tones.count == 1 { tones.append(OKLCH.mix(tones[0], .white, amount: 0.6).snapped) }
-        self.tones = tones
+        self.tones = Self.isUsable(tones) ? tones : Palettes.usable(tones)
         self.values = [:]
         for (key, value) in values { self[key] = value }
+    }
+
+    /// 2–6 tones, no two the same byte for byte.
+    static func isUsable(_ tones: [RGBAColor]) -> Bool {
+        Self.toneRange.contains(tones.count) && Set(tones.map(\.hexString)).count == tones.count
     }
 
     /// The knob's value, or its default; a knob the family does not

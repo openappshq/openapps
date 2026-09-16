@@ -494,9 +494,12 @@ final class AppModel {
 
     // MARK: - Colors
 
-    /// Replaces the edited generator's colors with `colors` (as many as it takes).
+    /// Replaces the edited generator's colors with `colors` (as many as it
+    /// takes). Fewer than two distinct colors (a photo of one hue) become
+    /// a ramp of the one, so no generator ever holds a single tone.
     func applyPalette(_ colors: [RGBAColor]) {
         guard !colors.isEmpty else { return }
+        let colors = Palettes.usable(colors)
         switch editedGenerator {
         case .gradient(var p):
             let count = min(max(colors.count, 2), GradientParameters.stopRange.upperBound)
@@ -520,7 +523,7 @@ final class AppModel {
             p.ink = colors.count > 1 ? colors[colors.count - 1] : p.ink
             editedGenerator = .dither(p)
         case .field(var p):
-            p.tones = Array(colors.prefix(FieldParameters.toneRange.upperBound))
+            p.tones = colors
             editedGenerator = .field(p)
         }
         // The base follows the palette's ground, in the base's own kind.
@@ -815,13 +818,15 @@ final class AppModel {
         run(plan, verb: target.thisSpaceOnly ? "Applied to this Space" : "Applied", perSpace: target.thisSpaceOnly)
     }
 
-    /// A random document, applied at once (this display, or all of them
-    /// while "same on all displays" is on), and shown as the draft.
+    /// A curated document, applied at once (this display, or all of them
+    /// while "same on all displays" is on), and shown as the draft. When
+    /// the draw finds nothing the gate passes (the pins leave too little
+    /// room), the desktop keeps what it shows and the panel says so.
     func shuffle(seed: UInt64 = .randomSeed()) {
         guard allowed() else { return }
         var generator = SeededGenerator(seed: seed)
         let targets = preferences.sameOnAllDisplays ? displays : currentDisplay.map { [$0] } ?? displays
-        let plan = shufflePlan(for: targets, using: &generator)
+        guard let plan = shufflePlan(for: targets, using: &generator) else { return }
         if let mine = currentDisplay.flatMap({ plan[$0] }) ?? plan.values.first { load(mine) }
         run(plan, verb: "Shuffled", perSpace: false)
     }
@@ -831,26 +836,35 @@ final class AppModel {
     func scheduledShuffle() {
         guard license.hasAccess(), !displays.isEmpty else { return }
         var generator = SeededGenerator(seed: .randomSeed())
-        let plan = shufflePlan(for: displays, using: &generator)
+        guard let plan = shufflePlan(for: displays, using: &generator) else { return }
         let draftWasApplied = currentApplied == draft
         if draftWasApplied, let mine = currentDisplay.flatMap({ plan[$0] }) { load(mine) }
         run(plan, verb: "Shuffled", perSpace: false)
     }
 
-    /// A plan with nothing never-showed in it; empty when none could be
-    /// found (every favorite blocked, or the random draw kept landing on
-    /// the list), so "never show" is never broken to fill a display. A
-    /// random pick is a curated one that keeps the draft's pins.
-    private func shufflePlan(for targets: [DisplayInfo], using generator: inout SeededGenerator) -> [DisplayInfo: Wallpaper] {
+    /// A plan with nothing never-showed in it, or nil (the status line
+    /// says why): every favorite blocked, the curated draw landing on the
+    /// list twice, or the draw finding nothing better than what is shown.
+    /// A display with nothing better keeps its wallpaper. A random pick
+    /// is a curated one that keeps the draft's pins, gated with the app's
+    /// renderer (a pinned photo renders) on each display's own context.
+    /// Two rounds at most: the curated draw is already bounded inside.
+    private func shufflePlan(for targets: [DisplayInfo], using generator: inout SeededGenerator) -> [DisplayInfo: Wallpaper]? {
         let favorites = blocklist.filter(self.favorites.all.map(\.wallpaper))
-        for _ in 0..<6 {
+        for _ in 0..<2 {
             let plan = ShufflePlanner.plan(
                 displays: targets, current: currentByDisplay, favorites: favorites,
-                favoritesOnly: preferences.favoritesOnly, sameOnAllDisplays: preferences.sameOnAllDisplays, template: draft, using: &generator
+                favoritesOnly: preferences.favoritesOnly, sameOnAllDisplays: preferences.sameOnAllDisplays, template: draft,
+                renderer: renderer, context: { $0.renderContext }, using: &generator
             )
+            guard !plan.isEmpty else {
+                show(displays.isEmpty ? "No display to apply to." : (preferences.favoritesOnly && !favorites.isEmpty ? "Nothing left to shuffle to: every choice is on the never-show list." : Shuffle.nothingBetterMessage), tone: .error)
+                return nil
+            }
             if plan.values.allSatisfy({ !blocklist.contains($0) }) { return plan }
         }
-        return [:]
+        show("Nothing left to shuffle to: every choice is on the never-show list.", tone: .error)
+        return nil
     }
 
     private var currentByDisplay: [DisplayID: Wallpaper] {

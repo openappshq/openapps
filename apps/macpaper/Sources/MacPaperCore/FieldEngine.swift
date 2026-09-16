@@ -166,9 +166,10 @@ public enum FieldEngine {
         return CellFill.raster(colors, columns: field.columns, rows: field.rows, cell: field.cell, canonical: size, target: target)
     }
 
-    /// The tone ramp of `steps` flat colors along the palette.
+    /// The tone ramp of `steps` flat colors along the palette. Defensive:
+    /// fewer than two tones (a document made by hand) still give a ramp.
     static func ramp(_ p: FieldParameters) -> [OKLCH] {
-        let tones = p.tones
+        let tones = p.tones.count >= 2 ? p.tones : Palettes.usable(p.tones)
         let steps = p.toneSteps
         return (0..<steps).map { i in
             let t = Double(i) / Double(steps - 1) * Double(tones.count - 1)
@@ -318,7 +319,11 @@ enum Interference {
         let (ax, ay) = frame.anchor(p[.anchorX] + (generator.nextUnit() - 0.5) * 0.06, p[.anchorY] + (generator.nextUnit() - 0.5) * 0.06)
         let theta = p[.twist] * .pi / 180
         let cosT = cos(theta), sinT = sin(theta)
-        let fr = p[.repeatX], fl = p[.repeatY]
+        // A wave that turns more than 0.35 of a cycle per cell is not a
+        // wave the grid can show, only alias: the rates are held to it
+        // for the display at hand (a big cell on a small display).
+        let maxRate = 0.35 / frame.cellUnit
+        let fr = min(p[.repeatX], maxRate), fl = min(p[.repeatY], maxRate)
         let reach = p[.reach]
         let offset = p[.offset]
         let balance = p[.balance]
@@ -589,7 +594,7 @@ enum Plate {
         let turn = (generator.nextUnit() - 0.5) * 0.12
         let aperture = reach * (0.9 + 0.2 * generator.nextUnit())
         let cosS = cos(turn), sinS = sin(turn)
-        var covered = 0
+        var covered = 0, central = 0
         for row in 0..<frame.rows {
             for column in 0..<frame.columns {
                 let (px, py) = frame.point(column, row)
@@ -601,11 +606,16 @@ enum Plate {
                 let r = (x * x + y * y).squareRoot()
                 let window = Generators.smoothstep(aperture, aperture * 0.7, r)
                 let value = min(1, max(0, window * exp(-abs(f) / epsilon) * density))
-                if value > 0.3 { covered += 1 }
+                if value > 0.3 {
+                    covered += 1
+                    if r < 0.12 { central += 1 }
+                }
                 sample.values[row * frame.columns + column] = value
             }
         }
         sample.stats["nodalCoverage"] = Double(covered) / Double(frame.columns * frame.rows)
+        // A star: the nodal lines all crossing at the plate's center.
+        sample.stats["centerShare"] = covered > 0 ? Double(central) / Double(covered) : 0
         return sample
     }
 }

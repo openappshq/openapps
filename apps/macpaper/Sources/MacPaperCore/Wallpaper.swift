@@ -174,11 +174,15 @@ public struct Wallpaper: Codable, Hashable, Sendable {
     /// texture (`BaseLayer.trueBlack`).
     public static let trueBlack = Wallpaper(generator: .solid(SolidParameters(color: .black)), seed: 0)
 
-    /// A random document for Shuffle: never uniform noise over the
-    /// parameter space, always a curated recipe family drawn with a preset
-    /// palette and passed through the quality gate (Curation.swift).
+    /// A random document: never uniform noise over the parameter space,
+    /// always a curated recipe family drawn with a preset palette and
+    /// passed through the quality gate (Curation.swift). With nothing
+    /// pinned the gate is always satisfied within the attempts in
+    /// practice; should it not be, a taste-set recipe stands in — a
+    /// document that passed the gate by test, never a refused candidate.
     public static func random(using generator: inout SeededGenerator) -> Wallpaper {
-        Shuffle.next(from: nil, using: &generator)
+        if let document = Shuffle.next(from: nil, using: &generator).document { return document }
+        return TasteSet.recipes[Int(generator.next() % UInt64(TasteSet.recipes.count))].wallpaper
     }
 }
 

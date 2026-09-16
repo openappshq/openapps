@@ -30,7 +30,7 @@ public struct Palette: Hashable, Sendable, Identifiable {
 
     /// A document's own colors as a palette.
     public static func custom(_ tones: [RGBAColor]) -> Palette {
-        Palette(name: Palettes.customName, group: .custom, tones: tones.isEmpty ? [.black, .white] : tones.map(\.snapped))
+        Palette(name: Palettes.customName, group: .custom, tones: Palettes.usable(tones))
     }
 
     public var isCustom: Bool { group == .custom }
@@ -187,6 +187,34 @@ public enum Palettes {
     /// The preset name for a document's colors, or "Custom".
     public static func name(for colors: [RGBAColor]) -> String {
         preset(matching: colors)?.name ?? customName
+    }
+
+    /// Colors a generator can take: at least two distinct tones, byte
+    /// exact, at most six. One color (a photo of one hue, a solid) becomes
+    /// a three-tone ramp of it — a darker step, the color, a lighter step
+    /// in OKLCH; nothing becomes black and white.
+    public static func usable(_ colors: [RGBAColor]) -> [RGBAColor] {
+        var distinct: [RGBAColor] = []
+        for color in colors.map(\.snapped) where !distinct.contains(color) { distinct.append(color) }
+        if distinct.count >= 2 { return Array(distinct.prefix(FieldParameters.toneRange.upperBound)) }
+        guard let only = distinct.first else { return [.black, .white] }
+        return ramp(from: only)
+    }
+
+    /// A three-tone ramp around one color, the color in the middle; the
+    /// steps go the way the color has room for.
+    public static func ramp(from color: RGBAColor) -> [RGBAColor] {
+        let lch = OKLCH(color)
+        let down = OKLCH(l: max(0.08, lch.l - 0.28), c: lch.c, h: lch.h).color.snapped
+        let up = OKLCH(l: min(0.97, lch.l + 0.28), c: lch.c * 0.8, h: lch.h).color.snapped
+        var tones = [down, color.snapped, up]
+        // Near an end of the lightness scale the outer step may land on the
+        // color itself: keep whatever is distinct, and make sure two remain.
+        var distinct: [RGBAColor] = []
+        for tone in tones where !distinct.contains(tone) { distinct.append(tone) }
+        if distinct.count < 2 { distinct = [OKLCH(l: lch.l < 0.5 ? 0.9 : 0.12, c: lch.c * 0.6, h: lch.h).color.snapped, color.snapped] }
+        tones = distinct
+        return tones
     }
 }
 

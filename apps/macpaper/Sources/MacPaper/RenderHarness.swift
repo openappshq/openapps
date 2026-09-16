@@ -71,7 +71,7 @@ enum RenderHarness {
     static func families(into directory: URL) -> Bool {
         var ok = true
         let palettes = ["Mint Circuit", "Neon Night", "Blueprint", "Magma", "Paper White", "Vaporwave", "Rust", "Sea"].compactMap(Palettes.preset(named:))
-        for family in RecipeFamily.all where family.kind != .pixelize {
+        for family in RecipeFamily.catalogue where family.kind != .pixelize {
             var tiles: [Tile] = []
             for (pi, palette) in palettes.enumerated() {
                 for seed in 1...4 {
@@ -119,7 +119,10 @@ enum RenderHarness {
         var previous: Wallpaper? = nil
         let context = displays[0].1
         for i in 0..<24 {
-            let next = Shuffle.next(from: previous, using: &generator, renderer: renderer, context: context)
+            guard let next = Shuffle.next(from: previous, using: &generator, renderer: renderer, context: context).document else {
+                tiles.append(Tile(image: nil, label: "\(i + 1). nothing better"))
+                continue
+            }
             let verdict = QualityGate.assess(next, renderer: renderer, context: context, previous: previous)
             tiles.append(Tile(image: render(next, side: .light, context: context, width: 360), label: "\(i + 1). \(Recipe.defaultName(for: next))\(verdict.passes ? "" : " ✗ " + verdict.failures.map(\.rawValue).joined(separator: ","))"))
             previous = next

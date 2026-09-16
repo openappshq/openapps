@@ -11,12 +11,16 @@ public enum TasteSet {
         public let palette: String
         public let seed: UInt64
         public let name: String?
+        /// The top shade the entry ships with: the same one repair Shuffle
+        /// makes when a strip does not read (0 for none).
+        public let shade: Double
 
-        public init(_ family: String, _ palette: String, _ seed: UInt64, name: String? = nil) {
+        public init(_ family: String, _ palette: String, _ seed: UInt64, name: String? = nil, shade: Double = 0) {
             self.family = family
             self.palette = palette
             self.seed = seed
             self.name = name
+            self.shade = shade
         }
 
         public var wallpaper: Wallpaper {
@@ -24,6 +28,7 @@ public enum TasteSet {
             var generator = SeededGenerator(seed: seed)
             var wallpaper = family.draw(palette, &generator)
             wallpaper.seed = seed
+            wallpaper.finish.topShade = shade
             return wallpaper
         }
 
@@ -37,7 +42,9 @@ public enum TasteSet {
     }
 
     /// Chosen by eye from contact sheets of eight passing seeds per entry
-    /// (RenderHarness `pick`), 2026-09-16.
+    /// (RenderHarness `pick`), 2026-09-16; reworked after review 1 on
+    /// 2026-09-17 (the lattice, dither and pattern entries left, the weak
+    /// relief and island seeds replaced).
     public static let entries: [Entry] = [
         Entry("Moiré atlas", "Mint Circuit", 6001),
         Entry("Moiré atlas", "Neon Night", 2),
@@ -45,34 +52,34 @@ public enum TasteSet {
         Entry("Moiré atlas", "Magma", 9004),
         Entry("Moiré atlas", "Paper White", 8005),
         Entry("Moiré atlas", "Sea", 702),
-        Entry("Moiré lattice", "Ultraviolet", 7006),
-        Entry("Moiré lattice", "Sonar", 8),
-        Entry("Contour relief", "Forest", 1009),
-        Entry("Contour relief", "Oxide", 4010),
-        Entry("Contour relief", "Dusk", 4011),
+        Entry("Moiré atlas", "Ultraviolet", 4041),
+        Entry("Moiré atlas", "Sonar", 3042),
+        Entry("Moiré atlas", "Hologram", 43),
+        Entry("Moiré atlas", "Cobalt Flash", 4044),
+        Entry("Contour relief", "Oxide", 4010, shade: 0.6),
+        Entry("Contour relief", "Dusk", 4011, shade: 0.6),
         Entry("Contour relief", "Clay", 1012),
+        Entry("Contour relief", "Forest", 2045),
+        Entry("Contour relief", "Terracotta", 28046),
+        Entry("Contour relief", "Slate", 25047),
         Entry("Pixel archipelago", "Sea", 13),
-        Entry("Pixel archipelago", "Deep Sea", 3014),
-        Entry("Pixel archipelago", "Lagoon", 10015),
-        Entry("Pixel archipelago", "Moss", 7016),
+        Entry("Pixel archipelago", "Deep Sea", 2048),
+        Entry("Pixel archipelago", "Lagoon", 7049),
+        Entry("Pixel archipelago", "Moss", 24050),
+        Entry("Pixel archipelago", "Tide", 8051),
         Entry("Resonance plate", "Charcoal", 8017),
         Entry("Resonance plate", "Cobalt Flash", 3018),
         Entry("Resonance plate", "Rose Heat", 3019),
-        Entry("Woven circuit", "Board", 6020),
-        Entry("Woven circuit", "Hazard", 7021),
-        Entry("Woven circuit", "Navy Chalk", 10022),
-        Entry("Woven circuit", "Signal", 9023),
+        Entry("Resonance plate", "Night Sky", 3052),
+        Entry("Woven circuit", "Board", 6020, shade: 0.6),
+        Entry("Woven circuit", "Navy Chalk", 10022, shade: 0.6),
+        Entry("Woven circuit", "Signal", 9023, shade: 0.6),
+        Entry("Woven circuit", "Racing", 3053),
         Entry("Memory sky", "Sunset Strip", 4024),
         Entry("Memory sky", "Twilight", 5025),
         Entry("Memory sky", "Ember", 26),
         Entry("Memory sky", "Peach Ice", 27),
-        Entry("Dithered base", "Vaporwave", 1028),
-        Entry("Dithered base", "Terminal Amber", 29),
-        Entry("Dithered base", "Cyanotype", 30),
-        Entry("Dithered base", "Newsprint", 31),
-        Entry("Pattern grid", "Risograph", 2032),
-        Entry("Pattern grid", "Grid Blue", 33),
-        Entry("Pattern grid", "Copper", 34),
+        Entry("Memory sky", "Lava", 1054),
     ]
 
     public static let recipes: [Recipe] = entries.map(\.recipe)

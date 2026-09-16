@@ -305,6 +305,10 @@ public struct MenuBarReadability: Hashable, Sendable {
     public let luminanceSpread: Double
     public let contrastWithWhite: Double
     public let contrastWithBlack: Double
+    /// The mean luminance of each of the strip's `patches` columns, left
+    /// to right: a text collision is local, the mean cannot see it.
+    public let patchLuminances: [Double]
+    public static let patches = 16
 
     /// The contrast with the side's text: black on the light side, white
     /// on the dark side.
@@ -325,6 +329,7 @@ public struct MenuBarReadability: Hashable, Sendable {
         let rows = min(max(1, stripHeight), raster.height)
         let step = max(1, raster.width / 512)
         var sum = 0.0, sumSquares = 0.0, n = 0.0
+        var patchSums = [Double](repeating: 0, count: patches), patchCounts = [Double](repeating: 0, count: patches)
         for y in stride(from: 0, to: rows, by: max(1, rows / 8)) {
             var x = 0
             while x < raster.width {
@@ -333,6 +338,9 @@ public struct MenuBarReadability: Hashable, Sendable {
                 sum += lum
                 sumSquares += lum * lum
                 n += 1
+                let patch = min(patches - 1, x * patches / max(1, raster.width))
+                patchSums[patch] += lum
+                patchCounts[patch] += 1
                 x += step
             }
         }
@@ -340,8 +348,14 @@ public struct MenuBarReadability: Hashable, Sendable {
         let variance = n > 0 ? max(0, sumSquares / n - mean * mean) : 0
         return MenuBarReadability(
             side: side, meanLuminance: mean, luminanceSpread: variance.squareRoot(),
-            contrastWithWhite: (1 + 0.05) / (mean + 0.05), contrastWithBlack: (mean + 0.05) / 0.05
+            contrastWithWhite: (1 + 0.05) / (mean + 0.05), contrastWithBlack: (mean + 0.05) / 0.05,
+            patchLuminances: (0..<patches).map { patchCounts[$0] > 0 ? patchSums[$0] / patchCounts[$0] : mean }
         )
+    }
+
+    /// Contrast of a text color (white or black) against a luminance.
+    static func contrast(luminance: Double, white: Bool) -> Double {
+        white ? 1.05 / (luminance + 0.05) : (luminance + 0.05) / 0.05
     }
 
     private static func linear(_ byte: UInt8) -> Double {

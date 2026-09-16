@@ -11,26 +11,52 @@ public enum Shuffle {
     /// How many candidates one draw may cost.
     public static let attempts = 12
 
+    /// What a draw came to: a document the gate passed, or nothing better
+    /// than what is shown — the desktop keeps its current wallpaper then,
+    /// and the reason says which veto the pins kept running into.
+    public enum Outcome: Equatable, Sendable {
+        case document(Wallpaper)
+        case nothingBetter(reason: String)
+
+        public var document: Wallpaper? {
+            if case .document(let wallpaper) = self { return wallpaper }
+            return nil
+        }
+    }
+
+    /// What the panel says when a draw finds nothing better.
+    public static let nothingBetterMessage = "Nothing better found — try another palette or unpin something."
+
     /// The next document after `template` (the draft, or the display's
     /// current document): the family, palette and every parameter drawn
-    /// fresh except what the template pins. `renderer` and `context`
-    /// serve the gate; the default is a 14" display.
+    /// fresh except what the template pins. `renderer` (the app's, so a
+    /// pinned photo renders) and `context` (the display) serve the gate.
+    /// A candidate the gate refuses is never returned: after `attempts`
+    /// refusals the outcome is `.nothingBetter`.
     public static func next(
         from template: Wallpaper?, pins: Set<ParameterKey>? = nil, using generator: inout SeededGenerator,
         families: [RecipeFamily] = RecipeFamily.all, renderer: WallpaperRenderer = WallpaperRenderer(), context: RenderContext = QualityGate.defaultContext
-    ) -> Wallpaper {
+    ) -> Outcome {
         let pinned = pins ?? template?.pinned ?? []
         let eligible = eligibleFamilies(families, template: template, pinned: pinned)
-        var best: (Wallpaper, Double)?
+        var lastFailures: [GateFailure] = []
         for _ in 0..<attempts {
-            let family = pick(eligible, using: &generator)
-            let palette: Palette
-            if pinned.contains(.palette), let template {
-                palette = Palettes.preset(matching: template.generator.colors) ?? Palette.custom(template.generator.colors)
+            var candidate: Wallpaper
+            if eligible.isEmpty, let template {
+                // A pinned generator no family makes (a gradient, a mesh):
+                // the template's own generator, everything else fresh.
+                let palette = Palettes.preset(matching: template.generator.colors) ?? Palette.custom(template.generator.colors)
+                candidate = Draw.document(template.generator, palette: palette, base: Draw.base(palette, kinds: [.none, .solid, .gradient], using: &generator), finish: Draw.finish(palette, fringe: 0...0, vignette: 0.1...0.25, using: &generator), grain: generator.nextDouble(in: 0.03...0.05), using: &generator)
             } else {
-                palette = Palettes.presets[Int(generator.next() % UInt64(Palettes.presets.count))]
+                let family = pick(eligible, using: &generator)
+                let palette: Palette
+                if pinned.contains(.palette), let template {
+                    palette = Palettes.preset(matching: template.generator.colors) ?? Palette.custom(template.generator.colors)
+                } else {
+                    palette = Palettes.presets[Int(generator.next() % UInt64(Palettes.presets.count))]
+                }
+                candidate = family.draw(palette, &generator)
             }
-            var candidate = family.draw(palette, &generator)
             candidate.seed = generator.next()
             if let template { candidate = Pins.apply(pinned, from: template, to: candidate) }
             candidate.pinned = pinned
@@ -40,23 +66,28 @@ public enum Shuffle {
                 candidate.finish.topShade = max(candidate.finish.topShade, 0.6)
                 verdict = QualityGate.assess(candidate, renderer: renderer, context: context, previous: template)
             }
-            if verdict.passes { return candidate }
-            if best == nil || verdict.score > best!.1 { best = (candidate, verdict.score) }
+            if verdict.passes { return .document(candidate) }
+            lastFailures = verdict.failures
         }
-        // Every attempt failed something: the least bad, never nothing.
-        return best!.0
+        return .nothingBetter(reason: lastFailures.map(\.rawValue).joined(separator: ", "))
     }
 
-    /// The families a pinned generator (and a pixelize document's photo)
-    /// leave open.
+    /// The families a pinned generator or family, and a document's photo,
+    /// leave open: a pinned `.generator` keeps the kind (and the field
+    /// family), a pinned `.family` the field family; the photo families
+    /// need a photo. Empty when the pinned generator is one no family
+    /// makes — the draw then keeps the template's generator.
     static func eligibleFamilies(_ families: [RecipeFamily], template: Wallpaper?, pinned: Set<ParameterKey>) -> [RecipeFamily] {
-        var eligible = families.filter { $0.kind != .pixelize || template?.generator.source != nil }
-        if pinned.contains(.generator), let template {
-            let field: FieldFamily? = { if case .field(let p) = template.generator { return p.family } else { return nil } }()
-            let same = eligible.filter { $0.kind == template.generator.kind && (field == nil || $0.field == field) }
-            if !same.isEmpty { eligible = same }
+        let hasPhoto = template?.generator.source != nil
+        var eligible = families.filter { $0.kind != .pixelize || hasPhoto }
+        guard let template else { return eligible }
+        let field: FieldFamily? = { if case .field(let p) = template.generator { return p.family } else { return nil } }()
+        if pinned.contains(.generator) {
+            eligible = eligible.filter { $0.kind == template.generator.kind && (field == nil || $0.field == field) }
+        } else if pinned.contains(.family), let field {
+            eligible = eligible.filter { $0.field == field }
         }
-        return eligible.isEmpty ? families : eligible
+        return eligible
     }
 
     static func pick(_ families: [RecipeFamily], using generator: inout SeededGenerator) -> RecipeFamily {
@@ -90,13 +121,42 @@ public enum Pins {
         if pinned.contains(.gradientMap) { out.finish.gradientMap = template.finish.gradientMap }
         if pinned.contains(.palette) {
             // The template's colors in the candidate's generator and base.
-            let colors = template.generator.colors
+            let colors = Palettes.usable(template.generator.colors)
             out.generator = Generator.default(out.generator.kind, colors: colors, source: out.generator.source).carryingParameters(of: out.generator)
-            if case .field(var p) = out.generator { p.tones = Array(colors.prefix(FieldParameters.toneRange.upperBound)); out.generator = .field(p) }
+            if case .field(var p) = out.generator { p.tones = colors; out.generator = .field(p) }
             if !pinned.contains(.base) { out.base = BaseLayer.default(out.base.kind, colors: colors) }
         }
+        // A photo is never dropped: a candidate that takes one gets the
+        // template's, with its framing.
+        out.generator = carrySource(from: template.generator, to: out.generator)
         out.generator = carryKnobs(pinned, from: template.generator, to: out.generator)
+        // A dark side edited by hand keeps its own pinned values too.
+        if let dark = template.darkGenerator {
+            out.darkGenerator = carryKnobs(pinned, from: dark, to: out.generator.darkened())
+            if out.darkGenerator == out.generator.darkened() { out.darkGenerator = nil }
+        }
         return out
+    }
+
+    /// The template's photo into a candidate of a photo kind.
+    static func carrySource(from template: Generator, to candidate: Generator) -> Generator {
+        guard let source = template.source else { return candidate }
+        let fit: ImageFit, focus: Point
+        switch template {
+        case .pixelize(let t): fit = t.fit; focus = t.focus
+        case .dither(let t): fit = t.fit; focus = t.focus
+        default: fit = .fill; focus = .center
+        }
+        switch candidate {
+        case .pixelize(var c) where c.source == nil:
+            c.source = source; c.fit = fit; c.focus = focus
+            return .pixelize(c)
+        case .dither(var c) where c.source == nil:
+            c.source = source; c.fit = fit; c.focus = focus
+            return .dither(c)
+        default:
+            return candidate
+        }
     }
 
     /// The pinned knobs of the template's generator into the candidate's,
@@ -179,6 +239,11 @@ public struct RecipeFamily: Sendable {
     public let name: String
     public let kind: GeneratorKind
     public let field: FieldFamily?
+    /// The field's `mode` knob the family draws (the atlas and the
+    /// lattice are one field family); nil for any.
+    public let fieldMode: Int?
+    /// How often Shuffle draws it; 0 keeps it out of Shuffle (a manual
+    /// pick that still has a finish stack and gate bands).
     public let weight: Int
     /// The share of quiet patches the gate accepts (composed looks leave
     /// more ground; all-over textiles less).
@@ -188,20 +253,26 @@ public struct RecipeFamily: Sendable {
     public let textureFloor: Double
     public let draw: @Sendable (Palette, inout SeededGenerator) -> Wallpaper
 
-    public init(name: String, kind: GeneratorKind, field: FieldFamily? = nil, weight: Int, quiet: ClosedRange<Double>, textureFloor: Double = QualityGate.textureFloor, draw: @escaping @Sendable (Palette, inout SeededGenerator) -> Wallpaper) {
+    public init(name: String, kind: GeneratorKind, field: FieldFamily? = nil, fieldMode: Int? = nil, weight: Int, quiet: ClosedRange<Double>, textureFloor: Double = QualityGate.textureFloor, draw: @escaping @Sendable (Palette, inout SeededGenerator) -> Wallpaper) {
         self.name = name
         self.kind = kind
         self.field = field
+        self.fieldMode = fieldMode
         self.weight = weight
         self.quiet = quiet
         self.textureFloor = textureFloor
         self.draw = draw
     }
 
-    /// The families Shuffle draws from. Never a bare gradient, never a
-    /// solid: those are bases under these.
-    public static let all: [RecipeFamily] = [
-        RecipeFamily(name: "Moiré atlas", kind: .field, field: .interference, weight: 3, quiet: 0.1...0.75) { palette, g in
+    /// The families Shuffle draws from: the catalogue's entries with a
+    /// weight. Never a bare gradient, never a solid: those are bases.
+    public static let all: [RecipeFamily] = catalogue.filter { $0.weight > 0 }
+
+    /// Every authored family, the manual-only ones included (the lattice
+    /// moiré, pattern grids and dithered bases read as textiles or as
+    /// gradients at a glance, so Shuffle leaves them alone).
+    public static let catalogue: [RecipeFamily] = [
+        RecipeFamily(name: "Moiré atlas", kind: .field, field: .interference, fieldMode: 0, weight: 3, quiet: 0.1...0.75) { palette, g in
             var p = FieldParameters(family: .interference, tones: Draw.tones(palette, 2...4, using: &g))
             p[.mode] = 0
             p[.repeatX] = g.nextDouble(in: 4...16); p[.repeatY] = g.nextDouble(in: 3...12)
@@ -214,7 +285,7 @@ public struct RecipeFamily: Sendable {
             p[.depth] = g.nextDouble(in: 0.2...0.5)
             return Draw.document(.field(p), palette: palette, base: Draw.base(palette, kinds: [.solid, .gradient, .gradient], using: &g), finish: Draw.finish(palette, fringe: 0.2...0.4, vignette: 0...0, using: &g), grain: g.nextDouble(in: 0.03...0.05), using: &g)
         },
-        RecipeFamily(name: "Moiré lattice", kind: .field, field: .interference, weight: 2, quiet: 0...0.55) { palette, g in
+        RecipeFamily(name: "Moiré lattice", kind: .field, field: .interference, fieldMode: 1, weight: 0, quiet: 0...0.55) { palette, g in
             var p = FieldParameters(family: .interference, tones: Draw.tones(palette, 2...4, using: &g))
             p[.mode] = Double(1 + Int(g.next() % 2))
             p[.repeatX] = g.nextDouble(in: 3...8); p[.repeatY] = g.nextDouble(in: 3...8)
@@ -288,7 +359,7 @@ public struct RecipeFamily: Sendable {
             p[.dither] = Double(ToneDitherMode.diffusion.rawValue)
             return Draw.document(.field(p), palette: palette, base: .none, finish: Draw.finish(palette, fringe: 0...0, vignette: 0...0, using: &g), grain: g.nextDouble(in: 0.03...0.05), using: &g)
         },
-        RecipeFamily(name: "Dithered base", kind: .dither, weight: 2, quiet: 0.0...1) { palette, g in
+        RecipeFamily(name: "Dithered base", kind: .dither, weight: 0, quiet: 0.0...1) { palette, g in
             // Cells big enough to read as texture from across the room.
             let modes: [DitherMode] = [.bayer8, .bayer8, .blueNoise, .floydSteinberg, .halftone, .halftone, .halftone]
             let mode = modes[Int(g.next() % UInt64(modes.count))]
@@ -303,7 +374,7 @@ public struct RecipeFamily: Sendable {
             // The base spans the whole palette: what a dither is of.
             return Draw.document(.dither(p), palette: palette, base: Draw.tonalBase(palette, using: &g), finish: Draw.finish(palette, fringe: mode == .halftone ? 0...0 : 0.1...0.2, vignette: 0...0, using: &g), grain: g.nextDouble(in: 0.02...0.04), using: &g)
         },
-        RecipeFamily(name: "Pattern grid", kind: .pattern, weight: 1, quiet: 0.0...0.6) { palette, g in
+        RecipeFamily(name: "Pattern grid", kind: .pattern, weight: 0, quiet: 0.0...0.6) { palette, g in
             let kinds: [PatternKind] = [.dots, .lines, .checks]
             let kind = kinds[Int(g.next() % UInt64(kinds.count))]
             let tones = Draw.tones(palette, 2...3, using: &g)
@@ -317,7 +388,21 @@ public struct RecipeFamily: Sendable {
     ]
 
     public static func named(_ name: String) -> RecipeFamily? {
-        all.first { $0.name == name }
+        catalogue.first { $0.name == name }
+    }
+
+    /// The family a document belongs to, by generator kind, field family
+    /// and the field's mode (the lattice is not the atlas).
+    public static func matching(_ wallpaper: Wallpaper) -> RecipeFamily? {
+        let field: FieldFamily?
+        var mode: Int?
+        if case .field(let p) = wallpaper.generator {
+            field = p.family
+            mode = p.family == .interference ? min(1, p.int(.mode)) : nil
+        } else {
+            field = nil
+        }
+        return catalogue.first { $0.kind == wallpaper.generator.kind && $0.field == field && ($0.fieldMode == nil || mode == nil || $0.fieldMode == mode) }
     }
 }
 
@@ -448,7 +533,7 @@ public enum QualityGate {
         var failures: [GateFailure] = []
         var metrics: [String: Double] = [:]
         var score = 100.0
-        let family = RecipeFamily.all.first { $0.kind == wallpaper.generator.kind && ($0.field == nil || $0.field == fieldFamily(wallpaper)) }
+        let family = RecipeFamily.matching(wallpaper)
 
         // 1. Nothing bare.
         switch wallpaper.generator {
@@ -560,6 +645,10 @@ public enum QualityGate {
             let coverage = field.stats["nodalCoverage"] ?? 0
             let lit = Double(field.labels.filter { $0 > 0 }.count) / cells
             if !(0.03...0.45).contains(coverage) && !(0.03...0.45).contains(lit) { return "coverage \(coverage)" }
+            // A bright central cross — every nodal line through the center —
+            // is the plate's cliché; more than a tenth of the lit cells
+            // within 0.12 of the height from the center is one.
+            if (field.stats["centerShare"] ?? 0) > 0.1 { return "center cross" }
             return nil
         case .circuit:
             if (field.stats["longPathShare"] ?? 0) < 0.6 { return "short paths" }
@@ -675,10 +764,19 @@ public enum QualityGate {
 }
 
 extension MenuBarReadability {
-    /// The strip reads under one of the two text colors macOS may draw
-    /// (it picks by the wallpaper's brightness) and is not too busy: the
-    /// gate's rule.
+    /// The text color macOS would draw over the strip: the one with the
+    /// better contrast against its mean.
+    public var likelyTextIsWhite: Bool { contrastWithWhite >= contrastWithBlack }
+
+    /// The strip reads under the text color macOS would pick, everywhere
+    /// along it: every one of the sixteen patches at 3:1 or better against
+    /// that text, the strip as a whole at 4.5:1, and not too busy. The
+    /// mean alone always finds one color at 4.58:1, so the patches are the
+    /// rule; a white patch on a black strip fails it.
     public var readsEitherText: Bool {
-        max(contrastWithWhite, contrastWithBlack) >= 4.5 && luminanceSpread < 0.3
+        let white = likelyTextIsWhite
+        let overall = white ? contrastWithWhite : contrastWithBlack
+        let weakest = patchLuminances.map { MenuBarReadability.contrast(luminance: $0, white: white) }.min() ?? overall
+        return overall >= 4.5 && weakest >= 3 && luminanceSpread < 0.3
     }
 }

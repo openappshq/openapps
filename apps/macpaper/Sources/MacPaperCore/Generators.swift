@@ -526,15 +526,19 @@ enum Generators {
         }
     }
 
-    /// Shades the top rows toward the menu bar's own tone — toward white on
-    /// the light side (dark text), toward black on the dark side (light
-    /// text) — evenly over the strip, then fading out over one more strip,
-    /// by up to `amount`.
+    /// Shades the top rows toward the menu bar's own tone — evenly over the
+    /// strip, then fading out over one more strip, by up to `amount`. A
+    /// strip that is already decisively dark (mean luminance under 0.05:
+    /// macOS draws light text there whatever the appearance) goes toward
+    /// black, a decisively light one (over 0.5) toward white; in between,
+    /// toward white on the light side (dark text) and black on the dark
+    /// side (light text).
     static func applyTopShade(_ amount: Double, strip: Int, side: Side, to raster: inout Raster) {
         let w = raster.width
         let strip = max(1, strip)
         let rows = min(raster.height, strip * 2)
-        let target = side == .light ? 255.0 : 0.0
+        let mean = MenuBarReadability.assess(raster, stripHeight: strip, side: side).meanLuminance
+        let target: Double = mean < 0.05 ? 0 : (mean > 0.5 ? 255 : (side == .light ? 255 : 0))
         raster.pixels.withUnsafeMutableBufferPointer { out in
             for y in 0..<rows {
                 let t = y < strip ? 0 : Double(y - strip) / Double(strip)

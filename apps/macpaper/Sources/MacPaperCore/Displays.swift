@@ -580,25 +580,33 @@ public struct ShuffleSchedule: Hashable, Sendable {
 /// pick avoids the display's current document when there is any other
 /// choice. `template` is the document whose pins a random pick keeps
 /// (the draft); a random pick also keeps the pins of the display's own
-/// document when the draft has none.
+/// document when the draft has none. A display for which the curated
+/// draw finds nothing better is left out of the plan: it keeps what it
+/// shows. `renderer` (the app's, with its imports) and `context` per
+/// display serve the gate; one curated draw per display, no retries
+/// around it.
 public enum ShufflePlanner {
     public static func plan(
         displays: [DisplayInfo], current: [DisplayID: Wallpaper], favorites: [Wallpaper], favoritesOnly: Bool,
-        sameOnAllDisplays: Bool, template: Wallpaper? = nil, using generator: inout SeededGenerator
+        sameOnAllDisplays: Bool, template: Wallpaper? = nil, renderer: WallpaperRenderer = WallpaperRenderer(),
+        context: ((DisplayInfo) -> RenderContext)? = nil, using generator: inout SeededGenerator
     ) -> [DisplayInfo: Wallpaper] {
         var plan: [DisplayInfo: Wallpaper] = [:]
         guard !displays.isEmpty else { return plan }
         let pool = favoritesOnly && !favorites.isEmpty ? favorites : []
+        let contextFor = context ?? { $0.renderContext }
         if sameOnAllDisplays {
             let avoid = Set(current.values)
-            let pick = next(pool: pool, avoiding: avoid, template: template ?? current.values.first, using: &generator)
-            for display in displays { plan[display] = pick }
+            let first = displays.first { $0.isMain } ?? displays[0]
+            if let pick = next(pool: pool, avoiding: avoid, template: template ?? current.values.first, renderer: renderer, context: contextFor(first), using: &generator) {
+                for display in displays { plan[display] = pick }
+            }
         } else {
             var taken: Set<Wallpaper> = []
             for display in displays.sorted(by: { $0.id < $1.id }) {
                 var avoid = taken
                 if let now = current[display.id] { avoid.insert(now) }
-                let pick = next(pool: pool, avoiding: avoid, template: template ?? current[display.id], using: &generator)
+                guard let pick = next(pool: pool, avoiding: avoid, template: template ?? current[display.id], renderer: renderer, context: contextFor(display), using: &generator) else { continue }
                 taken.insert(pick)
                 plan[display] = pick
             }
@@ -606,20 +614,18 @@ public enum ShufflePlanner {
         return plan
     }
 
-    /// From the pool when there is one (the favorites), else a curated
-    /// document. A pool with nothing left to avoid falls back to any entry.
-    static func next(pool: [Wallpaper], avoiding: Set<Wallpaper>, template: Wallpaper?, using generator: inout SeededGenerator) -> Wallpaper {
+    /// From the pool when there is one (the favorites), else one curated
+    /// draw — nil when it finds nothing better. A pool with nothing left
+    /// to avoid falls back to any entry.
+    static func next(pool: [Wallpaper], avoiding: Set<Wallpaper>, template: Wallpaper?, renderer: WallpaperRenderer, context: RenderContext, using generator: inout SeededGenerator) -> Wallpaper? {
         if !pool.isEmpty {
             let candidates = pool.filter { !avoiding.contains($0) }
             let source = candidates.isEmpty ? pool : candidates
             return source[Int(generator.next() % UInt64(source.count))]
         }
-        var candidate = Shuffle.next(from: template, using: &generator)
-        var attempts = 0
-        while avoiding.contains(candidate), attempts < 2 {
-            candidate = Shuffle.next(from: template, using: &generator)
-            attempts += 1
-        }
+        // The gate's sameness veto already keeps the draw off the template;
+        // a draw that still lands on a document to avoid is "nothing better".
+        guard let candidate = Shuffle.next(from: template, using: &generator, renderer: renderer, context: context).document, !avoiding.contains(candidate) else { return nil }
         return candidate
     }
 }
