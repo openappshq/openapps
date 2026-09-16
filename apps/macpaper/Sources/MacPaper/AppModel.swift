@@ -6,9 +6,11 @@ import UniformTypeIdentifiers
 
 /// Writes an export where the user asked, or asks where. The app's writes
 /// the export folder and falls back to a save panel; the preview harness
-/// writes nothing.
+/// writes nothing. `mayWrite` is asked right before any bytes are written,
+/// after every wait of the exporter's own (a save panel left open): a
+/// `false` answer throws `AppModel.Refused` and writes nothing.
 protocol FileExporter {
-    func export(_ data: Data, named name: String, to folder: URL) async throws -> URL
+    func export(_ data: Data, named name: String, to folder: URL, mayWrite: @escaping @MainActor () -> Bool) async throws -> URL
 }
 
 /// Picks an image to pixelize or dither. The app's is an open panel; the
@@ -18,7 +20,8 @@ protocol ImagePicker {
 }
 
 struct PanelFileExporter: FileExporter {
-    func export(_ data: Data, named name: String, to folder: URL) async throws -> URL {
+    func export(_ data: Data, named name: String, to folder: URL, mayWrite: @escaping @MainActor () -> Bool) async throws -> URL {
+        guard mayWrite() else { throw AppModel.Refused() }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let url = folder.appendingPathComponent(name)
@@ -32,6 +35,8 @@ struct PanelFileExporter: FileExporter {
             panel.allowedContentTypes = [UTType(filenameExtension: (name as NSString).pathExtension) ?? .data]
             NSApp.activate()
             guard panel.runModal() == .OK, let url = panel.url else { throw CocoaError(.userCancelled) }
+            // The panel may have stayed open across a deadline.
+            guard mayWrite() else { throw AppModel.Refused() }
             try data.write(to: url, options: .atomic)
             return url
         }
@@ -88,6 +93,9 @@ enum ExportKind: String, CaseIterable, Hashable {
 final class AppModel {
     @ObservationIgnored let preferences: Preferences
     @ObservationIgnored let license: LicenseStatus
+    /// What the panel says about an update; an official build binds the
+    /// updater to it (UpdatesLaunch.swift), every other build leaves it silent.
+    @ObservationIgnored let updates = UpdateStatus()
     @ObservationIgnored let favorites: FavoritesStore
     @ObservationIgnored let applied: AppliedStore
     @ObservationIgnored let imports: ImportStore
@@ -127,13 +135,18 @@ final class AppModel {
         }
     }
 
-    /// Changes the draft while the license allows generating; refused
-    /// edits are dropped (the panel shows the license card then anyway).
-    func edit(_ change: (inout Wallpaper) -> Void) {
-        guard license.hasAccess() else { return }
+    /// Changes the draft while the license allows generating, asked at the
+    /// edit through `allowed()` — never a value a view captured when it was
+    /// built — so a control retained across a deadline changes, renders and
+    /// saves nothing; a refused edit says so in the status line. Returns
+    /// whether the change landed.
+    @discardableResult
+    func edit(_ change: (inout Wallpaper) -> Void) -> Bool {
+        guard allowed() else { return false }
         var copy = draft
         change(&copy)
         draft = copy
+        return true
     }
 
     /// A binding into the draft that writes through `edit`.
@@ -307,11 +320,21 @@ final class AppModel {
         edit { $0 = $0.reseeded() }
     }
 
-    /// Sets the seed the user typed, if it is one.
-    func setSeed(_ text: String) -> Bool {
-        guard let seed = UInt64(text.trimmingCharacters(in: .whitespaces)) else { return false }
+    /// What became of a typed seed.
+    enum SeedEntry: Equatable {
+        case set
+        /// Not a whole number in range; the draft is unchanged.
+        case notANumber
+        /// The license refused; the status line says so, the draft is unchanged.
+        case refused
+    }
+
+    /// Sets the seed the user typed, if it is one and the license allows.
+    func setSeed(_ text: String) -> SeedEntry {
+        guard allowed() else { return .refused }
+        guard let seed = UInt64(text.trimmingCharacters(in: .whitespaces)) else { return .notANumber }
         edit { $0 = $0.reseeded(seed) }
-        return true
+        return .set
     }
 
     /// `#000000`, every finish, composition and pair off: exact zeros on
@@ -410,6 +433,7 @@ final class AppModel {
 
     /// The dominant colors of a photo the user picks.
     func usePhotoPalette() async {
+        guard allowed() else { return }
         guard let url = await imagePicker.pickImage() else { return }
         let outcome = await Task.detached(priority: .userInitiated) { () -> [RGBAColor]? in
             guard let raster = Raster.decode(at: url, maxPixelSize: 512) else { return nil }
@@ -427,17 +451,25 @@ final class AppModel {
 
     /// Imports an image for Pixelize or Dither, switching to one of them.
     func importImage() async {
+        guard allowed() else { return }
         guard let url = await imagePicker.pickImage() else { return }
         await importImage(at: url)
     }
 
     /// Decodes off the main actor, bounded by the import size (a huge photo
-    /// is scaled down while decoding, never held whole).
+    /// is scaled down while decoding, never held whole). The license is
+    /// asked before the decode (the picker may have stayed open across a
+    /// deadline) and again before the draft takes the result.
     func importImage(at url: URL) async {
+        guard allowed() else { return }
         let imports = imports
         let outcome = await Task.detached(priority: .userInitiated) { () -> Result<ImageReference, any Error> in
             do { return .success(try imports.importImage(at: url)) } catch { return .failure(error) }
         }.value
+        // Lapsed during the decode: the draft keeps its source. The store's
+        // copy is content-addressed and may already belong to a favorite, so
+        // it is left where it is.
+        guard allowed() else { return }
         switch outcome {
         case .success(let reference):
             switch editedGenerator {
@@ -502,14 +534,16 @@ final class AppModel {
     }
 
     /// Never show this: blocked for shuffle, dropped from the favorites,
-    /// and the panel moves on to a new seed of it.
+    /// and the panel moves on to a new seed of it — a new document, so only
+    /// while the license allows generating; restricted, the blocked one
+    /// stays shown.
     func neverShowThis() {
         do {
             try blocklist.add(draft)
             try? favorites.remove(draft)
             favoritesRevision &+= 1
             show("Never shown again by shuffle.")
-            load(draft.reseeded())
+            if license.hasAccess() { load(draft.reseeded()) }
         } catch {
             show("Couldn’t save: \(error.localizedDescription)", tone: .error)
         }
@@ -554,14 +588,30 @@ final class AppModel {
     // MARK: - Apply and shuffle
 
     /// Whether Apply, Shuffle and Export may run now (the license, and no
-    /// apply in flight).
+    /// apply in flight). What a view reads to draw its buttons; every action
+    /// asks `allowed()` again at the click.
     var canAct: Bool { license.hasAccess() && !isApplying }
+
+    /// What a refused action says.
+    static let restrictedMessage = "Not done: the license doesn’t allow making wallpapers right now."
+
+    /// Thrown by an exporter whose `mayWrite` answered no.
+    struct Refused: Error {}
+
+    /// The license, asked at the moment of the action — never a value a
+    /// view captured when it was built — so a click after a deadline that
+    /// no timer has delivered yet does nothing but say why.
+    private func allowed() -> Bool {
+        if license.hasAccess() { return true }
+        show(Self.restrictedMessage, tone: .error)
+        return false
+    }
 
     /// Applies the draft to this display, or to every display; "same on all
     /// displays" makes both the same. "This Space only" takes the display
     /// off the pin until the next every-Space apply.
     func apply(_ target: ApplyTarget = ApplyTarget()) {
-        guard license.hasAccess() else { return }
+        guard allowed() else { return }
         let scope = target.scope ?? currentDisplay.map { .display($0.id) } ?? .allDisplays
         let plan = ApplyScope.plan(draft, scope: scope, displays: displays, sameOnAllDisplays: preferences.sameOnAllDisplays)
         run(plan, verb: target.thisSpaceOnly ? "Applied to this Space" : "Applied", perSpace: target.thisSpaceOnly)
@@ -570,7 +620,7 @@ final class AppModel {
     /// A random document, applied at once (this display, or all of them
     /// while "same on all displays" is on), and shown as the draft.
     func shuffle(seed: UInt64 = .randomSeed()) {
-        guard license.hasAccess() else { return }
+        guard allowed() else { return }
         var generator = SeededGenerator(seed: seed)
         let targets = preferences.sameOnAllDisplays ? displays : currentDisplay.map { [$0] } ?? displays
         let plan = shufflePlan(for: targets, using: &generator)
@@ -608,6 +658,12 @@ final class AppModel {
         Dictionary(uniqueKeysWithValues: displays.compactMap { display in appliedState.wallpaper(for: display.id).map { (display.id, $0) } })
     }
 
+    /// Renders and writes off the main actor (`prepare`), then commits each
+    /// display's file to the desktop here, asking the license before every
+    /// one — and again before the fallback still a display that refused the
+    /// HEIC gets: a deadline crossed while rendering, between two displays
+    /// or between the refusal and the fallback leaves the rest undone and
+    /// discarded, the desktop as it was.
     private func run(_ plan: [DisplayInfo: Wallpaper], verb: String, perSpace: Bool) {
         guard !plan.isEmpty else {
             show(displays.isEmpty ? "No display to apply to." : "Nothing left to shuffle to: every choice is on the never-show list.", tone: .error)
@@ -617,25 +673,97 @@ final class AppModel {
         isApplying = true
         let applier = applier
         Task { [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<[AppliedImage], any Error> in
-                do { return .success(try applier.apply(plan)) } catch { return .failure(error) }
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<WallpaperApplier.Prepared, any Error> in
+                do { return .success(try applier.prepare(plan)) } catch { return .failure(error) }
             }.value
             guard let self else { return }
-            self.isApplying = false
+            defer { self.isApplying = false }
+            let prepared: WallpaperApplier.Prepared
             switch outcome {
-            case .success(let images):
-                self.record(images, perSpace: perSpace)
+            case .success(let value): prepared = value
+            case .failure(let error):
+                self.show(error.localizedDescription, tone: .error)
+                return
+            }
+            let committed = await self.commit(prepared, access: { [weak self] in self?.license.hasAccess() ?? false })
+            self.record(committed.applied, perSpace: perSpace)
+            if committed.refused {
+                self.show(Self.restrictedMessage, tone: .error)
+            } else if !committed.failures.isEmpty {
+                self.show(WallpaperApplier.Failure(applied: committed.applied, failures: committed.failures).localizedDescription, tone: .error)
+            } else {
+                let images = committed.applied
                 let fallbacks = images.filter { $0.format == .fallbackStill }.count
                 var text = images.count == 1 ? "\(verb)." : "\(verb) to \(images.count) displays."
                 if fallbacks > 0 { text += " \(fallbacks == 1 ? "One display" : "\(fallbacks) displays") took a still instead of the pair; macPaper swaps it on theme change while it runs." }
                 self.show(text)
-            case .failure(let failure as WallpaperApplier.Failure):
-                self.record(failure.applied, perSpace: perSpace)
-                self.show(failure.localizedDescription, tone: .error)
-            case .failure(let error):
-                self.show(error.localizedDescription, tone: .error)
             }
         }
+    }
+
+    /// What a round of commits came to.
+    private struct Committed {
+        var applied: [AppliedImage] = []
+        var failures: [(DisplayID, String)] = []
+        /// The license refused before some display: that one and the rest
+        /// were discarded.
+        var refused = false
+    }
+
+    /// Commits prepared files one display at a time, asking `access` on the
+    /// main actor right before each desktop call (which runs off it, so a
+    /// slow display never holds the UI): the file itself, and — where the
+    /// display refuses a dynamic file — the fallback still, rendered off
+    /// the main actor in between and asked about again. Once refused, every
+    /// remaining file is discarded.
+    private func commit(_ prepared: WallpaperApplier.Prepared, access: @escaping @MainActor () -> Bool) async -> Committed {
+        let applier = applier
+        var committed = Committed(failures: prepared.failures)
+        for image in prepared.images {
+            guard !committed.refused, access() else {
+                committed.refused = true
+                applier.discard(image)
+                continue
+            }
+            switch await Self.commit(image, with: applier) {
+            case .success(let applied):
+                committed.applied.append(applied)
+            case .failure(let refused as WallpaperApplier.DynamicRefused):
+                // The still takes a render: off the main actor, then asked again.
+                let fallback = await Task.detached(priority: .userInitiated) { () -> Result<WallpaperApplier.PreparedImage, any Error> in
+                    do { return .success(try applier.prepareFallback(for: refused.image)) } catch { return .failure(error) }
+                }.value
+                applier.discard(refused.image)
+                switch fallback {
+                case .success(let still):
+                    guard access() else {
+                        committed.refused = true
+                        applier.discard(still)
+                        continue
+                    }
+                    switch await Self.commit(still, with: applier) {
+                    case .success(let applied):
+                        committed.applied.append(applied)
+                    case .failure(let error):
+                        applier.discard(still)
+                        committed.failures.append((image.displayID, error.localizedDescription))
+                    }
+                case .failure(let error):
+                    committed.failures.append((image.displayID, error.localizedDescription))
+                }
+            case .failure(let error):
+                applier.discard(image)
+                committed.failures.append((image.displayID, error.localizedDescription))
+            }
+        }
+        return committed
+    }
+
+    /// One desktop call, off the main actor.
+    private nonisolated static func commit(_ image: WallpaperApplier.PreparedImage, with applier: WallpaperApplier) async -> Result<AppliedImage, any Error> {
+        await Task.detached(priority: .userInitiated) { () -> Result<AppliedImage, any Error> in
+            do { return .success(try applier.commit(image)) } catch { return .failure(error) }
+        }.value
     }
 
     private func record(_ images: [AppliedImage], perSpace: Bool) {
@@ -677,15 +805,20 @@ final class AppModel {
         }
         let plan = pending
         guard !plan.isEmpty else { return }
+        // The swap is an apply like any other: prepared off the main actor,
+        // committed per display only while the license allows it now (a
+        // restricted Mac keeps the side it has; the wallpaper stays).
         isApplying = true
         let applier = applier
         Task { [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) { () -> [AppliedImage] in
-                do { return try applier.apply(plan, side: side) } catch let failure as WallpaperApplier.Failure { return failure.applied } catch { return [] }
+            let outcome = await Task.detached(priority: .userInitiated) { () -> WallpaperApplier.Prepared? in
+                try? applier.prepare(plan, side: side)
             }.value
             guard let self else { return }
-            self.isApplying = false
-            for image in outcome {
+            defer { self.isApplying = false }
+            guard let prepared = outcome else { return }
+            let committed = await self.commit(prepared, access: { [weak self] in self?.license.hasAccess() ?? false })
+            for image in committed.applied {
                 try? self.applied.update { $0.record(image, perSpace: false) }
             }
             self.appliedState = self.applied.current
@@ -695,7 +828,7 @@ final class AppModel {
     // MARK: - Export
 
     func export(_ kind: ExportKind) {
-        guard license.hasAccess(), !isExporting else { return }
+        guard allowed(), !isExporting else { return }
         let wallpaper = draft
         let context = currentContext
         let renderer = renderer
@@ -729,15 +862,23 @@ final class AppModel {
                 self.show("Couldn’t render the export.", tone: .error)
                 return
             }
+            // The render may have crossed a deadline; the exporter asks
+            // again right before writing each file, after any panel of its
+            // own. A refusal mid-way keeps the files already written.
+            guard self.allowed() else { return }
             do {
                 var last: URL?
-                for (name, data) in files { last = try await self.exporter.export(data, named: name, to: folder) }
+                for (name, data) in files {
+                    last = try await self.exporter.export(data, named: name, to: folder) { [weak self] in self?.allowed() ?? false }
+                }
                 if let last {
                     self.show(files.count == 1 ? "Exported \(last.lastPathComponent)." : "Exported \(files.count) files to \(folder.lastPathComponent).")
                     self.exportWorkspace(last)
                 }
             } catch CocoaError.userCancelled {
                 // Nothing to say.
+            } catch is Refused {
+                // `allowed()` has said why.
             } catch {
                 self.show("Couldn’t export: \(error.localizedDescription)", tone: .error)
             }

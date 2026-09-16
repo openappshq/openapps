@@ -22,8 +22,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Filled by the licensing wiring before the first panel or popover
     /// shows: the trial pill above the preview.
     var panelHeader: (() -> AnyView)?
-    /// Filled by the licensing wiring before Settings first shows.
-    var settingsSections: [AnyView] = []
+    var onboarding: OnboardingWindowController?
+    #if OPENAPPS_LICENSING
+    var licenseController: LicenseController?
+    #endif
+    #if OPENAPPS_OFFICIAL
+    var updates: Updates?
+    #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -43,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exporter: PanelFileExporter(), imagePicker: PanelImagePicker(), displays: { ScreenCatalog.displays() }
         )
         self.model = model
+        // Official builds: the updater, before this launch writes any
+        // preferences (UpdatesLaunch.swift).
+        startUpdates()
 
         let statusItem = StatusItemController(model: model, showSettings: { [weak self] in self?.showSettings() }, quit: { NSApp.terminate(nil) })
         self.statusItem = statusItem
@@ -78,19 +86,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         shuffle = ShuffleEngine(model: model, preferences: preferences)
 
-        #if OPENAPPS_LICENSING
-        // The licensing ticket: the record store, the manager, the controller
-        // bound to `licenseStatus`, and the login-item default decided once
-        // storage says whether the install is fresh.
-        #else
-        // Licensing compiled out: no record store to wait for, so the
-        // install is fresh when no earlier launch left preferences behind.
-        // An update-test build never registers a login item.
-        if !UpdateTesting.isCompiledIn {
-            loginItem.applyDefaultIfNeeded(storageIsFresh: true)
-        }
-        #endif
-        license.enterKey = { [weak self] in self?.showLicense(keyField: true) }
+        // Licensing (LicensingLaunch.swift): in an official build the record
+        // store, the manager and the controller bound to `licenseStatus`, and
+        // the fresh-install defaults decided once storage says whether the
+        // install is fresh; from source, everything on and the defaults
+        // decided now. Then the updater's schedule and, once, the setup guide.
+        startLicensing()
+        startUpdaterSchedule()
+        showGuideOnFirstLaunchIfNeeded()
     }
 
     /// The hotkey's Carbon handler is removed with the app; the pin has
@@ -116,7 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return Diagnostics.text(model: self.model, preferences: self.preferences, loginItem: self.loginItem, hotkeys: hotkeys, keeper: self.keeper)
             }
         )
-        controller.extraSections = settingsSections
+        // License and Updates before About (LicensingLaunch.swift), the
+        // guide from About, the trial pill in the title bar.
+        controller.extraSections = licensingSettingsSections(navigation: controller.navigation)
+        controller.showGuide = { [weak self] in self?.showGuide() }
+        controller.titleBarBadge = { [weak self] in self?.licenseStatus.badge() }
         settingsWindow = controller
         return controller
     }
@@ -130,8 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// The update-test build variant (a later ticket's `scripts/update-e2e.sh`):
-/// present in every build so the launch path can ask without `#if`.
+/// The update-test build variant (`scripts/update-e2e.sh`): present in every
+/// build so the launch path can ask without `#if`; its hooks are in
+/// Updates/UpdateTesting.swift.
 nonisolated enum UpdateTesting {
     #if MACPAPER_UPDATE_TESTING
     static let isCompiledIn = true

@@ -31,6 +31,11 @@ struct WallpaperPanelView: View {
             PreviewCard(model: model, width: width - 2 * Brand.Space.s16)
             if let restriction = model.license.restriction() {
                 LicenseCard(restriction: restriction, license: model.license)
+                // Favorites keep working: the star for the shown document.
+                HStack {
+                    Spacer()
+                    FavoriteButton(model: model)
+                }
             } else {
                 SideAndPairRow(model: model)
                 SegmentedControl(title: "Generator", selection: $model.generatorKind, choices: GeneratorKind.allCases.map { ($0, $0.title) })
@@ -50,6 +55,7 @@ struct WallpaperPanelView: View {
                     FavoritesStrip(model: model)
                 }
             }
+            UpdateHintRow(updates: model.updates)
             Footer(model: model, showSettings: showSettings, quit: quit)
         }
         .padding(Brand.Space.s16)
@@ -338,18 +344,7 @@ private struct ActionRow: View {
                 .disabled(!model.canAct)
                 .help("A random wallpaper, applied now")
             applyButton
-            Button {
-                model.toggleFavorite()
-            } label: {
-                Image(systemName: model.isFavorite ? "star.fill" : "star")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(model.isFavorite ? Brand.accentText : Brand.textSecondary)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.isFavorite ? "Remove from favorites" : "Add to favorites")
-            .help(model.isFavorite ? "Remove from favorites" : "Add to favorites")
+            FavoriteButton(model: model)
             Menu {
                 Section("Export") {
                     ForEach(ExportKind.allCases, id: \.self) { kind in
@@ -409,6 +404,27 @@ private struct ActionRow: View {
             .accessibilityLabel("Apply to which display or Space")
         }
         .disabled(!model.canAct)
+    }
+}
+
+/// The star: favorites are browsing, not generating, so it works in every
+/// license state.
+private struct FavoriteButton: View {
+    let model: AppModel
+
+    var body: some View {
+        Button {
+            model.toggleFavorite()
+        } label: {
+            Image(systemName: model.isFavorite ? "star.fill" : "star")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(model.isFavorite ? Brand.accentText : Brand.textSecondary)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.isFavorite ? "Remove from favorites" : "Add to favorites")
+        .help(model.isFavorite ? "Remove from favorites" : "Add to favorites")
     }
 }
 
@@ -561,10 +577,14 @@ private struct Footer: View {
     }
 
     private func commitSeed() {
-        if model.setSeed(seedText) {
+        switch model.setSeed(seedText) {
+        case .set:
             editingSeed = false
-        } else {
+        case .notANumber:
             model.show("A seed is a whole number up to 18446744073709551615.", tone: .error)
+        case .refused:
+            // The model's status line says why; the field stays.
+            break
         }
     }
 }
@@ -572,7 +592,8 @@ private struct Footer: View {
 // MARK: - License card
 
 /// The feature is off: the state in LICENSING.md's words and a way out,
-/// never a price. Wired to the controller by the licensing ticket.
+/// never a price. The actions go through `LicenseStatus`, which the
+/// official build binds to the license controller (LicensingLaunch.swift).
 struct LicenseCard: View {
     let restriction: LicenseRestriction
     let license: LicenseStatus
@@ -590,12 +611,16 @@ struct LicenseCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: Brand.Space.s8) {
                 ForEach(Array(restriction.actions.enumerated()), id: \.offset) { index, action in
+                    // The website states the price; the button never does.
+                    let title = action == .buy && !license.canBuy ? "Buy a license — coming soon" : action.title
                     if index == 0 {
-                        Button(action.title) { license.perform(action) }
+                        Button(title) { license.perform(action) }
                             .buttonStyle(PrimaryButtonStyle())
+                            .disabled(action == .buy && !license.canBuy)
                     } else {
-                        Button(action.title) { license.perform(action) }
+                        Button(title) { license.perform(action) }
                             .secondaryAction()
+                            .disabled(action == .buy && !license.canBuy)
                     }
                 }
             }

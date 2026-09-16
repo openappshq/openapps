@@ -141,9 +141,9 @@ final class ThemeWatcher {
 }
 
 /// `macpaper://s/<code>`: a shared document becomes the draft. The app's
-/// single `kAEGetURL` handler (`AppDelegate.registerURLHandler`, and the
-/// licensing wiring's `openDeepLink` once merged) calls `routeSharedLink`
-/// first and handles other hosts (`activate`) itself; nothing here
+/// single `kAEGetURL` handler (`AppDelegate.registerURLHandler`) dispatches
+/// by host in `openDeepLink`: `routeSharedLink` first, then the licensing
+/// wiring's `openActivateLink` (LicensingLaunch.swift); nothing else
 /// registers a handler of its own.
 extension AppDelegate {
     /// True when the link was a share link and was consumed.
@@ -168,9 +168,10 @@ extension AppDelegate {
         openDeepLink(url)
     }
 
-    /// Dispatches by host: `s` is a share link; other hosts (`activate`,
-    /// the licensing wiring's) are ignored here until that wiring lands.
+    /// Dispatches by host: `s` is a share link, `activate` pre-fills a
+    /// license key; anything else is left alone.
     func openDeepLink(_ url: URL) {
         if routeSharedLink(url) { return }
+        openActivateLink(url)
     }
 }

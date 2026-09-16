@@ -1,9 +1,11 @@
 import MacPaperCore
 import SwiftUI
 
-/// The edited side's generator parameters. Each editor binds straight
-/// into the draft (the light side, or the dark side materialised on its
-/// first edit), so every change re-renders the preview.
+/// The edited side's generator parameters. Each editor binds into the
+/// draft (the light side, or the dark side materialised on its first edit)
+/// through `AppModel.editedGenerator`, whose setter goes through the one
+/// gated `edit`: the license is asked at the moment of the change, and an
+/// allowed change re-renders the preview.
 struct ParametersView: View {
     @Bindable var model: AppModel
 

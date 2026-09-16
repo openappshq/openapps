@@ -11,8 +11,9 @@ struct AppModelTests {
     final class MemoryExporter: FileExporter {
         var exported: [(String, Data)] = []
         var refuse = false
-        func export(_ data: Data, named name: String, to folder: URL) async throws -> URL {
+        func export(_ data: Data, named name: String, to folder: URL, mayWrite: @escaping @MainActor () -> Bool) async throws -> URL {
             if refuse { throw CocoaError(.fileWriteNoPermission) }
+            guard mayWrite() else { throw AppModel.Refused() }
             exported.append((name, data))
             return folder.appendingPathComponent(name)
         }
@@ -181,9 +182,9 @@ struct AppModelTests {
         let seed = h.model.draft.seed
         h.model.reseed()
         #expect(h.model.draft.seed != seed)
-        #expect(h.model.setSeed(" 12345 "))
+        #expect(h.model.setSeed(" 12345 ") == .set)
         #expect(h.model.draft.seedText == "12345")
-        #expect(!h.model.setSeed("twelve"))
+        #expect(h.model.setSeed("twelve") == .notANumber)
         #expect(h.model.draft.seedText == "12345")
     }
 
@@ -284,7 +285,7 @@ struct AppModelTests {
         let hotkeys = HotkeyCenter()
         let text = Diagnostics.text(model: h.model, preferences: h.preferences, loginItem: LoginItem(flags: h.defaults, service: InertLoginItemService()), hotkeys: hotkeys)
         #expect(text.hasPrefix("macPaper dev (0)\n"))
-        #expect(text.contains("Licensing: compiled out (source build)"))
+        #expect(text.contains("Licensing: \(Licensing.flavourDescription)"))
         #expect(text.contains("- Built-in (1) · 32×20 pt @2x · 64×40 px · notch 10 pt · main"))
         #expect(text.contains("Hotkey: ⌃⌥⌘W"))
         #expect(text.contains("Applied:\n- nothing yet"))

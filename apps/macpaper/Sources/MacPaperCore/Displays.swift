@@ -126,6 +126,11 @@ public struct WallpaperApplier: Sendable {
         public let applied: [AppliedImage]
         public let failures: [(DisplayID, String)]
 
+        public init(applied: [AppliedImage], failures: [(DisplayID, String)]) {
+            self.applied = applied
+            self.failures = failures
+        }
+
         public var errorDescription: String? {
             failures.map { "Display \($0.0): \($0.1)" }.joined(separator: "\n")
         }
@@ -145,55 +150,156 @@ public struct WallpaperApplier: Sendable {
         self.keptPerDisplay = max(1, keptPerDisplay)
     }
 
-    /// Applies each display's document. A still is a PNG of the light side;
-    /// a light/dark document is a HEIC appearance pair and a time-of-day
-    /// document a HEIC with its frames — and where the display refuses the
-    /// HEIC, a PNG of the side (or the moment) that fits now, marked so the
-    /// app swaps it on theme change. `side` forces one side as a PNG (the
-    /// swap itself). Displays with the same document and context share a
-    /// render through the cache.
+    /// A display's file, rendered and written but not yet on the desktop:
+    /// `commit` puts it there, `discard` removes it again. A dynamic file
+    /// (a HEIC pair or time-of-day set) may be refused by the display at the
+    /// commit; `prepareFallback` then makes the still for it.
+    public struct PreparedImage: Equatable, Sendable {
+        public let display: DisplayInfo
+        public let wallpaper: Wallpaper
+        public let url: URL
+        public let format: AppliedFormat
+
+        public var displayID: DisplayID { display.id }
+        /// A HEIC the display may refuse.
+        public var isDynamic: Bool { format == .appearancePair || format == .timeOfDay }
+    }
+
+    /// What `prepare` made of a plan: the files it could write, and the
+    /// displays it could not render or write for.
+    public struct Prepared: Sendable {
+        public var images: [PreparedImage]
+        public var failures: [(DisplayID, String)]
+    }
+
+    /// The display refused the dynamic file at the commit: the caller
+    /// prepares and commits the fallback still, or discards.
+    public struct DynamicRefused: Error, Sendable {
+        public let image: PreparedImage
+        public let underlying: String
+    }
+
+    /// Applies each display's document: `prepare`, then `commit` for each
+    /// file, with the fallback still where a display refuses the HEIC. A
+    /// still is a PNG of the light side; a light/dark document is a HEIC
+    /// appearance pair and a time-of-day document a HEIC with its frames —
+    /// and where the display refuses the HEIC, a PNG of the side (or the
+    /// moment) that fits now, marked so the app swaps it on theme change.
+    /// `side` forces one side as a PNG (the swap itself). Displays with the
+    /// same document and context share a render through the cache. The app
+    /// runs the halves apart, so that what reaches the desktop can be
+    /// decided per display, and per fallback, at the moment of the commit.
     public func apply(_ plan: [DisplayInfo: Wallpaper], side forcedSide: Side? = nil, now: Date = Date()) throws -> [AppliedImage] {
+        let prepared = try prepare(plan, side: forcedSide, now: now)
         var applied: [AppliedImage] = []
-        var failures: [(DisplayID, String)] = []
+        var failures = prepared.failures
+        for image in prepared.images {
+            do {
+                applied.append(try commit(image))
+            } catch let refused as DynamicRefused {
+                do {
+                    applied.append(try commit(try prepareFallback(for: refused.image, now: now)))
+                } catch {
+                    failures.append((image.displayID, error.localizedDescription))
+                }
+            } catch {
+                failures.append((image.displayID, error.localizedDescription))
+            }
+        }
+        if !failures.isEmpty { throw Failure(applied: applied, failures: failures) }
+        return applied
+    }
+
+    /// Renders and writes each display's file, touching no desktop. The
+    /// files are recorded in the manifest, so an uncommitted one is owned
+    /// like any other and pruned in time; `discard` removes it at once.
+    public func prepare(_ plan: [DisplayInfo: Wallpaper], side forcedSide: Side? = nil, now: Date = Date()) throws -> Prepared {
+        var prepared = Prepared(images: [], failures: [])
         try prepareDirectory()
         var manifest = AppliedManifest.load(in: directory)
         for (display, wallpaper) in plan.sorted(by: { $0.key.id < $1.key.id }) {
             do {
                 let context = display.renderContext
-                let image: AppliedImage
+                let image: PreparedImage
                 switch (wallpaper.pair, forcedSide) {
                 case (.still, _), (_, .some):
                     let side = forcedSide ?? .light
                     let url = try writeStill(wallpaper, side: side, context: context, display: display.id, manifest: &manifest)
-                    try applier.apply(imageAt: url, to: display.id)
-                    image = AppliedImage(display: display.id, wallpaper: wallpaper, url: url, format: forcedSide == nil ? .still : .fallbackStill)
+                    image = PreparedImage(display: display, wallpaper: wallpaper, url: url, format: forcedSide == nil ? .still : .fallbackStill)
                 case (.lightDark, nil):
                     let light = render(wallpaper, side: .light, context: context)
                     let dark = render(wallpaper, side: .dark, context: context)
                     let heic = try DynamicDesktop.appearancePair(light: light, dark: dark)
-                    image = try applyDynamic(heic, format: .appearancePair, wallpaper: wallpaper, display: display, manifest: &manifest) { manifest in
-                        try writeStill(wallpaper, side: .light, context: context, display: display.id, manifest: &manifest)
-                    }
+                    let url = try write(heic, for: display.id, extension: "heic", manifest: &manifest)
+                    image = PreparedImage(display: display, wallpaper: wallpaper, url: url, format: .appearancePair)
                 case (.timeOfDay(let frames), nil):
                     // Streamed: one frame rendered per encoder call, never
                     // the whole set in memory.
                     let count = max(2, frames)
                     let heic = try DynamicDesktop.timeOfDay(frameCount: count) { renderer.renderFrame(wallpaper, index: $0, of: count, context: context) }
-                    image = try applyDynamic(heic, format: .timeOfDay, wallpaper: wallpaper, display: display, manifest: &manifest) { manifest in
-                        let moment = renderer.renderMoment(wallpaper, dayFraction: DayClock.fraction(of: now), context: context)
-                        guard let png = moment.pngData() else { throw ApplyError.encoding }
-                        return try write(png, for: display.id, extension: "png", manifest: &manifest)
-                    }
+                    let url = try write(heic, for: display.id, extension: "heic", manifest: &manifest)
+                    image = PreparedImage(display: display, wallpaper: wallpaper, url: url, format: .timeOfDay)
                 }
-                applied.append(image)
-                prune(display: display.id, manifest: &manifest)
+                prepared.images.append(image)
             } catch {
-                failures.append((display.id, error.localizedDescription))
+                prepared.failures.append((display.id, error.localizedDescription))
             }
         }
         manifest.save(in: directory)
-        if !failures.isEmpty { throw Failure(applied: applied, failures: failures) }
-        return applied
+        return prepared
+    }
+
+    /// The still a display that refused the dynamic file gets instead: the
+    /// light side of a pair, or the moment of a time-of-day set that fits
+    /// now, marked as a fallback so the app swaps it on theme change. No
+    /// desktop is touched.
+    public func prepareFallback(for image: PreparedImage, now: Date = Date()) throws -> PreparedImage {
+        try prepareDirectory()
+        var manifest = AppliedManifest.load(in: directory)
+        let context = image.display.renderContext
+        let url: URL
+        switch image.format {
+        case .timeOfDay:
+            let moment = renderer.renderMoment(image.wallpaper, dayFraction: DayClock.fraction(of: now), context: context)
+            guard let png = moment.pngData() else { throw ApplyError.encoding }
+            url = try write(png, for: image.displayID, extension: "png", manifest: &manifest)
+        case .appearancePair, .still, .fallbackStill:
+            url = try writeStill(image.wallpaper, side: .light, context: context, display: image.displayID, manifest: &manifest)
+        }
+        manifest.save(in: directory)
+        return PreparedImage(display: image.display, wallpaper: image.wallpaper, url: url, format: .fallbackStill)
+    }
+
+    /// Hands one prepared file to the desktop applier, then prunes that
+    /// display's older files. The only place a desktop changes. A display
+    /// that refuses a dynamic file throws `DynamicRefused` (the file stays
+    /// until the caller discards it or commits its fallback).
+    public func commit(_ image: PreparedImage) throws -> AppliedImage {
+        do {
+            try applier.apply(imageAt: image.url, to: image.displayID)
+        } catch {
+            if image.isDynamic { throw DynamicRefused(image: image, underlying: error.localizedDescription) }
+            throw error
+        }
+        var manifest = AppliedManifest.load(in: directory)
+        prune(display: image.displayID, manifest: &manifest)
+        manifest.save(in: directory)
+        return AppliedImage(display: image.displayID, wallpaper: image.wallpaper, url: image.url, format: image.format)
+    }
+
+    /// Removes a prepared file that will not be committed, and its
+    /// manifest entry, so a refused apply leaves nothing behind and never
+    /// pushes the file the desktop shows out of the kept window.
+    public func discard(_ image: PreparedImage) {
+        var manifest = AppliedManifest.load(in: directory)
+        let name = image.url.lastPathComponent
+        if let entry = manifest.entry(named: name, for: image.displayID) {
+            manifest.remove(entry, for: image.displayID)
+            manifest.save(in: directory)
+        }
+        let realDirectory = URL(fileURLWithPath: directory.path).resolvingSymlinksInPath().standardizedFileURL.path
+        guard Self.isOwnedRegularFile(image.url, inside: realDirectory) else { return }
+        try? FileManager.default.removeItem(at: image.url)
     }
 
     /// Re-applies a file that was applied before (the pin): no render, the
@@ -217,20 +323,6 @@ public struct WallpaperApplier: Sendable {
         let raster = render(wallpaper, side: side, context: context)
         guard let png = raster.pngData() else { throw ApplyError.encoding }
         return try write(png, for: display, extension: "png", manifest: &manifest)
-    }
-
-    /// Hands a HEIC over; when the display refuses it, writes and applies
-    /// the still `fallback` makes and marks the image as a fallback.
-    private func applyDynamic(_ heic: Data, format: AppliedFormat, wallpaper: Wallpaper, display: DisplayInfo, manifest: inout AppliedManifest, fallback: (inout AppliedManifest) throws -> URL) throws -> AppliedImage {
-        let url = try write(heic, for: display.id, extension: "heic", manifest: &manifest)
-        do {
-            try applier.apply(imageAt: url, to: display.id)
-            return AppliedImage(display: display.id, wallpaper: wallpaper, url: url, format: format)
-        } catch {
-            let still = try fallback(&manifest)
-            try applier.apply(imageAt: still, to: display.id)
-            return AppliedImage(display: display.id, wallpaper: wallpaper, url: still, format: .fallbackStill)
-        }
     }
 
     public enum ApplyError: Error, LocalizedError, Equatable {
@@ -340,6 +432,10 @@ struct AppliedManifest: Codable, Sendable {
 
     mutating func remove(_ entry: Entry, for display: DisplayID) {
         files[String(display)]?.removeAll { $0 == entry }
+    }
+
+    func entry(named name: String, for display: DisplayID) -> Entry? {
+        files[String(display)]?.first { $0.name == name }
     }
 
     /// Every name the manifest holds for a display, newest last.

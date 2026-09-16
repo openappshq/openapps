@@ -1,5 +1,6 @@
 import AppKit
 import MacPaperCore
+import OpenAppsLicensing
 import SwiftUI
 
 final class SettingsWindowController: NSObject, NSWindowDelegate {
@@ -9,10 +10,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let hotkeys: HotkeyCenter
     private let diagnostics: () -> String
     private var window: NSWindow?
-    /// Sections other wiring appends before About: the licensing ticket's
-    /// License and Updates. Set before the window first shows.
+    /// Scroll requests (Settings → License); the sections the licensing
+    /// wiring appends read it.
+    let navigation = SettingsNavigation()
+    /// Sections other wiring appends before About: the licensing wiring's
+    /// License and Updates (LicensingLaunch.swift). Set before the window
+    /// first shows.
     var extraSections: [AnyView] = []
     var screenSaver: any ScreenSaverInstaller = SaverInstaller()
+    /// "Show setup guide" under About.
+    var showGuide: () -> Void = {}
+    /// The trial pill at the trailing end of the title bar, while there is
+    /// something to say; nil (a build without licensing) adds nothing.
+    var titleBarBadge: (() -> LicenseBadge.Label?)?
 
     init(model: AppModel, preferences: Preferences, loginItem: LoginItem, hotkeys: HotkeyCenter, diagnostics: @escaping () -> String) {
         self.model = model
@@ -24,7 +34,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func show() {
         if window == nil {
-            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: diagnostics, extraSections: extraSections, screenSaver: screenSaver)
+            var root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: diagnostics, extraSections: extraSections, screenSaver: screenSaver)
+            root.navigation = navigation
+            root.showGuide = showGuide
             let hostingView = NSHostingView(rootView: root)
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
@@ -35,9 +47,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.title = "macPaper Settings"
             window.isReleasedWhenClosed = false
             window.contentView = hostingView
-            #if OPENAPPS_LICENSING
-            // The trial pill goes in the title bar here (the licensing ticket).
-            #endif
+            if let titleBarBadge {
+                window.addTitlebarAccessoryViewController(LicensePillAccessory(badge: titleBarBadge) { [weak self] in
+                    self?.showLicense()
+                })
+            }
             window.center()
             self.window = window
         }
@@ -46,9 +60,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    /// Settings → License: the licensing ticket scrolls to the section.
+    /// Settings → License: the pill, the panel's card and the setup guide
+    /// land here. `keyField` puts the cursor in the key field.
     func showLicense(keyField: Bool = false) {
         show()
+        navigation.reveal(.license, keyField: keyField)
     }
 }
 
@@ -60,9 +76,13 @@ struct SettingsView: View {
     let diagnostics: () -> String
     var extraSections: [AnyView] = []
     var screenSaver: any ScreenSaverInstaller = SaverInstaller()
+    /// Scroll requests (Settings → License); the preview harness never scrolls.
+    var navigation = SettingsNavigation()
+    var showGuide: () -> Void = {}
     @State private var copied = false
     @State private var saverNote: String?
     @Environment(\.previewRendering) private var previewRendering
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if previewRendering {
@@ -79,12 +99,20 @@ struct SettingsView: View {
             .toggleStyle(.checkbox)
             .frame(width: 540)
         } else {
-            Form {
-                general
-                wallpapers
-                desktop
-                ForEach(Array(extraSections.enumerated()), id: \.offset) { _, section in section }
-                about
+            ScrollViewReader { proxy in
+                Form {
+                    general
+                    wallpapers
+                    desktop
+                    ForEach(Array(extraSections.enumerated()), id: \.offset) { _, section in section }
+                    about
+                }
+                .onChange(of: navigation.request) {
+                    guard let anchor = navigation.anchor else { return }
+                    withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                }
             }
             .formStyle(.grouped)
             .frame(width: 540, height: 820)
@@ -300,10 +328,14 @@ struct SettingsView: View {
 
     private var about: some View {
         Section {
-            Text(LicensingCopy.network)
-                .font(Brand.body(12))
-                .foregroundStyle(Brand.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top) {
+                Text(LicensingCopy.network)
+                    .font(Brand.body(12))
+                    .foregroundStyle(Brand.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Show setup guide", action: showGuide)
+            }
             Text("Lock screen: since macOS Sonoma it shows the current desktop wallpaper, and there is no public way to set a separate one — so the lock screen follows the desktop, a light/dark pair included.")
                 .font(Brand.body(12))
                 .foregroundStyle(Brand.textSecondary)

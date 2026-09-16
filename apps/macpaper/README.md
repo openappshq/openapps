@@ -69,6 +69,8 @@ Licensing and the updater are compiled out of every build until the licensing ti
 | Panel rules | `MacPaperCore/PanelStateMachine.swift`, `Notch.swift` | Hover, click, hotkey, fullscreen and settings as a pure state machine; the notch rect and the panel frame as pure geometry |
 | App | `MacPaper` | `AppModel` (the draft behind one gated edit entry, previews off the main actor, actions), the status item and popover, `NotchPanelController` (the hover window and the `NSPanel`), `DesktopKeeper` (the pin), `ThemeWatcher`, `ClockController`, `HotkeyCenter` (Carbon), `ShuffleEngine`, Settings, the login item, the preview harness |
 | Screen saver | `MacPaperSaver` | A `ScreenSaverView` over the core, assembled into `macPaper.saver` by `scripts/bundle.sh` |
+| Licensing | `MacPaper/Licensing/`, [`packages/openapps-licensing`](../../packages/openapps-licensing) | Official builds: the trial, the paid license and the record store from the shared package; the controller, the pill, the panel's card, Settings → License and the `macpaper://activate` deep link here. Every edit, action and resumption asks the projected entitlement at that moment |
+| Setup guide, updates | `MacPaper/Onboarding/`, `MacPaper/Updates/`, [`packages/openapps-updater`](../../packages/openapps-updater) | The guide shown once after install (welcome, nothing to grant, starts with your Mac, tips); the shared updater in official builds, with the fresh-install defaults from `MacPaperCore/FirstRun.swift` |
 
 ## Credits
 
