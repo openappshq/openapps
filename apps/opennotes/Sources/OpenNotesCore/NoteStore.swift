@@ -189,9 +189,14 @@ public final class NoteStore {
             guard let contents = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info)), let text = contents.text else { return note }
             let fresh = Self.parse(id: id, contents: text, fileDate: contents.identity.modified, fallbackCreated: contents.identity.modified, truncated: contents.truncated)
             note.text = fresh.text
+            note.truncated = fresh.truncated
             note.bodyIsLoaded = true
             identities[id] = contents.identity
+            // Room first (this note is not in the line yet, so it cannot be
+            // the one evicted), then the body is accounted for.
+            enforceBudget(toFit: note.text.utf8.count)
             notes[id] = note
+            account(id, bytes: note.text.utf8.count)
         }
         touch(id)
         return note
