@@ -67,6 +67,13 @@
 # that is accepted for any other build, and scripts/verify-release.sh
 # refuses it.
 #
+# Shortcuts (design/products/opennotes.md, "Automation"): the App Intents
+# live in the OpenNotesIntents module, and Shortcuts finds them through
+# Contents/Resources/Metadata.appintents, which Xcode would extract and this
+# script extracts the same way — the compiler emits the module's constant
+# values (`-emit-const-values`, gathered for the AppIntents protocols) and
+# appintentsmetadataprocessor turns them into the metadata bundle.
+#
 # Signing uses the hardened runtime, no sandbox (the notes folder is any
 # folder the user names) and scripts/OpenNotes.entitlements.
 set -euo pipefail
@@ -190,16 +197,18 @@ if [[ "$NEEDS_LOCAL_NETWORKING" == 1 ]]; then
         <true/>
     </dict>"
 fi
-# The website's thanks page opens opennotes://activate?key=… to pre-fill the key;
-# a build without licensing registers the scheme too and ignores the link.
-# The update-test variant must never catch the real app's links.
+# The opennotes:// scheme (design/products/opennotes.md, "Automation"):
+# new, open and append from any app, and the website's thanks page's
+# opennotes://activate?key=… to pre-fill the key (a build without licensing
+# registers the scheme too and ignores that one link). The update-test
+# variant must never catch the real app's links.
 URL_TYPES_PLIST=""
 if [[ "$UPDATE_TEST" != "1" ]]; then
     URL_TYPES_PLIST="<key>CFBundleURLTypes</key>
     <array>
         <dict>
             <key>CFBundleURLName</key>
-            <string>${BUNDLE_ID}.activate</string>
+            <string>${BUNDLE_ID}.links</string>
             <key>CFBundleURLSchemes</key>
             <array>
                 <string>opennotes</string>
@@ -225,8 +234,14 @@ fi
 export OPENAPPS_LICENSING="${OPENAPPS_LICENSING:-0}"
 export OPENAPPS_OFFICIAL="$OFFICIAL"
 export OPENNOTES_UPDATE_TEST="$UPDATE_TEST"
-swift build -c release --scratch-path "$SCRATCH_PATH" --product "$APP_NAME" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
-BIN_DIR="$(swift build -c release --scratch-path "$SCRATCH_PATH" --show-bin-path ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"})"
+# The protocols whose conformances the App Intents metadata is read from
+# (the list Xcode's build system gathers for).
+INTENTS_PROTOCOLS="$SCRATCH_PATH/appintents-protocols.json"
+mkdir -p "$SCRATCH_PATH"
+printf '%s' '["AppIntent","EntityQuery","AppEntity","TransientEntity","AppEnum","AppShortcutProviding","AppShortcutsProvider","AnyResolverProviding","AppIntentsPackage","DynamicOptionsProvider","_IntentValueRepresentable","_AssistantIntentsProvider","_GenerativeFunctionExtractable","IntentValueQuery","Resolver"]' > "$INTENTS_PROTOCOLS"
+CONST_FLAGS=(-Xswiftc -emit-const-values -Xswiftc -Xfrontend -Xswiftc -const-gather-protocols-file -Xswiftc -Xfrontend -Xswiftc "$INTENTS_PROTOCOLS")
+swift build -c release --scratch-path "$SCRATCH_PATH" --product "$APP_NAME" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} "${CONST_FLAGS[@]}"
+BIN_DIR="$(swift build -c release --scratch-path "$SCRATCH_PATH" --show-bin-path ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} "${CONST_FLAGS[@]}")"
 
 echo "==> Assembling ${APP}"
 rm -rf "$APP"
@@ -238,6 +253,43 @@ cp -R Sources/OpenNotes/Resources/. "$APP/Contents/Resources/"
 cp LICENSE NOTICE "$APP/Contents/Resources/"
 test -f "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+
+# The App Intents metadata Shortcuts, Spotlight and Siri read
+# (Contents/Resources/Metadata.appintents), from the intents module's
+# constant values. A toolchain without the processor ships without it: the
+# actions still run from a shortcut that already names them, but Shortcuts
+# cannot list them.
+echo "==> Extracting App Intents metadata"
+INTENTS_MODULE="OpenNotesIntents"
+# SwiftPM names the file after the module; a universal build (through
+# xcbuild) after the module and architecture. Either arch's values do.
+CONST_VALUES="$(find "$SCRATCH_PATH" \( -path '*release*' -o -path '*Release*' \) -name "${INTENTS_MODULE}*.swiftconstvalues" -print | sort | head -n 1)"
+PROCESSOR="$(xcrun --find appintentsmetadataprocessor 2>/dev/null || true)"
+if [[ -n "$PROCESSOR" && -n "$CONST_VALUES" ]]; then
+    INTENTS_LISTS="$SCRATCH_PATH/appintents"
+    mkdir -p "$INTENTS_LISTS"
+    find "$PWD/Sources/$INTENTS_MODULE" -name '*.swift' > "$INTENTS_LISTS/sources.txt"
+    printf '%s\n' "$CONST_VALUES" > "$INTENTS_LISTS/const-values.txt"
+    "$PROCESSOR" \
+        --toolchain-dir "$(dirname "$(dirname "$(xcrun --find swiftc)")")" \
+        --module-name "$INTENTS_MODULE" \
+        --sdk-root "$(xcrun --show-sdk-path)" \
+        --xcode-version "$(xcodebuild -version | sed -n 's/Build version //p')" \
+        --platform-family macOS \
+        --deployment-target 14.0 \
+        --target-triple arm64-apple-macos14.0 \
+        --source-file-list "$INTENTS_LISTS/sources.txt" \
+        --swift-const-vals-list "$INTENTS_LISTS/const-values.txt" \
+        --no-app-shortcuts-localization \
+        --quiet-warnings \
+        --output "$APP/Contents/Resources" >/dev/null
+    test -f "$APP/Contents/Resources/Metadata.appintents/extract.actionsdata"
+    for action in CreateNoteIntent AppendToNoteIntent GetNoteTextIntent OpenNoteIntent; do
+        grep -Fq "\"$action\"" "$APP/Contents/Resources/Metadata.appintents/extract.actionsdata" || { echo "error: the App Intents metadata lacks ${action}" >&2; exit 1; }
+    done
+else
+    echo "warning: appintentsmetadataprocessor or the module's constant values are missing; Shortcuts will not list the actions" >&2
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
