@@ -23,6 +23,15 @@ export function siteHeaders(sitePages: SitePage[] = pages): string {
     // Update feeds (RELEASES.md): installed apps poll these, so a new release
     // must show up within minutes and a pulled one must disappear as fast.
     ["/updates/*", "Cache-Control: public, max-age=300"],
+    // Install scripts (RELEASES.md, "Install script"): extensionless files run
+    // as `curl … | sh`, so they are typed as shell, not sniffed; the edge may
+    // keep one for five minutes like a feed, while every client revalidates.
+    [
+      "/install/*",
+      "Content-Type: text/x-shellscript; charset=utf-8",
+      "Cache-Control: public, max-age=0, s-maxage=300, must-revalidate",
+      "X-Robots-Tag: noindex",
+    ],
     ...sitePages
       .filter((page) => page.noindex)
       .map((page) => [

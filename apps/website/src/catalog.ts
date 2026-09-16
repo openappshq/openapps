@@ -8,8 +8,9 @@ export type Product = {
   price: string;
   /**
    * Free and open source: no license, no trial and no Buy button. Installed
-   * with Homebrew (`brew install --cask openappshq/tap/<id>`), so it has no
-   * download page and no checkout return page either.
+   * with the one-line install script (or `brew install --cask
+   * openappshq/tap/<id>`), so it has no download page and no checkout return
+   * page either.
    */
   free?: boolean;
   icon: string;
@@ -58,7 +59,7 @@ export const products: Product[] = [
         path: "download",
         entry: "Download",
         title: "Install · OpenKlack",
-        description: "Install OpenKlack with Homebrew, and the one step to set it up.",
+        description: "Install OpenKlack with one Terminal line, and the one step to set it up.",
       },
       {
         path: "thanks",
@@ -97,7 +98,7 @@ export const products: Product[] = [
         path: "download",
         entry: "Download",
         title: "Install · OpenReaction",
-        description: "Install OpenReaction with Homebrew, and the one step to set it up.",
+        description: "Install OpenReaction with one Terminal line, and the one step to set it up.",
         template: "src/apps/openreaction/template.html",
       },
       {

@@ -97,7 +97,7 @@ Run `pnpm design:check` to verify tokens against the saved Figma snapshot and va
 
 ## Behavior
 
-The website’s install links open `/openklack/download/`, a separate static HTML entry. Apps ship as Homebrew casks (see [RELEASES.md](../RELEASES.md)): with `VITE_OPENKLACK_BREW_CASK` set to the cask (`owner/tap/name`, e.g. `openappshq/tap/openklack`), the page, the app page and the thanks page show the exact `brew install --cask <cask>` command with a Copy button and a "Requires Homebrew" note. Without it, the page shows the unreleased state and offers nothing. `VITE_OPENKLACK_MAC_DOWNLOAD_URL` is optional: when it is an https URL and the cask is set, the page also attempts that download once and exposes the same URL as a manual retry link, and the install buttons read "Download for Mac" instead of "Install with Homebrew". Set the variables in `apps/website/.env.local` (see `.env.example`) and rebuild. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
+The website’s install links open `/openklack/download/`, a separate static HTML entry. Apps install from one Terminal line, the [install script](../RELEASES.md#install-script) served at `/install/<app>` from `apps/website/public/install/<app>`, with the Homebrew cask as the alternative (see [RELEASES.md](../RELEASES.md)). The script and the cask are published together, so the cask is the gate: with `VITE_OPENKLACK_BREW_CASK` set to the cask (`owner/tap/name`, e.g. `openappshq/tap/openklack`), the page, the app page and the thanks page show `curl -fsSL https://openapps.space/install/openklack | sh` with a Copy button, one sentence on what it does with a link to the script's source, and "Prefer Homebrew? `brew install --cask <cask>`" under it. Without it, the page shows the unreleased state and offers nothing. `VITE_OPENKLACK_MAC_DOWNLOAD_URL` is optional: when it is an https URL and the cask is set, the page also attempts that download once and exposes the same URL as a manual retry link, and the install buttons read "Download for Mac" instead of "Install for Mac". Set the variables in `apps/website/.env.local` (see `.env.example`) and rebuild. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
 
 - Type in the playground or click the interactive 3D keyboard.
   Each key has damped travel and a radial lighting pulse.
@@ -116,7 +116,7 @@ The website’s install links open `/openklack/download/`, a separate static HTM
 
 What no page code can prevent: the host that serves the thanks page receives the initial request, query string included. The build emits `dist/_headers` from the catalog (`apps/website/headers.ts`): every `noindex` page is served with `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex` and `Cache-Control: no-store`. On Cloudflare those pages are plain static asset requests that never run Worker code, and the Worker keeps Workers Logs off; don't enable Logpush or Workers Logs for it.
 
-Paid app pages offer the install (the Homebrew command, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the brew command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's page also keeps an install section with the command and the `brew upgrade` line, on the same gate (`VITE_HERTZ_DODO_PAID_PRODUCT_ID` and `VITE_HERTZ_BREW_CASK`).
+Paid app pages offer the install (the one-line command with Homebrew under it, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the install command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's page also keeps an install section with the command and the Homebrew line, on the same gate (`VITE_HERTZ_DODO_PAID_PRODUCT_ID` and `VITE_HERTZ_BREW_CASK`).
 
 ## Sound library
 
@@ -279,7 +279,7 @@ A paid license's time is anchored to Dodo's `Date` header at the last successful
 
 ### Releases and updates
 
-Releases follow the shared [release contract](../RELEASES.md): a Homebrew cask (`brew install --cask openappshq/tap/openklack`, into `/Applications`), a zip on the GitHub Release `openklack-vX.Y.Z`, a stable self-signed certificate instead of Developer ID and notarization, and a signed update feed at `https://openapps.space/updates/openklack/latest.json`.
+Releases follow the shared [release contract](../RELEASES.md): the install script (`curl -fsSL https://openapps.space/install/openklack | sh`) and a Homebrew cask (`brew install --cask openappshq/tap/openklack`), both into `/Applications`, a zip on the GitHub Release `openklack-vX.Y.Z`, a stable self-signed certificate instead of Developer ID and notarization, and a signed update feed at `https://openapps.space/updates/openklack/latest.json`.
 The [desktop workflow](../.github/workflows/openklack.yml) runs the checks on every change and, on a pushed `openklack-vX.Y.Z` tag (or a manual run with a version and `publish`), the release: build → sign and verify → package → publish → feed → verify live → cask.
 The scripts it runs are the ones you can run locally:
 
@@ -290,6 +290,8 @@ The scripts it runs are the ones you can run locally:
 | `scripts/release/with-signing-keychain.sh <command>` | Runs a command with the certificate in a temporary keychain and removes it afterwards, whatever happens (Bash; re-executes itself under Bash from any other shell; `scripts/release/tests/with-signing-keychain.test.sh` checks bash and zsh) |
 | `scripts/release/verify-designated-requirement.sh <App.app> <pinned.txt>` | `codesign --verify --deep --strict`, hardened runtime, and the exact pinned requirement |
 | `scripts/release/release-tag-ruleset.sh check\|apply <definition.json>` | Checks for, or creates, the ruleset that makes `openklack-v*` tags immutable |
+| `scripts/release/write-install-script.sh <app-id> <App> <version> <sha256> <out-file>` | Writes the pinned install script served at `/install/<app-id>` (never a downgrade or a rewrite); `scripts/release/tests/install-script.test.sh` runs a generated script against a zip on `127.0.0.1` |
+| `scripts/release/verify-live-install-script.sh <app-id> <version> <sha256>` | Fetches the live install script and checks its pin, content type, syntax and that it equals the committed file |
 | `release/create-update-key.sh <dir>` | One-time: creates the Tauri updater key and pins its public half in `release/updater-public-key.txt` |
 | `release/updater-config.mjs <out.json> <version>` | The build's config overlay: version, updater artifacts, the pinned update key and feed |
 | `release/build-signed.sh <version>` | Builds the licensed, updater-enabled app signed with the release identity and verifies the pinned requirement (inside `with-signing-keychain.sh`) |
@@ -303,7 +305,7 @@ The scripts it runs are the ones you can run locally:
 
 **Signing.** macOS ties Input Monitoring to the app's designated requirement, so every release is signed with the same self-signed certificate; a different identity would make an update look like a new app and lose the permission. The license and trial records are files the app owns, so they survive an identity change.
 The requirement is pinned in `release/designated-requirement.txt` as `identifier "com.openklack.desktop" and certificate leaf = H"<certificate SHA-1>"`, and a release whose signature does not produce exactly that fails before anything is published.
-The app is not notarized: the cask clears the quarantine flag after install, and a zip downloaded by hand needs right-click → Open once.
+The app is not notarized: the cask and the install script clear the quarantine flag after install, and a zip downloaded by hand needs right-click → Open once.
 Both pinned files start as a `NOT GENERATED` marker; until the release owner has generated the material on their own Mac and committed the public halves, the release job stops before building and official builds report that updates aren't configured.
 
 **Setup, once, on the release owner's Mac** (the generators never touch the login keychain; back the output up offline, then delete it locally):
@@ -325,7 +327,7 @@ Then create the GitHub environment `openklack-release` (deployment branches and 
 | `TAURI_SIGNING_PRIVATE_KEY` | `openklack-update.key` (the Tauri updater private key) |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password, if one was set |
 | `RULESET_READ_TOKEN` | Fine-grained token, this repository only, Administration: read; lets the publish job see the tag ruleset's bypass actors |
-| `FEED_COMMIT_TOKEN` | A token that may push to `main` (a fine-grained token with Contents: write that bypasses `main`'s protection, or a GitHub App token); used only to commit `apps/website/public/updates/openklack/latest.json` and `.sig`, which then deploys the website |
+| `FEED_COMMIT_TOKEN` | A token that may push to `main` (a fine-grained token with Contents: write that bypasses `main`'s protection, or a GitHub App token); used only to commit `apps/website/public/updates/openklack/latest.json`, `.sig` and `apps/website/public/install/openklack`, which then deploys the website |
 | `HOMEBREW_TAP_DEPLOY_KEY` | Fine-grained token scoped to `openappshq/homebrew-tap` with Contents: write; used only to push the cask bump |
 
 and the licensing variables `OPENKLACK_DODO_PAID_PRODUCT_ID`, `OPENKLACK_BUY_URL` and optional `OPENKLACK_SUPPORT_URL` from [Licensed builds](#licensed-builds).
@@ -336,7 +338,7 @@ The tap repository `openappshq/homebrew-tap` must exist; the first release copie
 The version is stamped from the tag; `tauri.conf.json` and `Cargo.toml` keep the development version.
 `release` (read-only token) builds the universal licensed app, signs it inside a temporary keychain that is deleted as soon as the build ends, verifies the pinned requirement, packages `OpenKlack-1.0.0.zip` and `OpenKlack-1.0.0.app.tar.gz` with their update-key signatures, writes the signed feed and uploads everything as a workflow artifact.
 `publish` (the only job that can write releases) downloads that exact artifact by id, checks the zip against the digest the release job reported, requires the tag ruleset, requires the tag to name the built commit, creates a draft release, uploads the files, checks the tag again and publishes.
-`feed` commits the feed to `main` (the website deploy serves it), polls the live feed and zip until they match, then bumps the cask.
+`feed` commits the feed and the regenerated install script to `main` (the website deploy serves both), polls the live feed and zip until they match, checks the live install script, then bumps the cask.
 A bad release is pulled by committing the previous feed back, and fixed with a new patch version; tags are never moved or reused.
 
 **Updates in the app.** Only builds with the `updater` cargo feature (official builds) contain the updater; `pnpm openklack:build` and `cargo test` without it never check, download or install anything, and the commands answer "Builds from source don't include app updates."

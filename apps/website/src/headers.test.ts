@@ -30,6 +30,15 @@ test("every checkout return page is uncached, unindexed and sends no referrer", 
   expect(headers.has("/openklack/")).toBe(false);
 });
 
+test("install scripts are served as shell and revalidated by every client", () => {
+  const headers = rules(siteHeaders());
+  expect(headers.get("/install/*")).toEqual([
+    "Content-Type: text/x-shellscript; charset=utf-8",
+    "Cache-Control: public, max-age=0, s-maxage=300, must-revalidate",
+    "X-Robots-Tag: noindex",
+  ]);
+});
+
 test("every response gets baseline security headers and hashed assets cache forever", () => {
   const headers = rules(siteHeaders());
   expect(headers.get("/*")).toEqual(

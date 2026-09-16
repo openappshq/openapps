@@ -27,11 +27,11 @@
    button and should not sit in a row of them. */
 .install-command {
   flex-basis: 100%;
-  max-width: 600px;
+  max-width: 640px;
 }
-/* Sized so the longest cask stays on one line at the hero's width. */
+/* Sized so the install line (curl … | sh) stays on one line at the hero's width. */
 .install-command .copy-row code {
-  font-size: 15px;
+  font-size: 13px;
 }
 .hero-intro > .install-command {
   margin-top: 24px;
@@ -47,6 +47,15 @@
   gap: 2px;
   text-decoration: underline;
   text-underline-offset: 4px;
+}
+/* The Homebrew alternative: a line to select, not a second Copy row. */
+.install-command-note code {
+  font: 500 0.92em/1.4 var(--font-mono);
+  padding: 2px 6px;
+  border-radius: var(--radius-small);
+  background: var(--color-bg-surface);
+  overflow-wrap: anywhere;
+  user-select: all;
 }
 .buy-note {
   flex-basis: 100%;

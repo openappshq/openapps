@@ -18,14 +18,18 @@ const REQUIREMENTS = (
 
 export default function DownloadPage({
   // Only when the app's product and cask are configured; the download is a bonus.
+  installCommand = licensingFor("hertz").installCommand,
   brewCommand = licensingFor("hertz").brewCommand,
   downloadUrl = licensingFor("hertz").downloadUrl,
 }: {
+  installCommand?: string | null;
   brewCommand?: string | null;
   downloadUrl?: string | null;
 }) {
   return (
     <Page
+      installCommand={installCommand}
+      installScriptSourceUrl={licensingFor("hertz").installScriptSourceUrl}
       brewCommand={brewCommand}
       downloadUrl={downloadUrl}
       name="Hertz"
