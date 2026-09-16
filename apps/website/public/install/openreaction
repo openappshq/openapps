@@ -35,16 +35,25 @@ work=''
 staging=''
 old=''
 target=''
+still_running=''
+quarantine_left=''
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# Runs on every exit: puts a previous copy back if the new one never landed,
-# and removes everything temporary. Never touches an installed app.
+# Runs on every exit. If the previous copy was moved aside and nothing is at
+# its place, it goes back; if it cannot go back it is kept and its location
+# printed. Only directories this run created with mktemp are ever removed.
 cleanup() {
     status=$?
-    if [ -n "$old" ] && [ -e "$old" ] && [ ! -e "$target" ]; then
-        mv "$old" "$target" || true
+    if [ -n "$old" ] && [ -d "$old/$APP_NAME.app" ]; then
+        if [ ! -e "$target" ] && [ ! -L "$target" ] && mv "$old/$APP_NAME.app" "$target" 2>/dev/null; then
+            rmdir "$old" 2>/dev/null || true
+        else
+            printf 'The previous %s is kept at %s\n' "$APP_NAME.app" "$old/$APP_NAME.app" >&2
+        fi
+    elif [ -n "$old" ]; then
+        rmdir "$old" 2>/dev/null || true
     fi
     if [ -n "$staging" ]; then rm -rf "$staging"; fi
     if [ -n "$work" ]; then rm -rf "$work"; fi
@@ -59,15 +68,18 @@ sha256_of() {
     fi
 }
 
+# Device and inode: the identity of a directory across a rename.
+identity() { stat -f '%d:%i' "$1" 2>/dev/null; }
+
 check_macos() {
     if [ "$(uname -s 2>/dev/null)" != Darwin ]; then
         fail "$APP_NAME is a Mac app; this installer runs on macOS only."
     fi
-    command -v curl >/dev/null 2>&1 || fail "curl is required and was not found."
+    for tool in curl unzip realpath stat xattr; do
+        command -v "$tool" >/dev/null 2>&1 || fail "$tool is required and was not found."
+    done
     command -v shasum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1 \
         || fail "shasum or openssl is required to check the download and neither was found."
-    command -v ditto >/dev/null 2>&1 || command -v unzip >/dev/null 2>&1 \
-        || fail "ditto or unzip is required to unpack the download and neither was found."
     macos="$(sw_vers -productVersion 2>/dev/null || true)"
     major="${macos%%.*}"
     case "$major" in
@@ -79,20 +91,30 @@ check_macos() {
 }
 
 # /Applications when this account can write there (admin accounts can, without
-# a password), otherwise ~/Applications, which the Finder also lists. Sets dest.
+# a password), otherwise ~/Applications, which the Finder also lists. Sets dest
+# and target. A symlinked folder or a symlinked <App>.app is refused: the
+# install would land somewhere other than the path it names.
 choose_dest() {
     if [ -n "${OPENAPPS_INSTALL_DIR:-}" ]; then
         dest="$OPENAPPS_INSTALL_DIR"
+        [ -L "$dest" ] && fail "$dest is a symbolic link; set OPENAPPS_INSTALL_DIR to a real folder."
         mkdir -p "$dest" || fail "Could not create $dest."
-    elif [ -d /Applications ] && [ -w /Applications ]; then
+    elif [ -d /Applications ] && [ ! -L /Applications ] && [ -w /Applications ]; then
         dest=/Applications
     else
         [ -n "${HOME:-}" ] || fail "/Applications is not writable for this account and HOME is not set."
         dest="$HOME/Applications"
         say "/Applications is not writable for this account; installing into $dest instead."
+        [ -L "$dest" ] && fail "$dest is a symbolic link; replace it with a real folder or set OPENAPPS_INSTALL_DIR."
         mkdir -p "$dest" || fail "Could not create $dest."
     fi
-    [ -d "$dest" ] && [ -w "$dest" ] || fail "$dest is not a writable folder."
+    [ -d "$dest" ] && [ ! -L "$dest" ] && [ -w "$dest" ] || fail "$dest is not a writable folder."
+    target="$dest/$APP_NAME.app"
+    [ -L "$target" ] && fail "$target is a symbolic link; move it aside first."
+    if [ -e "$target" ] && [ ! -d "$target" ]; then
+        fail "$target exists and is not an app bundle; move it aside first."
+    fi
+    return 0
 }
 
 download() {
@@ -108,6 +130,21 @@ download() {
     say "Checked the download: SHA-256 matches."
 }
 
+# The archive must hold exactly one top-level <App>.app (plus ditto's
+# __MACOSX metadata, which unpacking folds back in) and nothing that could
+# reach outside it: no absolute or ".." entries, and after unpacking no
+# symbolic link that resolves outside the bundle.
+check_archive() {
+    unzip -Z1 "$zip" > "$work/entries" || fail "Could not list the download."
+    [ -s "$work/entries" ] || fail "The download is empty."
+    if grep -v -e "^$APP_NAME\.app/" -e '^__MACOSX/' "$work/entries" | grep -q .; then
+        fail "The download holds more than $APP_NAME.app. Nothing was installed."
+    fi
+    if grep -E '(^|/)\.\.(/|$)' "$work/entries" | grep -q .; then
+        fail "The download names a path outside $APP_NAME.app. Nothing was installed."
+    fi
+}
+
 unpack() {
     mkdir "$work/unpacked"
     if command -v ditto >/dev/null 2>&1; then
@@ -115,47 +152,84 @@ unpack() {
     else
         unzip -q "$zip" -d "$work/unpacked" || fail "Could not unpack the download."
     fi
+    rm -rf "$work/unpacked/__MACOSX"
     unpacked="$work/unpacked/$APP_NAME.app"
-    [ -d "$unpacked" ] && [ -f "$unpacked/Contents/Info.plist" ] \
+    [ "$(find "$work/unpacked" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 1 ] && [ -d "$unpacked" ] && [ ! -L "$unpacked" ] \
+        || fail "The download does not unpack to a single $APP_NAME.app."
+    [ -f "$unpacked/Contents/Info.plist" ] && [ ! -L "$unpacked/Contents" ] && [ ! -L "$unpacked/Contents/Info.plist" ] \
         || fail "The download does not contain $APP_NAME.app."
+    root="$(realpath "$unpacked")" || fail "Could not resolve $unpacked."
+    find "$unpacked" -type l -print > "$work/links"
+    while IFS= read -r link; do
+        [ -n "$link" ] || continue
+        resolved="$(cd "$(dirname "$link")" && realpath -q "$(readlink "$link")" 2>/dev/null)" \
+            || fail "$APP_NAME.app contains a link that does not resolve: ${link#"$unpacked"/}. Nothing was installed."
+        case "$resolved" in
+            "$root"/*) ;;
+            *) fail "$APP_NAME.app contains a link that points outside the bundle: ${link#"$unpacked"/}. Nothing was installed." ;;
+        esac
+    done < "$work/links"
 }
 
-# Asks a running copy to quit and gives it a moment; the install goes ahead
-# either way, since the new bundle only replaces the old one on disk.
+# Asks a running copy to quit and gives it up to ten seconds in all: the
+# AppleScript runs in the background so a stalled app or an unanswered
+# Automation prompt cannot hold the install. The install goes ahead either
+# way, since the new bundle only replaces the old one on disk.
 quit_running() {
     if ! pgrep -qx "$APP_NAME" 2>/dev/null; then return 0; fi
     say "Quitting the running $APP_NAME..."
-    osascript -e "quit app id \"$BUNDLE_ID\"" >/dev/null 2>&1 || true
+    osascript -e "quit app id \"$BUNDLE_ID\"" >/dev/null 2>&1 &
+    quit_pid=$!
     tries=0
     while [ "$tries" -lt 20 ] && pgrep -qx "$APP_NAME" 2>/dev/null; do
         sleep 0.5
         tries=$((tries + 1))
     done
+    kill "$quit_pid" 2>/dev/null || true
+    if pgrep -qx "$APP_NAME" 2>/dev/null; then
+        still_running=1
+        say "$APP_NAME did not quit in time; the new version replaces it on disk and runs the next time you open it."
+    fi
 }
 
 # The new bundle is copied next to its final place first, so the swap is two
-# renames on one volume: the old app moves aside, the new one moves in, and
-# only then is the old one removed. A failure in between puts the old one back.
+# renames on one volume. The previous copy moves into a private directory this
+# run created with mktemp; only that exact directory is ever removed, and only
+# after the new bundle is confirmed at its place (a rename keeps the inode, so
+# a bundle that landed inside some other directory is detected and undone).
 install_app() {
-    target="$dest/$APP_NAME.app"
     staging="$(mktemp -d "$dest/.$APP_NAME.install.XXXXXX")" || fail "Could not create a folder in $dest."
     if ! ditto "$unpacked" "$staging/$APP_NAME.app" 2>/dev/null; then
         rm -rf "$staging/$APP_NAME.app"
         cp -pR "$unpacked" "$staging/$APP_NAME.app" || fail "Could not copy $APP_NAME.app into $dest."
     fi
+    staged_id="$(identity "$staging/$APP_NAME.app")" || fail "Could not read the staged bundle."
     if [ -e "$target" ] || [ -L "$target" ]; then
-        old="$dest/.$APP_NAME.app.previous.$$"
-        mv "$target" "$old" || fail "Could not move the existing $target aside."
+        [ -d "$target" ] && [ ! -L "$target" ] || fail "$target changed while installing; nothing was replaced."
+        old="$(mktemp -d "$dest/.$APP_NAME.previous.XXXXXX")" || fail "Could not create a folder in $dest."
+        mv "$target" "$old/$APP_NAME.app" || fail "Could not move the existing $target aside."
     fi
-    if ! mv "$staging/$APP_NAME.app" "$target"; then
-        if [ -n "$old" ]; then mv "$old" "$target" || true; fi
-        fail "Could not put $APP_NAME.app into $dest."
+    if [ -e "$target" ] || [ -L "$target" ] || ! mv "$staging/$APP_NAME.app" "$target" \
+        || [ -L "$target" ] || [ "$(identity "$target")" != "$staged_id" ]; then
+        # Something else appeared at the target. Undo our own move if it nested.
+        if [ -d "$target/$APP_NAME.app" ] && [ "$(identity "$target/$APP_NAME.app")" = "$staged_id" ]; then
+            rm -rf "$target/$APP_NAME.app"
+        fi
+        fail "$target was changed by something else while installing; nothing of it was touched."
     fi
     if [ -n "$old" ]; then
         rm -rf "$old"
         old=''
     fi
-    xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+    # The app is signed but not notarized: without this, Gatekeeper would
+    # refuse to open it. Reported, never hidden.
+    if ! xattr -dr com.apple.quarantine "$target" 2> "$work/xattr.err"; then
+        say "Clearing the download quarantine reported: $(tr '\n' ' ' < "$work/xattr.err")"
+    fi
+    if xattr -lr "$target" 2>/dev/null | grep -q 'com\.apple\.quarantine'; then
+        quarantine_left=1
+        say "The download quarantine could not be cleared from $target; macOS may ask to confirm the first open (right-click, Open)."
+    fi
 }
 
 main() {
@@ -166,11 +240,16 @@ main() {
     choose_dest
     work="$(mktemp -d "${TMPDIR:-/tmp}/$APP_ID-install.XXXXXX")" || fail "Could not create a temporary folder."
     download
+    check_archive
     unpack
     quit_running
     install_app
     say "Installed $APP_NAME $VERSION to $target."
-    if open -a "$target" 2>/dev/null; then
+    if [ -n "$still_running" ]; then
+        say "Quit the running $APP_NAME and open it again to run $VERSION. It checks for updates itself, so this is the only time you need this command."
+    elif [ -n "$quarantine_left" ]; then
+        say "Open it from $dest. $APP_NAME checks for updates itself, so this is the only time you need this command."
+    elif open -a "$target" 2>/dev/null; then
         say "It is opening now. $APP_NAME checks for updates itself, so this is the only time you need this command."
     else
         say "Open it from $dest. $APP_NAME checks for updates itself, so this is the only time you need this command."

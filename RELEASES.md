@@ -77,15 +77,15 @@ end
 
 What the script does, in order, and what it refuses:
 
-1. macOS only (`uname`), macOS 14 or newer (`sw_vers`), `curl` present, `shasum` or `openssl`, `ditto` or `unzip`. Universal zip, so Apple silicon and Intel are the same path.
-2. Picks `/Applications` when the account can write there (admin accounts can, no password), otherwise `~/Applications` with a line saying so. Never `sudo`.
+1. macOS only (`uname`), macOS 14 or newer (`sw_vers`), `curl`, `unzip`, `realpath`, `stat` and `xattr` present, `shasum` or `openssl`. Universal zip, so Apple silicon and Intel are the same path.
+2. Picks `/Applications` when the account can write there (admin accounts can, no password), otherwise `~/Applications` with a line saying so. Never `sudo`. A destination folder that is a symbolic link, or a `<App>.app` that is one, is refused: the install would land somewhere other than the path it names.
 3. Downloads the release zip over https only (`--proto '=https' --tlsv1.2`) into a private `mktemp -d`, then checks its SHA-256 against the pinned digest **before anything is unpacked**. A mismatch deletes the download and exits 1 with a message that says nothing was installed.
-4. Unpacks with `ditto -xk` (or `unzip`) in the private directory and checks `<App>.app/Contents/Info.plist` is there.
-5. If a copy is running (`pgrep -x <App>`), asks it to quit with `osascript -e 'quit app id "<bundle id>"'`, waits up to ten seconds, and continues either way. (The first time, macOS may ask to allow Terminal to control the app.)
-6. Copies the new bundle into a hidden staging folder next to its final place, moves an existing `<App>.app` aside, moves the new one in, and only then removes the old one. A failure in between, or an interrupt, puts the old one back. Nothing is deleted before the new bundle is in place.
-7. `xattr -dr com.apple.quarantine` on the installed bundle, `open -a`, and a last line naming where it went and that the app updates itself from then on.
+4. Checks the archive listing (`unzip -Z1`): every entry under `<App>.app/` (or ditto's `__MACOSX/` metadata), no absolute or `..` paths. Unpacks with `ditto -xk` (or `unzip`) in the private directory; exactly one `<App>.app` with `Contents/Info.plist`, and every symbolic link inside it must resolve (`realpath`) inside the bundle. Anything else exits 1 before the install starts.
+5. If a copy is running (`pgrep -x <App>`), asks it to quit with `osascript -e 'quit app id "<bundle id>"'` in the background and polls for up to ten seconds in all, so a stalled app or an unanswered Automation prompt cannot hold the install; then continues either way. A copy that did not quit is reported, the last line says to quit it and reopen the app, and `open` is skipped. (The first time, macOS may ask to allow Terminal to control the app.)
+6. Copies the new bundle into a hidden staging folder created with `mktemp -d` next to its final place. An existing `<App>.app` is moved into another `mktemp -d` folder this run owns (`.<App>.previous.XXXXXX/<App>.app`), the new one is renamed in, and its identity (device and inode, which a rename keeps) is checked at the final path; only then is that exact previous folder removed. Nothing this run did not create is ever deleted. If the rename fails or something else appeared at the path meanwhile, the run undoes its own move, keeps the previous copy and prints where it is, and exits 1. An interrupt caught by the shell puts the previous copy back; a process killed outright between the two renames leaves it at the printed hidden folder, where the next run of the script never touches it.
+7. `xattr -dr com.apple.quarantine` on the installed bundle; a failure is printed, and if the attribute is still present the script says so and does not open the app (macOS would ask to confirm the first open). Otherwise `open -a`, and a last line naming where it went and that the app updates itself from then on.
 
-Pipe safety: the whole script is a `main` function called on its last line (`main </dev/null`), so a download cut short stops at a syntax error instead of running half a script, and no command inside can read the script off stdin.
+Pipe safety: the whole script is a `main` function called on its last line (`main </dev/null`), so a download cut short before that call defines functions and constants and installs nothing (a prefix ending inside a function is a syntax error), and no command inside can read the script off stdin.
 
 ## Release flow (one GitHub Actions workflow per app)
 

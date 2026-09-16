@@ -33,7 +33,8 @@ deadline=$(( $(date +%s) + WAIT_SECONDS ))
 pinned=""
 while :; do
     # Cache-busting query: the edge may keep the script for five minutes.
-    if curl -fsSL -H 'Cache-Control: no-cache' -D "$work/headers" -o "$work/script" "${URL}?t=$(date +%s)" \
+    # %{content_type} is the final response's, after any redirect.
+    if curl -fsSL -H 'Cache-Control: no-cache' -o "$work/script" -w '%{content_type}' "${URL}?t=$(date +%s)" > "$work/content-type" \
         && grep -q "^VERSION='${VERSION}'$" "$work/script"; then
         pinned=1
         break
@@ -53,10 +54,10 @@ case "$zip_url" in
     "https://github.com/openappshq/openapps/releases/download/${APP_ID}-v${VERSION}/"*"-${VERSION}.zip") ;;
     *) echo "error: ${URL} downloads ${zip_url}, not the ${APP_ID}-v${VERSION} release zip" >&2; exit 1 ;;
 esac
-# The last headers block, after any redirect.
-content_type="$(tr -d '\r' < "$work/headers" | awk 'tolower($1)=="content-type:" {value=$0} END{print value}')"
-if ! printf '%s' "$content_type" | grep -qi 'text/x-shellscript'; then
-    echo "error: ${URL} is served as '${content_type#*: }', not text/x-shellscript" >&2
+content_type="$(cat "$work/content-type")"
+media_type="$(printf '%s' "${content_type%%;*}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+if [[ "$media_type" != "text/x-shellscript" ]]; then
+    echo "error: ${URL} is served as '${content_type}', not text/x-shellscript" >&2
     exit 1
 fi
 [[ "$(tail -n 1 "$work/script")" == "main </dev/null" ]] || { echo "error: ${URL} does not end with the call to main; it may be truncated" >&2; exit 1; }
@@ -67,4 +68,4 @@ if [[ -f "$committed" ]] && ! cmp -s "$committed" "$work/script"; then
     diff "$committed" "$work/script" >&2 || true
     exit 1
 fi
-echo "ok: ${URL} pins ${VERSION} ${EXPECTED_SHA256}, served as ${content_type#*: }"
+echo "ok: ${URL} pins ${VERSION} ${EXPECTED_SHA256}, served as ${content_type}"
