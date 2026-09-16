@@ -308,15 +308,20 @@ nonisolated public enum MarkdownLite {
     /// Every link in the text, in order, code spans excluded: `http(s)://`,
     /// `www.`, `mailto:`, `file:///` and `~/` paths, ending at whitespace
     /// or a quote, without the sentence's trailing punctuation and without
-    /// a closing bracket the link did not open.
-    public static func links(in text: String) -> [Link] {
+    /// a closing bracket the link did not open. Only the first `limit`
+    /// units are read (the editor's styling budget), so a giant note costs
+    /// one pass, never more.
+    public static func links(in text: String, limit: Int = styleLimit) -> [Link] {
         let string = text as NSString
         var result: [Link] = []
         var index = 0
-        while index < string.length {
+        let end = min(string.length, max(0, limit))
+        while index < end {
             let lineRange = string.lineRange(for: NSRange(location: index, length: 0))
             let terminator = string.substring(with: lineRange).hasSuffix("\n") ? 1 : 0
-            let line = string.substring(with: NSRange(location: lineRange.location, length: lineRange.length - terminator)) as NSString
+            // A line past the budget is read up to it.
+            let contentLength = min(lineRange.length - terminator, end - lineRange.location)
+            let line = string.substring(with: NSRange(location: lineRange.location, length: contentLength)) as NSString
             let code = codeFlags(line)
             for var link in links(inLine: line, from: 0, inCode: { $0 < code.count && code[$0] }) {
                 link.range.location += lineRange.location
@@ -329,8 +334,8 @@ nonisolated public enum MarkdownLite {
     }
 
     /// The link whose range holds `location` (the caret, a click).
-    public static func link(in text: String, at location: Int) -> Link? {
-        links(in: text).first { location >= $0.range.location && location <= NSMaxRange($0.range) }
+    public static func link(in text: String, at location: Int, limit: Int = styleLimit) -> Link? {
+        links(in: text, limit: limit).first { location >= $0.range.location && location <= NSMaxRange($0.range) }
     }
 
     private static let linkPrefixes: [(String, Link.Kind)] = [
@@ -370,8 +375,21 @@ nonisolated public enum MarkdownLite {
     }
 
     /// Trailing punctuation belongs to the sentence, and a closing bracket
-    /// the link did not open belongs to the text around it.
+    /// the link did not open belongs to the text around it. One pass over
+    /// the link counts the brackets; the trim then walks back once, so a
+    /// link followed by a wall of `)` costs its length, not its square.
     private static func trimLinkEnd(_ line: NSString, from start: Int, to end: Int) -> Int {
+        var parens = 0
+        var squares = 0
+        for i in start..<end {
+            switch line.character(at: i) {
+            case 40: parens += 1
+            case 41: parens -= 1
+            case 91: squares += 1
+            case 93: squares -= 1
+            default: break
+            }
+        }
         var end = end
         while end > start {
             let last = line.character(at: end - 1)
@@ -379,14 +397,15 @@ nonisolated public enum MarkdownLite {
                 end -= 1
                 continue
             }
-            if last == 41 || last == 93 { // ) ]
-                let open: unichar = last == 41 ? 40 : 91
-                var balance = 0
-                for i in start..<end {
-                    let c = line.character(at: i)
-                    if c == open { balance += 1 } else if c == last { balance -= 1 }
-                }
-                if balance < 0 { end -= 1; continue }
+            if last == 41, parens < 0 { // an unopened )
+                parens += 1
+                end -= 1
+                continue
+            }
+            if last == 93, squares < 0 { // an unopened ]
+                squares += 1
+                end -= 1
+                continue
             }
             break
         }

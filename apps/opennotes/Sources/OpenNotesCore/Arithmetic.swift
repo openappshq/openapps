@@ -128,7 +128,7 @@ nonisolated public enum Arithmetic {
             }
             if let parsed = parseAnswerLine(line) {
                 let expression = String(line[parsed.expression])
-                let usesSum = mentionsSum(expression)
+                let usesSum = mentionsSum(expression, format: format)
                 var sum: Value?
                 if usesSum {
                     // Each line's amount is read once, however many sums ask.
@@ -254,8 +254,8 @@ nonisolated public enum Arithmetic {
         return rest.allSatisfy { ($0.isASCII && $0.isNumber) || $0 == "." || $0 == "," || $0 == " " }
     }
 
-    private static func mentionsSum(_ expression: String) -> Bool {
-        tokens(in: expression, format: .point)?.contains(.sum) ?? false
+    private static func mentionsSum(_ expression: String, format: Format) -> Bool {
+        tokens(in: expression, format: format)?.contains(.sum) ?? false
     }
 
     // MARK: - Amounts on the lines above
@@ -274,7 +274,7 @@ nonisolated public enum Arithmetic {
         }
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         guard trimmed.count <= inputLimit, !trimmed.isEmpty else { return nil }
-        if !mentionsSum(trimmed), case .success(let value)? = evaluateTrailing(trimmed, format: format, sum: nil), !value.isPercent {
+        if !mentionsSum(trimmed, format: format), case .success(let value)? = evaluateTrailing(trimmed, format: format, sum: nil), !value.isPercent {
             return value
         }
         var scanner = Scanner(text: trimmed, format: format)
@@ -298,20 +298,29 @@ nonisolated public enum Arithmetic {
     /// The expression at the end of a line that starts with a label
     /// (`Hotel 3 * $95`, `split: $777 / 2`): the whole text when it is
     /// arithmetic, else the longest tail that is, starting after a space
-    /// or a bracket at a number, a currency, a sign or `sum`.
+    /// at a number, a currency, a sign, a paren or `sum` — provided what
+    /// is skipped is words only. A malformed expression (`2 + (3 * 4`) is
+    /// not a label and gets no answer from its valid tail.
     public static func evaluateTrailing(_ text: String, format: Format = .point, sum: Value? = nil) -> Result<Value, Failure>? {
         guard text.count <= inputLimit else { return nil }
         if let outcome = evaluate(text, format: format, sum: sum) { return outcome }
         let characters = Array(text)
         for (index, c) in characters.enumerated() where index > 0 {
             let before = characters[index - 1]
-            guard before == " " || before == "\t" || before == "(" else { continue }
+            guard before == " " || before == "\t" else { continue }
             let starts = (c.isASCII && c.isNumber) || currencySymbols.contains(c) || c == "(" || c == "." || c == "-"
                 || (c == "s" && String(characters[index...].prefix(3)).lowercased() == "sum")
-            guard starts, let outcome = evaluate(String(characters[index...]), format: format, sum: sum) else { continue }
-            return outcome
+            guard starts, isLabel(characters[..<index]) else { continue }
+            return evaluate(String(characters[index...]), format: format, sum: sum)
         }
         return nil
+    }
+
+    /// Words, spaces and a colon or comma: what may stand before an
+    /// expression on its line. A digit, a currency or an operator is
+    /// arithmetic that failed, not a label.
+    private static func isLabel(_ prefix: ArraySlice<Character>) -> Bool {
+        prefix.allSatisfy { $0.isLetter || $0 == " " || $0 == "\t" || $0 == ":" || $0 == "," || $0 == "'" || $0 == "’" || $0 == "." }
     }
 
     /// The value of one expression; nil when the text is not arithmetic

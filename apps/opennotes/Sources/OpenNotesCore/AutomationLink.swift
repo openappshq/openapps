@@ -35,8 +35,29 @@ nonisolated public enum AutomationOutcome: Hashable, Sendable {
 /// Anything else — another host, a missing title — is nil.
 nonisolated public enum AutomationLink {
     public static let scheme = "opennotes"
+    /// The longest text a link or an action may bring, in characters: a
+    /// sticky, not a book (the store shows a file over 1 MB read-only).
+    public static let textLimit = 100_000
+    /// The longest title.
+    public static let titleLimit = 1_000
 
+    /// Whether a request's text and title are within the bounds.
+    public static func isBounded(_ request: AutomationRequest) -> Bool {
+        switch request {
+        case .new(let text, let title, _): text.count <= textLimit && (title?.count ?? 0) <= titleLimit
+        case .append(let title, let text): title.count <= titleLimit && text.count <= textLimit
+        case .open(let title), .text(let title): title.count <= titleLimit
+        }
+    }
+
+    /// The request a link carries; nil for a link that is not one, and
+    /// for one whose text or title is over the bound.
     public static func request(from url: URL) -> AutomationRequest? {
+        guard let request = unboundedRequest(from: url), isBounded(request) else { return nil }
+        return request
+    }
+
+    private static func unboundedRequest(from url: URL) -> AutomationRequest? {
         guard url.scheme?.lowercased() == scheme, let host = url.host?.lowercased() else { return nil }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         func value(_ name: String) -> String? {

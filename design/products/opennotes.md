@@ -43,7 +43,7 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 - Paste is plain text. Smart quotes, smart dashes and text replacement are off in every note.
 - Markdown-lite, styled live without changing a character: `#`, `##`, `###` headings, `**bold**`, `_italic_` / `*italic*`, `` `code` ``, `- ` / `* ` / `1. ` lists, `- [ ]` / `- [x]` checklists (a click on the box toggles it, `[ ]` ↔ `[x]` in the file), links underlined (below). Markers stay visible, dimmed. Nothing else is interpreted.
 - Links: `http(s)://`, `www.`, `mailto:`, `file:///` and `~/…` paths underline live (a styled run, not stored; never inside a code span; the sentence's trailing punctuation and an unmatched closing bracket stay text, so `[text](https://…)` keeps working). ⌘-click, or ⌥⏎ with the caret on the link, opens it through the system (`NSWorkspace`); a plain click places the caret. While the pointer rests on a link a small chip names its host, mailbox or file name and says ⌘click — nothing is fetched, no network.
-- Inline arithmetic: a line ending in `=` (or `= ` and an earlier answer) evaluates the expression before the `=` — after a label if there is one (`Hotel 3 * $95 =`) — and shows the answer after the `=` in the ink's secondary colour, live as you type: `+ - * / ^ ( )`, `×` `÷`, a postfix `%` (`12% of 80`, `80 + 10%`; `10 % 3` is the remainder), thousands separators, `k` / `M` after a number, `$` / `€` / `£` carried into the answer (two decimals for money), `sum` for the amounts on the lines above up to a blank line (each line's trailing expression, or its last number), and the decimal separator of the user's locale in and out. Division by zero shows `÷0`, an answer past 10¹⁵ shows `overflow`, a line that isn't arithmetic shows nothing. **The answer is never written to the file** unless Tab is pressed on that line, which types it after the `=`; an earlier answer that no longer matches is dimmed and struck through, and Tab replaces it. Pure Swift over bounded input (200 characters, 32 levels), never `NSExpression`.
+- Inline arithmetic: a line ending in `=` (or `= ` and an earlier answer) evaluates the expression before the `=` — after a label of words if there is one (`Hotel 3 * $95 =`; a malformed expression such as `2 + (3 * 4 =` shows nothing, never its valid tail) — and shows the answer after the `=` in the ink's secondary colour, live as you type: `+ - * / ^ ( )`, `×` `÷`, a postfix `%` (`12% of 80`, `80 + 10%`; `10 % 3` is the remainder), thousands separators, `k` / `M` after a number, `$` / `€` / `£` carried into the answer (two decimals for money), `sum` for the amounts on the lines above up to a blank line (each line's trailing expression, or its last number), and the decimal separator of the user's locale in and out. Division by zero shows `÷0`, an answer past 10¹⁵ shows `overflow`, a line that isn't arithmetic shows nothing. **The answer is never written to the file** unless Tab is pressed on that line, which types it after the `=`; an earlier answer that no longer matches is dimmed and struck through, and Tab replaces it. Pure Swift over bounded input (200 characters, 32 levels), never `NSExpression`.
 - Two faces: Sans (Instrument Sans) and Mono (IBM Plex Mono); a default in Settings, and the open note's footer switches its own note.
 - Six colors: coral, yellow, mint, sky, lilac, paper. The default is coral (Settings). Colors follow the appearance: a light face with ink text, a deep face with paper text in Dark Mode; the tab and the pill dash keep the light face in both.
 - Pinned notes come first in the deck and are never auto-archived.
@@ -72,7 +72,7 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 
 Every entry point is an action (LICENSING.md): a write asks the projected license at that moment and, refused, writes nothing. A refused link shows a note-shaped card beside the deck — "Waits for a license", the read-only line, Settings → License from it — for ten seconds or until clicked; a refused Shortcuts action fails with the same read-only line. Reading never waits.
 
-URL scheme, registered in `Info.plist` (`CFBundleURLTypes`) in every build but the update-test variant; parameters are percent-decoded, `+` is a `+`:
+URL scheme, registered in `Info.plist` (`CFBundleURLTypes`) in every build but the update-test variant; parameters are percent-decoded, `+` is a `+`; a text over 100 000 characters or a title over 1 000 is refused at the door (a link is dropped, an action fails saying so):
 
 | Link | Does |
 | --- | --- |
@@ -87,7 +87,7 @@ Shortcuts, Spotlight and Siri: App Intents in the app itself (no extension), the
 | --- | --- | --- |
 | Create Note | Text (required, multiline), Title (optional), Color (optional: Coral, Yellow, Mint, Sky, Lilac, Paper) | The note's file (URL) |
 | Append to Note | Title (required), Text (required, multiline) | — |
-| Get Note Text | Title (required) | The note's text |
+| Get Note Text | Title (required) | The note's whole text — an error, never a part, when the body can't be read or the file is over 1 MB |
 | Open Note | Title (required) | — |
 
 "Create a note in OpenNotes" and "Open a note in OpenNotes" are offered as App Shortcuts. Titles match as for `open`.

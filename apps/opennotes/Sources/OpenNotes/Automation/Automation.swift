@@ -20,6 +20,8 @@ final class Automation {
         case emptyText
         /// The store refused (the folder is missing, the disk is full): its words.
         case storage(String)
+        /// The text or the title is over `AutomationLink`'s bound.
+        case tooLong
 
         var errorDescription: String? {
             switch self {
@@ -27,6 +29,7 @@ final class Automation {
             case .noSuchNote(let title): "No note is titled “\(title)”."
             case .emptyText: "The note needs some text."
             case .storage(let message): message
+            case .tooLong: "The text is too long for a note (\(AutomationLink.textLimit) characters at most)."
             }
         }
     }
@@ -58,9 +61,12 @@ final class Automation {
         }
     }
 
-    /// Performs one request; the license is asked at every write.
+    /// Performs one request; the license is asked at every write, and the
+    /// text is bounded at the door (a link is dropped before this, an
+    /// action fails with why).
     @discardableResult
     func perform(_ request: AutomationRequest) throws -> AutomationOutcome {
+        guard AutomationLink.isBounded(request) else { throw Failure.tooLong }
         switch request {
         case .new(let text, let title, let color):
             let composed = AutomationLink.compose(title: title, text: text)
@@ -88,6 +94,9 @@ final class Automation {
             return .appended(id)
         case .text(let title):
             guard let note = find(title), let body = model.body(of: note.id) else { throw Failure.noSuchNote(title) }
+            // The whole text or nothing: never a summary or a preview.
+            guard body.bodyIsLoaded else { throw Failure.storage(StoreError.bodyUnavailable(note.id).localizedDescription) }
+            guard !body.truncated else { throw Failure.storage(StoreError.oversized(note.id).localizedDescription) }
             return .text(body.text)
         case .open(let title):
             guard let note = find(title) else { throw Failure.noSuchNote(title) }
