@@ -168,6 +168,30 @@ pnpm openklack:build
 ```
 
 Global keyboard sound requires macOS Input Monitoring permission for OpenKlack.
+Open System Settings (in the setup guide and on the home screen's permission notice) asks macOS with `CGRequestListenEventAccess`, opens the Input Monitoring pane, and shows a floating drag-to-grant helper: a small non-activating utility panel (`NSPanel`, floating level, on every Space) at the bottom-right of the screen with System Settings, holding the app icon as an `NSDraggingSource` that vends the bundle's file URL (`NSPasteboardTypeFileURL`, what Finder puts on the pasteboard), for when OpenKlack is missing from the list and has to be dropped into it.
+"Not working? Reset" runs `/usr/bin/tccutil reset ListenEvent <bundle id>` directly (no shell, this app only) and asks again, so macOS re-prompts and a fresh entry matching this build appears; the panel closes itself once the permission is granted, from Close or its title bar, when the guide's Keyboard access step is left, and on quit. The guide's step offers "Show the helper again" while it is away.
+The native bridge (`src-tauri/native/macos.m`, called from `engine.rs`) reports state to Rust as numbered message kinds, and Rust exposes the panel to the settings window as two commands:
+
+| Message kind | Meaning                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| 0, 1         | Key down, key up: key code and logical key name                                              |
+| 2            | Forget held keys                                                                             |
+| 100          | Input Monitoring permission: 1 granted                                                       |
+| 101          | Microphone: 0 idle, 1 in use, 2 unknown, 3 detection unavailable                             |
+| 102          | Mac resting (sleep, screens off, session inactive): 1 paused                                 |
+| 103          | Default output device changed; reopen the audio output                                       |
+| 104          | Frontmost app changed (bundle identifier in the text)                                        |
+| 105          | Secure input: 1 active                                                                       |
+| 106          | Default output route: 1 built-in speakers, 0 anything else                                   |
+| 107          | Drag-to-grant helper panel: 1 shown, 0 hidden (closed by the user, or once the permission is granted) |
+
+| Command                    | Effect                                                                                        |
+| -------------------------- | --------------------------------------------------------------------------------------------- |
+| `request_input_permission` | Asks macOS for Input Monitoring and opens the pane when it is still missing                   |
+| `show_permission_helper`   | Shows the floating helper (`ok_show_permission_helper`); nothing once the permission is there |
+| `hide_permission_helper`   | Hides it (`ok_hide_permission_helper`); also run when the permission arrives and on quit      |
+
+The panel's state (`Runtime.permission_helper.visible`, `model.rs`) follows kind 107 and is published in the snapshot as `runtime.permissionHelper`.
 The home screen offers sound selection, starred favorites, one volume slider, and optional per-key customization. Settings contain muted apps, microphone pause, launch at login, appearance, file imports/exports, and local diagnostics. There is no desktop typing test or user-facing preset editor.
 Official builds open a short setup guide once, on first launch (`onboardingCompleted` in `settings.json`; Settings → About & help → Show setup guide reopens it), and turn "Open at login" on once, on that first launch (`loginItemDefaulted`), after which the Settings toggle and System Settings → Login Items are the user's; source builds do neither.
 App updates follow [RELEASES.md](../RELEASES.md): official builds check a signed feed, download in the background and install on the next quit or restart; "Check for updates automatically" is turned on once, on that same first launch of a fresh install (`autoCheckDefaulted` in `updates.json`), "Download and install automatically" stays off until the user turns it on, and `brew upgrade --cask openklack` always works (see [Releases and updates](#releases-and-updates)).
