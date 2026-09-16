@@ -37,6 +37,8 @@ export type Snapshot = {
   runtime: {
     inputPermission: boolean;
     microphone: number;
+    /** Where the Mac's default output plays; the microphone only pauses through the speakers. */
+    outputRoute: "speakers" | "other";
     secureInput: boolean;
     audioReady: boolean;
     audioError: string | null;
@@ -47,6 +49,8 @@ export type Snapshot = {
     licenseBlocked: boolean;
   };
   pauseReason: string | null;
+  /** The pause a temporary resume is overriding, while that resume is what keeps playback on. */
+  resumedReason: string | null;
   effectivePresetId: string;
   recoveryNotices: string[];
   licensingEnabled: boolean;

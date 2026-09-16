@@ -58,8 +58,8 @@ export function General({
           }
         />
         <Toggle
-          label="Pause when the microphone is in use"
-          description="Includes calls, dictation, and recording."
+          label="Pause while the microphone is in use"
+          description="Only through the built-in speakers, so people on your call don't hear the sounds. Headphones keep playing."
           selected={snapshot!.preferences.pauseOnMicrophone}
           disabled={busy || snapshot!.runtime.microphone === 3}
           onChange={(enabled) => void desktop.save((p) => ({ ...p, pauseOnMicrophone: enabled }))}

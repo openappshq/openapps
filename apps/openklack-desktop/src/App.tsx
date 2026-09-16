@@ -12,10 +12,12 @@ import {
   Volume2,
   VolumeX,
   Pause,
+  Play,
   WifiOff,
   X,
 } from "lucide-react";
 import { useDesktop } from "./useDesktop";
+import { RESUMABLE_REASONS, resumedBannerText } from "./pauseBanner";
 import { useLicense } from "./useLicense";
 import { licensePill } from "./licenseState";
 import {
@@ -255,20 +257,35 @@ export default function App() {
             snapshot.runtime.inputPermission &&
             !snapshot.runtime.configurationError &&
             !snapshot.runtime.audioError &&
-            (snapshot.pauseReason || snapshot.runtime.temporaryResume) && (
+            (snapshot.pauseReason || snapshot.resumedReason) && (
               <div className="pause-banner" role="status">
-                <Pause size={16} aria-hidden="true" />
-                <p>{snapshot.pauseReason ?? "Temporarily resumed"}</p>
-                {[
-                  "Paused for this app",
-                  "Microphone in use",
-                  "Checking microphone activity",
-                ].includes(snapshot.pauseReason ?? "") && (
+                {snapshot.pauseReason ? (
+                  <Pause size={16} aria-hidden="true" />
+                ) : (
+                  <Play size={16} aria-hidden="true" />
+                )}
+                <p>
+                  {snapshot.pauseReason ??
+                    resumedBannerText(
+                      snapshot.resumedReason ?? "",
+                      prefs.appRules.find((r) => r.bundleId === snapshot.runtime.frontmostApp)
+                        ?.name,
+                    )}
+                </p>
+                {RESUMABLE_REASONS.includes(snapshot.pauseReason ?? "") && (
                   <Button
                     variant="ghost"
                     onPress={() => void desktop.perform(() => invoke("resume_temporarily"))}
                   >
                     Resume temporarily
+                  </Button>
+                )}
+                {!snapshot.pauseReason && snapshot.resumedReason && (
+                  <Button
+                    variant="ghost"
+                    onPress={() => void desktop.perform(() => invoke("end_temporary_resume"))}
+                  >
+                    Pause again
                   </Button>
                 )}
                 {snapshot.runtime.licenseBlocked && page !== "general" && (
