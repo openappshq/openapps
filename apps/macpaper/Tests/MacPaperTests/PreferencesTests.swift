@@ -5,16 +5,11 @@ import Testing
 
 @MainActor
 struct PreferencesTests {
-    private func suite() -> UserDefaults {
-        let name = "space.openapps.macpaper.tests.prefs.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defaults.removePersistentDomain(forName: name)
-        return defaults
-    }
-
     @Test("Defaults are the contract's: on, the notch display, hover or click, down, regular, hide in fullscreen, ⌃⌥⌘W, shuffle off, same on all displays")
-    func defaults() {
-        let preferences = Preferences(defaults: suite())
+    func defaults() throws {
+        let temporary = try TemporaryDefaults()
+        defer { temporary.remove() }
+        let preferences = Preferences(defaults: temporary.defaults)
         #expect(preferences.notchEnabled)
         #expect(preferences.hostDisplay == .notchDisplay)
         #expect(preferences.trigger == .both)
@@ -30,8 +25,10 @@ struct PreferencesTests {
     }
 
     @Test("Every setting round-trips through its key, and a cleared hotkey stays cleared")
-    func roundTrip() {
-        let defaults = suite()
+    func roundTrip() throws {
+        let temporary = try TemporaryDefaults()
+        defer { temporary.remove() }
+        let defaults = temporary.defaults
         let preferences = Preferences(defaults: defaults)
         preferences.notchEnabled = false
         preferences.hostDisplay = .everyNotchedDisplay
@@ -60,8 +57,10 @@ struct PreferencesTests {
     }
 
     @Test("A stored value that is not a case falls back to the default")
-    func badValues() {
-        let defaults = suite()
+    func badValues() throws {
+        let temporary = try TemporaryDefaults()
+        defer { temporary.remove() }
+        let defaults = temporary.defaults
         defaults.set("sideways", forKey: PreferenceKey.direction)
         defaults.set(Data("junk".utf8), forKey: PreferenceKey.hotkey)
         let preferences = Preferences(defaults: defaults)

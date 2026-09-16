@@ -88,6 +88,14 @@ struct ContinuationTests {
     let exporter = GatedExporter()
     let picker = GatedPicker()
     let license = LicenseStatus()
+    /// Removed with the directory; a suite lives under the temporary
+    /// directory, never in ~/Library/Preferences.
+    let temporaryDefaults = Suites()
+
+    final class Suites: @unchecked Sendable {
+        private(set) var all: [TemporaryDefaults] = []
+        func append(_ suite: TemporaryDefaults) { all.append(suite) }
+    }
 
     /// The model over the fakes, its status bound to the manager's
     /// projection, one minute of trial left.
@@ -109,10 +117,9 @@ struct ContinuationTests {
             restriction: { LicenseRestriction.card(for: project()) },
             badge: { LicenseBadge.label(for: project(), appName: Licensing.appName) }, canBuy: true
         )
-        let suite = "space.openapps.macpaper.tests.continuations.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        let preferences = Preferences(defaults: defaults)
+        let temporary = try! TemporaryDefaults()
+        temporaryDefaults.append(temporary)
+        let preferences = Preferences(defaults: temporary.defaults)
         preferences.sameOnAllDisplays = true
         let model = AppModel(
             preferences: preferences, license: license, paths: AppPaths(root: directory), desktop: desktop,
@@ -125,6 +132,7 @@ struct ContinuationTests {
 
     func tearDown() {
         try? FileManager.default.removeItem(at: directory)
+        for suite in temporaryDefaults.all { suite.remove() }
     }
 
     func settle(_ model: AppModel) async {

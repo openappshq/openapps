@@ -59,7 +59,7 @@ private final class UpdaterMemoryFlags: FlagStore, @unchecked Sendable {
 /// the fresh-install default for "Check for updates automatically", decided
 /// once through the same rule as "Open at login", and what the panel's row
 /// makes of each phase. The updater is never started, so nothing here contacts a
-/// feed; its toggles live in a private defaults suite that is removed again.
+/// feed; its toggles live in a temporary suite that is removed again.
 @Suite("Updater wiring", .serialized)
 @MainActor
 struct UpdatesWiringTests {
@@ -67,17 +67,16 @@ struct UpdatesWiringTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-updates-wiring-\(UUID().uuidString)", isDirectory: true)
         let bundle = directory.appendingPathComponent("macPaper.app", isDirectory: true)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
-        let suite = "macpaper-updates-wiring.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let temporary = try TemporaryDefaults()
         let configuration = UpdaterConfiguration(
             appID: Updating.appID, appName: Updating.appName, bundleURL: bundle,
             currentVersion: UpdateVersion("0.2.0")!, currentBuild: UpdateVersion("0.2.0")!.buildNumber,
             feedURL: URL(string: "https://openapps.space/updates/macpaper/appcast.xml")!,
-            publicKey: Data(repeating: 7, count: 32).base64EncodedString(), defaults: defaults
+            publicKey: Data(repeating: 7, count: 32).base64EncodedString(), defaults: temporary.defaults
         )
         let updates = Updates(updater: Updater(configuration: configuration), flags: flags)
         return (updates, {
-            defaults.removePersistentDomain(forName: suite)
+            temporary.remove()
             try? FileManager.default.removeItem(at: directory)
         })
     }

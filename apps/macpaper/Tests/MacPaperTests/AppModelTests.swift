@@ -27,7 +27,8 @@ struct AppModelTests {
     @MainActor
     struct Harness {
         let directory: URL
-        let defaults: UserDefaults
+        let temporaryDefaults: TemporaryDefaults
+        var defaults: UserDefaults { temporaryDefaults.defaults }
         let preferences: Preferences
         let license = LicenseStatus()
         let desktop = RecordingApplier()
@@ -41,10 +42,8 @@ struct AppModelTests {
 
         init() {
             directory = FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-app-tests-\(UUID().uuidString)", isDirectory: true)
-            let suite = "space.openapps.macpaper.tests.\(UUID().uuidString)"
-            defaults = UserDefaults(suiteName: suite)!
-            defaults.removePersistentDomain(forName: suite)
-            preferences = Preferences(defaults: defaults)
+            temporaryDefaults = try! TemporaryDefaults()
+            preferences = Preferences(defaults: temporaryDefaults.defaults)
             model = AppModel(
                 preferences: preferences, license: license, paths: AppPaths(root: directory), desktop: desktop,
                 exporter: exporter, imagePicker: picker, displays: { Harness.displays }
@@ -54,6 +53,7 @@ struct AppModelTests {
 
         func tearDown() {
             try? FileManager.default.removeItem(at: directory)
+            temporaryDefaults.remove()
         }
 
         /// The apply runs on a detached task; wait for it.

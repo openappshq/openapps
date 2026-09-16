@@ -18,10 +18,15 @@ import SwiftUI
 /// are drawn with `ImageRenderer` (see `write`).
 @MainActor
 final class PreviewHarness {
-    nonisolated static let suite = "space.openapps.macpaper.preview"
+    /// The throwaway suite lives under the temporary directory (a suite
+    /// named by an absolute path is kept at that path), never in
+    /// ~/Library/Preferences, where a removed domain would be written back
+    /// as an empty plist.
+    nonisolated static let suiteDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("space.openapps.macpaper.preview-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    nonisolated static let suite = suiteDirectory.appendingPathComponent("defaults").path
 
     private let outputDirectory: URL
-    private let defaults = UserDefaults(suiteName: PreviewHarness.suite)!
+    private let defaults: UserDefaults
     private let paths: AppPaths
     private let preferences: Preferences
     private let license = LicenseStatus()
@@ -71,7 +76,8 @@ final class PreviewHarness {
 
     init(outputDirectory: URL) {
         self.outputDirectory = outputDirectory
-        defaults.removePersistentDomain(forName: Self.suite)
+        try? FileManager.default.createDirectory(at: Self.suiteDirectory, withIntermediateDirectories: true)
+        defaults = UserDefaults(suiteName: Self.suite)!
         paths = AppPaths(root: FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-preview-\(UUID().uuidString)", isDirectory: true))
         preferences = Preferences(defaults: defaults)
         preferences.sameOnAllDisplays = false
@@ -88,6 +94,9 @@ final class PreviewHarness {
     func run() async -> Bool {
         defer {
             defaults.removePersistentDomain(forName: Self.suite)
+            defaults.removeSuite(named: Self.suite)
+            defaults.synchronize()
+            try? FileManager.default.removeItem(at: Self.suiteDirectory)
             try? FileManager.default.removeItem(at: paths.root)
         }
         do {
