@@ -94,4 +94,59 @@ struct DarkSidePinCarryTests {
         guard case .pixelize(let dark)? = out.darkGenerator else { Issue.record("the dark side's photo did not survive"); return }
         #expect(dark.source == darkSource && dark.fit == .fit && dark.focus == Point(x: 0.3, y: 0.6), "the photo, and its framing, carried from the dark side alone")
     }
+
+    // Regression: with distinct light and dark photos, the light carry
+    // (carrySource(from: template.generator, ...), line 154) already fills
+    // out.generator's photo before the dark side is derived from it, so
+    // out.generator.darkened() starts with the light photo, not a blank.
+    // The dark carry used to only fill a blank (`c.source == nil`), so a
+    // materialised dark photo was silently dropped in favor of the derived
+    // light one; `replacing: true` makes it replace instead of fill.
+    @Test(
+        "A distinct dark photo survives the dark carry even though the derived dark side already carries the light photo — a photo is never dropped, pinned or not",
+        arguments: [Set<ParameterKey>(), [.generator], [.generator, .palette]]
+    )
+    func darkPhotoSurvivesDerivedLightCarry(pinned: Set<ParameterKey>) {
+        let lightSource = ImageReference(fileName: "light0123456789ab.png", contentHash: String(repeating: "1", count: 64))
+        let darkSource = ImageReference(fileName: "dark0123456789abc.png", contentHash: String(repeating: "2", count: 64))
+        var template = Wallpaper(generator: .pixelize(PixelizeParameters(source: lightSource, blockSize: 16, fit: .fill, focus: Point(x: 0.2, y: 0.4))), seed: 1)
+        template.darkGenerator = .pixelize(PixelizeParameters(source: darkSource, blockSize: 16, fit: .fit, focus: Point(x: 0.8, y: 0.3)))
+        let candidate = Wallpaper(generator: .pixelize(PixelizeParameters(source: nil, blockSize: 20)), seed: 2)
+        let out = Pins.apply(pinned, from: template, to: candidate)
+        guard case .pixelize(let light) = out.generator else { Issue.record("not pixelize"); return }
+        #expect(light.source == lightSource && light.fit == .fill && light.focus == Point(x: 0.2, y: 0.4), "the light side takes the template's photo")
+        guard case .pixelize(let dark)? = out.darkGenerator else { Issue.record("the dark side did not survive"); return }
+        #expect(dark.source == darkSource && dark.fit == .fit && dark.focus == Point(x: 0.8, y: 0.3), "the dark side keeps its own photo, not the light one the derived side already carried")
+    }
+
+    @Test("The same replace-not-fill carry holds when the derived dark side is a dither, not a pixelize")
+    func darkPhotoSurvivesDerivedLightCarryOnDither() {
+        let lightSource = ImageReference(fileName: "lightabcdef012345.png", contentHash: String(repeating: "3", count: 64))
+        let darkSource = ImageReference(fileName: "darkabcdef0123456.png", contentHash: String(repeating: "4", count: 64))
+        var template = Wallpaper(generator: .pixelize(PixelizeParameters(source: lightSource, blockSize: 16, fit: .fill, focus: Point(x: 0.1, y: 0.9))), seed: 1)
+        template.darkGenerator = .dither(DitherParameters(source: darkSource, fit: .fit, focus: Point(x: 0.6, y: 0.5)))
+        let candidate = Wallpaper(generator: .dither(DitherParameters(source: nil)), seed: 2)
+        let out = Pins.apply([.generator], from: template, to: candidate)
+        guard case .dither(let light) = out.generator else { Issue.record("not dither"); return }
+        #expect(light.source == lightSource && light.fit == .fill && light.focus == Point(x: 0.1, y: 0.9), "the light side takes the template's photo")
+        guard case .dither(let dark)? = out.darkGenerator else { Issue.record("the dark side did not survive"); return }
+        #expect(dark.source == darkSource && dark.fit == .fit && dark.focus == Point(x: 0.6, y: 0.5), "a dither dark side also keeps its own photo over the derived one")
+    }
+
+    @Test("Shuffle.next carries distinct light and dark photos through a pinned generator: the drawn document's dark side keeps its own photo, not the light one the derived side already carries")
+    func darkPhotoSurvivesShuffle() throws {
+        let lightSource = PhotoCarryTests.reference
+        let darkSource = ImageReference(fileName: "darkchecker.png", contentHash: "darkchecker")
+        let renderer = WallpaperRenderer(images: MemoryImages([lightSource: PhotoCarryTests.source, darkSource: PhotoCarryTests.checker(size: 32, tile: 4)]))
+        let context = RenderContext(size: PixelSize(width: 640, height: 400), menuBarStrip: 12)
+        var template = Wallpaper(generator: .pixelize(PixelizeParameters(source: lightSource, blockSize: 16, fit: .fill)), seed: 1)
+        template.darkGenerator = .pixelize(PixelizeParameters(source: darkSource, blockSize: 16, fit: .fit, focus: Point(x: 0.7, y: 0.2)))
+        template.pinned = [.generator]
+        var g = SeededGenerator(seed: 1)
+        let outcome = Shuffle.next(from: template, pins: [.generator], using: &g, families: [RecipeFamily.named("Pixelized photo")!], renderer: renderer, context: context)
+        let document = try #require(outcome.document, "a textured photo clears the gate within the attempt budget")
+        #expect(document.generator.source == lightSource, "the light side keeps the template's photo")
+        guard case .pixelize(let dark)? = document.darkGenerator else { Issue.record("the dark side did not survive the draw"); return }
+        #expect(dark.source == darkSource, "the dark side keeps its own photo, not the light one the derived side already carried")
+    }
 }
