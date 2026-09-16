@@ -12,7 +12,7 @@ cask "openklack" do
   desc "Mechanical keyboard sounds for the keyboard you already own"
   homepage "https://openapps.space/openklack/"
 
-  # OpenKlack can update itself (off by default); Homebrew shouldn't fight it.
+  # OpenKlack checks for updates itself; installing is opt-in. Homebrew shouldn’t fight it.
   auto_updates true
   depends_on macos: :sonoma
 
