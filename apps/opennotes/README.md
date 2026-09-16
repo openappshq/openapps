@@ -59,7 +59,7 @@ scripts/bundle.sh      # release build → build/OpenNotes.app, ad-hoc signed
 A build from source has licensing compiled out: no License section, no trial, no license network calls, every note editable; Settings → Updates says the build has no updater. The official flavour compiles both in (`OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1`, with `scripts/generate-licensing-config.sh` writing the gitignored `Sources/OpenNotes/Licensing/LicensingConfig.swift` from `OPENAPPS_DODO_ENV` and `OPENAPPS_DODO_PAID_PRODUCT_ID`; a debug build shortens the trial with `OPENNOTES_DEBUG_TRIAL_DAY_SECONDS=60`). The debug binary renders every surface to PNGs without opening a window, touching your notes folder or registering anything:
 
 ```sh
-.build/debug/OpenNotes --preview /tmp/opennotes-preview   # deck states (read-only too), All Notes, the license card, the setup guide, Settings; light and dark
+.build/debug/OpenNotes --preview /tmp/opennotes-preview   # deck states (read-only too), All Notes (empty, one, ten notes, no match, read-only), the license card, the setup guide, Settings; light and dark
 ```
 
 Regenerate the app icon and menu-bar image from the SVG masters in `design/assets` with `scripts/make-icons.sh`.

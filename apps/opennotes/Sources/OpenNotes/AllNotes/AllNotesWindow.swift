@@ -18,13 +18,13 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
             let root = AllNotesView(model: model, openNote: openNote, export: { [weak self] id, format in self?.export(id, as: format) })
             let hostingView = NSHostingView(rootView: root)
             let window = NSWindow(
-                contentRect: NSRect(origin: .zero, size: NSSize(width: 760, height: 520)),
+                contentRect: NSRect(origin: .zero, size: NSSize(width: 800, height: 540)),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false
             )
             window.title = "All Notes"
-            window.minSize = NSSize(width: 560, height: 360)
+            window.minSize = NSSize(width: 640, height: 400)
             window.isReleasedWhenClosed = false
             window.contentView = hostingView
             window.setFrameAutosaveName("AllNotes")
@@ -47,8 +47,11 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// Search, Active / Archived, the list with drag-to-reorder, the preview
-/// pane with its actions (design/products/opennotes.md, "All Notes").
+/// The sidebar (search with the count inside, Active / Archived, the list
+/// with drag-to-reorder, the license card while read-only) and the preview
+/// pane: the note's state, its actions as chips, the pill, and the note
+/// drawn as its own paper on the window's ground
+/// (design/products/opennotes.md, "All Notes").
 struct AllNotesView: View {
     let model: AppModel
     let openNote: (NoteID) -> Void
@@ -56,8 +59,21 @@ struct AllNotesView: View {
     @State private var query = ""
     @State private var showsArchived = false
     @State private var selection: NoteID?
+    @State private var hovered: NoteID?
     @Environment(\.previewRendering) private var previewRendering
     @Environment(\.colorScheme) private var colorScheme
+
+    /// The sidebar's width in the harness and its ideal width in the window.
+    static let sidebarWidth: CGFloat = 300
+
+    /// `query` is what the search field starts with (the harness's
+    /// no-results stage); the window starts empty.
+    init(model: AppModel, openNote: @escaping (NoteID) -> Void, export: @escaping (NoteID, ExportFormat) -> Void, query: String = "") {
+        self.model = model
+        self.openNote = openNote
+        self.export = export
+        _query = State(initialValue: query)
+    }
 
     private var notes: [Note] {
         model.search(query, archived: showsArchived)
@@ -69,30 +85,18 @@ struct AllNotesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // The trial's remaining time, or why the notes are read-only,
-            // as a pill over the toolbar (official builds; nothing while
-            // licensed), and while read-only the license card in
-            // LICENSING.md's words with the way out. Asked on every body.
-            if model.license.badge() != nil || model.license.restriction() != nil {
-                VStack(spacing: Brand.Space.s8) {
-                    LicensePillHeader(license: model.license)
-                    LicenseCard(license: model.license)
-                }
-                .padding(.horizontal, Brand.Space.s12)
-                .padding(.top, Brand.Space.s12)
-            }
             Group {
                 if previewRendering {
                     // `ImageRenderer` draws no split view: a fixed split.
                     HStack(spacing: 0) {
-                        list.frame(width: 320)
+                        sidebar.frame(width: Self.sidebarWidth)
                         Divider()
                         preview.frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else {
                     HSplitView {
-                        list.frame(minWidth: 280, idealWidth: 320)
-                        preview.frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+                        sidebar.frame(minWidth: 260, idealWidth: Self.sidebarWidth, maxWidth: 440)
+                        preview.frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
             }
@@ -101,76 +105,61 @@ struct AllNotesView: View {
             if model.updates.hint() != nil {
                 Divider()
                 UpdateHintRow(updates: model.updates)
-                    .padding(.horizontal, Brand.Space.s12)
+                    .padding(.horizontal, Brand.Space.s16)
                     .padding(.vertical, Brand.Space.s8)
             }
         }
         .background(Brand.canvas)
+        .tint(Brand.accentSolid)
     }
 
-    private var list: some View {
+    // MARK: - Sidebar
+
+    private var sidebar: some View {
         VStack(spacing: 0) {
-            HStack(spacing: Brand.Space.s8) {
-                if previewRendering {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(Brand.textSecondary)
-                        Text(query.isEmpty ? "Search" : query).foregroundStyle(query.isEmpty ? Brand.textSecondary : Brand.textPrimary)
-                        Spacer()
-                    }
-                    .font(Brand.body(13))
-                    .padding(.horizontal, 8)
-                    .frame(height: 28)
-                    .background(Brand.surface, in: RoundedRectangle(cornerRadius: 6))
-                } else {
-                    TextField("Search", text: $query)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Search notes")
-                }
-                if previewRendering {
-                    HStack(spacing: 2) {
-                        segment("Active", selected: !showsArchived)
-                        segment("Archived", selected: showsArchived)
-                    }
-                    .padding(2)
-                    .background(Brand.surface, in: RoundedRectangle(cornerRadius: 7))
-                } else {
-                    Picker("", selection: $showsArchived) {
-                        Text("Active").tag(false)
-                        Text("Archived").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 150)
+            VStack(spacing: Brand.Space.s8) {
+                searchField
+                HStack(spacing: Brand.Space.s4) {
+                    scopeChip("Active", archived: false)
+                    scopeChip("Archived", archived: true)
+                    Spacer(minLength: 0)
                 }
             }
             .padding(Brand.Space.s12)
-            Divider()
+            // Why the notes are read-only, in LICENSING.md's words with the
+            // way out, above the list it gates. Asked on every body.
+            if model.license.restriction() != nil {
+                LicenseCard(license: model.license)
+                    .padding(.horizontal, Brand.Space.s12)
+                    .padding(.bottom, Brand.Space.s12)
+            }
             if notes.isEmpty {
-                VStack(spacing: Brand.Space.s8) {
-                    Spacer()
-                    Text(query.isEmpty ? (showsArchived ? "Nothing archived." : "No notes yet.") : "No note matches “\(query)”.")
-                        .font(Brand.body(13))
-                        .foregroundStyle(Brand.textSecondary)
-                    if query.isEmpty, !showsArchived {
-                        Text("Press the hotkey anywhere, or click + on the deck.")
-                            .font(Brand.body(12))
-                            .foregroundStyle(Brand.textSecondary)
-                    }
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
             } else if previewRendering {
                 VStack(spacing: 0) {
                     ForEach(notes) { note in
-                        row(note).padding(.horizontal, 8).padding(.vertical, 6)
-                            .background(selected?.id == note.id ? Brand.accentSubtle : Color.clear)
+                        row(note)
+                            .background(rowBackground(note))
+                            .padding(.horizontal, Brand.Space.s8)
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
                 }
             } else {
                 List(selection: $selection) {
                     ForEach(notes) { note in
-                        row(note).tag(note.id)
+                        row(note)
+                            .tag(note.id)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            // Drawn over the table's own highlight: the
+                            // selection is a tint of the accent, hover the
+                            // surface, never the system blue.
+                            .listRowBackground(
+                                rowBackground(note)
+                                    .padding(.horizontal, Brand.Space.s8)
+                                    .background(Brand.canvas)
+                            )
+                            .onHover { inside in hovered = inside ? note.id : (hovered == note.id ? nil : hovered) }
                     }
                     .onMove { source, destination in
                         // The drop asks the license (`AppModel.reorder`); the
@@ -181,94 +170,369 @@ struct AllNotesView: View {
                         model.reorder(ids)
                     }
                 }
-                .listStyle(.inset)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Brand.canvas)
                 .accessibilityLabel(showsArchived ? "Archived notes" : "Active notes")
             }
         }
     }
 
-    private func segment(_ title: String, selected: Bool) -> some View {
-        Text(title)
-            .font(Brand.body(12, weight: selected ? 600 : 400))
-            .foregroundStyle(Brand.textPrimary)
-            .padding(.horizontal, 10)
-            .frame(height: 22)
-            .background(selected ? Brand.canvas : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Brand.textSecondary)
+                .accessibilityHidden(true)
+            if previewRendering {
+                Text(query.isEmpty ? "Search" : query)
+                    .font(Brand.body(13))
+                    .foregroundStyle(query.isEmpty ? Brand.textSecondary : Brand.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            } else {
+                TextField("Search", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(Brand.body(13))
+                    .foregroundStyle(Brand.textPrimary)
+                    .accessibilityLabel("Search notes")
+            }
+            if let count = AllNotesText.count(notes.count) {
+                Text(count)
+                    .font(Brand.body(11))
+                    .monospacedDigit()
+                    .foregroundStyle(Brand.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(Brand.surface, in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
     }
 
-    private func row(_ note: Note) -> some View {
-        HStack(alignment: .top, spacing: Brand.Space.s8) {
-            RoundedRectangle(cornerRadius: 2).fill(Brand.tab(note.color)).frame(width: 4, height: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    if note.pinned { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(Brand.textSecondary) }
-                    Text(note.title).font(Brand.body(13, weight: 600)).foregroundStyle(Brand.textPrimary).lineLimit(1)
-                }
-                Text(note.preview.isEmpty ? " " : note.preview).font(Brand.body(12)).foregroundStyle(Brand.textSecondary).lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            Text(Age.text(note.modified)).font(Brand.mono(10)).foregroundStyle(Brand.textSecondary)
+    /// Active / Archived: the chosen one carries the accent.
+    private func scopeChip(_ title: String, archived: Bool) -> some View {
+        let selected = showsArchived == archived
+        return Button {
+            showsArchived = archived
+            selection = nil
+        } label: {
+            Text(title)
         }
-        .padding(.vertical, 2)
+        .buttonStyle(ChipButtonStyle(tone: selected ? .selected : .quiet))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// The selection is the accent's tint: the subtle token in light, and
+    /// in dark a wash of the solid over the canvas, since the dark subtle
+    /// token is the coral paper itself and a row must not read as one.
+    private func rowBackground(_ note: Note) -> some View {
+        let selectedRow = selected?.id == note.id
+        let selection = colorScheme == .dark ? Brand.accentSolid.opacity(0.14) : Brand.accentSubtle
+        return RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous)
+            .fill(selectedRow ? selection : hovered == note.id ? Brand.surface : Color.clear)
+            .animation(.easeOut(duration: Brand.Motion.fast), value: selectedRow)
+    }
+
+    /// The color as the deck's pill dash, the title with the pin, the age,
+    /// the first line in the note's own face.
+    private func row(_ note: Note) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Capsule()
+                .fill(Brand.tab(note.color))
+                .overlay(Capsule().strokeBorder(Color.black.opacity(0.12), lineWidth: 1))
+                .frame(width: 4, height: 24)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(note.title)
+                        .font(Brand.body(13, weight: 600))
+                        .foregroundStyle(Brand.textPrimary)
+                        .lineLimit(1)
+                    if note.pinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Brand.textSecondary)
+                            .accessibilityHidden(true)
+                    }
+                    Spacer(minLength: Brand.Space.s8)
+                    Text(Age.text(note.modified))
+                        .font(Brand.body(11))
+                        .monospacedDigit()
+                        .foregroundStyle(Brand.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                Text(note.preview.isEmpty ? " " : note.preview)
+                    .font(note.face == .mono ? Brand.mono(11) : Brand.body(12))
+                    .foregroundStyle(Brand.textSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { if !note.archived { openNote(note.id) } }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(note.title), \(Age.text(note.modified))")
+        .accessibilityLabel(AllNotesText.rowLabel(note))
     }
 
+    // MARK: - Preview
+
     private var preview: some View {
-        Group {
-            if let note = selected {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: Brand.Space.s8) {
-                        if note.archived {
-                            Button("Restore") { model.unarchive(note.id) }.disabled(model.readOnly)
-                        } else {
-                            Button("Open") { openNote(note.id) }.keyboardShortcut(.defaultAction)
-                            Button(note.pinned ? "Unpin" : "Pin") { model.setPinned(!note.pinned, for: note.id) }.disabled(model.readOnly)
-                            Button("Archive") { model.archive(note.id) }.disabled(model.readOnly)
-                        }
-                        Spacer()
-                        if previewRendering {
-                            Button("Export…") {}
-                        } else {
-                            Menu("Export…") {
-                                ForEach(ExportFormat.allCases, id: \.self) { format in
-                                    Button(format.title) { export(note.id, format) }
-                                }
-                            }
-                            .fixedSize()
-                        }
-                        Button("Reveal in Finder") { model.revealInFinder(note.id) }
-                    }
-                    .padding(Brand.Space.s12)
-                    Divider()
-                    Group {
-                        if previewRendering {
-                            PreviewText(text: note.text, face: note.face, dark: colorScheme == .dark)
-                                .padding(Brand.Space.s16)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        } else {
-                            ScrollView {
-                                PreviewText(text: note.text, face: note.face, dark: colorScheme == .dark)
-                                    .padding(Brand.Space.s16)
-                            }
-                        }
-                    }
-                    .background(Brand.face(note.color))
-                    Divider()
-                    Text("\(note.id.fileName) · \(note.color.title) · \(note.face.title) · created \(note.created.formatted(date: .abbreviated, time: .shortened))" + (note.bodyIsLoaded ? "" : " · can’t read the file right now; shown in part"))
-                        .font(Brand.mono(10))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Brand.Space.s8) {
+                if let note = selected {
+                    Circle()
+                        .fill(Brand.tab(note.color))
+                        .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 1))
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                    Text(AllNotesText.caption(note))
+                        .font(Brand.body(11, weight: 600))
+                        .tracking(0.8)
                         .foregroundStyle(Brand.textSecondary)
                         .lineLimit(1)
-                        .padding(Brand.Space.s12)
+                }
+                Spacer(minLength: 0)
+                // The trial's remaining time, or why the notes are
+                // read-only, beside the actions it gates (official builds;
+                // nothing while licensed).
+                LicensePillHeader(license: model.license)
+            }
+            .frame(height: 22)
+            .padding(.horizontal, Brand.Space.s16)
+            .padding(.top, Brand.Space.s12)
+            if let note = selected {
+                actions(note)
+                    .padding(.horizontal, Brand.Space.s16)
+                    .padding(.top, Brand.Space.s8)
+                Group {
+                    if previewRendering {
+                        paper(note)
+                            .padding(Brand.Space.s16)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    } else {
+                        ScrollView {
+                            paper(note)
+                                .padding(Brand.Space.s16)
+                                .frame(maxWidth: .infinity, alignment: .top)
+                        }
+                    }
                 }
             } else {
-                Text("Select a note")
-                    .font(Brand.body(13))
-                    .foregroundStyle(Brand.textSecondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyState
             }
         }
+    }
+
+    /// Open (Restore for an archived note) carries the accent; the rest are
+    /// quiet chips, with their words while the pane is wide enough and as
+    /// icons with help tags when it is not.
+    private func actions(_ note: Note) -> some View {
+        ViewThatFits(in: .horizontal) {
+            actionRow(note, compact: false)
+            actionRow(note, compact: true)
+        }
+    }
+
+    private func actionRow(_ note: Note, compact: Bool) -> some View {
+        HStack(spacing: 6) {
+            if note.archived {
+                Button("Restore") { model.unarchive(note.id) }
+                    .buttonStyle(ChipButtonStyle(tone: .primary))
+                    .disabled(model.readOnly)
+            } else {
+                Button("Open") { openNote(note.id) }
+                    .buttonStyle(ChipButtonStyle(tone: .primary))
+                    .keyboardShortcut(.defaultAction)
+                chip(note.pinned ? "Unpin" : "Pin", symbol: note.pinned ? "pin.slash" : "pin", compact: compact) { model.setPinned(!note.pinned, for: note.id) }
+                    .disabled(model.readOnly)
+                chip("Archive", symbol: "archivebox", compact: compact) { model.archive(note.id) }
+                    .disabled(model.readOnly)
+            }
+            Spacer(minLength: 0)
+            if previewRendering {
+                chip("Export…", symbol: "square.and.arrow.up", compact: compact) {}
+            } else {
+                Menu {
+                    ForEach(ExportFormat.allCases, id: \.self) { format in
+                        Button(format.title) { export(note.id, format) }
+                    }
+                } label: {
+                    chipLabel("Export…", symbol: "square.and.arrow.up", compact: compact)
+                }
+                .menuStyle(.button)
+                .buttonStyle(ChipButtonStyle(tone: .quiet))
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Export…")
+                .accessibilityLabel("Export…")
+            }
+            chip("Reveal in Finder", symbol: "folder", compact: compact) { model.revealInFinder(note.id) }
+        }
+    }
+
+    private func chip(_ title: String, symbol: String, compact: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            chipLabel(title, symbol: symbol, compact: compact)
+        }
+        .buttonStyle(ChipButtonStyle(tone: .quiet))
+        .help(title)
+        .accessibilityLabel(title)
+    }
+
+    private func chipLabel(_ title: String, symbol: String, compact: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .accessibilityHidden(true)
+            if !compact { Text(title) }
+        }
+    }
+
+    /// The note as the deck shows it: the same face, ink, corner and
+    /// contact shadow as the docked card, with what the file knows in the
+    /// footer band.
+    private func paper(_ note: Note) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let dark = colorScheme == .dark
+        return VStack(alignment: .leading, spacing: 0) {
+            PreviewText(text: note.text, face: note.face, dark: dark)
+                .padding(Brand.Space.s16)
+                .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+            HStack(spacing: Brand.Space.s8) {
+                Text(AllNotesText.footer(note))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                Text(note.face.title)
+                    .fixedSize()
+            }
+            .font(Brand.body(11))
+            .foregroundStyle(Brand.noteInkSecondary)
+            .padding(.horizontal, Brand.Space.s16)
+            .padding(.vertical, 9)
+            .background(Color.black.opacity(0.05))
+        }
+        .background(Brand.face(note.color))
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(dark ? Brand.tab(note.color).opacity(0.28) : Color.black.opacity(0.1), lineWidth: 1))
+        .shadow(color: .black.opacity(dark ? 0.4 : 0.12), radius: 12, x: 0, y: 5)
+        .frame(maxWidth: 600, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Note: \(note.title)")
+    }
+
+    private var emptyState: some View {
+        let copy = AllNotesText.empty(query: query, archived: showsArchived)
+        return VStack(spacing: Brand.Space.s4) {
+            Text(copy.title)
+                .font(Brand.body(13, weight: 600))
+                .foregroundStyle(Brand.textPrimary)
+            Text(copy.detail)
+                .font(Brand.body(12))
+                .foregroundStyle(Brand.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(Brand.Space.s24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A small action: the accent for the one primary action, a quiet surface
+/// for the rest, the accent's tint for a chosen scope. Press feedback is a
+/// small scale, disabled a fade.
+struct ChipButtonStyle: ButtonStyle {
+    enum Tone { case primary, quiet, selected }
+
+    let tone: Tone
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Brand.body(12, weight: tone == .quiet ? 500 : 600))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(background(pressed: configuration.isPressed), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(isEnabled ? 1 : 0.4)
+            .animation(.easeOut(duration: Brand.Motion.fast), value: configuration.isPressed)
+    }
+
+    private var foreground: Color {
+        switch tone {
+        case .primary: Brand.accentOn
+        case .quiet: Brand.textPrimary
+        case .selected: Brand.accentText
+        }
+    }
+
+    private func background(pressed: Bool) -> Color {
+        switch tone {
+        case .primary: pressed ? Brand.accentSolid.opacity(0.85) : Brand.accentSolid
+        case .quiet: pressed ? Brand.hover : Brand.surface
+        case .selected: Brand.accentSubtle
+        }
+    }
+}
+
+/// The words All Notes derives from a note and a state; pure, so the
+/// tests read them without a window.
+enum AllNotesText {
+    /// The count inside the search field; nothing while the list is empty
+    /// (the pane says why).
+    static func count(_ notes: Int) -> String? {
+        switch notes {
+        case 0: nil
+        case 1: "1 note"
+        default: "\(notes) notes"
+        }
+    }
+
+    /// The state caption over the actions.
+    static func caption(_ note: Note) -> String {
+        if note.archived { return "ARCHIVED" }
+        return note.pinned ? "PINNED · IN THE DECK" : "ACTIVE · IN THE DECK"
+    }
+
+    /// "Edited 5 min ago", "Edited just now", "Edited Mar 4".
+    static func edited(_ date: Date, now: Date = Date()) -> String {
+        let age = Age.text(date, now: now)
+        if age == "now" { return "Edited just now" }
+        if now.timeIntervalSince(date) < 7 * 86_400 { return "Edited \(age) ago" }
+        return "Edited \(age)"
+    }
+
+    /// The paper's footer: when it was created and edited, its file, and
+    /// whether what is shown is the whole of it.
+    static func footer(_ note: Note, now: Date = Date()) -> String {
+        var parts = ["Created \(note.created.formatted(date: .abbreviated, time: .omitted))", edited(note.modified, now: now), note.id.fileName]
+        if note.truncated {
+            parts.append("over 1 MB; shown from the start, read-only")
+        } else if !note.bodyIsLoaded {
+            parts.append("can’t read the file right now; shown in part")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// What the pane says while there is nothing to show.
+    static func empty(query: String, archived: Bool) -> (title: String, detail: String) {
+        if !query.isEmpty {
+            return ("No matches", "Nothing \(archived ? "archived" : "in the deck") contains “\(query)”.")
+        }
+        if archived {
+            return ("Nothing archived", "Archived notes leave the deck and wait here; Restore brings one back.")
+        }
+        return ("No notes yet", "Press the hotkey in any app, or click + on the deck.")
+    }
+
+    /// The row for VoiceOver: the title, pinned, the age.
+    static func rowLabel(_ note: Note, now: Date = Date()) -> String {
+        [note.title, note.pinned ? "pinned" : nil, Age.text(note.modified, now: now)].compactMap { $0 }.joined(separator: ", ")
     }
 }

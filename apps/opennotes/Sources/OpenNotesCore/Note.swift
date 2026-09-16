@@ -121,13 +121,48 @@ nonisolated public struct Note: Hashable, Sendable, Identifiable {
         text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// The text after the title line, trimmed, for the All Notes list.
+    /// The text after the title line as one line for the All Notes list:
+    /// the lines joined with spaces, the markers gone (headings, emphasis,
+    /// code, bullets and checkboxes), read line by line only until
+    /// `previewLength` characters are in hand (the line that crosses it is
+    /// kept whole), so a long note costs no more than a short one.
     public var preview: String {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if let first = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
             lines.removeSubrange(...first)
         }
-        return lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " · ")
+        var kept: [String] = []
+        var length = 0
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            kept.append(trimmed)
+            length += trimmed.count + 1
+            if length >= Note.previewLength { break }
+        }
+        guard !kept.isEmpty else { return "" }
+        let plain = MarkdownLite.plainText(kept.joined(separator: "\n"))
+        return plain.split(separator: "\n").map { Note.withoutListMarker(String($0)) }.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// How much of the text the preview reads before it stops taking
+    /// lines, in characters; far more than a row shows.
+    public static let previewLength = 240
+
+    /// The line without a leading bullet, number or checkbox.
+    static func withoutListMarker(_ line: String) -> String {
+        var rest = Substring(line.trimmingCharacters(in: .whitespaces))
+        if rest.hasPrefix("- ") || rest.hasPrefix("* ") {
+            rest = rest.dropFirst(2)
+        } else if let dot = rest.firstIndex(of: "."), rest[..<dot].allSatisfy(\.isNumber), !rest[..<dot].isEmpty, rest[rest.index(after: dot)...].hasPrefix(" ") {
+            rest = rest[rest.index(after: dot)...].dropFirst()
+        }
+        for box in ["[ ] ", "[x] ", "[X] "] where rest.hasPrefix(box) {
+            rest = rest.dropFirst(box.count)
+            break
+        }
+        if rest == "[ ]" || rest == "[x]" || rest == "[X]" { return "" }
+        return rest.trimmingCharacters(in: .whitespaces)
     }
 
     public static func title(of text: String) -> String {

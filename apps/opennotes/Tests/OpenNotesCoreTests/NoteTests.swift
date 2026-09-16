@@ -14,9 +14,9 @@ final class NoteTests: XCTestCase {
         XCTAssertEqual(Note.title(of: "#"), "Untitled")
     }
 
-    @MainActor func testPreviewSkipsTheTitleAndJoinsTheRest() {
+    @MainActor func testPreviewSkipsTheTitleAndJoinsTheRestWithSpaces() {
         let note = Note(id: NoteID("g"), text: "Groceries\n\n- milk \n- eggs\n", created: date)
-        XCTAssertEqual(note.preview, "- milk · - eggs")
+        XCTAssertEqual(note.preview, "milk eggs")
         XCTAssertEqual(Note(id: NoteID("t"), text: "Only a title", created: date).preview, "")
     }
 

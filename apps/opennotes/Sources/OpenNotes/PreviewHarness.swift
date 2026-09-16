@@ -158,15 +158,26 @@ final class PreviewHarness {
             let left = DeckStage(content: content(state: .open(groceries, editing: true), toast: false), side: .left, dark: scheme == .dark)
             if await !write(left, scheme: scheme, appearance: appearance, to: "deck-left-\(suffix).png") { failures += 1 }
             preferences.side = .right
+            // All Notes over the deck's notes; then over its own folders:
+            // none, one, ten with every color and both faces, ten with a
+            // search that finds nothing; then read-only, the card above the
+            // list, the pill beside the actions, Pin / Archive disabled;
+            // then the card on its own.
             let allNotes = AllNotesView(model: model, openNote: { _ in }, export: { _, _ in })
-                .frame(width: 760, height: 520)
+                .frame(width: 800, height: 540)
                 .background(Brand.canvas)
             if await !write(allNotes, scheme: scheme, appearance: appearance, to: "allnotes-\(suffix).png") { failures += 1 }
-            // All Notes read-only: the card above the list, the pill in the
-            // toolbar, Pin / Archive disabled; then the card on its own.
+            for (name, count, query) in [("empty", 0, ""), ("one", 1, ""), ("ten", 10, ""), ("nomatch", 10, "zebra")] {
+                let stage = allNotesModel(notes: count)
+                let view = AllNotesView(model: stage.model, openNote: { _ in }, export: { _, _ in }, query: query)
+                    .frame(width: 800, height: 540)
+                    .background(Brand.canvas)
+                if await !write(view, scheme: scheme, appearance: appearance, to: "allnotes-\(name)-\(suffix).png") { failures += 1 }
+                try? FileManager.default.removeItem(at: stage.folder)
+            }
             setRestricted(true)
             let allNotesReadOnly = AllNotesView(model: model, openNote: { _ in }, export: { _, _ in })
-                .frame(width: 760, height: 560)
+                .frame(width: 800, height: 600)
                 .background(Brand.canvas)
             if await !write(allNotesReadOnly, scheme: scheme, appearance: appearance, to: "allnotes-readonly-\(suffix).png") { failures += 1 }
             let card = LicenseCard(license: license)
@@ -191,24 +202,50 @@ final class PreviewHarness {
         return failures == 0
     }
 
+    private typealias Sample = (text: String, color: NoteColor, face: NoteFace, pinned: Bool, order: Int, age: TimeInterval)
+
+    /// The deck's five notes, then five more for All Notes' ten: every
+    /// color, both faces, a second pinned one, a long one, a bare title.
+    private static let samples: [Sample] = [
+        ("Groceries\n- [x] milk\n- [ ] eggs\n- [ ] sourdough from **Bread Ahead**\n- [ ] coffee beans\n\nAsk about the _oat_ one.", .coral, .sans, true, 0, -3600),
+        ("Standup 16 Sep\n- feed key rotation\n- reply re ⌘W focus\n- release notes: paste as plain text", .yellow, .sans, false, 1, -7200),
+        ("# Snippets\n`brew upgrade --cask opennotes`\nsee https://openapps.space/opennotes/", .sky, .mono, false, 2, -86_400),
+        ("Side project\nName ideas, none good yet.", .mint, .sans, false, 3, -3 * 86_400),
+        ("Call mum\nSunday, after lunch.", .lilac, .sans, false, 4, -9 * 86_400),
+        ("Reading list\n- _Piranesi_\n- **The Dispossessed**\n- The Overstory, again", .paper, .sans, true, 5, -20 * 60),
+        ("Server notes\n```\nssh deploy@10.0.0.4\nsudo systemctl restart hertz\n```\nrotate the key on the 1st", .mint, .mono, false, 6, -5 * 3600),
+        ("Ideas for the talk\nStart with the folder, not the app. Show the file in Finder first, then the deck, then the same note in Obsidian. The point is that nothing is locked in: the notes were always theirs.\n\n## Demo order\n1. hotkey\n2. edge\n3. All Notes\n4. iCloud Drive", .yellow, .sans, false, 7, -2 * 86_400),
+        ("Untitled", .lilac, .sans, false, 8, -5 * 86_400),
+        ("Passport renewal\n- [ ] photos\n- [ ] form\n- [x] old passport found", .sky, .sans, false, 9, -12 * 86_400),
+    ]
+
     private func seedNotes() {
         let base = Date()
-        let samples: [(String, NoteColor, NoteFace, Bool, Int, TimeInterval)] = [
-            ("Groceries\n- [x] milk\n- [ ] eggs\n- [ ] sourdough from **Bread Ahead**\n- [ ] coffee beans\n\nAsk about the _oat_ one.", .coral, .sans, true, 0, -3600),
-            ("Standup 16 Sep\n- feed key rotation\n- reply re ⌘W focus\n- release notes: paste as plain text", .yellow, .sans, false, 1, -7200),
-            ("# Snippets\n`brew upgrade --cask opennotes`\nsee https://openapps.space/opennotes/", .sky, .mono, false, 2, -86_400),
-            ("Side project\nName ideas, none good yet.", .mint, .sans, false, 3, -3 * 86_400),
-            ("Call mum\nSunday, after lunch.", .lilac, .sans, false, 4, -9 * 86_400),
-        ]
-        for (text, color, face, pinned, order, age) in samples {
-            let id = NoteFileName.id(for: Note.title(of: text), created: base) { _ in false }
-            let note = Note(id: id, text: text, color: color, face: face, pinned: pinned, order: order, created: base.addingTimeInterval(age - 86_400), modified: base.addingTimeInterval(age))
+        Self.write(Array(Self.samples.prefix(5)), into: folder, base: base)
+        let archived = Note(id: NoteID("old-plan"), text: "Old plan\nDone and dusted.", color: .paper, archived: true, created: base.addingTimeInterval(-30 * 86_400))
+        try? Data(FrontMatter.serialize(archived).utf8).write(to: folder.appendingPathComponent(archived.id.fileName))
+    }
+
+    private static func write(_ samples: [Sample], into folder: URL, base: Date) {
+        for sample in samples {
+            let id = NoteFileName.id(for: Note.title(of: sample.text), created: base) { _ in false }
+            let note = Note(id: id, text: sample.text, color: sample.color, face: sample.face, pinned: sample.pinned, order: sample.order, created: base.addingTimeInterval(sample.age - 86_400), modified: base.addingTimeInterval(sample.age))
             let url = folder.appendingPathComponent(id.fileName)
             try? Data(FrontMatter.serialize(note).utf8).write(to: url)
             try? FileManager.default.setAttributes([.modificationDate: note.modified], ofItemAtPath: url.path)
         }
-        let archived = Note(id: NoteID("old-plan"), text: "Old plan\nDone and dusted.", color: .paper, archived: true, created: base.addingTimeInterval(-30 * 86_400))
-        try? Data(FrontMatter.serialize(archived).utf8).write(to: folder.appendingPathComponent(archived.id.fileName))
+    }
+
+    /// A model over its own temporary folder holding the first `count`
+    /// samples, for All Notes' empty, one-note and ten-note stages. The
+    /// caller removes the folder.
+    private func allNotesModel(notes count: Int) -> (model: AppModel, folder: URL) {
+        let stageFolder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-preview-allnotes-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: stageFolder, withIntermediateDirectories: true)
+        Self.write(Array(Self.samples.prefix(count)), into: stageFolder, base: Date())
+        let stage = AppModel(preferences: preferences, license: license, store: NoteStore(folder: stageFolder), watcher: FolderWatcher())
+        stage.store.load(create: false)
+        return (stage, stageFolder)
     }
 
     /// A model started over an empty temporary folder, exactly as a first
