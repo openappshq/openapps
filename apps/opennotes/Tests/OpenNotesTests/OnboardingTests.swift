@@ -31,7 +31,10 @@ private final class InertLoginItemService: LoginItemService {
 @MainActor
 struct OnboardingModelTests {
     let flags = MemoryFlags()
-    let license = LicenseStatus()
+    /// Standing in for "nothing bound yet" regardless of flavour: an
+    /// official build's own default starts restricted (Licensing.swift),
+    /// which is not what most of these tests are about.
+    let license = LicenseStatus(startsRestricted: false)
 
     func makeModel() -> OnboardingModel {
         let temporary = try! TemporaryDefaults()

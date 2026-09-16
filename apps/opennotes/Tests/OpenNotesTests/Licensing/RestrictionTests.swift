@@ -127,25 +127,55 @@ struct BadgeTests {
     @Test("The About copy names exactly the calls this flavour can make")
     func networkCopy() {
         let text = LicensingCopy.network
-        #expect(text.hasPrefix("OpenNotes reads and writes the notes folder you chose"))
+        #expect(text.hasPrefix("OpenNotes reads and writes your notes only in the folder you chose"))
         #expect(text.contains("license check") == Licensing.isCompiledIn)
         #expect(text.contains("update check") == Updating.isCompiledIn)
         #expect(text.contains("no network calls at all") == (!Licensing.isCompiledIn && !Updating.isCompiledIn))
     }
 }
 
-/// `LicenseStatus` is what the views read in every build: on with nothing
-/// to say until bound to a live source, and never a stored answer after.
+/// `LicenseStatus` is what the views read in every build: never a stored
+/// answer once bound. Before binding its default follows the flavour
+/// (Licensing.swift): a build without licensing is always on with nothing
+/// to say; a build with licensing starts **restricted** — "Starting your
+/// free trial…" — so nothing the launch runs before the controller binds
+/// it can write.
 @Suite("License status")
 @MainActor
 struct LicenseStatusTests {
-    @Test func startsOnWithNothingToSay() {
+    @Test("The flavour's own default: on with nothing to say from source, restricted from an official build")
+    func startsOnWithNothingToSayUnlessLicensingIsCompiledIn() {
         let status = LicenseStatus()
+        if Licensing.isCompiledIn {
+            #expect(!status.hasAccess())
+            #expect(status.state() == .trialUnavailable)
+            #expect(status.restriction() == LicenseRestriction.card(for: .trialUnavailable))
+            #expect(status.badge() == LicenseBadge.label(for: .trialUnavailable, appName: Licensing.appName))
+        } else {
+            #expect(status.hasAccess())
+            #expect(status.state() == nil)
+            #expect(status.badge() == nil)
+            #expect(status.restriction() == nil)
+        }
+        #expect(!status.canBuy)
+    }
+
+    @Test("startsRestricted: false always starts on with nothing to say, in every flavour — a test standing in for a source build")
+    func explicitlyUnrestrictedAlwaysStartsOn() {
+        let status = LicenseStatus(startsRestricted: false)
         #expect(status.hasAccess())
         #expect(status.state() == nil)
         #expect(status.badge() == nil)
         #expect(status.restriction() == nil)
-        #expect(!status.canBuy)
+    }
+
+    @Test("startsRestricted: true always starts restricted, in every flavour")
+    func explicitlyRestrictedAlwaysStartsRestricted() {
+        let status = LicenseStatus(startsRestricted: true)
+        #expect(!status.hasAccess())
+        #expect(status.state() == .trialUnavailable)
+        #expect(status.restriction()?.title == "Starting your free trial…")
+        #expect(status.badge()?.text == "Starting your free trial…")
     }
 
     @Test("Every accessor asks the bound source afresh; nothing is cached between calls")

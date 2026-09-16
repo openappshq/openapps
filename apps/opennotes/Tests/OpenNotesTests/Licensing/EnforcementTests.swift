@@ -260,6 +260,77 @@ struct EnforcementTests {
         _ = provisional
     }
 
+    // MARK: Storage errors, at the app outputs
+
+    @Test("An unreadable license record is a storage error, not \"no license\": the card, no Dodo call, then readable restores", arguments: [LicenseStoreError.unavailable("locked"), .corrupt])
+    func licenseRecordStorageError(error: LicenseStoreError) async throws {
+        // Otherwise plainly licensed, if only the record could be read.
+        store.record = paidRecord(lastSuccessAge: 3600)
+        store.readError = error
+        let manager = await attach()
+        defer { tearDown() }
+        try expectRestricted(title: "Can’t read the license record")
+        #expect(status.restriction()?.actions.first == .tryAgain)
+        #expect(client.calls.isEmpty, "no Dodo call while the record itself cannot even be read")
+        // Readable again ("Try again" / a wake): the stored record decides.
+        store.readError = nil
+        await manager.tick(wake: true)
+        try expectAllowed()
+    }
+
+    @Test("An activation whose record save is indeterminate keeps writing off until the retry lands")
+    func indeterminateActivationSaveKeepsWritingOff() async throws {
+        trialStore.record = trialRecord(elapsed: 4 * FakeClock.day) // trial already ended
+        client.activation = .activated(Activation(instanceID: "inst_1", productID: Self.paid, productName: "OpenNotes", createdAt: clock.now, serverDate: clock.now))
+        store.indeterminateSaves = true
+        let manager = await attach()
+        defer { tearDown() }
+        try expectRestricted(title: "Your free trial has ended")
+        #expect(await manager.activate(key: "OPENNOTES-KEY") == .activated, "the activation itself succeeded with Dodo")
+        // The record is in place but not confirmed durable: access still
+        // comes from what the store last confirmed (nothing), so the trial
+        // rules still decide — an ended trial, still restricted.
+        #expect(status.state() == .trialEnded, "not licensed yet: the save never confirmed")
+        try expectRestricted(title: "Your free trial has ended")
+        #expect(await manager.storageError == .indeterminate("not yet confirmed"))
+        // The retry succeeds: the record becomes durable at the manager,
+        // and access follows it there right away.
+        store.indeterminateSaves = false
+        await manager.tick()
+        #expect(await manager.state == .licensed, "the manager's own state confirms the retry landed")
+        #expect(await manager.storageError == nil)
+        // `retryStorage()`'s silent confirm (`flushRecord` alone, no
+        // `notify()`) does not itself push a fresh snapshot to `onChange` —
+        // unlike every other retry path here, which does (`reloadFromStore`,
+        // `applySuccess`, `write`). In the real app this is exactly the gap
+        // between the manager already being licensed and the next timer,
+        // wake or action re-reading it — `feed.snapshot` stands in for that
+        // next read, not for anything this test invented.
+        feed.snapshot = await manager.snapshot
+        #expect(status.state() == .licensed)
+        try expectAllowed()
+    }
+
+    @Test("A paid record whose journal entry is unreadable holds the feature off (check required) until a successful check settles it")
+    func unreadableJournalForAPaidRecordHoldsCheckRequired() async throws {
+        store.record = paidRecord(lastSuccessAge: 3600) // otherwise plainly licensed
+        journal.readError = .unavailable("locked")
+        // Unreachable at launch, so `checkOnLaunch()`'s own check does not
+        // settle this before the restricted assertions below ever run.
+        client.validation = .unreachable
+        let manager = await attach()
+        defer { tearDown() }
+        try expectRestricted(title: "Connect to the internet to verify your license")
+        #expect(await manager.journalUnreadable)
+        #expect(await manager.storageError != nil)
+        #expect(status.restriction()?.actions.contains(.tryAgain) == true)
+        // A successful check settles the unreadable entry and turns writing on.
+        client.validation = .valid(serverDate: clock.now)
+        await manager.check()
+        #expect(await !manager.journalUnreadable)
+        try expectAllowed()
+    }
+
     @Test("Text accepted while allowed still diverts to a conflict copy after the deadline, exactly as it would allowed")
     func acceptedTextDivertsToAConflictCopyAcrossExpiry() async throws {
         trialStore.record = trialRecord(elapsed: 3 * FakeClock.day - 60)

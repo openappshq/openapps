@@ -46,9 +46,21 @@ final class MemoryStore: LicenseStore, @unchecked Sendable {
     var record: LicenseRecord?
     var pendingCleanups: [PendingCleanup] = []
     var failsWrites = false
-    func loadRecord() throws(LicenseStoreError) -> LicenseRecord? { record }
+    /// Thrown by `loadRecord()`: an unreadable license record (a storage
+    /// error distinct from "no record").
+    var readError: LicenseStoreError?
+    /// `saveRecord` throws `.indeterminate` instead of succeeding: the
+    /// record is "in place but not known to be on disk" (LICENSING.md).
+    /// Not applied to `self.record`, since the manager's own memory is what
+    /// every test asserts on; flip it back to retry the save for real.
+    var indeterminateSaves = false
+    func loadRecord() throws(LicenseStoreError) -> LicenseRecord? {
+        if let readError { throw readError }
+        return record
+    }
     func saveRecord(_ record: LicenseRecord) throws(LicenseStoreError) {
         if failsWrites { throw .unavailable("denied") }
+        if indeterminateSaves { throw .indeterminate("not yet confirmed") }
         self.record = record
     }
     func clearRecord() throws(LicenseStoreError) {
@@ -64,7 +76,13 @@ final class MemoryStore: LicenseStore, @unchecked Sendable {
 
 final class MemoryJournal: InvalidationJournal, @unchecked Sendable {
     var entries: [String: JournalEntry] = [:]
-    func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry? { entries[instanceID] }
+    /// Thrown by `entry(instanceID:)`: the journal entry for an activation
+    /// cannot be read (distinct from no entry at all).
+    var readError: LicenseStoreError?
+    func entry(instanceID: String) throws(LicenseStoreError) -> JournalEntry? {
+        if let readError { throw readError }
+        return entries[instanceID]
+    }
     func record(instanceID: String, entry: JournalEntry) -> Bool {
         if let existing = entries[instanceID], existing.seq >= entry.seq { return true }
         entries[instanceID] = entry
