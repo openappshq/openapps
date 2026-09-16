@@ -32,7 +32,10 @@ cask "macpaper" do
 
   uninstall quit: "com.openappshq.macpaper"
 
+  # `--zap` removes everything, the user's wallpapers, favorites and license
+  # records in Application Support included.
   zap trash: [
+    "~/Library/Application Support/OpenApps/macpaper",
     "~/Library/Caches/com.openappshq.macpaper",
     "~/Library/HTTPStorages/com.openappshq.macpaper",
     "~/Library/Preferences/com.openappshq.macpaper.plist",
