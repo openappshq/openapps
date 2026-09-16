@@ -62,19 +62,13 @@
 # OPENAPPS_LICENSING=1) builds the variant scripts/update-e2e.sh runs: bundle
 # identifier com.openappshq.macpaper.updatetest, no URL scheme, no login item,
 # no setup guide and no licensing (so no record store, registry or Dodo
-# client; `UpdateTesting` in Sources/MacPaper/AppDelegate.swift), and UPDATE_FEED_URL
+# client; Sources/MacPaper/Updates/UpdateTesting.swift), and UPDATE_FEED_URL
 # (an http://127.0.0.1 feed is allowed) overriding the pinned feed. None of
 # that is accepted for any other build, and scripts/verify-release.sh
 # refuses it.
 #
 # Signing uses the hardened runtime, no sandbox (the app writes where the
 # user asks and hands files to NSWorkspace) and scripts/MacPaper.entitlements.
-#
-# Until the licensing and release tickets land, OPENAPPS_LICENSING=1 and
-# OPENAPPS_OFFICIAL=1 have nothing to link: the flags define their
-# conditions and the seams compile, but scripts/generate-licensing-config.sh
-# and release/sparkle-public-key.txt do not exist yet, so only the source
-# flavour builds.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
