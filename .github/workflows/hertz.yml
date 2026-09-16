@@ -215,9 +215,10 @@ jobs:
       - name: Check release configuration
         # Everything the release needs is checked up front, so a missing
         # secret fails here with its name and never produces a signed build
-        # that cannot be published. The certificate and the tokens are
-        # repository secrets shared by every app; only the update key is the
-        # environment's own (RELEASES.md, "Signing material"). Only public
+        # that cannot be published. The certificate and the read-only ruleset
+        # token are repository secrets shared by every app; the update key and
+        # the two publishing credentials are the environment's (RELEASES.md,
+        # "Signing material"). Only public
         # material is committed: the pinned requirement and the update public
         # key must have been generated.
         env:
@@ -239,8 +240,9 @@ jobs:
           if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then echo "::error::Secret SPARKLE_ED_PRIVATE_KEY is not set in the hertz-release environment."; missing=1; fi
           # Only publication uses these, but a missing token should fail before a long build, not after.
           if [ "$PUBLISH" = true ]; then
-            for name in RULESET_READ_TOKEN FEED_COMMIT_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
-              if [ -z "${!name}" ]; then echo "::error::Secret $name is not set as a repository secret; publishing needs it."; missing=1; fi
+            if [ -z "$RULESET_READ_TOKEN" ]; then echo "::error::Secret RULESET_READ_TOKEN is not set as a repository secret; publishing needs it."; missing=1; fi
+            for name in FEED_COMMIT_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
+              if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the hertz-release environment; publishing needs it."; missing=1; fi
             done
           fi
           if [ -z "$OPENAPPS_DODO_PAID_PRODUCT_ID" ]; then

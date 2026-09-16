@@ -115,23 +115,16 @@ release workflow creates the cask from
 [`packaging/homebrew/Casks/openreaction.rb`](../../packaging/homebrew/Casks/openreaction.rb)
 on the first release and bumps it after every later one.
 
-**Shared secrets (already there).** The certificate and the tokens are
-**repository** secrets shared by every app ([RELEASES.md, Signing
-material](../../RELEASES.md#signing-material)); the workflow reads them by
-name and nothing is copied per app:
+**Shared secrets (already there).** The certificate and the read-only
+ruleset token are **repository** secrets shared by every app ([RELEASES.md,
+Signing material](../../RELEASES.md#signing-material)); the workflow reads
+them by name and they are never copied per app:
 
 | Repository secret | Value |
 | --- | --- |
 | `RELEASE_SIGNING_P12` | The certificate and key as a `.p12`, base64-encoded (`release-signing.p12.base64`) |
 | `RELEASE_SIGNING_P12_PASSWORD` | Its password (`release-signing.p12.password`) |
 | `RULESET_READ_TOKEN` | [Fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository only, Administration: Read-only, created by a repository admin; used only to read the tag ruleset before publishing |
-| `FEED_COMMIT_TOKEN` | Fine-grained token for this repository only, Contents: Read and write; used only to push the update feed commit to `main` |
-| `HOMEBREW_TAP_DEPLOY_KEY` | The private half of an SSH deploy key added to `openappshq/homebrew-tap` with write access (`gh repo deploy-key add --allow-write`); it can push only to the tap |
-
-`FEED_COMMIT_TOKEN` belongs to a bot account or the
-release owner; the commits they push are authored `openapps-release
-<release@openapps.space>`. If `main` requires status checks or reviews for
-pushes, allow that account to bypass them for the feed path only.
 
 **Environment.** Create the environment **`openreaction-release`**
 (Settings → Environments) and add, on that environment, the following.
@@ -140,11 +133,20 @@ nothing else can reach the update key or publish. The build, publish and
 feed jobs all run in this environment, so any required reviewers approve
 each.
 
-**Secret** (the only one the environment holds):
+**Secrets** — the app's own update key, and the two publishing credentials
+(the same values every app uses, restored from the offline backup; they stay
+per environment so only `main` and release tags can publish):
 
 | Secret | Value |
 | --- | --- |
 | `SPARKLE_ED_PRIVATE_KEY` | The update key (`sparkle-ed25519.key`, one base64 line) |
+| `FEED_COMMIT_TOKEN` | Fine-grained token for this repository only, Contents: Read and write; used only to push the update feed commit to `main` |
+| `HOMEBREW_TAP_DEPLOY_KEY` | The private half of an SSH deploy key added to `openappshq/homebrew-tap` with write access (`gh repo deploy-key add --allow-write`); it can push only to the tap |
+
+`FEED_COMMIT_TOKEN` belongs to a bot account or the
+release owner; the commits they push are authored `openapps-release
+<release@openapps.space>`. If `main` requires status checks or reviews for
+pushes, allow that account to bypass them for the feed path only.
 
 **Variables** (public configuration, per [LICENSING.md](../../LICENSING.md)):
 

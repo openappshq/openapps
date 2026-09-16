@@ -35,20 +35,20 @@ macOS ties Accessibility and Input Monitoring to an app's code-signing identity 
 
 ## Signing material
 
-Two kinds of secret, kept in two places (decided 2026-09-16; before that every app's environment held a copy of everything, and GitHub cannot read a secret back, so a new app meant re-creating material nobody had any more):
+Two kinds of secret, kept in two places (decided 2026-09-16; before that every app's environment held a copy of everything, and GitHub cannot read a secret back, so a new app meant re-creating material nobody had any more). The split follows what each secret can do: material that only *signs* is shared once at repository level; anything that can *publish* stays behind an environment, whose deployment-branch policy decides which refs may run with it.
 
 | Where | Secret | Used by |
 | --- | --- | --- |
 | **Repository** secrets (Settings → Secrets and variables → Actions), shared by every app | `RELEASE_SIGNING_P12`, `RELEASE_SIGNING_P12_PASSWORD` | The release job, to sign with the stable certificate |
-| | `RULESET_READ_TOKEN` | The publish job, to read the tag ruleset |
+| | `RULESET_READ_TOKEN` | The publish job, to read the tag ruleset (Administration: read only; it can change nothing) |
+| **Environment** `<app>-release`, one per app, deployment branches `main` and tags `<app>-v*` | The app's update key: `SPARKLE_ED_PRIVATE_KEY` (Swift apps) or `TAURI_SIGNING_PRIVATE_KEY` (OpenKlack) | The release job, to sign the zip and the feed |
 | | `FEED_COMMIT_TOKEN` | The feed job, to commit the feed and the install script to `main` |
 | | `HOMEBREW_TAP_DEPLOY_KEY` | The feed job, to push the cask bump to the tap |
-| **Environment** `<app>-release`, one per app | The app's update key: `SPARKLE_ED_PRIVATE_KEY` (Swift apps) or `TAURI_SIGNING_PRIVATE_KEY` (OpenKlack) | The release job, to sign the zip and the feed |
 | | Variables `OPENAPPS_DODO_PAID_PRODUCT_ID`, `OPENAPPS_BUY_URL`, `OPENAPPS_SUPPORT_URL` (OpenKlack: `OPENKLACK_*`) | The release job, compiled into the licensed build |
 
-`${{ secrets.NAME }}` in a job that runs in an environment resolves the environment's secret first and falls back to the repository's, so the workflows name the five shared secrets exactly as before and nothing is copied: a new app creates its environment with **only** its update key and its variables. The release job checks each secret up front and names the missing one and where it belongs.
+`${{ secrets.NAME }}` in a job that runs in an environment resolves the environment's secret first and falls back to the repository's, so the workflows name every secret exactly as before. A new app creates its environment with its update key, the two publishing credentials (the same token and deploy key every app uses; copy them from the offline backup) and its variables; the certificate is never copied. The release job checks each secret up front and names the missing one and where it belongs.
 
-What the environment gates changed with this: its deployment-branch policy (`main` and the app's release tags) still decides who can reach the update key and the licensing variables, and so who can produce something the updater accepts, but a repository secret is readable by any workflow run in this repository, from any branch, by anyone who can push one — only pull requests from forks get none. Publishing stays impossible from outside `main` and the tags (the environment, the tag ruleset and the publish job's checks). Everyone with write access to this repository can therefore sign with the certificate; treat granting write access as adding a signer.
+Why the two publishing credentials are per environment although every app shares the same values: a repository secret is readable by any workflow run in this repository, from any branch, by anyone who can push one — only pull requests from forks get none. An environment secret is reachable only by a job that runs in that environment, which the deployment-branch policy grants to `main` and the app's release tags alone. So everyone with write access to this repository can *sign* with the certificate (treat granting write access as adding a signer), but *publishing* — committing a feed or install script, moving the cask — still needs a run on `main` or a release tag, and a release still needs the tag ruleset and the publish job's checks.
 
 Do not delete a repository secret to "rotate" it: set the new value in place. The certificate is the identity every installed copy trusts (above); the update keys are per app and losing one strands that app's updater the same way.
 
