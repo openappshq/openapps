@@ -1,0 +1,693 @@
+@import "./tokens.css";
+
+code {
+  font-family: var(--font-mono);
+}
+
+/* --- Hero ------------------------------------------------------------------
+   The lead and the actions on the left, the edge-deck scene on the right: the
+   idea in one picture beside the sentence that says it. */
+.on-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 520px);
+  gap: 48px 72px;
+  align-items: center;
+}
+.on-hero-stage {
+  min-width: 0;
+}
+
+/* --- The edge-deck scene ---------------------------------------------------
+   A screen on a raised key, showing a full-screen app (no menu bar: the canvas
+   goes to every edge). On the right edge, the deck: a pill at rest, tabs when
+   the pointer arrives, one note out. One 12-second loop, every part timed from
+   the same clock. Without animation (reduced motion, the still frames) the
+   parts sit in their open state: the fan out, the note out, the pill gone. */
+.on-scene {
+  --on-cycle: 12s;
+  --on-ink: #141414;
+  --on-paper: #fbfaf7;
+  --on-glass: oklch(1 0 0 / 0.86);
+  --on-coral: var(--palette-coral-300);
+  --on-coral-paper: var(--palette-coral-200);
+  --on-yellow: var(--palette-yellow-400);
+  --on-green: var(--palette-green-300);
+  --on-cobalt: var(--palette-cobalt-300);
+  container-type: inline-size;
+  border-radius: var(--radius-soft);
+  padding: 20px;
+  background: var(--surface-face);
+  box-shadow: var(--keycap-rest);
+}
+.on-screen {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--on-ink);
+  box-shadow:
+    inset 0 0 0 1px oklch(0 0 0 / 0.2),
+    0 1px 2px oklch(0 0 0 / 0.16);
+  /* The scene is a picture of a Mac, so it keeps its own shape in both themes. */
+  color-scheme: light;
+}
+/* The full-screen app: a slide, edge to edge. */
+.on-app {
+  position: absolute;
+  inset: 0;
+  padding: 14% 12%;
+  background: linear-gradient(180deg, #2a2a2e, #1b1b1e);
+  display: flex;
+  flex-direction: column;
+  gap: 4.5%;
+}
+.on-app-title,
+.on-app-line,
+.on-app-blocks span {
+  display: block;
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.16);
+}
+.on-app-title {
+  width: 44%;
+  height: 7%;
+  background: oklch(1 0 0 / 0.72);
+}
+.on-app-line {
+  width: 58%;
+  height: 3.2%;
+}
+.on-app-line.is-short {
+  width: 36%;
+}
+.on-app-blocks {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4%;
+}
+.on-app-blocks span {
+  aspect-ratio: 16 / 9;
+  border-radius: 8%;
+  background: oklch(1 0 0 / 0.08);
+}
+/* The pointer: an arrow that rests at the edge, drawn so it has no image to load. */
+.on-pointer {
+  position: absolute;
+  top: 42%;
+  left: 89%;
+  width: 3.6%;
+  aspect-ratio: 1;
+  background: var(--on-paper);
+  clip-path: polygon(0 0, 0 82%, 24% 64%, 40% 100%, 54% 94%, 38% 60%, 66% 60%);
+  filter: drop-shadow(0 1px 1px oklch(0 0 0 / 0.5));
+  z-index: 3;
+}
+/* At rest: a pill on the edge, one dash per note. */
+.on-pill {
+  position: absolute;
+  top: 30%;
+  right: 0;
+  width: 2.6%;
+  height: 40%;
+  border-radius: 999px 0 0 999px;
+  background: var(--on-glass);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 9%;
+  padding-block: 6%;
+  opacity: 0;
+}
+.on-dash {
+  display: block;
+  width: 38%;
+  height: 12%;
+  border-radius: 999px;
+}
+/* The fan: tabs shingled down the edge, labelled. */
+.on-fan {
+  position: absolute;
+  top: 14%;
+  right: 0;
+  width: 9%;
+  height: 72%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2.5%;
+}
+.on-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 20%;
+  border-radius: 10px 0 0 10px;
+  color: var(--on-ink);
+  font: 500 clamp(5px, 1.5cqw, 8.5px) / 1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  box-shadow:
+    inset 1px 0 0 oklch(1 0 0 / 0.5),
+    -2px 0 6px -2px oklch(0 0 0 / 0.4);
+}
+.on-tab-add {
+  width: 60%;
+  aspect-ratio: 1;
+  margin-right: 12%;
+  border-radius: 30%;
+  background: var(--on-glass);
+  color: var(--on-ink);
+  font: 600 clamp(7px, 2cqw, 12px) / 1 var(--font-sans);
+  display: grid;
+  place-items: center;
+}
+/* The note, out at full size over the app; its tab stays attached to the edge. */
+.on-note {
+  position: absolute;
+  top: 12%;
+  right: 9%;
+  width: 44%;
+  padding: 5% 4.5% 4%;
+  border-radius: 12px;
+  background: var(--on-coral-paper);
+  color: var(--on-ink);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.5),
+    0 18px 36px -16px oklch(0 0 0 / 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+  font: 400 clamp(6px, 2cqw, 11px) / 1.35 var(--font-sans);
+  z-index: 2;
+}
+.on-note::before {
+  /* The strip that says which tab it came from. */
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 7%;
+  border-radius: 12px 12px 0 0;
+  background: var(--on-coral);
+}
+.on-note-title {
+  font: 700 clamp(8px, 2.6cqw, 14px) / 1.2 var(--font-heading);
+  letter-spacing: -0.02em;
+}
+.on-note-line {
+  display: block;
+}
+.on-note-line b {
+  font-weight: 700;
+}
+.on-tick {
+  display: inline-block;
+  vertical-align: -0.12em;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.4em;
+  border-radius: 0.25em;
+  box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.45);
+}
+.on-tick.is-ticking {
+  background: var(--on-ink);
+  box-shadow: none;
+  position: relative;
+}
+.on-tick.is-ticking::after {
+  content: "";
+  position: absolute;
+  left: 0.3em;
+  top: 0.12em;
+  width: 0.28em;
+  height: 0.5em;
+  border: solid var(--on-coral-paper);
+  border-width: 0 0.14em 0.14em 0;
+  rotate: 45deg;
+}
+.on-note-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2%;
+  font: 400 clamp(5px, 1.5cqw, 9px) / 1 var(--font-mono);
+  color: oklch(0 0 0 / 0.55);
+}
+.is-coral {
+  background: var(--on-coral);
+}
+.is-yellow {
+  background: var(--on-yellow);
+}
+.is-green {
+  background: var(--on-green);
+}
+.is-cobalt {
+  background: var(--on-cobalt);
+}
+.on-note.is-coral {
+  background: var(--on-coral-paper);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .on-pointer {
+    animation: on-pointer var(--on-cycle) infinite;
+  }
+  .on-pill {
+    animation: on-pill var(--on-cycle) infinite;
+  }
+  .on-tab {
+    animation: on-tab var(--on-cycle) infinite;
+    /* Shingled: each tab arrives a beat after the one above. */
+    animation-delay: calc(var(--i, 0) * 45ms);
+  }
+  .on-fan .on-tab.is-coral {
+    animation-name: on-tab-pressed;
+  }
+  .on-tab-add {
+    /* Narrower than a tab and inset from the edge, so it has further to go. */
+    animation: on-tab-add var(--on-cycle) infinite;
+    animation-delay: 180ms;
+  }
+  .on-note {
+    animation: on-note var(--on-cycle) infinite;
+  }
+  .on-tick.is-ticking {
+    animation: on-tick var(--on-cycle) infinite;
+  }
+  .on-tick.is-ticking::after {
+    animation: on-tick-mark var(--on-cycle) infinite;
+  }
+  /* The pointer drifts from the middle of the app to the edge, hops onto the
+     first tab, waits while the note is out, then drifts back. */
+  @keyframes on-pointer {
+    0%,
+    6% {
+      left: 52%;
+      top: 58%;
+      animation-timing-function: var(--ease-out);
+    }
+    16%,
+    26% {
+      left: 95%;
+      top: 42%;
+      animation-timing-function: var(--ease-out);
+    }
+    30%,
+    84% {
+      left: 93%;
+      top: 22%;
+      animation-timing-function: var(--ease-out);
+    }
+    92%,
+    100% {
+      left: 52%;
+      top: 58%;
+    }
+  }
+  @keyframes on-pill {
+    0%,
+    16% {
+      opacity: 1;
+    }
+    19%,
+    88% {
+      opacity: 0;
+    }
+    92%,
+    100% {
+      opacity: 1;
+    }
+  }
+  /* Tabs come out of the edge quickly and go back the same way. */
+  @keyframes on-tab {
+    0%,
+    17% {
+      translate: 110% 0;
+      animation-timing-function: var(--ease-spring);
+    }
+    22%,
+    86% {
+      translate: 0 0;
+      animation-timing-function: var(--ease-out);
+    }
+    90%,
+    100% {
+      translate: 110% 0;
+    }
+  }
+  @keyframes on-tab-add {
+    0%,
+    17% {
+      translate: 320% 0;
+      animation-timing-function: var(--ease-spring);
+    }
+    22%,
+    86% {
+      translate: 0 0;
+      animation-timing-function: var(--ease-out);
+    }
+    90%,
+    100% {
+      translate: 320% 0;
+    }
+  }
+  /* The pressed tab: the same arrival, then a press, then it stays proud
+     while its note is out. */
+  @keyframes on-tab-pressed {
+    0%,
+    17% {
+      translate: 110% 0;
+      scale: 1;
+      animation-timing-function: var(--ease-spring);
+    }
+    22%,
+    28% {
+      translate: 0 0;
+      scale: 1;
+    }
+    30% {
+      translate: 4% 0;
+      scale: 0.96;
+      animation-timing-function: var(--ease-out);
+    }
+    33%,
+    78% {
+      translate: -6% 0;
+      scale: 1;
+    }
+    82%,
+    86% {
+      translate: 0 0;
+      animation-timing-function: var(--ease-out);
+    }
+    90%,
+    100% {
+      translate: 110% 0;
+    }
+  }
+  @keyframes on-note {
+    0%,
+    30% {
+      translate: 125% 0;
+      opacity: 0;
+      animation-timing-function: var(--ease-spring);
+    }
+    37%,
+    78% {
+      translate: 0 0;
+      opacity: 1;
+      animation-timing-function: var(--ease-out);
+    }
+    83%,
+    100% {
+      translate: 125% 0;
+      opacity: 0;
+    }
+  }
+  @keyframes on-tick {
+    0%,
+    54% {
+      background: transparent;
+      box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.45);
+    }
+    56%,
+    100% {
+      background: var(--on-ink);
+      box-shadow: none;
+    }
+  }
+  @keyframes on-tick-mark {
+    0%,
+    55% {
+      opacity: 0;
+    }
+    56%,
+    100% {
+      opacity: 1;
+    }
+  }
+}
+
+/* --- The deck: three still frames -----------------------------------------
+   The same parts, no clock: each frame pins one state. */
+.deck-section {
+  padding-block: var(--section-pad);
+}
+.deck-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
+  gap: 48px 72px;
+  align-items: start;
+}
+.deck-text h2 {
+  font-size: clamp(38px, 4.6vw, 68px);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+  margin-top: 20px;
+}
+.deck-lead {
+  max-width: 44ch;
+  margin-top: 20px;
+  font-size: 18px;
+  color: var(--muted);
+}
+.deck-states {
+  display: grid;
+  gap: 18px;
+  margin: 40px 0 0;
+}
+.deck-states > div {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+.deck-states dt {
+  font: 400 12px/1.6 var(--font-mono);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--color-accent-text);
+}
+.deck-states dd {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.deck-stage {
+  position: sticky;
+  top: 40px;
+}
+.on-states {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 20px;
+  list-style: none;
+  border-radius: var(--radius-soft);
+  background: var(--surface-face);
+  box-shadow: var(--keycap-rest);
+}
+.on-states li {
+  display: grid;
+  gap: 8px;
+}
+.on-state-label {
+  font: 400 11px/1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.on-frame {
+  --on-ink: #141414;
+  --on-glass: oklch(1 0 0 / 0.86);
+  --on-coral: var(--palette-coral-300);
+  --on-coral-paper: var(--palette-coral-200);
+  --on-yellow: var(--palette-yellow-400);
+  --on-green: var(--palette-green-300);
+  --on-cobalt: var(--palette-cobalt-300);
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #2a2a2e, #1b1b1e);
+  box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.1);
+  color-scheme: light;
+}
+.on-frame-app {
+  position: absolute;
+  top: 16%;
+  left: 12%;
+  width: 40%;
+  height: 8%;
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.6);
+}
+.on-frame-app::after {
+  content: "";
+  position: absolute;
+  top: 190%;
+  left: 0;
+  width: 130%;
+  height: 45%;
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.16);
+}
+.on-frame .on-pill,
+.on-frame .on-fan,
+.on-frame .on-note {
+  display: none;
+}
+.on-frame[data-state="rest"] .on-pill {
+  display: flex;
+  opacity: 1;
+}
+.on-frame[data-state="fan"] .on-fan,
+.on-frame[data-state="write"] .on-fan {
+  display: flex;
+}
+.on-frame[data-state="write"] .on-note {
+  display: flex;
+  width: 46%;
+  padding: 7% 4.5% 5%;
+  gap: 0.7em;
+}
+.on-frame .on-tab {
+  height: 18%;
+}
+.on-frame .on-note-title,
+.on-frame .on-note-line {
+  display: block;
+  height: 0.7em;
+  border-radius: 999px;
+  background: oklch(0 0 0 / 0.55);
+}
+.on-frame .on-note-title {
+  width: 42%;
+  height: 1em;
+  background: var(--on-ink);
+}
+.on-frame .on-note-line {
+  width: 78%;
+}
+.on-frame .on-note-line + .on-note-line {
+  width: 58%;
+}
+
+/* --- The Mac app ----------------------------------------------------------- */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 48px 40px;
+}
+.feature-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: oklch(1 0 0 / 0.07);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.08);
+  color: var(--palette-coral-300);
+}
+.feature-grid h3 {
+  font-size: 24px;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+  margin: 20px 0 12px;
+}
+.feature-grid p {
+  color: var(--palette-neutral-400);
+}
+.feature-grid code {
+  font-size: 0.92em;
+}
+
+/* --- Install ---------------------------------------------------------------- */
+.install-section {
+  padding-block: var(--section-space) var(--section-pad);
+}
+.install-section .section-heading {
+  margin-bottom: 36px;
+}
+.on-install {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  max-width: 620px;
+}
+.on-install .install-command {
+  max-width: none;
+  width: 100%;
+}
+.on-install-note {
+  font-size: 15px;
+  color: var(--muted);
+}
+.on-install-note code {
+  font: 500 0.92em/1 var(--font-mono);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--surface-face);
+  color: var(--foreground);
+}
+.closing-wrap {
+  padding-block: var(--section-pad);
+}
+
+@media (max-width: 1000px) {
+  .on-hero-grid,
+  .deck-grid {
+    grid-template-columns: 1fr;
+  }
+  .on-hero-stage {
+    max-width: 520px;
+  }
+  .deck-stage {
+    position: static;
+    max-width: none;
+  }
+  .on-states {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .feature-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 32px 24px;
+  }
+}
+@media (max-width: 600px) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .deck-states > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .on-scene,
+  .on-states {
+    padding: 12px;
+  }
+  .on-states {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+@media (forced-colors: active) {
+  .on-screen,
+  .on-frame,
+  .on-note,
+  .on-tab,
+  .on-pill {
+    border: 1px solid CanvasText;
+  }
+}

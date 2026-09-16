@@ -1,0 +1,32 @@
+/* OpenNotes's signature colour: coral, a sticky without being HQ's yellow.
+   The steps are apps/opennotes/design/tokens.json's, and tokens.test.ts
+   checks this file against it. Coral is the app's only: success stays green,
+   danger red, warning HQ yellow. */
+:root[data-product="opennotes"] {
+  --palette-coral-50: #fff1ec;
+  --palette-coral-200: #ffc0ab;
+  --palette-coral-300: #ffa48a;
+  --palette-coral-500: #f0653f;
+  --palette-coral-600: #c7492a;
+  --palette-coral-700: #a53a20;
+  --palette-coral-800: #7d2c18;
+  --palette-coral-950: #4a1d12;
+  --color-accent-solid: var(--palette-coral-700);
+  --color-accent-hover: var(--palette-coral-800);
+  --color-accent-subtle: var(--palette-coral-50);
+  --color-accent-text: var(--palette-coral-700);
+  --color-accent-on: var(--palette-white);
+  --color-focus-ring: var(--palette-coral-700);
+  --color-brand-opennotes: var(--palette-coral-300);
+  --color-brand-opennotes-shade: var(--palette-coral-500);
+  --brand-solid: var(--palette-coral-300);
+  --brand-on: var(--palette-neutral-950);
+}
+:root[data-product="opennotes"][data-theme="dark"] {
+  --color-accent-solid: var(--palette-coral-300);
+  --color-accent-hover: var(--palette-coral-200);
+  --color-accent-subtle: var(--palette-coral-950);
+  --color-accent-text: var(--palette-coral-200);
+  --color-accent-on: var(--palette-neutral-950);
+  --color-focus-ring: var(--palette-coral-300);
+}

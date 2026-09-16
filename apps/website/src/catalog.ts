@@ -13,8 +13,19 @@ export type Product = {
    * page either.
    */
   free?: boolean;
+  /**
+   * The macOS permissions the app asks for on first launch, named as System
+   * Settings names them (e.g. "Input Monitoring"). Left out for an app that
+   * asks for nothing. The install guide and the setup copy read this.
+   */
+  permissions?: readonly string[];
+  /**
+   * Where the app shows up once it opens, for the install guide's last step:
+   * "It <arrival>." Left out for an app that appears in the menu bar.
+   */
+  arrival?: string;
   icon: string;
-  accent: "cobalt" | "orchid" | "green" | "tangerine";
+  accent: "cobalt" | "orchid" | "green" | "tangerine" | "coral";
   /** Whether `/brand/<id>/wordmark-{ink,paper}.svg` exist; otherwise the name is set in type. */
   wordmark?: boolean;
   brandSource: string;
@@ -40,6 +51,7 @@ export const products: Product[] = [
     description: "Mechanical keyboard sounds. For the keyboard you already own.",
     platform: "macOS",
     price: "$5",
+    permissions: ["Input Monitoring"],
     icon: "/brand/openklack/app-icon.svg",
     accent: "cobalt",
     brandSource: "design/assets/openklack",
@@ -78,6 +90,7 @@ export const products: Product[] = [
     description: "Type :tada: in any text field on your Mac. Get 🎉.",
     platform: "macOS",
     price: "$5",
+    permissions: ["Accessibility", "Input Monitoring"],
     icon: "/brand/openreaction/app-icon.svg",
     accent: "orchid",
     wordmark: false,
@@ -158,6 +171,7 @@ export const products: Product[] = [
     description: "Wallpapers your Mac makes itself, from the notch.",
     platform: "macOS",
     price: "$5",
+    permissions: [],
     icon: "/brand/macpaper/app-icon.svg",
     accent: "tangerine",
     wordmark: false,
@@ -185,6 +199,47 @@ export const products: Product[] = [
         title: "Thank you · macPaper",
         description: "Your macPaper license key and how to activate it.",
         template: "src/apps/macpaper/template.html",
+        noindex: true,
+        checkoutReturn: true,
+      },
+    ],
+  },
+  {
+    id: "opennotes",
+    route: "/opennotes",
+    name: "OpenNotes",
+    description: "Sticky notes on the edge of your screen. Plain Markdown files underneath.",
+    platform: "macOS",
+    price: "$5",
+    permissions: [],
+    arrival: "shows up as a pill on the edge of your screen",
+    icon: "/brand/opennotes/app-icon.svg",
+    accent: "coral",
+    wordmark: false,
+    brandSource: "apps/opennotes/design/assets",
+    assets: [],
+    pages: [
+      {
+        path: "",
+        entry: "Home",
+        title: "OpenNotes · Sticky notes on the edge of your screen",
+        description:
+          "A deck of sticky notes docked to the edge of your screen: a thin pill at rest, a fan when you reach for it, one note out to write. Visible over full-screen apps, captured from anywhere with a hotkey, kept as plain Markdown files in a folder you choose. OpenNotes is an open-source Mac app. No permissions, no telemetry.",
+        template: "src/apps/opennotes/template.html",
+      },
+      {
+        path: "download",
+        entry: "Download",
+        title: "Install · OpenNotes",
+        description: "Install OpenNotes with one Terminal line. Nothing to grant, nothing to set up.",
+        template: "src/apps/opennotes/template.html",
+      },
+      {
+        path: "thanks",
+        entry: "Thanks",
+        title: "Thank you · OpenNotes",
+        description: "Your OpenNotes license key and how to activate it.",
+        template: "src/apps/opennotes/template.html",
         noindex: true,
         checkoutReturn: true,
       },

@@ -1,0 +1,14 @@
+.DS_Store
+.build/
+.swiftpm/
+build/
+dist/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.vscode/*
+.idea
+*.local
+Sources/OpenNotes/Licensing/LicensingConfig.swift
+# Every build resolves the local OpenAppsLicensing package.
+Package.resolved

@@ -19,18 +19,21 @@ const liveEnv = {
   VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
   VITE_HERTZ_DODO_PAID_PRODUCT_ID: "pdt_hzPaid",
   VITE_MACPAPER_DODO_PAID_PRODUCT_ID: "pdt_mpPaid",
+  VITE_OPENNOTES_DODO_PAID_PRODUCT_ID: "pdt_onPaid",
 };
 const casks = {
   openreaction: "openappshq/tap/openreaction",
   openklack: "openappshq/tap/openklack",
   hertz: "openappshq/tap/hertz",
   macpaper: "openappshq/tap/macpaper",
+  opennotes: "openappshq/tap/opennotes",
 };
 const downloads = {
   openreaction: "https://downloads.example/OpenReaction.dmg",
   openklack: "https://downloads.example/OpenKlack.dmg",
   hertz: "https://downloads.example/Hertz.dmg",
   macpaper: "https://downloads.example/macPaper.dmg",
+  opennotes: "https://downloads.example/OpenNotes.dmg",
 };
 import { activateUrl, cleanedUrl, parseCheckoutReturn, readCheckoutReturn } from "./thanks";
 import { CHECKOUT_GLOBAL } from "./checkoutCapture";
@@ -62,6 +65,7 @@ describe("dodoConfigFrom", () => {
       openklack: { paid: "pdt_okPaid" },
       hertz: { paid: "pdt_hzPaid" },
       macpaper: { paid: "pdt_mpPaid" },
+      opennotes: { paid: "pdt_onPaid" },
     });
   });
 
@@ -71,7 +75,7 @@ describe("dodoConfigFrom", () => {
       VITE_DODO_CHECKOUT_ORIGIN: " https://test.checkout.dodopayments.com/ ",
     });
     expect(config.checkoutOrigin).toBe(DODO_CHECKOUT_ORIGINS.test);
-    expect(Object.keys(config.products)).toHaveLength(4);
+    expect(Object.keys(config.products)).toHaveLength(5);
   });
 
   it("sells nothing when the checkout origin is not Dodo's", () => {
@@ -100,6 +104,7 @@ describe("brewCasksFrom", () => {
         VITE_OPENREACTION_BREW_CASK: casks.openreaction,
         VITE_HERTZ_BREW_CASK: casks.hertz,
         VITE_MACPAPER_BREW_CASK: casks.macpaper,
+        VITE_OPENNOTES_BREW_CASK: casks.opennotes,
       }),
     ).toEqual(casks);
     expect(brewCasksFrom({ VITE_OPENKLACK_BREW_CASK: "open-apps/tap-2/open-klack" })).toEqual({
@@ -234,6 +239,7 @@ describe("licensingFor", () => {
         VITE_OPENREACTION_MAC_DOWNLOAD_URL: downloads.openreaction,
         VITE_HERTZ_MAC_DOWNLOAD_URL: downloads.hertz,
         VITE_MACPAPER_MAC_DOWNLOAD_URL: downloads.macpaper,
+        VITE_OPENNOTES_MAC_DOWNLOAD_URL: downloads.opennotes,
       }),
     ).toEqual(downloads);
     for (const bad of ["", "http://x.example/a.dmg", "/OpenKlack.dmg", "javascript:alert(1)", "not a url"]) {

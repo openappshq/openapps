@@ -49,6 +49,10 @@
   /* tangerine/300 from apps/macpaper/tokens.css, which the home page never loads. */
   --accent-line: #ffb48a;
 }
+.app-row[data-accent="coral"] {
+  /* coral/300 from apps/opennotes/tokens.css, likewise. */
+  --accent-line: #ffa48a;
+}
 /* The backlight: the app's own colour lighting up along the key's edge. */
 .app-row::before {
   content: "";

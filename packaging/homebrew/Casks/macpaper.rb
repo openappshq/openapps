@@ -23,11 +23,9 @@ cask "macpaper" do
   # Signed with the stable OpenApps HQ Release certificate but not notarized:
   # clear the download quarantine so it opens without a Gatekeeper prompt,
   # then start it in the menu bar.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/macPaper.app"]
-    system_command "/usr/bin/open",
-                   args: ["#{appdir}/macPaper.app"]
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/macPaper.app"], must_succeed: false
+    run "/usr/bin/open", args: ["{{appdir}}/macPaper.app"], must_succeed: false
   end
 
   uninstall quit: "com.openappshq.macpaper"

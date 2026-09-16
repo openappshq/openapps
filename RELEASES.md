@@ -67,9 +67,9 @@ cask "<app>" do
   auto_updates true
   depends_on macos: :sonoma
   app "<App>.app"
-  postflight do
-    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/<App>.app"]
-    system_command "/usr/bin/open", args: ["#{appdir}/<App>.app"]
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/<App>.app"], must_succeed: false
+    run "/usr/bin/open", args: ["{{appdir}}/<App>.app"], must_succeed: false
   end
   uninstall quit: "<bundle id>"
   zap trash: ["~/Library/Preferences/<bundle id>.plist", "~/Library/Application Support/<App>"]
@@ -78,6 +78,8 @@ end
 
 - **Location:** `/Applications`, Homebrew's default `appdir` and where a dragged disk image lands (decided 2026-09-16; before that `~/Applications`). Admin accounts write there without a password, so the in-app updater needs none either; a non-admin account installs with `--appdir`. The System Settings privacy pickers open on `/Applications`, which is why it matters.
 - **`auto_updates true`:** Homebrew doesn't fight the in-app updater.
+- **`postflight_steps`:** Homebrew's declarative install steps (Homebrew 5.1.14 and newer; the Ruby `postflight do … end` block is deprecated since 6.0.16 and warns on every install). A steps block only takes the fixed step verbs (`run`, `move`, `remove`, …) with literal arguments — no `system_command`, no Ruby interpolation — and `{{appdir}}` is expanded by Homebrew at install time, so `--appdir` is honoured. `must_succeed: false` keeps the old behaviour: a failed `xattr` or `open` is printed, never fails the install. The steps run in Homebrew's sandbox, which allows writes to the app directory.
+- **Tap trust:** Homebrew 6 and newer trust third-party casks one at a time. The fully qualified `brew install --cask openappshq/tap/<app>` taps `openappshq/tap` and trusts just that cask (it prints `Trusted cask openappshq/tap/<app>`); nothing to confirm, and `brew upgrade --cask <app>` keeps working afterwards. Never ask users for `brew trust openappshq/tap`: that would trust every current and future cask in the tap.
 - **Bumping the cask:** the release workflow updates the cask right after a release is published, by pushing a commit to the tap with an SSH deploy key that can write only to that repository (`HOMEBREW_TAP_DEPLOY_KEY`). There's no polling cron. The cask's `sha256` is the digest the release job verified.
 
 ## Install script

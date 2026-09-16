@@ -9,18 +9,21 @@ const dodo = dodoConfigFrom({
   VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
   VITE_HERTZ_DODO_PAID_PRODUCT_ID: "pdt_hzPaid",
   VITE_MACPAPER_DODO_PAID_PRODUCT_ID: "pdt_mpPaid",
+  VITE_OPENNOTES_DODO_PAID_PRODUCT_ID: "pdt_onPaid",
 });
 const casks = {
   openreaction: "openappshq/tap/openreaction",
   openklack: "openappshq/tap/openklack",
   hertz: "openappshq/tap/hertz",
   macpaper: "openappshq/tap/macpaper",
+  opennotes: "openappshq/tap/opennotes",
 };
 const downloads = {
   openreaction: "https://downloads.example/OpenReaction.dmg",
   openklack: "https://downloads.example/OpenKlack.dmg",
   hertz: "https://downloads.example/Hertz.dmg",
   macpaper: "https://downloads.example/macPaper.dmg",
+  opennotes: "https://downloads.example/OpenNotes.dmg",
 };
 
 test("app pages offer the install with its trial and a priced purchase, and no trial checkout", () => {
@@ -43,6 +46,7 @@ test("without a configured product and cask, Buy is a coming-soon plate, not a c
     expect(html, product.id).not.toContain("Download for Mac");
     expect(html, product.id).not.toContain("curl ");
     expect(html, product.id).not.toContain("brew install");
+    expect(html, product.id).not.toContain("How do I install this?");
     expect(html, product.id).not.toContain("dodopayments.com");
   }
 });
@@ -55,6 +59,9 @@ test("with a product and cask, the install line is shown with a Copy button, Hom
       `<code tabindex="-1">curl -fsSL https://openapps.space/install/${product.id} | sh</code>`,
     );
     expect(html, product.id).toContain('aria-label="Copy install command"');
+    // "How do I install this?" above the line, on the same gate.
+    expect(html, product.id).toContain("How do I install this?");
+    expect(html.indexOf("How do I install this?"), product.id).toBeLessThan(html.indexOf("curl "));
     expect(html, product.id).toContain(
       `Prefer Homebrew? <code>brew install --cask ${casks[product.id as keyof typeof casks]}</code>`,
     );
@@ -90,6 +97,7 @@ test("a direct download alone never opens Buy", () => {
     expect(html, product.id).toContain("Coming soon");
     expect(html, product.id).not.toContain("curl ");
     expect(html, product.id).not.toContain("brew install");
+    expect(html, product.id).not.toContain("How do I install this?");
     expect(html, product.id).not.toContain("dodopayments.com");
   }
 });

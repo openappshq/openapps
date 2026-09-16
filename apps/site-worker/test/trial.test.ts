@@ -127,8 +127,28 @@ describe("POST /api/trial", () => {
     ]);
   });
 
-  it("accepts exactly the catalog's paid apps: Hertz since it went on sale, macPaper since it was added", () => {
-    expect([...TRIAL_APPS].sort()).toEqual(["hertz", "macpaper", "openklack", "openreaction"]);
+  it("accepts exactly the catalog's paid apps: Hertz since it went on sale, macPaper and OpenNotes since they were added", () => {
+    expect([...TRIAL_APPS].sort()).toEqual([
+      "hertz",
+      "macpaper",
+      "openklack",
+      "opennotes",
+      "openreaction",
+    ]);
+  });
+
+  it("starts an OpenNotes trial like any other app's, in test and live", async () => {
+    const device = freshDevice();
+    for (const env of ["test", "live"] as const) {
+      const response = await post({ app: "opennotes", device, env });
+      expect(response.status).toBe(200);
+      const body = await response.json<{ started_at: string; now: string }>();
+      expect(body.started_at).toMatch(ISO);
+    }
+    expect((await rows(device)).map((row) => `${row.app}/${row.env}`)).toEqual([
+      "opennotes/live",
+      "opennotes/test",
+    ]);
   });
 
   it("starts a macPaper trial like any other app's, in test and live", async () => {

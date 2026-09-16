@@ -152,6 +152,8 @@ export default function ThanksPage({
                   name={licensing.name}
                   sourceUrl={licensing.installScriptSourceUrl}
                   brewCommand={licensing.brewCommand}
+                  permissions={licensing.permissions}
+                  arrival={licensing.arrival}
                 />
                 <p>
                   {permissions}

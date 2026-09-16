@@ -1,7 +1,7 @@
 # Development and release guide
 
 OpenApps HQ is one workspace for independent desktop apps and their marketing pages.
-OpenKlack, [OpenReaction](../apps/openreaction/README.md), [Hertz](../apps/hertz/README.md) and [macPaper](../apps/macpaper/README.md) have independent native apps.
+OpenKlack, [OpenReaction](../apps/openreaction/README.md), [Hertz](../apps/hertz/README.md), [macPaper](../apps/macpaper/README.md) and [OpenNotes](../apps/opennotes/README.md) have independent native apps.
 
 ## Run
 
@@ -34,11 +34,13 @@ apps/
     src/apps/openreaction/     OpenReaction marketing and emoji demo
     src/apps/hertz/            Hertz marketing and the drawn dashboard
     src/apps/macpaper/         macPaper marketing and the notch scene
+    src/apps/opennotes/        OpenNotes marketing and the edge-deck scene
   site-worker/                Cloudflare Worker: serves the site, runs /api/trial on D1
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
   openreaction/               OpenReaction's Swift app
   hertz/                      Hertz's Swift app
-  macpaper/                   macPaper's Swift app (in development; no website page yet)
+  macpaper/                   macPaper's Swift app
+  opennotes/                  OpenNotes' Swift app
 packages/
   openapps-licensing/         Swift: licensing rules, trial, record store and clients (LICENSING.md)
   openapps-updater/           Swift: the in-app updater (RELEASES.md)
@@ -59,7 +61,7 @@ design/
 ```
 
 The workspace remains pnpm + Vite+, with no additional task runner.
-`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/openklack/`, its download page at `/openklack/download/`, OpenReaction at `/openreaction/`, Hertz at `/hertz/`, and macPaper at `/macpaper/`.
+`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/openklack/`, its download page at `/openklack/download/`, OpenReaction at `/openreaction/`, Hertz at `/hertz/`, macPaper at `/macpaper/`, and OpenNotes at `/opennotes/`.
 `pnpm openklack:dev` runs the native utility.
 `pnpm build` emits one static `dist/` with a real HTML entry for each catalog page and a `404.html` fallback.
 The website loads each product's code and styles only when its route opens.
@@ -74,7 +76,7 @@ Start with the [design checklist](../design/system.md#adding-a-product) so the n
 1. Add its desktop project in `apps/<app-id>-desktop/` with a unique workspace package name, such as `@openapps/<app-id>-desktop`.
 2. Put its marketing entry in `apps/website/src/apps/<app-id>/pages/Home.tsx`, exporting a React component as default.
    Keep its components and styles beside that folder; use product-specific class names.
-3. Add one product to `apps/website/src/catalog.ts` with its id, route (for example `/another_route`), description, platform, status, brand imagery, asset sources, and pages.
+3. Add one product to `apps/website/src/catalog.ts` with its id, route (for example `/another_route`), description, platform, status, brand imagery, asset sources, and pages, plus `permissions` (the macOS permissions it asks for on first launch, as System Settings names them) unless it asks for nothing.
    Every product needs a home page with `path: ""`; optional subpages use `path: "download"` or another segment.
    A free app sets `free: true` and `price: "Free"`: it gets no download, thanks or checkout pages, is left out of licensing and of the trial registry, and installs with the same Homebrew command through its own install block. No app in the catalog is free today.
    `entry: "Home"` resolves to `pages/Home.tsx`; optional `template` preserves product-specific HTML metadata.
@@ -98,7 +100,7 @@ Run `pnpm design:check` to verify tokens against the saved Figma snapshot and va
 
 ## Behavior
 
-The website’s install links open `/openklack/download/`, a separate static HTML entry. Apps install from one Terminal line, the [install script](../RELEASES.md#install-script) served at `/install/<app>` from `apps/website/public/install/<app>`, with the Homebrew cask as the alternative (see [RELEASES.md](../RELEASES.md)). The script and the cask are published together, so the cask is the gate: with `VITE_OPENKLACK_BREW_CASK` set to the cask (`owner/tap/name`, e.g. `openappshq/tap/openklack`), the page, the app page and the thanks page show `curl -fsSL https://openapps.space/install/openklack | sh` with a Copy button, one sentence on what it does with a link to the script's source, and "Prefer Homebrew? `brew install --cask <cask>`" under it. Without it, the page shows the unreleased state and offers nothing. `VITE_OPENKLACK_MAC_DOWNLOAD_URL` is optional: when it is an https URL and the cask is set, the page also attempts that download once and exposes the same URL as a manual retry link, and the install buttons read "Download for Mac" instead of "Install for Mac". Set the variables in `apps/website/.env.local` (see `.env.example`) and rebuild. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
+The website’s install links open `/openklack/download/`, a separate static HTML entry. Apps install from one Terminal line, the [install script](../RELEASES.md#install-script) served at `/install/<app>` from `apps/website/public/install/<app>`, with the Homebrew cask as the alternative (see [RELEASES.md](../RELEASES.md)). The script and the cask are published together, so the cask is the gate: with `VITE_OPENKLACK_BREW_CASK` set to the cask (`owner/tap/name`, e.g. `openappshq/tap/openklack`), the page, the app page and the thanks page show `curl -fsSL https://openapps.space/install/openklack | sh` with a Copy button, one sentence on what it does with a link to the script's source, and "Prefer Homebrew? `brew install --cask <cask>`" under it. Above the command, "How do I install this?" opens a step-by-step guide for people who have never used Terminal (`apps/website/src/shared/InstallGuide.tsx`): it is shown on the same gate wherever the command is, and every app-specific word in it comes from the catalog (name, permissions) and `licensingFor` (commands). Without the cask, the page shows the unreleased state and offers nothing. `VITE_OPENKLACK_MAC_DOWNLOAD_URL` is optional: when it is an https URL and the cask is set, the page also attempts that download once and exposes the same URL as a manual retry link, and the install buttons read "Download for Mac" instead of "Install for Mac". Set the variables in `apps/website/.env.local` (see `.env.example`) and rebuild. Browsers do not report download completion to the page; it must not claim the file finished downloading. GitHub release discovery is deferred; there is no release API polling or fake installer. Social links open the repository or an editable X post, without automatically starring or posting.
 
 - Type in the playground or click the interactive 3D keyboard.
   Each key has damped travel and a radial lighting pulse.
@@ -117,7 +119,7 @@ The website’s install links open `/openklack/download/`, a separate static HTM
 
 What no page code can prevent: the host that serves the thanks page receives the initial request, query string included. The build emits `dist/_headers` from the catalog (`apps/website/headers.ts`): every `noindex` page is served with `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex` and `Cache-Control: no-store`. On Cloudflare those pages are plain static asset requests that never run Worker code, and the Worker keeps Workers Logs off; don't enable Logpush or Workers Logs for it.
 
-Paid app pages offer the install (the one-line command with Homebrew under it, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the install command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's and macPaper's pages also keep an install section with the command and the Homebrew line, on the same gate (`VITE_<APP>_DODO_PAID_PRODUCT_ID` and `VITE_<APP>_BREW_CASK`).
+Paid app pages offer the install (the one-line command with Homebrew under it, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the install command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's, macPaper's and OpenNotes's pages also keep an install section with the command and the Homebrew line, on the same gate (`VITE_<APP>_DODO_PAID_PRODUCT_ID` and `VITE_<APP>_BREW_CASK`).
 
 ## Sound library
 
@@ -161,6 +163,10 @@ The menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift b
 ## macPaper
 
 The notch wallpaper maker lives in `apps/macpaper` and is plain SwiftPM: `swift build`, `swift test`, `scripts/bundle.sh`; see [its README](../apps/macpaper/README.md). It asks macOS for no permissions. It is unreleased: the release workflow (`.github/workflows/macpaper.yml`), the cask template and the install script are in place, the catalog entry and website page arrive with the first licensed release. Licensing and the updater follow the other Swift apps: compiled out of a source build, in with `OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1` after `scripts/generate-licensing-config.sh` has written the (gitignored) configuration; a third flavour, `OPENAPPS_OFFICIAL=1 MACPAPER_UPDATE_TEST=1` (never with licensing), is the update-test variant `scripts/update-e2e.sh` builds and drives — its own bundle id and Application Support folder, no login item, no guide. All three flavours have their own tests and the checks job runs them; see [RELEASING.md](../apps/macpaper/RELEASING.md). The debug build's `--preview <directory>` renders the notch panel, the popover and Settings to PNGs without a status item, a window or a desktop change: on a shared Mac that is the way to look at the UI, never `open` or `swift run`. The [product contract](../design/products/macpaper.md) records approved behavior.
+
+## OpenNotes
+
+The edge-docked sticky notes app lives in `apps/opennotes` and is plain SwiftPM: `swift build`, `swift test`, `swift run OpenNotes`, `scripts/bundle.sh`; see [its README](../apps/opennotes/README.md). It asks macOS for no permissions: the global hotkey is a Carbon system hotkey, the deck is a non-activating panel that joins every Space and full-screen space above the status-bar level, and the notes are plain `.md` files in a folder the user chooses (`~/Documents/OpenNotes` by default), watched with FSEvents. `OpenNotesCore` (the file format, the Markdown-lite styler, the folder store with its conflict copies, search, export, archive and undo, the deck's state machine and geometry) is tested against temporary folders only; the debug binary's `--preview <dir>` renders the deck's states, All Notes and Settings to PNGs without opening a window, so UI changes are checked from the images. Official builds compile licensing in from `packages/openapps-licensing` (`OPENAPPS_LICENSING=1` with a generated `LicensingConfig.swift`, [LICENSING.md](../LICENSING.md)): the 3-day trial, Settings → License, the trial pill, and **read-only after the trial** — the deck stays visible and every note readable, searchable and exportable, while creating, editing, renaming, archiving, reordering and folder changes wait for a license; the entitlement is a projection asked at every action and again by the store at the file, never a stored flag. Official builds also compile in the shared updater, `packages/openapps-updater` (`OPENAPPS_OFFICIAL=1`): the signed feed at `https://openapps.space/updates/opennotes/appcast.xml`, automatic checks on for a fresh install, installing opt-in, `brew upgrade --cask opennotes` always works; the setup guide opens once on the first launch of the packaged app ([RELEASES.md](../RELEASES.md), [its release guide](../apps/opennotes/RELEASING.md)). A build from source has none of it; `OPENAPPS_OFFICIAL=1 OPENNOTES_UPDATE_TEST=1` is the update-test variant `scripts/update-e2e.sh` builds (never licensed, its own bundle id and notes folder). The [product contract](../design/products/opennotes.md) records approved behavior. The website page: buy and the install block sit on the usual gate (`VITE_OPENNOTES_DODO_PAID_PRODUCT_ID` and `VITE_OPENNOTES_BREW_CASK`) and show "Coming soon" until both are set; the trial registry accepts `opennotes` because it is a paid product in the catalog.
 
 ## Desktop application (in development)
 

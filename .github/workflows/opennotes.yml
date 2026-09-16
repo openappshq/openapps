@@ -1,0 +1,502 @@
+name: OpenNotes
+
+# Checks on every change to the app; a signed universal release when a
+# `opennotes-v<MAJOR.MINOR.PATCH>` tag is pushed (or on manual dispatch, which
+# publishes only when asked). The release flow follows RELEASES.md: build
+# and sign with the stable OpenApps HQ Release certificate, verify the pinned
+# designated requirement, zip, update-sign, publish the GitHub Release,
+# commit the feed, verify live, bump the cask. The release compiles licensing
+# in (LICENSING.md) against Dodo live mode with the paid product ID from the
+# opennotes-release environment and the in-app updater with the committed update
+# key; the checks job compiles the licensed and the official flavour against
+# test mode with a placeholder ID and a throwaway key. Setup, variables and secrets:
+# apps/opennotes/RELEASING.md.
+#
+# The paths filter applies to branch pushes and pull requests; tag pushes
+# always run, which is what the release needs.
+on:
+  pull_request:
+    paths:
+      - apps/opennotes/**
+      - packages/openapps-licensing/**
+      - packages/openapps-updater/**
+      - scripts/release/**
+      - packaging/homebrew/**
+      - .github/workflows/opennotes.yml
+      - .github/rulesets/opennotes-release-tags.json
+  push:
+    branches: [main]
+    tags: [opennotes-v*]
+    paths:
+      - apps/opennotes/**
+      - packages/openapps-licensing/**
+      - packages/openapps-updater/**
+      - scripts/release/**
+      - packaging/homebrew/**
+      - .github/workflows/opennotes.yml
+      - .github/rulesets/opennotes-release-tags.json
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build as MAJOR.MINOR.PATCH (ignored when running from a opennotes-v* tag)
+        type: string
+        default: ""
+      publish:
+        description: Publish a GitHub Release (creates the opennotes-v<version> tag at this commit if it does not exist), then commit the feed and bump the cask
+        type: boolean
+        default: false
+      allow_older:
+        description: Allow publishing a version lower than the newest published release (a back-port)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: apps/opennotes
+
+env:
+  # The checks job compiles the licensed flavour against Dodo test mode with a
+  # placeholder product ID; nothing built with it is ever published, and
+  # verify-release.sh --release refuses a binary that contains it.
+  PLACEHOLDER_PAID_PRODUCT_ID: pdt_placeholder_opennotes
+  # The release tag this run is about: the pushed tag, or opennotes-v<input> on a
+  # manual run from a branch. Build and publish serialise per tag, so a
+  # second run for the same version queues behind the first instead of racing it.
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('opennotes-v{0}', inputs.version) || github.ref_name }}
+
+jobs:
+  checks:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Select Xcode 26
+        run: |
+          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then echo "Xcode 26 (macOS 26 SDK) is required."; exit 1; fi
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+          swift --version
+      # OpenNotesCoreTests is pure logic (the note files and their folder
+      # against a temporary directory, the Markdown-lite styling, the
+      # exporters, archive and undo, search, the deck rules, the first-run
+      # flags); OpenNotesTests drives the app model with fakes, the
+      # preferences round trips and, in the licensed and official flavours,
+      # the licensing package's manager and the updater's wiring against a
+      # never-started updater. Nothing in either touches the user's notes
+      # folder, the record store or the network, or needs a permission.
+      - name: Build and test the source flavour
+        run: swift test
+      - name: Build and test the licensed flavour
+        env:
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_DODO_ENV: test
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
+        run: |
+          scripts/generate-licensing-config.sh Sources/OpenNotes/Licensing/LicensingConfig.swift
+          swift test --scratch-path .build/licensed
+      - name: Build and test the official flavour
+        env:
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_OFFICIAL: "1"
+          OPENAPPS_DODO_ENV: test
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
+        run: |
+          scripts/generate-licensing-config.sh Sources/OpenNotes/Licensing/LicensingConfig.swift
+          swift test --scratch-path .build/official
+      - name: Build and test the update-test flavour
+        # The variant scripts/update-e2e.sh drives: the updater with its test
+        # hooks, licensing compiled out (Package.swift refuses it with
+        # OPENAPPS_LICENSING=1), so its isolation is checked on every change.
+        env:
+          OPENAPPS_LICENSING: "0"
+          OPENAPPS_OFFICIAL: "1"
+          OPENNOTES_UPDATE_TEST: "1"
+        run: swift test --scratch-path .build/updatetest
+      - name: Test the licensing package
+        run: swift test --package-path ../../packages/openapps-licensing
+      - name: Test the updater package
+        run: swift test --package-path ../../packages/openapps-updater
+      - name: Lint the release scripts and this workflow
+        run: |
+          brew install shellcheck actionlint >/dev/null
+          shellcheck scripts/*.sh ../../scripts/release/*.sh ../../packaging/homebrew/bump-cask.sh
+          actionlint ../../.github/workflows/opennotes.yml
+      - name: Check the cask template
+        # bump-cask.sh must accept the template as a first release and refuse a rewrite.
+        run: |
+          cask="$RUNNER_TEMP/opennotes.rb"
+          cp ../../packaging/homebrew/Casks/opennotes.rb "$cask"
+          digest="$(printf 'a%.0s' $(seq 1 64))"
+          ../../packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest"
+          grep -q '^  version "0.1.0"$' "$cask"
+          if ../../packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$(printf 'b%.0s' $(seq 1 64))" 2>/dev/null; then echo "rewrite accepted"; exit 1; fi
+      # The official flavour (licensing and the updater) as an ad-hoc signed
+      # development app, against Dodo test mode with the placeholder ID and
+      # a throwaway update key so the build does not depend on the real key;
+      # it verifies like a release except for the signature and the live
+      # configuration.
+      - name: Build an ad-hoc signed official development app
+        env:
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_OFFICIAL: "1"
+          OPENAPPS_DODO_ENV: test
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
+          UNIVERSAL: "1"
+          SCRATCH_PATH: .build/official-app
+        run: |
+          UPDATE_PUBLIC_ED_KEY="$(xcrun swift -e 'import CryptoKit; print(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString())')"
+          export UPDATE_PUBLIC_ED_KEY
+          scripts/bundle.sh
+          scripts/make-zip.sh
+          scripts/verify-release.sh dist/OpenNotes-*.zip
+      # The whole update path, end to end, with a throwaway certificate and
+      # key and nothing beyond 127.0.0.1: builds the update-test variant twice,
+      # signs, serves and installs it (RELEASING.md, "The update end-to-end
+      # test"). Runs the variant as a real app on the runner's GUI session; it
+      # keeps its notes in its own Application Support folder, never the
+      # user's, and asks for no permission.
+      - name: Run the update end-to-end test
+        env:
+          OPENAPPS_LICENSING: "0"
+          SCRATCH_PATH: .build/update-e2e
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3 >/dev/null
+          scripts/update-e2e.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenNotes-development-unsigned
+          path: apps/opennotes/dist/*.zip
+          retention-days: 7
+          if-no-files-found: error
+
+  # Builds, signs, verifies and packages the release. Read-only token: it
+  # never touches tags, releases, the feed or the tap.
+  release:
+    # Only the canonical repository releases; a fork keeps the checks and nothing else.
+    if: github.repository == 'openappshq/openapps' && (startsWith(github.ref, 'refs/tags/opennotes-v') || github.event_name == 'workflow_dispatch')
+    needs: checks
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: opennotes-release
+    concurrency:
+      group: opennotes-build-${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('opennotes-v{0}', inputs.version) || github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+      commit: ${{ steps.version.outputs.commit }}
+      # The digest of the zip as verified here, and the id of the artifact it
+      # was uploaded as: later jobs trust these, not what they download.
+      sha256: ${{ steps.package.outputs.sha256 }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # The tags too, for bundle.sh's version fallback (`git describe`).
+          fetch-depth: 0
+      - name: Select Xcode 26
+        run: |
+          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then echo "Xcode 26 (macOS 26 SDK) is required."; exit 1; fi
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+      - name: Resolve the release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          # A tag push always publishes; a manual run publishes only when asked,
+          # whether it was started from a branch or from a release tag.
+          if [ "$GITHUB_EVENT_NAME" = push ]; then publish=true; else publish="${INPUT_PUBLISH:-false}"; fi
+          case "$GITHUB_REF" in
+            refs/tags/opennotes-v*)
+              version="${GITHUB_REF#refs/tags/opennotes-v}"
+              if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$version" ]; then
+                echo "This run is on tag $GITHUB_REF_NAME; leave the version input empty or set it to $version."; exit 1
+              fi ;;
+            *)
+              version="$INPUT_VERSION"
+              if [ -z "$version" ]; then echo "Give a version, or run from a opennotes-v* tag."; exit 1; fi ;;
+          esac
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Version must be MAJOR.MINOR.PATCH (got '$version')."; exit 1
+          fi
+          if [ "opennotes-v$version" != "$RELEASE_TAG" ]; then
+            echo "Internal error: resolved opennotes-v$version but this run is serialised as $RELEASE_TAG."; exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=opennotes-v$version"
+            echo "publish=$publish"
+            echo "commit=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building OpenNotes $version from $(git rev-parse HEAD) (publish: $publish)"
+      - name: Check release configuration
+        # Everything the release needs is checked up front, so a missing
+        # secret fails here with its name and never produces a signed build
+        # that cannot be published. Only public material is committed: the
+        # pinned requirement and the update public key must have been generated.
+        env:
+          RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
+          RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          PUBLISH: ${{ steps.version.outputs.publish }}
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
+          OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
+          OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
+        run: |
+          missing=0
+          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set as a repository secret."; missing=1; fi
+          done
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then echo "::error::Secret SPARKLE_ED_PRIVATE_KEY is not set in the opennotes-release environment."; missing=1; fi
+          # Only publication uses these, but a missing token should fail before a long build, not after.
+          if [ "$PUBLISH" = true ]; then
+            if [ -z "$RULESET_READ_TOKEN" ]; then echo "::error::Secret RULESET_READ_TOKEN is not set as a repository secret; publishing needs it."; missing=1; fi
+            for name in FEED_COMMIT_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
+              if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the opennotes-release environment; publishing needs it."; missing=1; fi
+            done
+          fi
+          if [ -z "$OPENAPPS_DODO_PAID_PRODUCT_ID" ]; then
+            echo "::error::Variable OPENAPPS_DODO_PAID_PRODUCT_ID is not set in the opennotes-release environment."; missing=1
+          fi
+          for file in release/designated-requirement.txt release/sparkle-public-key.txt; do
+            if grep -q '^NOT GENERATED' "$file"; then
+              echo "::error::$file has not been generated yet; create the release certificate and update key first (apps/opennotes/RELEASING.md, \"Signing certificate and update key\")."; missing=1
+            fi
+          done
+          [ "$missing" = 0 ] || exit 1
+          case "$OPENAPPS_DODO_PAID_PRODUCT_ID" in
+            pdt_*) ;;
+            *) echo "::error::OPENAPPS_DODO_PAID_PRODUCT_ID must be a Dodo product ID (pdt_…)."; exit 1 ;;
+          esac
+          # The generator validates the URLs' shape; this only reports what is configured.
+          for name in OPENAPPS_BUY_URL OPENAPPS_SUPPORT_URL; do
+            if [ -n "${!name}" ]; then echo "$name: set"; else echo "$name: not set (the app's default applies)"; fi
+          done
+      - name: Build, sign and verify the universal release
+        # The identity lives in a temporary keychain for exactly this step;
+        # with-signing-keychain.sh removes it before the step ends and fails
+        # if it can still be found. bundle.sh signs with the pinned designated
+        # requirement and refuses a certificate that does not produce it.
+        env:
+          RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
+          RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
+          VERSION: ${{ steps.version.outputs.version }}
+          UNIVERSAL: "1"
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_OFFICIAL: "1"
+          OPENAPPS_DODO_ENV: live
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
+          OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
+          OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
+        run: ../../scripts/release/with-signing-keychain.sh scripts/bundle.sh
+      - name: Confirm the signing identity is gone
+        # Nothing after this point may sign: the zip, the feed, the upload and
+        # the publish only need the update key and tokens.
+        run: |
+          if security find-identity -p codesigning 2>/dev/null | grep -q 'OpenApps HQ Release'; then
+            echo "::error::The release signing identity is still available after the build."; exit 1
+          fi
+      - name: Zip, verify and sign the update
+        id: package
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Feed verification needs OpenSSL 3 (Ed25519); macOS ships LibreSSL.
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          scripts/make-zip.sh
+          scripts/verify-release.sh --release "dist/OpenNotes-$VERSION.zip"
+          scripts/make-appcast.sh "dist/OpenNotes-$VERSION.zip"
+          echo "sha256=$(cut -d' ' -f1 "dist/OpenNotes-$VERSION.zip.sha256")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: OpenNotes-${{ steps.version.outputs.version }}-signed
+          path: |
+            apps/opennotes/dist/*.zip
+            apps/opennotes/dist/*.sha256
+            apps/opennotes/dist/appcast.xml
+          if-no-files-found: error
+
+  # Publishes the verified zip. The only job with a token that can write
+  # releases; it runs no build, only scripts/publish-release.sh, which
+  # requires the opennotes-v* tag ruleset to be active with no bypass actors and
+  # refuses unless the tag names exactly the commit the zip was built from
+  # and the zip has exactly the digest the release job verified.
+  publish:
+    if: github.repository == 'openappshq/openapps' && needs.release.outputs.publish == 'true'
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: opennotes-release
+    # One publication at a time across all versions, so the newest-version
+    # check and the final publish of two releases can never interleave.
+    concurrency:
+      group: opennotes-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          # By id, not by name: exactly the artifact the release job uploaded.
+          artifact-ids: ${{ needs.release.outputs.artifact_id }}
+          path: apps/opennotes/dist
+          merge-multiple: true
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          BUILT_COMMIT: ${{ needs.release.outputs.commit }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+          CREATE_TAG: ${{ github.event_name == 'workflow_dispatch' }}
+          ALLOW_OLDER: ${{ inputs.allow_older == true }}
+        run: scripts/publish-release.sh
+
+  # Once the release is public: commit the signed feed and the install script
+  # to main (the website deploy serves both), verify the live feed, zip and
+  # script, then bump the cask.
+  # No build runs here and no signing material is present; the feed was
+  # signed by the release job and is only checked again here.
+  feed:
+    if: github.repository == 'openappshq/openapps'
+    needs: [release, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: opennotes-release
+    concurrency:
+      group: opennotes-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.release.outputs.artifact_id }}
+          path: apps/opennotes/dist
+          merge-multiple: true
+      - name: Check the feed against the published release
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          cd apps/opennotes
+          read -r version _ url sha256 < <(scripts/verify-appcast.sh dist/appcast.xml "dist/OpenNotes-$VERSION.zip")
+          expected_url="https://github.com/openappshq/openapps/releases/download/opennotes-v$VERSION/OpenNotes-$VERSION.zip"
+          if [ "$version" != "$VERSION" ] || [ "$sha256" != "$EXPECTED_SHA256" ] || [ "$url" != "$expected_url" ]; then
+            echo "::error::dist/appcast.xml announces $version $sha256 at $url, not $VERSION $EXPECTED_SHA256 at $expected_url"; exit 1
+          fi
+      - name: Never move the stable feed backwards
+        # The feed and the cask only ever advance. A back-port (allow_older)
+        # is published as a GitHub Release and nothing else: installed apps
+        # never downgrade anyway, and the cask refuses lower versions.
+        id: order
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          ALLOW_OLDER: ${{ inputs.allow_older == true }}
+        run: |
+          current=""
+          if [ -f apps/website/public/updates/opennotes/appcast.xml ]; then
+            read -r current _ < <(cd apps/opennotes && scripts/verify-appcast.sh ../website/public/updates/opennotes/appcast.xml)
+          fi
+          if [ -n "$current" ] && [ "$current" != "$VERSION" ] && [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" = "$current" ]; then
+            if [ "$ALLOW_OLDER" != true ]; then
+              echo "::error::The live feed is at $current, newer than $VERSION; a lower version is never promoted."; exit 1
+            fi
+            echo "::notice::$VERSION is a back-port below the live feed's $current: the release is published, the feed and the cask stay at $current."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Commit the feed to main
+        if: steps.order.outputs.promote == 'true'
+        env:
+          FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p apps/website/public/updates/opennotes
+          cp apps/opennotes/dist/appcast.xml apps/website/public/updates/opennotes/appcast.xml
+          # The install script pins the same release as the feed (RELEASES.md,
+          # "Install script"); write-install-script.sh refuses to move it backwards.
+          scripts/release/write-install-script.sh opennotes OpenNotes "$VERSION" "$SHA256" apps/website/public/install/opennotes
+          git config user.name "openapps-release"
+          git config user.email "release@openapps.space"
+          git add apps/website/public/updates/opennotes/appcast.xml apps/website/public/install/opennotes
+          if git diff --cached --quiet; then echo "The feed and the install script already name $VERSION."; exit 0; fi
+          git commit -m "Point OpenNotes's update feed and install script at $VERSION"
+          # The token is passed per command and never written to .git/config.
+          for _ in 1 2 3; do
+            if git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" push "https://github.com/$REPO.git" HEAD:main; then exit 0; fi
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" pull --rebase "https://github.com/$REPO.git" main
+          done
+          echo "::error::Could not push the feed to main after 3 attempts."; exit 1
+      - name: Verify the live feed and download
+        if: steps.order.outputs.promote == 'true'
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+          # The website deploys from main after the commit above.
+          WAIT_SECONDS: "1500"
+        run: apps/opennotes/scripts/verify-live.sh "$VERSION" "$EXPECTED_SHA256"
+      - name: Verify the live install script
+        if: steps.order.outputs.promote == 'true'
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+        run: scripts/release/verify-live-install-script.sh opennotes "$VERSION" "$EXPECTED_SHA256"
+      - name: Bump the cask
+        if: steps.order.outputs.promote == 'true'
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          # The tap is pushed with a deploy key that can write only to that repository.
+          umask 077; install -d "$RUNNER_TEMP/tap-key"; printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$RUNNER_TEMP/tap-key/id"
+          ssh-keyscan -t ed25519 github.com > "$RUNNER_TEMP/tap-key/known_hosts" 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/tap-key/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/tap-key/known_hosts"
+          trap 'rm -rf "$RUNNER_TEMP/tap-key"' EXIT
+          git clone --depth 1 git@github.com:openappshq/homebrew-tap.git "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Casks"
+          if [ ! -f "$RUNNER_TEMP/tap/Casks/opennotes.rb" ]; then cp packaging/homebrew/Casks/opennotes.rb "$RUNNER_TEMP/tap/Casks/opennotes.rb"; fi
+          packaging/homebrew/bump-cask.sh "$RUNNER_TEMP/tap/Casks/opennotes.rb" "$VERSION" "$SHA256"
+          cd "$RUNNER_TEMP/tap"
+          git config user.name "openapps-release"
+          git config user.email "release@openapps.space"
+          git add Casks/opennotes.rb
+          if git diff --cached --quiet; then echo "The cask already names $VERSION."; exit 0; fi
+          git commit -m "opennotes $VERSION"
+          git push origin HEAD

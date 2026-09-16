@@ -22,6 +22,7 @@ test("every checkout return page is uncached, unindexed and sends no referrer", 
       "/openreaction/thanks/",
       "/hertz/thanks/",
       "/macpaper/thanks/",
+      "/opennotes/thanks/",
       "/thanks/",
     ]),
   );

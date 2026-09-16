@@ -14,10 +14,17 @@ export default function HertzInstall({
 }: {
   licensing: Pick<
     AppLicensing,
-    "name" | "brewCask" | "brewCommand" | "installCommand" | "installScriptSourceUrl"
+    | "name"
+    | "brewCask"
+    | "brewCommand"
+    | "installCommand"
+    | "installScriptSourceUrl"
+    | "permissions"
+    | "arrival"
   >;
 }) {
-  const { name, brewCommand, installCommand, installScriptSourceUrl } = licensing;
+  const { name, brewCommand, installCommand, installScriptSourceUrl, permissions, arrival } =
+    licensing;
   if (!installCommand || !brewCommand) {
     return (
       <div className="hertz-install">
@@ -39,6 +46,8 @@ export default function HertzInstall({
         name={name}
         sourceUrl={installScriptSourceUrl}
         brewCommand={brewCommand}
+        permissions={permissions}
+        arrival={arrival}
       />
       <p className="hertz-install-note">
         Hertz lands in <code>/Applications</code> and opens in your menu bar; nothing to grant.

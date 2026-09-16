@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the signed OpenNotes.app (scripts/bundle.sh).
+
+  The app is not sandboxed: the notes folder is any folder the user names
+  (iCloud Drive, an Obsidian vault), which a sandboxed process could reach
+  only through security-scoped bookmarks the app would have to keep, and
+  the deck's window level and Carbon hotkey need no entitlement. The
+  hardened runtime is enabled on the codesign command line with no
+  exceptions: OpenNotes loads no frameworks, plug-ins or JIT, and asks
+  macOS for no permissions.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
