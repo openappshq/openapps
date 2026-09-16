@@ -184,6 +184,43 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertEqual(try read("a.md").contains("archived: true"), true)
     }
 
+    /// The one exception to read-only: text `setText` accepted while access
+    /// was on is written by `save`/`saveAll` whatever `access` says by the
+    /// time the flush runs; a second, new edit made after access is
+    /// withdrawn is refused like any other change.
+    @MainActor func testAcceptedTextIsFlushedAfterAccessIsWithdrawnButANewEditIsRefused() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "A")
+        let store = makeStore()
+        var allowed = true
+        store.access = { allowed }
+        try store.setText("Typed while allowed", for: NoteID("a"))
+        allowed = false
+        XCTAssertNoThrow(try store.save(NoteID("a")))
+        XCTAssertTrue(try read("a.md").contains("Typed while allowed"))
+        XCTAssertFalse(store.hasUnsavedChanges(NoteID("a")))
+        XCTAssertThrowsError(try store.setText("A second, refused edit", for: NoteID("a"))) { XCTAssertEqual($0 as? StoreError, .readOnly) }
+        XCTAssertEqual(store.note(NoteID("a"))?.text, "Typed while allowed", "the refused edit never reached the buffer")
+    }
+
+    /// A pending change that is not accepted text (a flag on a note with no
+    /// file yet) has nowhere the license can carry it: `saveAll` finds it
+    /// refused, skips it silently — not a failure, so quit is never held —
+    /// and it stays dirty for the next flush that finds access restored.
+    @MainActor func testAPendingNonTextChangeOnAnEmptyProvisionalNoteIsSkippedSilentlyWhileReadOnly() throws {
+        let store = makeStore()
+        var allowed = true
+        store.access = { allowed }
+        let note = try store.create(color: .coral, face: .sans)
+        try store.setPinned(true, for: note.id)
+        XCTAssertTrue(store.hasUnsavedChanges(note.id))
+        allowed = false
+        let problems = store.saveAll()
+        XCTAssertEqual(problems, [:], "a refusal that is not accepted text is skipped silently, not reported")
+        XCTAssertTrue(store.hasUnsavedChanges(note.id), "stays dirty for the next flush")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(note.id.fileName).path))
+    }
+
     // MARK: - Outside edits
 
     @MainActor func testAnOutsideEditIsPickedUpByRescan() throws {

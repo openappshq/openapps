@@ -8,15 +8,19 @@ import OpenAppsLicensing
 /// tick, no timer and no re-render in between: a debounced save in flight,
 /// a provisional note left open, a folder chosen from an open panel, the
 /// text view's own edit gate, the undo toast. The real manager's
-/// projection decides at every resumption; nothing started under the grant
-/// commits after it lapsed.
+/// projection decides at every resumption. One exception carries across a
+/// deadline on purpose: text already typed while it was allowed is stamped
+/// `accepted` by `NoteStore.setText` and is written by its flush (the
+/// debounce, a close, sleep, quit) whatever the license says by then — the
+/// restriction is on new edits, archiving, renaming, the folder and every
+/// other change, never on text already accepted.
 ///
 /// XCTest, not Swift Testing (unlike the rest of this directory): the save
 /// debounce is a real `Timer` on the main run loop
 /// (`AppModel.setText`/`AppModel.saveDebounce`), and only `XCTestCase.wait`
 /// actually spins that run loop long enough for it to fire. A Swift Testing
 /// `Task.sleep` here would pass whether or not the timer ever ran, which is
-/// not what "no file written after the debounce fires past the deadline"
+/// not what "the debounce writes the accepted text after the deadline"
 /// is supposed to prove.
 @MainActor
 final class ContinuationTests: XCTestCase {
@@ -71,7 +75,11 @@ final class ContinuationTests: XCTestCase {
         return model
     }
 
-    @MainActor func testADebouncedSaveCrossesTheDeadlineAndWritesNothing() async throws {
+    /// The one thing a deadline never takes: text already typed while it was
+    /// allowed. `setText` stamps the buffer `accepted` the moment it lands,
+    /// so its flush — the debounce, a close, sleep or quit — is written
+    /// whatever the license says by the time it runs.
+    @MainActor func testADebouncedSaveCrossesTheDeadlineAndStillWritesTheAcceptedText() async throws {
         let model = await attach()
         let note = try XCTUnwrap(model.createNote())
         model.setText("Groceries", for: note.id)
@@ -79,21 +87,22 @@ final class ContinuationTests: XCTestCase {
         let fired = expectation(description: "debounce window passed")
         DispatchQueue.main.asyncAfter(deadline: .now() + AppModel.saveDebounce + 0.2) { fired.fulfill() }
         await fulfillment(of: [fired], timeout: 2)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: model.store.fileURL(for: note.id).path))
-        XCTAssertTrue(model.store.hasUnsavedChanges(note.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: model.store.fileURL(for: note.id).path), "typed under access: the debounce's flush is never refused")
+        XCTAssertFalse(model.store.hasUnsavedChanges(note.id))
         XCTAssertNil(model.saveProblem)
-        XCTAssertEqual(model.statusLine(for: note.id), model.readOnlyNotice)
+        XCTAssertEqual(model.statusLine(for: note.id), model.readOnlyNotice, "read-only for everything else")
     }
 
-    @MainActor func testAProvisionalNoteClosedAfterTheDeadlineIsRenamedNothingAndWritesNoFile() async throws {
+    @MainActor func testAProvisionalNoteClosedAfterTheDeadlineWritesTheAcceptedTextButKeepsItsProvisionalName() async throws {
         let model = await attach()
         let note = try XCTUnwrap(model.createNote())
         model.setText("Trip ideas", for: note.id)
         clock.advance(120)
         let closed = model.closeNote(note.id)
-        XCTAssertEqual(closed, note.id, "finishProvisional is a file change, refused while read-only")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: model.store.fileURL(for: note.id).path))
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [])
+        XCTAssertEqual(closed, note.id, "the accepted text is written, but finishProvisional's rename is a new file change, still refused")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: model.store.fileURL(for: note.id).path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [note.id.fileName])
+        XCTAssertEqual(model.note(note.id)?.text, "Trip ideas")
     }
 
     @MainActor func testAFolderChosenWhileAllowedIsRefusedAfterTheDeadline() async throws {

@@ -260,35 +260,74 @@ struct EnforcementTests {
         _ = provisional
     }
 
-    @Test("An outside edit lands on a dirty note; once the deadline passes, the refused save neither overwrites it nor diverts to a conflict copy")
-    func outsideEditConflictAcrossExpiry() async throws {
+    @Test("Text accepted while allowed still diverts to a conflict copy after the deadline, exactly as it would allowed")
+    func acceptedTextDivertsToAConflictCopyAcrossExpiry() async throws {
         trialStore.record = trialRecord(elapsed: 3 * FakeClock.day - 60)
         _ = await attach()
         defer { tearDown() }
         let noteID = try #require(model.active.first?.id)
-        model.setText("Our edit", for: noteID)
+        model.setText("Our edit", for: noteID) // accepted: typed while allowed
         let fileURL = model.store.fileURL(for: noteID)
         let outsideText = "Someone else's edit, longer"
         try Data(outsideText.utf8).write(to: fileURL)
         model.store.rescan()
         let listingBefore = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
-        clock.advance(120) // the trial ends before the save
-        // The read-only guard is the first line of the write transaction, so
-        // a dirty note with an outside edit waiting behind it is refused
-        // before the diversion logic ever runs: no `.keptAsConflictCopy`,
-        // no new file, the outside version on disk untouched.
-        #expect(model.save(noteID) == nil)
-        #expect(try Data(contentsOf: fileURL) == Data(outsideText.utf8), "the file keeps the outside version")
-        #expect(model.store.hasUnsavedChanges(noteID), "the note stays dirty")
+        clock.advance(120) // the trial ends before the flush
+        // The buffer was stamped `accepted` the moment it was typed, so its
+        // flush goes through the write transaction whatever the license says
+        // now — including the transaction's own conflict handling.
+        let copyID = try #require(model.save(noteID), "accepted text is always flushed")
+        #expect(copyID != noteID)
+        #expect(try Data(contentsOf: fileURL) == Data(outsideText.utf8), "the original file keeps the outside version")
+        #expect(model.note(noteID)?.text == outsideText, "the original id now holds the outside text, read back")
+        #expect(model.note(copyID)?.text == "Our edit", "ours continues in the copy")
+        #expect(!model.store.hasUnsavedChanges(copyID))
+        #expect(FileManager.default.fileExists(atPath: model.store.fileURL(for: copyID).path))
         let listingAfter = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
-        #expect(listingAfter == listingBefore, "no conflict copy for a refused save")
-        #expect(!listingAfter.contains { $0.contains("conflict") })
-        #expect(model.statusLine(for: noteID) == model.readOnlyNotice)
-        // `flush()` (the quit/sleep/resign path) refuses identically.
-        let problems = model.flush()
-        #expect(problems.isEmpty)
+        #expect(listingAfter.count == listingBefore.count + 1)
+        #expect(listingAfter.contains { $0.contains("conflict") })
+        #expect(model.statusLine(for: copyID) == model.readOnlyNotice, "read-only for everything else, even the note the text landed in")
+    }
+
+    @Test("A fully saved note is never touched by a refused save or flush, even with an outside edit waiting")
+    func fullySavedNoteWithOutsideEditAfterExpiryIsUntouched() async throws {
+        trialStore.record = trialRecord(elapsed: 3 * FakeClock.day - 60)
+        _ = await attach()
+        defer { tearDown() }
+        let noteID = try #require(model.active.first?.id)
+        model.setText("Saved before the deadline", for: noteID)
+        #expect(model.save(noteID) == noteID, "written while allowed: no divert, no rename")
+        #expect(!model.store.hasUnsavedChanges(noteID))
+        let fileURL = model.store.fileURL(for: noteID)
+        let outsideText = "Someone else's edit, arriving later"
+        try Data(outsideText.utf8).write(to: fileURL)
+        model.store.rescan() // a plain read: not dirty, so this alone updates memory
+        #expect(model.note(noteID)?.text == outsideText)
+        #expect(!model.store.hasUnsavedChanges(noteID))
+        let listingBefore = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        clock.advance(120)
+        // Nothing dirty: `save` and `flush` find `.unchanged` before the
+        // read-only guard is ever asked — not a refusal, just nothing to do.
+        #expect(model.save(noteID) == noteID)
+        #expect(model.flush().isEmpty)
         #expect(try Data(contentsOf: fileURL) == Data(outsideText.utf8))
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() == listingBefore)
+        #expect(!listingBefore.contains { $0.contains("conflict") })
+    }
+
+    @Test("Text accepted while allowed is written by flush() too, even after the deadline")
+    func acceptedTextIsWrittenByFlushAfterTheDeadline() async throws {
+        trialStore.record = trialRecord(elapsed: 3 * FakeClock.day - 60)
+        _ = await attach()
+        defer { tearDown() }
+        let noteID = try #require(model.active.first?.id)
+        model.setText("Typed with a minute to spare", for: noteID)
+        clock.advance(120)
+        let problems = model.flush()
+        #expect(problems.isEmpty)
+        #expect(!model.store.hasUnsavedChanges(noteID))
+        #expect(try String(contentsOf: model.store.fileURL(for: noteID), encoding: .utf8).contains("Typed with a minute to spare"))
+        #expect(model.statusLine(for: noteID) == model.readOnlyNotice, "read-only for everything else, even though this text landed")
     }
 
     // MARK: Deadlines nobody delivered
@@ -382,19 +421,25 @@ struct EnforcementTests {
         #expect(model.archived.map(\.id).contains(oldID) == false, "refused: the sweep asked the license and it said no")
     }
 
-    @Test("Once writing is allowed again, text refused at the debounce reaches the disk, and the auto-archive it also refused runs")
-    func restoringAccessFlushesPendingTextAndReRunsAutoArchive() async throws {
+    @Test("Once writing is allowed again, the auto-archive refused earlier runs; a flag held on an empty provisional note is finally written once it has text")
+    func restoringAccessReRunsAutoArchiveAndFlushesAHeldFlagChange() async throws {
         trialStore.record = trialRecord(elapsed: 3 * FakeClock.day - 60) // one minute left
         client.activation = .activated(Activation(instanceID: "inst_1", productID: Self.paid, productName: "OpenNotes", createdAt: clock.now, serverDate: clock.now))
         let manager = await attach()
         defer { tearDown() }
         model.preferences.autoArchiveDays = 1
-        let noteID = NoteID("shopping")
         let oldID = NoteID("trip")
-        model.setText("Refused, then restored", for: noteID)
-        clock.advance(120) // the trial ends before the debounce's own save can land
-        #expect(model.save(noteID) == nil, "the debounce's attempt is refused")
-        #expect(model.store.hasUnsavedChanges(noteID))
+
+        // A brand-new, still-empty note: a pin set on it while allowed sits
+        // in memory only (an empty provisional note is never written,
+        // license or not) — this is the one kind of pending change a
+        // deadline can still hold, since typing accepted text no longer can.
+        let held = try #require(model.createNote())
+        model.setPinned(true, for: held.id)
+        #expect(model.store.hasUnsavedChanges(held.id))
+        #expect(!FileManager.default.fileExists(atPath: model.store.fileURL(for: held.id).path))
+
+        clock.advance(120) // the trial ends before start()'s sweep, or anything else
         model.start() // wires the license.revision observer, on the temp folder
         // An old, unpinned note that would be an auto-archive candidate once it can run.
         try Data(FrontMatter.serialize(Note(id: oldID, text: model.note(oldID)?.text ?? "Trip planning", order: 5, created: clock.now.addingTimeInterval(-3 * FakeClock.day), modified: clock.now.addingTimeInterval(-3 * FakeClock.day))).utf8)
@@ -402,16 +447,25 @@ struct EnforcementTests {
         model.store.rescan()
         #expect(AutoArchive.candidates(in: model.active, days: 1, now: clock.now).contains(oldID))
 
+        #expect(model.flush().isEmpty, "the held pin change is not reported as a failure")
+        #expect(model.store.hasUnsavedChanges(held.id), "still dirty: an empty provisional note is never written")
+        #expect(model.archived.map(\.id).contains(oldID) == false, "auto-archive is still refused")
+
         #expect(await manager.activate(key: "OPENNOTES-KEY") == .activated)
         status.publish() // the manager's own change does not publish LicenseStatus; the app's launch path does this on `onChange`
         for _ in 0..<50 { await Task.yield() }
 
         #expect(status.hasAccess())
-        #expect(!model.readOnly)
-        #expect(!model.store.hasUnsavedChanges(noteID), "the flush the license observer ran wrote the held text")
-        #expect(FileManager.default.fileExists(atPath: model.store.fileURL(for: noteID).path))
-        #expect(model.note(noteID)?.text == "Refused, then restored")
         #expect(model.archived.map(\.id).contains(oldID), "the auto-archive the observer re-ran picked up the old note")
+        #expect(model.store.hasUnsavedChanges(held.id), "the pin alone still has nowhere to go: the note is still empty")
+
+        // The user finally types something: the held pin and the new text
+        // reach the disk together.
+        model.setText("Finally has something to say", for: held.id)
+        #expect(model.save(held.id) != nil)
+        #expect(!model.store.hasUnsavedChanges(held.id))
+        #expect(FileManager.default.fileExists(atPath: model.store.fileURL(for: held.id).path))
+        #expect(model.note(held.id)?.pinned == true, "the flag set long before is still there")
     }
 }
 
