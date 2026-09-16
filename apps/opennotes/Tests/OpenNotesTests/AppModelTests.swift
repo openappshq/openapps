@@ -150,7 +150,9 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.color, .coral)
         XCTAssertEqual(preferences.autoArchiveDays, 0)
         XCTAssertTrue(preferences.usesDefaultFolder)
-        XCTAssertEqual(preferences.folder.lastPathComponent, "OpenNotes")
+        // The update-test variant keeps its notes in its own folder.
+        let defaultLeaf = UpdateTesting.isCompiledIn ? "Notes" : "OpenNotes"
+        XCTAssertEqual(preferences.folder.lastPathComponent, defaultLeaf)
         preferences.side = .left
         preferences.display = .every
         preferences.hotkey = nil
@@ -170,7 +172,7 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(again.folder.path, chosen.path)
         again.resetFolder()
         XCTAssertTrue(again.usesDefaultFolder)
-        XCTAssertEqual(Preferences(defaults: temporary.defaults).folder.lastPathComponent, "OpenNotes")
+        XCTAssertEqual(Preferences(defaults: temporary.defaults).folder.lastPathComponent, defaultLeaf)
     }
 
     @MainActor func testEveryKeyWrittenIsFreshInstallEvidence() throws {
@@ -267,7 +269,9 @@ final class WiringTests: XCTestCase {
         let text = Diagnostics.text(model: model, preferences: preferences, loginItem: LoginItem(flags: temporary.defaults, service: FakeLoginItemService()), hotkeys: HotkeyCenter(), deck: nil)
         // Under xctest Bundle.main is the test host; only the shape is checked.
         XCTAssertTrue(text.hasPrefix("OpenNotes ") && text.contains(" · macOS "), text)
-        XCTAssertTrue(text.contains("Licensing: off (source build"), text)
+        // The flavour's line: from source it says so; an official build
+        // names where the license stands (here: nothing bound, so the flavour alone).
+        XCTAssertTrue(text.contains(Licensing.isCompiledIn ? "Licensing: official build" : "Licensing: off (source build"), text)
         XCTAssertTrue(text.contains("Deck: right edge · the main display · hidden"), text)
         XCTAssertTrue(text.contains("Hotkey: ⌥⌘N"), text)
         XCTAssertTrue(text.contains("watcher off"), text)
