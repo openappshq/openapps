@@ -1,6 +1,6 @@
 # macPaper
 
-A wallpaper maker that lives in the notch: click or hover the notch and a panel drops down with the current wallpaper, a generator to change it, Shuffle, Apply, Favorite and Export. Every wallpaper is made on the Mac from a few parameters and a seed; nothing is downloaded and nothing is uploaded. macPaper makes **stills** that macOS keeps showing after the app quits — light/dark and time-of-day pairs included — and keeps them applied.
+A wallpaper maker that lives in the notch: click or hover the notch and a column drops down with the current wallpaper, the library of looks, a generator to change it, its parameters and effects, Shuffle and Export. Every change lands on the desktop as it is made. Every wallpaper is made on the Mac from a few parameters and a seed; nothing is downloaded and nothing is uploaded. macPaper makes **stills** that macOS keeps showing after the app quits — light/dark and time-of-day pairs included — and keeps them applied.
 Open source under MIT; the official build is paid on the same terms as every OpenApps HQ app ([LICENSING.md](../../LICENSING.md): 3-day in-app trial, no signup, one license for 3 Macs). Installed with Homebrew; the official build checks a signed feed for updates once a day and installs one only when the user says so ([RELEASES.md](../../RELEASES.md)).
 
 Inspired by the idea of a notch-based wallpaper maker; written from scratch, with no code, copy, name or asset from any other product. Scope decided 2026-09-16 by the user from the macPaper roadmap (three scouts of what wallpaper apps ship and users ask for): the whole roadmap is v1, except what a spike ruled out ("Not built" below).
@@ -10,22 +10,22 @@ Inspired by the idea of a notch-based wallpaper maker; written from scratch, wit
 Signature color: tangerine (`tangerine/300` tile face, `tangerine/500` shade, `tangerine/700` / `tangerine/300` accent in light / dark); the mark is a display outline with the notch as a filled tab and one horizon line inside.
 The color is the app's, not a state: success stays green, danger red, warning HQ yellow, so a tangerine control is always an action or the brand.
 Type follows the shared system: Bricolage Grotesque for the panel's heading and the settings window's headings, Instrument Sans for interface text, IBM Plex Mono with tabular digits for seeds, sizes and labels.
-Surfaces are glass cards (Liquid Glass on macOS 26, the system material before, opaque under Reduce Transparency, a visible rim under Increase Contrast), as in Hertz and OpenReaction. The notch panel is one such card, squared off at the top where it meets the menu bar.
+Surfaces are glass cards (Liquid Glass on macOS 26, the system material before, opaque under Reduce Transparency, a visible rim under Increase Contrast), as in Hertz and OpenReaction — the settings window and the setup guide. The notch panel is the exception: a column that hangs from the notch, a piece of the same black in both appearances and opaque (`PanelTheme` in the core: neutral/950 ground, neutral/850 rows, neutral/0 and neutral/400 text, the tangerine/300 accent), with the neutral/700 rim, squared off at the top where it meets the notch. Nothing of the wallpaper reaches a label, so every text pair reads at AA over any desktop; a test asserts the pairs and the preview harness proves it over a saturated mesh, grey, near-black and near-white.
 
 ## Primary task
 
-Make the desktop look the way you want in one gesture: open the panel, pick or shuffle, Apply. Everything else (favorites, scheduled shuffle, export, per-display choices) supports that.
+Make the desktop look the way you want as you go: open the column, pick a look or shuffle, move a slider — every change lands on the desktop by itself (live apply). Everything else (the library, scheduled shuffle, export, per-display choices) supports that.
 
 ## Generators
 
-Every wallpaper is a document: a generator, its parameters, a seed, the finishes and the composition, serialisable as JSON. The same document renders the same pixels at the same size on every Mac; the seed is shown in the panel so a look can be reproduced or shared.
+Every wallpaper is a document: a generator, its parameters, a seed, the finishes and the composition, serialisable as JSON. The panel lists Dither, Mesh, Pattern and Pixelize as generators; a gradient or a flat color on its own is the **base layer** (Effects → Base layer: Flat · Gradient · True black), never a shuffle's result and never a starter. The same document renders the same pixels at the same size on every Mac; the seed is shown in the panel so a look can be reproduced or shared.
 
 | Generator | Parameters | Rendering |
 | --- | --- | --- |
-| Gradient | Linear, radial or conic; 2–6 color stops; angle (linear, conic) or center (radial, conic); interpolation in sRGB or OKLCH ("smooth", the default for new documents: no grey dip between saturated colors) | Per pixel, software |
+| Gradient (base layer) | Linear, radial or conic; 2–6 color stops; angle (linear, conic) or center (radial, conic); interpolation in sRGB or OKLCH ("smooth", the default for new documents: no grey dip between saturated colors) | Per pixel, software |
 | Mesh | Columns × rows of control points (2–5 each), a palette of up to 6 colors, jitter and softness; the seed places the points and picks their colors | Inverse-distance blend of the control points, software (no Metal, no GPU: the result is the same on every Mac) |
 | Pattern | Dots, lines, checks or noise; foreground and background colors; scale; angle (lines, checks); the seed drives noise | Software raster |
-| Solid | One color; **True black** sets `#000000` with every finish, composition and pair off, and the render is exact zeros on both sides (Liquid Glass reads best on it) | Flat fill |
+| Solid (base layer) | One color; **True black** sets `#000000` with every finish, composition and pair off, and the render is exact zeros on both sides (Liquid Glass reads best on it) | Flat fill |
 | Pixelize | An imported image (PNG, JPEG, HEIC, TIFF), block size 4–64 px, optional palette reduction to 2–32 colors; framing (below) | The image is placed per the framing, averaged per block straight from the source pixels, optionally quantised (median cut), then filled block by block |
 | Dither | An imported image; Bayer 2/4/8, Floyd–Steinberg, blue noise (a 64×64 void-and-cluster tile), halftone (dot size by luminance on a rotated grid) or ASCII (a built-in 5×7 glyph ramp, no font); cell size (widened on very large displays so the sample grid stays under 2.5 million cells: cell 1 on a 5K is cell 3); 2 colors (ink/paper) or a reduced palette of up to 16; framing | Software, from the source pixels; the same seed and image give the same bytes |
 
@@ -33,13 +33,13 @@ Every wallpaper is a document: a generator, its parameters, a seed, the finishes
 
 **Finishes**, in this order after the generator, each off by default: tint (one color, amount), duotone (shadow and highlight colors), gradient map (2–6 stops over luminance), film grain (0–100 %, seeded, monochrome), and **top shade** (a shading of the menu-bar strip toward the menu bar's own tone — lighter on the light side, darker on the dark side — so its text reads). The panel reads the menu-bar strip of every render against the text the side gets (dark text in the light appearance, light text in the dark one) and says **"Menu bar: reads" / "Menu bar: low contrast"** (4.5:1 and an even strip); the low-contrast state offers "Shade the top" with one click. Renders are made at the display's pixel size; previews render at a fraction of it (`renderScale`) so a slider drag never waits on a 6-megapixel image. A render cache keyed by document and size keeps the last few full-size renders within a byte limit.
 
-**Colors.** Every color row offers **From photo…** (the dominant colors of an image, median cut, pasted into the row), **From accent color** (the Mac's accent color expanded into a palette in OKLCH: the accent, a lighter and a darker step, its complement, a near-black and a near-white), and the built-in palettes. Random documents and the accent palette interpolate in OKLCH so nothing lands in the grey.
+**Colors.** Every color row offers **From photo…** (the dominant colors of an image, median cut, pasted into the row), **From accent color** (the Mac's accent color expanded into a palette in OKLCH: the accent, a lighter and a darker step, its complement, a near-black and a near-white), and the preset palettes (the Palette section's grid; a recipe is titled by the preset its colors come from, or "Custom"). Random documents and the accent palette interpolate in OKLCH so nothing lands in the grey.
 
 ## Pairs
 
 | Pair | What it is | How it is applied |
 | --- | --- | --- |
-| Light / dark | Every document has a light and a dark side. The dark side is derived (**Make dark from light**: every color's OKLCH lightness folded down, hue and chroma kept) or edited on its own; a segmented control above the preview switches which side is edited, and the preview shows the side matching the Mac's appearance | Applied as one HEIC with the two images and the `apple_desktop:apr` appearance record (the format macOS's own dynamic desktops use, written with ImageIO), so macOS switches by itself after macPaper quits. Where a display refuses the HEIC (an old macOS, a screen that only takes stills), the two PNGs are kept and swapped on the theme-change notification while macPaper runs |
+| Light / dark | Every document has a light and a dark side. The dark side is derived (**Make dark from light**: every color's OKLCH lightness folded down, hue and chroma kept) or edited on its own; a segmented control under Effects switches which side is edited, and the preview shows the side matching the Mac's appearance | Applied as one HEIC with the two images and the `apple_desktop:apr` appearance record (the format macOS's own dynamic desktops use, written with ImageIO), so macOS switches by itself after macPaper quits. Where a display refuses the HEIC (an old macOS, a screen that only takes stills), the two PNGs are kept and swapped on the theme-change notification while macPaper runs |
 | Time of day | The same seed at 4, 8 or 16 moments of the day: the document's colors follow a day curve (lightness and warmth up toward noon, down toward midnight), the seed unchanged | One HEIC with the frames and the `apple_desktop:h24` time record (fractions of the day, plus which frame is light and dark), so macOS keeps cycling after quit. No Location: the curve is by clock time, not the sun; a sun-position (`solar`) variant is listed under "Not built" |
 | Phone | The desktop still and a 1290×2796 portrait of the same document | **Export → Phone pair** writes both PNGs; the phone one is AirDropped by the user |
 
@@ -51,7 +51,23 @@ A favorite is a document, so it keeps its pair and its frames.
 
 ## Notch panel
 
-The panel is anchored to the notch of the display that hosts it and opens downwards from it, centered on the notch, its top squared against the menu bar and its bottom corners rounded. Without a notch the panel opens from the top center of the host display (the hover zone is then a 2-point strip at the top edge, so no menu-bar item is covered) and the menu-bar popover stays the primary surface.
+The panel is a tall column anchored to the notch of the display that hosts it: centered on the notch, its top squared against it, its bottom corners rounded, most of the screen tall (the screen's height under the notch less a 24-point margin, at most 920 points) and a fixed height while it is open, so switching sections never moves the window; the menu-bar row beside the notch is shaded in the column's width by a click-through strip, so the row reads as part of it while the menu bar keeps every click. Without a notch the column opens under the menu-bar item as the popover does — its trailing edge on the item's, rounded all round, a 6-point gap under the menu bar — or from the top center when the item is on another display (the hover zone is then a 2-point strip at the top edge, so no menu-bar item is covered), and the menu-bar popover stays the primary surface.
+
+Its width is the setting below, unless a segmented control needs more: every segment is as wide as the control's widest label measured in the segment font, and the column grows to fit the widest control, so no label ever wraps (`PanelLayout`; the tests measure the real labels). The column has an icon rail on its left (the mark; Library, Generators, Palette, Parameters, Effects, Export, History; at the bottom Shuffle and Collapse) and, beside it, the section the rail points at. The pane: a header with the section's title and the **reach** control (where every change lands: every display · this display · this Space only; the display choice is left out while "same on all displays" is on); the preview in the display's aspect, at most 200 points tall (the display's name when there is more than one, "on the desktop" while the draft is what the display shows, the menu-bar readability verdict, the focal point of a framed image); the section; a status line after an action; the update row; and a quiet footer with the seed (click to type one, a die for a new one, a pin), Settings… and Quit. Rows keep one rhythm (72 points: a 13-point semibold label with its pin and a mono readout, the control under them; thin sliders with a round knob, focusable and keyboard-operable), section labels are the mono label, lists are 72-point rows with 56-point thumbnails.
+
+| Section | What it holds |
+| --- | --- |
+| Library | A name field and **Save** (the draft as a recipe; a blank name takes the derived "Palette · Generator" title, a saved document is renamed); the saved recipes (thumbnail, title, generator · seed · pair, the star to remove, a ⋯ menu: apply, copy link, export, never show, remove); then the built-in starters. Clicking a row loads it; live apply takes it to the desktop |
+| Generators | Dither, Mesh, Pattern, Pixelize, one row each with a line of what it does; the current one marked. A flat color or a gradient is the base layer (under Effects), not a generator |
+| Palette | The current colors as swatches (add and remove where the generator takes a variable count), From photo… and From accent color, then the grid of preset palettes (`PresetPalettes`, about fifty on the OKLCH ramps, seven per row), the one in use ringed; the row's title is the preset's name or "Custom" |
+| Parameters | The edited generator's parameters as rows with pins (gradient: shape, angle, center, blend; mesh: grid, jitter, softness; pattern: kind, scale, angle, ink and paper; pixelize: image, block, colors, framing; dither: image, mode, cell, colors, framing) |
+| Effects | Editing (Light / Dark) and the pair (Still · Light / Dark · Time of day with its frame count); the finish stack — grain, top shade (with "Shade the top" while the menu bar reads badly), tint, duotone, gradient map — each pinnable; the notch composition; the base layer (Generator · Flat · Gradient · True black) |
+| Export | PNG, SVG, HEIC pair, Phone pair, each with what it makes; Copy link, Remix, Never show this |
+| History | What reached a desktop, newest first, one entry per look (a slider moved replaces the entry; a shuffle, a favorite, a new seed adds one; 40 kept): click loads it, the star saves it, the x forgets it, Clear forgets all |
+
+**Live apply.** There is no Apply button: every change to the draft — a slider, a palette, a generator, a loaded recipe — renders and reaches the desktop on its own, 150 ms after the last change, off the main actor, through the same prepare/commit gate as before (the license asked before every desktop call). The last state wins: a change during the wait restarts it; a change while a render is in flight leaves that render's files discarded before any desktop call; applies queue one behind another, so nothing lands out of order. A successful live apply says nothing (the preview's tag reads "on the desktop"); a failure says so in the status line. Restricted, an edit is refused as before and a loaded recipe stays a preview; the license card says why.
+
+**Pins.** A pin beside a parameter locks it against Shuffle: a shuffle keeps every pinned value from the draft (the palette, the seed, a finish, the composition, the pair, or a generator's own parameter, which keeps that generator as well). Pins are kept in the preferences.
 
 | Setting | Values | Default |
 | --- | --- | --- |
@@ -59,7 +75,7 @@ The panel is anchored to the notch of the display that hosts it and opens downwa
 | Host display | the notch display / the main display / every notched display | the notch display |
 | Open on | hover / click / both | both |
 | Direction | down (v1 renders down only; left, right are stored for a later release) | down |
-| Width | compact / regular / wide (360 / 440 / 560 pt) | regular |
+| Width | compact / regular / wide (360 / 440 / 560 pt, each grown to fit the widest control's labels) | regular |
 | Hide in fullscreen | on / off | on |
 | Hotkey | any key with at least one modifier, or none | ⌃⌥⌘ W |
 
@@ -70,7 +86,7 @@ Behavior:
 - In fullscreen (Hide in fullscreen on) the panel closes and hover does nothing until the space leaves fullscreen; the hotkey still opens the popover.
 - Reduce Motion: no drop animation, the panel appears in place; the standard drop takes 180 ms otherwise.
 - The panel never takes key focus from the app in front unless the user types in it (the seed field, a color field); Escape then returns focus.
-- The panel's content, top to bottom: the current wallpaper's preview in the display's aspect ratio (with the display's name when there is more than one, "on the desktop" while the draft is what the display shows, the menu-bar readability verdict, and the focal point for a framed image); the Light / Dark / Time-of-day control; the generator segmented control; the generator's parameters (sliders, brand segmented controls, color swatches that open the system color panel, minus/plus counters, From photo… / From accent color on color rows); a **Finishes** disclosure (tint, duotone, gradient map, grain, top shade) and a **Composition** row (none / emerge / contours / painted pill); a row of actions: **Shuffle** (a random document, applied at once), **Apply** (this display · all displays · this Space only in a split button, or one button while "same on all displays" is on), Favorite (a star, filled while the document is a favorite), a **more** menu (Export as PNG / SVG / HEIC pair / Phone pair, Share link, Remix, Never show this); a status line after an action; a footer with the seed (click to type one, a die for a new one), Settings… and Quit.
+- The column's content is the section the rail points at (above); the section is kept across opens and shared with the popover. Collapse on the rail closes the column the way Escape does.
 
 ### Notch-aware composition
 
@@ -78,7 +94,7 @@ A document may compose around the notch of the display it is applied to: **Emerg
 
 ## Menu bar
 
-A template symbol (the mark) with no readout. Clicking opens the popover with the same content as the notch panel, 420 pt wide. The popover is the only surface when the notch panel is off, when no display has a notch and the host display setting is "the notch display", and in fullscreen while the panel is hidden.
+A template symbol (the mark) with no readout. Clicking opens the popover with the same column as the notch panel, the regular width, as tall as the screen allows, dark in both appearances. The popover is the only surface when the notch panel is off, when no display has a notch and the host display setting is "the notch display", and in fullscreen while the panel is hidden.
 
 ## Apply, finished
 
@@ -96,7 +112,7 @@ A template symbol (the mark) with no readout. Clicking opens the popover with th
 
 | Setting | Behavior | Default |
 | --- | --- | --- |
-| Shuffle | Off, or every 15 min / 30 min / hour / 3 hours / 6 hours / day; a shuffle renders a new document (a random generator and seed, or one of the favorites) and applies it | off |
+| Shuffle | Off, or every 15 min / 30 min / hour / 3 hours / 6 hours / day; a shuffle renders a new document (a random mesh or pattern and seed, or one of the favorites, with the pinned parameters kept from the draft; never a flat color or a gradient on its own) and applies it | off |
 | Favorites only | Shuffle picks from the favorites; with none saved it falls back to random and the settings row says so | off |
 | Same on all displays | Apply and Shuffle set one document on every display; off: each display keeps its own, Apply offers "this display" and "all displays", Shuffle changes every display to a different document | on |
 | Keep it applied | The pin above | on |
