@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs OpenReaction 0.1.4 on your Mac.
+# Installs OpenReaction 0.1.5 on your Mac.
 #
 #   curl -fsSL https://openapps.space/install/openreaction | sh
 #
@@ -26,9 +26,9 @@ umask 022
 APP_ID='openreaction'
 APP_NAME='OpenReaction'
 BUNDLE_ID='com.openappshq.openreaction'
-VERSION='0.1.4'
-SHA256='68e07acf8e7b30b5df06a75ae50c9551b68407ccfa0478ceb7d1a789a0a2d416'
-URL='https://github.com/openappshq/openapps/releases/download/openreaction-v0.1.4/OpenReaction-0.1.4.zip'
+VERSION='0.1.5'
+SHA256='f724862545239e6a6db5a5928e51bce57106ffdbd945129f0fb71862da0f187a'
+URL='https://github.com/openappshq/openapps/releases/download/openreaction-v0.1.5/OpenReaction-0.1.5.zip'
 MINIMUM_MACOS=14
 
 work=''
