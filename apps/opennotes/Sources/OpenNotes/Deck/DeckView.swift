@@ -154,8 +154,9 @@ struct DeckView: View {
                     if note?.pinned == true {
                         Image(systemName: "pin.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(tabInk.opacity(0.7))
                     }
+                    // The title in the note's own font ("Where it shows").
                     Text(label)
-                        .font(Brand.body(11, weight: 600))
+                        .font(look.map { Font($0.nsFont(size: 11, weight: 600)) } ?? Brand.body(11, weight: 600))
                         .foregroundStyle(tabInk)
                         .lineLimit(1)
                         .truncationMode(.tail)

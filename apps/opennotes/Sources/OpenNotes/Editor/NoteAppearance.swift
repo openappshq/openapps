@@ -185,6 +185,8 @@ struct NoteAppearance: Hashable {
     func paperColor(dark: Bool) -> NSColor { NSColor(hex: color.face(dark: dark)) }
     func inkColor(dark: Bool) -> NSColor { NSColor(hex: color.ink(dark: dark)) }
     func inkSecondaryColor(dark: Bool) -> NSColor { NSColor(hex: color.inkSecondary(dark: dark)) }
+    /// URLs and ticked boxes on the paper.
+    func linkColor(dark: Bool) -> NSColor { NSColor(hex: color.link(dark: dark)) }
 
     private func dynamic(_ make: @escaping @Sendable (Bool) -> NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

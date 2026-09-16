@@ -39,6 +39,10 @@ final class DeckPanelController {
     /// The note whose body the deck holds retained: taken once per open,
     /// released once per close, moved with a redirect.
     private var held: NoteID?
+    /// The note the colour panel is picking for, followed through a
+    /// rename; a pick is written to it whatever the deck's state, as long
+    /// as the note still exists and the license allows.
+    private var colorPanelNote: NoteID?
     private var layout: DeckLayout
 
     /// The window level: above the status bar, so a full-screen app's
@@ -114,6 +118,7 @@ final class DeckPanelController {
     func noteRedirected(from: NoteID, to: NoteID) {
         redirects[from] = to
         if held == from { held = to }
+        if colorPanelNote == from { colorPanelNote = to }
         _ = machine.handle(.noteRenamed(from: from, to: to))
         render()
     }
@@ -173,7 +178,14 @@ final class DeckPanelController {
             model.clearConflictNotice()
             // The colour panel opened for the note that just closed goes too.
             NoteColorPanel.shared.dismiss(ownersStartingWith: "note:")
+            colorPanelNote = nil
         case .openNote(let id, let focus):
+            // Another note takes the deck: the panel picking for the
+            // previous one closes with its last pick delivered.
+            if let colorPanelNote, colorPanelNote != id {
+                NoteColorPanel.shared.dismiss(ownersStartingWith: "note:")
+                self.colorPanelNote = nil
+            }
             if let held, held != id { model.release(held) }
             if held != id { model.retain(id) }
             held = id
@@ -191,6 +203,9 @@ final class DeckPanelController {
             panel.makeKey()
         case .closeNote(let id):
             let id = current(id)
+            // A pick still settling is written before the note is saved
+            // and renamed.
+            NoteColorPanel.shared.settle(ownersStartingWith: "note:")
             let kept = model.closeNote(id)
             if let held, held == id || held == kept {
                 model.release(kept ?? held)
@@ -264,9 +279,13 @@ final class DeckPanelController {
         content.onCustomColor = { [weak self] in
             guard let self, let id = self.machine.state.openNote, let note = self.model.note(id) else { return }
             // Each pick is a write: the model asks the license at every one.
+            // The target follows the note through a rename and outlives
+            // the deck's state, so a pick settling while the note closes
+            // still lands in its file.
+            self.colorPanelNote = id
             NoteColorPanel.shared.present(for: "note:\(id.rawValue)", current: note.color) { [weak self] color in
-                guard let self, let open = self.machine.state.openNote, open.rawValue == id.rawValue else { return }
-                self.model.setColor(color, for: open)
+                guard let self, let target = self.colorPanelNote, self.model.note(target) != nil else { return }
+                self.model.setColor(color, for: target)
             }
         }
         content.onFace = { [weak self] in

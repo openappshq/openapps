@@ -116,14 +116,22 @@ nonisolated public enum NoteColor: Hashable, Sendable, Codable, RawRepresentable
     /// The text colour on the face: the appearance's ink (neutral/950 in
     /// Light Mode, neutral/0 in Dark Mode) when it reads at 4.5:1 or better,
     /// the other one when it does not — so a deep custom paper carries
-    /// paper-coloured text in Light Mode, and Graphite does in both.
+    /// paper-coloured text in Light Mode, and Graphite does in both — and
+    /// pure black or white for a midtone neither brand ink reaches.
     public func ink(dark: Bool) -> UInt32 {
         NotePaper.ink(on: face(dark: dark), preferDark: !dark)
     }
 
-    /// Markers and metadata on the face: a softer ink of the same polarity.
+    /// Markers and metadata on the face: a softer ink of the body's
+    /// polarity, at 3:1 or better.
     public func inkSecondary(dark: Bool) -> UInt32 {
-        ink(dark: dark) == NotePaper.darkInk ? NotePaper.darkInkSecondary : NotePaper.lightInkSecondary
+        NotePaper.secondaryInk(on: face(dark: dark), body: ink(dark: dark))
+    }
+
+    /// URLs and ticked boxes: the coral accent of the body's polarity, the
+    /// first shade that reads at 4.5:1, else at 3:1, else the body ink.
+    public func link(dark: Bool) -> UInt32 {
+        NotePaper.linkInk(on: face(dark: dark), body: ink(dark: dark))
     }
 
     /// The ink on a swatch of the light face (the colour menu's check).
@@ -239,14 +247,68 @@ nonisolated public enum NotePaper: String, CaseIterable, Sendable, Codable {
     public static let darkInkSecondary: UInt32 = 0xEBEBEB
     /// WCAG AA for body text; below it the ink flips.
     public static let minimumContrast = 4.5
+    /// The floor for markers, metadata and links (large-text / UI AA).
+    public static let minimumSecondaryContrast = 3.0
+    /// The coral shades a link can take, darkest first for ink-coloured
+    /// text and lightest first for paper-coloured text (coral/700, 800,
+    /// 950; coral/200, 100, 50).
+    static let linkShadesOnLight: [UInt32] = [0xA53A20, 0x7D2C18, 0x4A1D12]
+    static let linkShadesOnDark: [UInt32] = [0xFFC0AB, 0xFFDCCF, 0xFFF1EC]
 
-    /// The ink for a face: the preferred polarity when it reaches 4.5:1,
-    /// otherwise whichever of the two inks reads better.
+    /// The ink for a face: the preferred brand ink when it reaches 4.5:1,
+    /// else the other brand ink, else pure black or white — one of those
+    /// always does (a paper no brand ink reaches is a midtone, and black
+    /// or white reads on every midtone).
     public static func ink(on face: UInt32, preferDark: Bool) -> UInt32 {
         let preferred = preferDark ? lightInk : darkInk
         let other = preferDark ? darkInk : lightInk
-        if contrast(preferred, face) >= minimumContrast { return preferred }
-        return contrast(other, face) > contrast(preferred, face) ? other : preferred
+        for candidate in [preferred, other] where contrast(candidate, face) >= minimumContrast { return candidate }
+        let pureBlack: UInt32 = 0x000000, pureWhite: UInt32 = 0xFFFFFF
+        return contrast(pureBlack, face) >= contrast(pureWhite, face) ? pureBlack : pureWhite
+    }
+
+    /// Whether an ink is on the dark side (ink-coloured text) or the
+    /// light side (paper-coloured text).
+    static func isDarkInk(_ ink: UInt32) -> Bool { luminance(ink) < 0.5 }
+
+    /// Markers and metadata: the brand secondary of the body's polarity
+    /// when it reads at 3:1, else the body ink faded towards the paper
+    /// as far as 3.5:1 allows (a margin over the floor). Monotonic in the
+    /// fade, so a bisection finds it; pure arithmetic.
+    public static func secondaryInk(on face: UInt32, body: UInt32) -> UInt32 {
+        let brand = isDarkInk(body) ? lightInkSecondary : darkInkSecondary
+        if contrast(brand, face) >= minimumSecondaryContrast { return brand }
+        return fade(body, towards: face, untilContrast: 3.5)
+    }
+
+    /// Links and ticked boxes: the first coral shade of the body's
+    /// polarity at 4.5:1, else the first at 3:1, else the body ink.
+    public static func linkInk(on face: UInt32, body: UInt32) -> UInt32 {
+        let shades = isDarkInk(body) ? linkShadesOnLight : linkShadesOnDark
+        for threshold in [minimumContrast, minimumSecondaryContrast] {
+            if let shade = shades.first(where: { contrast($0, face) >= threshold }) { return shade }
+        }
+        return body
+    }
+
+    /// `ink` blended towards `face` by the largest amount that keeps the
+    /// contrast at or above `target`; `ink` itself when it is below.
+    static func fade(_ ink: UInt32, towards face: UInt32, untilContrast target: Double) -> UInt32 {
+        guard contrast(ink, face) >= target else { return ink }
+        var low = 0.0, high = 1.0
+        for _ in 0..<12 {
+            let mid = (low + high) / 2
+            if contrast(mix(ink, face, mid), face) >= target { low = mid } else { high = mid }
+        }
+        return mix(ink, face, low)
+    }
+
+    static func mix(_ a: UInt32, _ b: UInt32, _ t: Double) -> UInt32 {
+        func channel(_ shift: UInt32) -> UInt32 {
+            let x = Double((a >> shift) & 0xFF), y = Double((b >> shift) & 0xFF)
+            return UInt32((x + (y - x) * t).rounded()) & 0xFF
+        }
+        return (channel(16) << 16) | (channel(8) << 8) | channel(0)
     }
 
     /// The Dark Mode paper for a picked Light Mode colour: the same hue,

@@ -197,14 +197,16 @@ struct AllNotesView: View {
     }
 
     private func row(_ note: Note) -> some View {
-        HStack(alignment: .top, spacing: Brand.Space.s8) {
-            RoundedRectangle(cornerRadius: 2).fill(model.appearance(of: note).tab).frame(width: 4, height: 30)
+        // The bar in the note's paper, the title and the preview in its font.
+        let look = model.appearance(of: note)
+        return HStack(alignment: .top, spacing: Brand.Space.s8) {
+            RoundedRectangle(cornerRadius: 2).fill(look.tab).frame(width: 4, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     if note.pinned { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(Brand.textSecondary) }
-                    Text(note.title).font(Brand.body(13, weight: 600)).foregroundStyle(Brand.textPrimary).lineLimit(1)
+                    Text(note.title).font(Font(look.nsFont(size: 13, weight: 600))).foregroundStyle(Brand.textPrimary).lineLimit(1)
                 }
-                Text(note.preview.isEmpty ? " " : note.preview).font(Brand.body(12)).foregroundStyle(Brand.textSecondary).lineLimit(1)
+                Text(note.preview.isEmpty ? " " : note.preview).font(Font(look.nsFont(size: 12))).foregroundStyle(Brand.textSecondary).lineLimit(1)
             }
             Spacer(minLength: 4)
             Text(Age.text(note.modified)).font(Brand.mono(10)).foregroundStyle(Brand.textSecondary)

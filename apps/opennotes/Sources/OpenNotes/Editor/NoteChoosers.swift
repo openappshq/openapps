@@ -178,9 +178,13 @@ struct FontChooser: View {
 
     @ViewBuilder private var familyList: some View {
         if previewRendering {
-            // No scroll view under `ImageRenderer`: the first rows, flat.
+            // No scroll view under `ImageRenderer`: nine rows, flat, around
+            // the selected family.
+            let all = families
+            let selectedIndex = all.firstIndex { $0.name == selection?.family } ?? 0
+            let start = max(0, min(selectedIndex - 4, all.count - 9))
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(families.prefix(9)) { family in row(family) }
+                ForEach(all.dropFirst(start).prefix(9)) { family in row(family) }
             }
         } else if families.isEmpty {
             Text("No font matches “\(query)”.")
@@ -230,8 +234,13 @@ struct FontChooser: View {
 /// The system colour panel as the note's Custom… picker: one shared
 /// panel, pointed at whichever note or setting asked last. Picks arrive
 /// continuously while the user drags; each is handed on after a short
-/// pause, so the file is written once per settle, and every write still
+/// settle, so the file is written once per pause, and every write still
 /// asks the license at the model (`AppModel.setColor`).
+///
+/// A pending pick belongs to the owner that was picking when it arrived:
+/// it is settled to that owner before the panel is retargeted, closed or
+/// the owner's note closes (`settle`), so a pick made in the last 250 ms
+/// is never dropped and never reaches the next owner.
 @MainActor
 final class NoteColorPanel: NSObject {
     static let shared = NoteColorPanel()
@@ -241,12 +250,22 @@ final class NoteColorPanel: NSObject {
     private var onPick: ((NoteColor) -> Void)?
     private var pending: NoteColor?
     private var timer: Timer?
+    /// The system panel is left alone in tests: the ownership and
+    /// settling logic runs the same without it.
+    private let usesSystemPanel: Bool
     static let settle: TimeInterval = 0.25
 
-    /// Shows the panel at `current`, sending picks to `onPick`.
+    init(usesSystemPanel: Bool = true) {
+        self.usesSystemPanel = usesSystemPanel
+    }
+
+    /// Shows the panel at `current`, sending picks to `onPick`. A pick
+    /// the previous owner has not received yet goes to it first.
     func present(for owner: String, current: NoteColor, onPick: @escaping (NoteColor) -> Void) {
+        if self.owner != nil, self.owner != owner { flush() }
         self.owner = owner
         self.onPick = onPick
+        guard usesSystemPanel else { return }
         let panel = NSColorPanel.shared
         panel.showsAlpha = false
         panel.isContinuous = true
@@ -257,13 +276,22 @@ final class NoteColorPanel: NSObject {
         panel.orderFront(nil)
     }
 
-    /// Closes the panel if `owner` still has it (a note closing).
+    /// Hands any pending pick to its owner now (the note is about to
+    /// close or move) without closing the panel.
+    func settle(ownersStartingWith prefix: String) {
+        guard let owner, owner.hasPrefix(prefix) else { return }
+        flush()
+    }
+
+    /// Closes the panel if `owner` still has it, its pending pick
+    /// delivered first.
     func dismiss(for owner: String) {
         guard self.owner == owner else { return }
         close()
     }
 
-    /// Closes the panel if any note has it (the deck folding up).
+    /// Closes the panel if any owner with the prefix has it (the deck
+    /// folding up: every note), the pending pick delivered first.
     func dismiss(ownersStartingWith prefix: String) {
         guard let owner, owner.hasPrefix(prefix) else { return }
         close()
@@ -271,17 +299,23 @@ final class NoteColorPanel: NSObject {
 
     private func close() {
         flush()
-        self.owner = nil
+        owner = nil
         onPick = nil
-        if NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.orderOut(nil) }
+        if usesSystemPanel, NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.orderOut(nil) }
     }
 
     var isPresented: Bool {
-        NSColorPanel.sharedColorPanelExists && NSColorPanel.shared.isVisible && owner != nil
+        usesSystemPanel && NSColorPanel.sharedColorPanelExists && NSColorPanel.shared.isVisible && owner != nil
     }
 
     @objc private func colorChanged(_ sender: NSColorPanel) {
         guard let rgb = Self.rgb(sender.color) else { return }
+        receive(rgb)
+    }
+
+    /// A pick from the panel: held for the settle, then handed on. The
+    /// tests call this in the panel's place.
+    func receive(_ rgb: UInt32) {
         pending = .custom(rgb)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: Self.settle, repeats: false) { [weak self] _ in
@@ -289,6 +323,7 @@ final class NoteColorPanel: NSObject {
         }
     }
 
+    /// The pending pick to the current owner, now.
     private func flush() {
         timer?.invalidate()
         timer = nil

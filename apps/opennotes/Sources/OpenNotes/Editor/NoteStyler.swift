@@ -17,9 +17,7 @@ struct NoteStyler {
         let dark = (appearance ?? NSApp?.effectiveAppearance)?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         ink = look.inkColor(dark: dark)
         secondary = look.inkSecondaryColor(dark: dark)
-        // The accent on the paper, in the ink's polarity.
-        let paperInk = look.color.ink(dark: dark) == NotePaper.darkInk
-        link = NSColor(hex: paperInk ? 0xFFC0AB : 0xA53A20)
+        link = look.linkColor(dark: dark)
     }
 
     /// A face on the default paper, for tests and the harness.
