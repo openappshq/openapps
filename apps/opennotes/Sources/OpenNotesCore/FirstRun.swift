@@ -80,7 +80,7 @@ nonisolated public enum OnboardingLaunch {
 /// user once turned off — is left alone. Decided once; the flag makes every
 /// later launch leave the setting as is. Three settings follow this rule:
 /// "Open at login" and "Check for updates automatically" (RELEASES.md,
-/// "In-app updater"), and "Hide notes from screen sharing"
+/// "In-app updater"), and "Keep notes out of screen sharing"
 /// (design/products/opennotes.md, "Settings").
 nonisolated public struct FreshInstallDefault {
     public enum Key {
@@ -91,7 +91,7 @@ nonisolated public struct FreshInstallDefault {
         /// The screen-sharing default was applied (or found unnecessary); never again.
         public static let screenSharingApplied = "screenSharing.defaultApplied"
         /// The setting itself (the app's Preferences.swift): the deck and
-        /// All Notes leave screen shares and recordings.
+        /// All Notes ask macOS to be left out of screen captures.
         public static let hideFromScreenSharing = "screenSharing.hideNotes"
 
         /// Every preference the app writes to its standard defaults domain
@@ -125,7 +125,7 @@ nonisolated public struct FreshInstallDefault {
         FreshInstallDefault(store: store, key: Key.updateChecksApplied)
     }
 
-    /// "Hide notes from screen sharing".
+    /// "Keep notes out of screen sharing".
     public static func screenSharing(store: any FlagStore) -> FreshInstallDefault {
         FreshInstallDefault(store: store, key: Key.screenSharingApplied)
     }

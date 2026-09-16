@@ -30,6 +30,10 @@ struct DeckContent {
     /// A drop is refused while read-only: the notice, shown under the deck
     /// in the toast's place while the drag hovers.
     var dropRefusal: String?
+    /// Each note's checklist for its tab, from the model's cache
+    /// (`AppModel.checklistProgress`): nothing for a note without boxes,
+    /// nothing for one whose whole body is not in memory.
+    var progress: [NoteID: MarkdownLite.ChecklistProgress] = [:]
     /// Asked by the editor at every keystroke, paste and checkbox click:
     /// the license now, not `readOnly` as rendered.
     var mayEdit: () -> Bool = { true }
@@ -97,30 +101,17 @@ struct DeckView: View {
     private static let space = "deck"
     private var metrics: DeckMetrics { DeckMetrics() }
 
-    /// Each note's checklist, from its parsed body: nothing for a note
-    /// without boxes, and nothing for one whose whole body is not here
-    /// (evicted, or cut at the read cap) — a count of part of a list
-    /// would be wrong.
-    private var progress: [NoteID: MarkdownLite.ChecklistProgress] {
-        // The pill draws no tab: nothing to count (and nothing to tick
-        // when the fan next opens on a list that was already done).
-        guard content.state != .pill else { return [:] }
-        var result: [NoteID: MarkdownLite.ChecklistProgress] = [:]
-        for note in content.notes where note.bodyIsLoaded && !note.truncated {
-            if let progress = MarkdownLite.checklistProgress(in: note.text) { result[note.id] = progress }
-        }
-        return result
-    }
-
     /// Which notes have every box ticked: a note going from not to done
-    /// is the moment the tab ticks.
+    /// is the moment the tab ticks. The pill draws no tab, so nothing is
+    /// counted there (and nothing ticks when the fan next opens on a list
+    /// that was already done).
     private var completion: [NoteID: Bool] {
-        progress.mapValues(\.isComplete)
+        content.state == .pill ? [:] : content.progress.mapValues(\.isComplete)
     }
 
     var body: some View {
         let placed = placedTabs
-        let progress = progress
+        let progress = content.progress
         ZStack(alignment: .topLeading) {
             Color.clear
             if content.state == .pill {

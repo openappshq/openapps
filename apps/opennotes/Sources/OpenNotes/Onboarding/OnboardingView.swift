@@ -332,8 +332,8 @@ private struct TipsStep: View {
                 tip("rectangle.righthalf.inset.filled", "Rest the pointer on the \(model.preferences.side == .right ? "right" : "left") edge and the deck fans out; click a tab to open a note, click anywhere else to close it; drag a tab up or down to reorder. ⌘W moves to the next note, ⌘⇧A archives, ⌘⇧P pins.")
                 tip("list.bullet.rectangle", "⌥⌘L opens All Notes: search, Active and Archived, drag to reorder, and Export or Reveal in Finder for any note.")
                 tip("eye.slash", model.preferences.hideFromScreenSharing
-                    ? "Your notes stay off screen shares and recordings while you see them as usual; Settings → General turns that off."
-                    : "Settings → General can keep your notes off screen shares and recordings while you see them as usual.")
+                    ? "OpenNotes asks macOS to leave your notes out of screen captures while you see them as usual — not a guarantee, some capture tools ignore it. Settings → General turns that off."
+                    : "Settings → General can ask macOS to leave your notes out of screen captures while you see them as usual — not a guarantee, some capture tools ignore it.")
                 if Licensing.isCompiledIn {
                     tip("key", "The trial, buying a license and entering a key live under Settings → License. When the trial ends nothing opens on its own: your notes stay readable and exportable, and writing waits for a license.")
                 }

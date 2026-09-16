@@ -23,25 +23,18 @@ nonisolated public enum DropPayload {
         return lines.joined(separator: "\n")
     }
 
-    /// One item's contribution: text as it is (trailing blank lines
-    /// dropped, a blank item skipped), a link as its address, a file as a
-    /// Markdown link to it by name.
+    /// One item's contribution: text exactly as dropped (only a blank item
+    /// is skipped — not a character of the rest is changed), a link as its
+    /// address, a file as a Markdown link to it by name.
     static func line(for item: Item) -> String? {
         switch item {
         case .text(let text):
-            let trimmed = trimmingTrailingNewlines(text)
-            return trimmed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : trimmed
+            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
         case .url(let url):
             return url.absoluteString
         case .file(let url):
             let name = url.lastPathComponent
             return "[\(name.isEmpty ? url.absoluteString : name)](\(url.absoluteString))"
         }
-    }
-
-    private static func trimmingTrailingNewlines(_ text: String) -> String {
-        var scalars = Substring(text)
-        while let last = scalars.last, last.isNewline { scalars.removeLast() }
-        return String(scalars)
     }
 }

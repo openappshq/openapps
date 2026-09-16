@@ -107,7 +107,7 @@ final class DeckPanelController {
         panel.animationBehavior = .none
         panel.acceptsMouseMovedEvents = true
         panel.setAccessibilityLabel("OpenNotes deck")
-        // Out of screen shares and recordings while the setting says so;
+        // Asked to be left out of screen captures while the setting says so;
         // `settingsChanged` follows the setting from then on.
         ScreenSharing.apply(to: panel, surface: .deck, hidden: preferences.hideFromScreenSharing)
 
@@ -200,7 +200,7 @@ final class DeckPanelController {
         render()
     }
 
-    /// "Hide notes from screen sharing" changed: the panel follows. False
+    /// "Keep notes out of screen sharing" changed: the panel follows. False
     /// when it cannot — a panel once hidden is never shown again
     /// (`ScreenSharing`) — and the host must make this deck anew.
     func applyScreenSharing() -> Bool {
@@ -411,6 +411,7 @@ final class DeckPanelController {
         )
         content.dropTarget = dropHover == .target
         content.dropRefusal = refusal
+        content.progress = checklists(for: notes, state: state)
         // Every keystroke, paste and checkbox click asks the license as it
         // happens, not the `readOnly` this render captured — and that the
         // note's whole body is in memory: an editor showing a summary
@@ -516,7 +517,19 @@ final class DeckPanelController {
         content.openNote = note
         content.notes = model.active
         content.statusLine = model.statusLine(for: id)
+        content.progress = checklists(for: content.notes, state: machine.state)
         hosting.rootView = DeckView(content: content)
+    }
+
+    /// The tabs' counts, from the model's cache: one parse per changed
+    /// note, dictionary lookups otherwise. The pill has no tabs to count.
+    private func checklists(for notes: [Note], state: DeckState) -> [NoteID: MarkdownLite.ChecklistProgress] {
+        guard state != .pill else { return [:] }
+        var result: [NoteID: MarkdownLite.ChecklistProgress] = [:]
+        for note in notes {
+            if let progress = model.checklistProgress(for: note.id) { result[note.id] = progress }
+        }
+        return result
     }
 
     /// The strip the pointer reaches at the screen edge: the pill's width

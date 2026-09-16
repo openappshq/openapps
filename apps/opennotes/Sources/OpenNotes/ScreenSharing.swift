@@ -1,12 +1,14 @@
 import AppKit
 
-/// "Hide notes from screen sharing" (design/products/opennotes.md,
-/// "Settings"): the windows that show a note's text — every deck (the
+/// "Keep notes out of screen sharing" (design/products/opennotes.md,
+/// "The deck"): the windows that show a note's text — every deck (the
 /// pill, the fan, the open note) and All Notes — take `sharingType =
-/// .none`, so Zoom, Meet and a screen recording never see them while they
-/// stay on the user's own screen. Settings and the setup guide show no
-/// note and are shared like any window. One rule, applied wherever a
-/// window is made or the setting changes.
+/// .none`, the hint that asks macOS to leave a window out of screen
+/// captures, while they stay on the user's own screen. A request, not a
+/// guarantee: Apple documents the flag as legacy and some capture tools
+/// ignore it, and every word the app says about it says so. Settings and
+/// the setup guide show no note and are shared like any window. One rule,
+/// applied wherever a window is made or the setting changes.
 ///
 /// macOS never raises a window's `sharingType` again once it is `.none`
 /// (the setter is a one-way ratchet, verified on macOS 26): a window
@@ -32,8 +34,8 @@ enum ScreenSharing {
     }
 
     /// The sharing type a window of this class takes with the setting as
-    /// given: `.none` hides it from capture, `.readOnly` is a window's
-    /// ordinary state (shared, never driven remotely).
+    /// given: `.none` asks to be left out of captures, `.readOnly` is a
+    /// window's ordinary state (shared, never driven remotely).
     static func sharingType(for surface: Surface, hidden: Bool) -> NSWindow.SharingType {
         surface.hidesNotes && hidden ? .none : .readOnly
     }

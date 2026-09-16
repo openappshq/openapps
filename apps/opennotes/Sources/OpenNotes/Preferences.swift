@@ -63,8 +63,8 @@ final class Preferences {
     var autoArchiveDays: Int {
         didSet { defaults.set(autoArchiveDays, forKey: Key.autoArchiveDays) }
     }
-    /// The deck and All Notes leave screen shares and recordings
-    /// (`ScreenSharing`). Turned on once on a fresh install
+    /// The deck and All Notes ask macOS to be left out of screen captures
+    /// (`ScreenSharing`; a request, not a guarantee). Turned on once on a fresh install
     /// (`applyScreenSharingDefaultIfNeeded`, `FreshInstallDefault`); any
     /// write here — the user's or the default's — records the decision, so
     /// a choice made before storage answers is never undone.
@@ -96,7 +96,7 @@ final class Preferences {
         autoArchiveDays = defaults.object(forKey: Key.autoArchiveDays) as? Int ?? 0
     }
 
-    /// "Hide notes from screen sharing", on once: when the install is
+    /// "Keep notes out of screen sharing", on once: when the install is
     /// demonstrably fresh (no earlier preferences, and `storageIsFresh` —
     /// true from source, nil while an official build's storage has not
     /// answered, which waits). Once decided, never revisited: an upgrade

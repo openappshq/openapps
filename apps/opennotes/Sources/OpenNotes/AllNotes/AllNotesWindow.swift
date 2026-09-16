@@ -9,12 +9,17 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
     /// Made on the first `show()`; replaced when the screen-sharing
     /// setting turns off (`applyScreenSharing`).
     private(set) var window: NSWindow?
+    /// The search, the filter and the selection, kept across a replacement.
+    let session = AllNotesSession()
+    /// The window's frame is remembered under this name between launches;
+    /// nil remembers nothing (the tests, which must write no defaults).
+    var frameAutosaveName: NSWindow.FrameAutosaveName? = "AllNotes"
 
     init(model: AppModel, openNote: @escaping (NoteID) -> Void) {
         self.model = model
         self.openNote = openNote
         super.init()
-        // "Hide notes from screen sharing": the window shows note text, so
+        // "Keep notes out of screen sharing": the window shows note text, so
         // it follows the setting like the deck.
         observeChanges({ [model] in _ = model.preferences.hideFromScreenSharing }, onChange: { [weak self] in self?.applyScreenSharing() })
     }
@@ -25,12 +30,14 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    /// The window, not yet on screen; `show()` orders it front.
-    func makeWindow() {
-        let root = AllNotesView(model: model, openNote: openNote, export: { [weak self] id, format in self?.export(id, as: format) })
+    /// The window, not yet on screen; `show()` orders it front. Centred
+    /// on the first make (the autosaved frame, if any, then takes over);
+    /// `frame` puts a replacement exactly where the window it replaces was.
+    func makeWindow(frame: CGRect? = nil) {
+        let root = AllNotesView(model: model, openNote: openNote, export: { [weak self] id, format in self?.export(id, as: format) }, session: session)
         let hostingView = NSHostingView(rootView: root)
         let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: NSSize(width: 760, height: 520)),
+            contentRect: frame ?? NSRect(origin: .zero, size: NSSize(width: 760, height: 520)),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -39,22 +46,28 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
         window.minSize = NSSize(width: 560, height: 360)
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
-        window.setFrameAutosaveName("AllNotes")
-        window.center()
+        if let frameAutosaveName { window.setFrameAutosaveName(frameAutosaveName) }
+        if let frame {
+            window.setFrame(frame, display: false)
+        } else {
+            window.center()
+        }
         ScreenSharing.apply(to: window, surface: .allNotes, hidden: model.preferences.hideFromScreenSharing)
         self.window = window
     }
 
     /// The setting changed: the window follows. Turned off, a window once
     /// hidden cannot be shown again (`ScreenSharing`): one made anew takes
-    /// its place (the frame is autosaved), on screen if the old one was,
-    /// without taking the focus from Settings.
+    /// its place — the same frame, the same search, filter and selection
+    /// (`session`) — on screen if the old one was, without taking the
+    /// focus from Settings.
     private func applyScreenSharing() {
         guard let window else { return }
         guard !ScreenSharing.apply(to: window, surface: .allNotes, hidden: model.preferences.hideFromScreenSharing) else { return }
         let wasVisible = window.isVisible
+        let frame = window.frame
         window.orderOut(nil)
-        makeWindow()
+        makeWindow(frame: frame)
         if wasVisible { self.window?.orderFront(nil) }
     }
 
@@ -70,17 +83,32 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
     }
 }
 
+/// What the user has set up in All Notes — the search text, Active or
+/// Archived, the selected note — kept apart from the view so it outlives
+/// the window (`AllNotesWindowController.applyScreenSharing`).
+@Observable
+final class AllNotesSession {
+    var query = ""
+    var showsArchived = false
+    var selection: NoteID?
+}
+
 /// Search, Active / Archived, the list with drag-to-reorder, the preview
 /// pane with its actions (design/products/opennotes.md, "All Notes").
 struct AllNotesView: View {
     let model: AppModel
     let openNote: (NoteID) -> Void
     let export: (NoteID, ExportFormat) -> Void
-    @State private var query = ""
-    @State private var showsArchived = false
-    @State private var selection: NoteID?
+    /// The search, the Active / Archived choice and the selection: owned
+    /// by the controller, so a window made anew (the screen-sharing
+    /// setting turning off) shows the same list.
+    @Bindable var session = AllNotesSession()
     @Environment(\.previewRendering) private var previewRendering
     @Environment(\.colorScheme) private var colorScheme
+
+    private var query: String { session.query }
+    private var showsArchived: Bool { session.showsArchived }
+    private var selection: NoteID? { session.selection }
 
     private var notes: [Note] {
         model.search(query, archived: showsArchived)
@@ -145,7 +173,7 @@ struct AllNotesView: View {
                     .frame(height: 28)
                     .background(Brand.surface, in: RoundedRectangle(cornerRadius: 6))
                 } else {
-                    TextField("Search", text: $query)
+                    TextField("Search", text: $session.query)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Search notes")
                 }
@@ -157,7 +185,7 @@ struct AllNotesView: View {
                     .padding(2)
                     .background(Brand.surface, in: RoundedRectangle(cornerRadius: 7))
                 } else {
-                    Picker("", selection: $showsArchived) {
+                    Picker("", selection: $session.showsArchived) {
                         Text("Active").tag(false)
                         Text("Archived").tag(true)
                     }
@@ -191,7 +219,7 @@ struct AllNotesView: View {
                     Spacer()
                 }
             } else {
-                List(selection: $selection) {
+                List(selection: $session.selection) {
                     ForEach(notes) { note in
                         row(note).tag(note.id)
                     }

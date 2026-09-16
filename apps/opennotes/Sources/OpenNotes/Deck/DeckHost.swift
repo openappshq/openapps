@@ -23,7 +23,7 @@ final class DeckHost {
             MainActor.assumeIsolated { self?.rebuild() }
         })
         observeChanges({ [preferences] in _ = preferences.side; _ = preferences.display }, onChange: { [weak self] in self?.settingsChanged() })
-        // "Hide notes from screen sharing": every deck's window follows.
+        // "Keep notes out of screen sharing": every deck's window follows.
         // Turned off, a deck once hidden cannot be shown again (macOS never
         // raises a window's sharing type, `ScreenSharing`): that deck is
         // torn down — its open note saved and slid back — and made anew.

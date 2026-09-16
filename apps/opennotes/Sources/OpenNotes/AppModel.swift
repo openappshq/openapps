@@ -49,6 +49,10 @@ final class AppModel {
     /// user's text went to a conflict copy): the deck follows.
     @ObservationIgnored var onRedirect: (NoteID, NoteID) -> Void = { _, _ in }
 
+    /// Each note's checklist as last parsed (nil: the note has no box),
+    /// dropped when its text changes here or on disk, so the deck's tabs
+    /// read a count on every render without a parse (`checklistProgress`).
+    @ObservationIgnored private var checklists: [NoteID: MarkdownLite.ChecklistProgress?] = [:]
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var saveTimers: [NoteID: Timer] = [:]
     @ObservationIgnored private var retryTimer: Timer?
@@ -167,6 +171,20 @@ final class AppModel {
     func retain(_ id: NoteID) { store.retain(id) }
     func release(_ id: NoteID) { store.release(id) }
 
+    /// The note's checklist for its tab (design/products/opennotes.md,
+    /// "Checklist progress"): parsed once per change of the text, from the
+    /// body in memory; nil for a note with no box, and nil rather than a
+    /// wrong count for one whose whole body is not here (evicted, or cut
+    /// at the read cap).
+    func checklistProgress(for id: NoteID) -> MarkdownLite.ChecklistProgress? {
+        _ = revision
+        guard let note = store.note(id), note.bodyIsLoaded, !note.truncated else { return nil }
+        if let cached = checklists[id] { return cached }
+        let progress = MarkdownLite.checklistProgress(in: note.text)
+        checklists[id] = .some(progress)
+        return progress
+    }
+
     /// Search over titles and text; evicted bodies are read one at a time.
     func search(_ query: String, archived: Bool) -> [Note] {
         _ = revision
@@ -197,6 +215,7 @@ final class AppModel {
             if !Self.isRefusal(error) { saveProblem = error.localizedDescription }
             return
         }
+        checklists[id] = nil
         saveTimers[id]?.invalidate()
         saveTimers[id] = Timer.scheduledTimer(withTimeInterval: Self.saveDebounce, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.save(id) }
@@ -418,13 +437,20 @@ final class AppModel {
     private func handle(_ event: StoreEvent) {
         switch event {
         case .renamed(let from, let to):
+            checklists[from] = nil
+            checklists[to] = nil
             onRedirect(from, to)
         case .conflict(let original, let copy):
+            checklists[original] = nil
             lastConflict = (NoteID(copy.deletingPathExtension().lastPathComponent), original)
         case .reloaded, .updated:
+            // The text may have changed under a cached count.
+            if case .updated(let ids) = event { for id in ids { checklists[id] = nil } } else { checklists = [:] }
             // A note that could fall due may have appeared or changed: the
             // next wake follows it (nothing runs now, nothing while off).
             if preferences.autoArchiveDays > 0 { scheduleAutoArchive(runNow: false) }
+        case .removed(let ids):
+            for id in ids { checklists[id] = nil }
         default:
             break
         }
