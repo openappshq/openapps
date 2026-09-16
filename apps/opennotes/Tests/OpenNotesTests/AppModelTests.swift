@@ -240,6 +240,34 @@ final class NoteStylerTests: XCTestCase {
         XCTAssertEqual(storage.attributes(at: 2, effectiveRange: nil)[.foregroundColor] as? NSColor, NSColor(hex: 0xF8F8F8))
     }
 
+    /// ⌥⌘↑ / ⌥⌘↓ as a keyboard sends them: the arrow events carry the
+    /// function and numeric-pad bits beside the modifiers, and are matched
+    /// by key code (the arrows have no character). Any other modifier set
+    /// on an arrow is left to the text view.
+    @MainActor func testOptionCommandArrowsMoveTheNoteWhateverTheArrowBitsSay() {
+        let scrollView = NoteTextView.makeScrollableTextView()
+        let textView = scrollView.documentView as! NoteTextView
+        var commands: [EditorCommand] = []
+        textView.onCommand = { commands.append($0) }
+        func arrow(_ keyCode: UInt16, _ flags: NSEvent.ModifierFlags) -> Bool {
+            let character = keyCode == 126 ? "\u{F700}" : "\u{F701}"
+            let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                characters: character, charactersIgnoringModifiers: character, isARepeat: false, keyCode: keyCode
+            )!
+            return textView.performKeyEquivalent(with: event)
+        }
+        XCTAssertTrue(arrow(126, [.command, .option, .function, .numericPad]))
+        XCTAssertTrue(arrow(125, [.command, .option, .function, .numericPad]))
+        XCTAssertTrue(arrow(126, [.command, .option]))
+        XCTAssertEqual(commands, [.moveUp, .moveDown, .moveUp])
+        // Plain, shifted or control arrows are the text view's own.
+        XCTAssertFalse(arrow(125, [.function, .numericPad]))
+        XCTAssertFalse(arrow(125, [.command, .shift, .function, .numericPad]))
+        XCTAssertFalse(arrow(125, [.command, .option, .control, .function, .numericPad]))
+        XCTAssertEqual(commands, [.moveUp, .moveDown, .moveUp])
+    }
+
     @MainActor func testTheTextViewTogglesACheckboxThroughTheEditPath() {
         let scrollView = NoteTextView.makeScrollableTextView()
         let textView = scrollView.documentView as! NoteTextView
