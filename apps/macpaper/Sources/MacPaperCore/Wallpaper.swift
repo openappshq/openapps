@@ -340,8 +340,42 @@ public enum GeneratorKind: String, Codable, CaseIterable, Hashable, Sendable {
         }
     }
 
-    /// The generators Shuffle can make from nothing.
-    public static let shuffleable: [GeneratorKind] = [.gradient, .mesh, .pattern, .solid]
+    /// The generators Shuffle can make from nothing. A flat color or a
+    /// gradient on its own is a base layer, never a shuffle's result.
+    public static let shuffleable: [GeneratorKind] = [.mesh, .pattern]
+
+    /// The generators the panel offers as generators, in its order; a flat
+    /// color and a gradient are the base layer, chosen under Effects.
+    public static let panelOrder: [GeneratorKind] = [.dither, .mesh, .pattern, .pixelize]
+
+    /// The base layers: a document that is only a flat color or a gradient.
+    public static let baseLayers: [GeneratorKind] = [.solid, .gradient]
+
+    public var isBaseLayer: Bool { Self.baseLayers.contains(self) }
+
+    /// One line under the generator's name in the panel.
+    public var summary: String {
+        switch self {
+        case .gradient: "A gradient on its own: linear, radial or conic."
+        case .mesh: "Control points blended into one soft field."
+        case .pattern: "Dots, lines, checks or noise in two colors."
+        case .solid: "One flat color."
+        case .pixelize: "Your photo in blocks, optionally a small palette."
+        case .dither: "Your photo through Bayer, blue noise, halftone or ASCII."
+        }
+    }
+
+    /// The SF Symbol the panel's lists use.
+    public var symbolName: String {
+        switch self {
+        case .gradient: "square.lefthalf.filled"
+        case .mesh: "circle.hexagongrid"
+        case .pattern: "circle.grid.3x3"
+        case .solid: "square.fill"
+        case .pixelize: "squareshape.split.3x3"
+        case .dither: "checkerboard.rectangle"
+        }
+    }
 
     /// The generators that work on an imported image.
     public var needsSource: Bool { self == .pixelize || self == .dither }
@@ -409,6 +443,37 @@ public enum Generator: Hashable, Sendable {
         case .pixelize(let p): p.source
         case .dither(let p): p.source
         default: nil
+        }
+    }
+
+    /// The same generator in another palette, as many of its colors as it
+    /// takes: a gradient's stops are respaced over them, a mesh takes up to
+    /// six, the two-color generators take the first as the ground and the
+    /// last as the ink. An empty palette changes nothing.
+    public func withPalette(_ colors: [RGBAColor]) -> Generator {
+        guard !colors.isEmpty else { return self }
+        switch self {
+        case .gradient(var p):
+            let count = min(max(colors.count, GradientParameters.stopRange.lowerBound), GradientParameters.stopRange.upperBound)
+            p.stops = (0..<count).map { i in ColorStop(position: Double(i) / Double(count - 1), color: colors[i % colors.count]) }
+            return .gradient(p)
+        case .mesh(var p):
+            p.colors = Array(colors.prefix(MeshParameters.colorRange.upperBound))
+            return .mesh(p)
+        case .pattern(var p):
+            p.background = colors[0]
+            p.foreground = colors.count > 1 ? colors[colors.count - 1] : p.foreground
+            return .pattern(p)
+        case .solid(var p):
+            p.color = colors[0]
+            return .solid(p)
+        case .pixelize(var p):
+            p.background = colors[0]
+            return .pixelize(p)
+        case .dither(var p):
+            p.paper = colors[0]
+            p.ink = colors.count > 1 ? colors[colors.count - 1] : p.ink
+            return .dither(p)
         }
     }
 

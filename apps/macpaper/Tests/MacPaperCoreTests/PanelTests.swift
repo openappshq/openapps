@@ -32,9 +32,9 @@ struct NotchGeometryTests {
         let notch = CGRect(x: 630, y: 945, width: 252, height: 37)
         let frame = NotchGeometry.panelFrame(screenFrame: Self.screen, menuBarHeight: 37, notch: notch, width: .regular, contentHeight: 500)
         #expect(frame == CGRect(x: 756 - 220, y: 945 - 500, width: 440, height: 500))
-        // No notch: centered on the screen, under a 24-point menu bar.
+        // No notch: centered on the screen, under a 24-point menu bar and the popover's gap.
         let plain = NotchGeometry.panelFrame(screenFrame: Self.screen, menuBarHeight: 24, notch: nil, width: .compact, contentHeight: 300)
-        #expect(plain == CGRect(x: 756 - 180, y: 982 - 24 - 300, width: 360, height: 300))
+        #expect(plain == CGRect(x: 756 - 180, y: 982 - 24 - PanelLayout.popoverGap - 300, width: 360, height: 300))
         // A notch near the edge: the panel stays on screen.
         let edge = NotchGeometry.panelFrame(screenFrame: Self.screen, menuBarHeight: 37, notch: CGRect(x: 1400, y: 945, width: 100, height: 37), width: .wide, contentHeight: 100)
         #expect(edge.maxX == Self.screen.maxX && edge.width == 560)

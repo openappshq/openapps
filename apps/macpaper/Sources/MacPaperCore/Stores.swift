@@ -23,6 +23,7 @@ public struct AppPaths: Sendable {
     public var favorites: URL { root.appendingPathComponent("favorites.json") }
     public var applied: URL { root.appendingPathComponent("applied.json") }
     public var blocklist: URL { root.appendingPathComponent("never.json") }
+    public var history: URL { root.appendingPathComponent("history.json") }
     public var imports: URL { root.appendingPathComponent("imports", isDirectory: true) }
     public var appliedImages: URL { root.appendingPathComponent("applied", isDirectory: true) }
 
@@ -104,11 +105,30 @@ public struct Favorite: Codable, Hashable, Identifiable, Sendable {
     public let id: UUID
     public var wallpaper: Wallpaper
     public let addedAt: Date
+    /// What the user called it; nil is titled from the palette and the
+    /// generator (`title`). Files from before names decode without one.
+    public var name: String?
 
-    public init(id: UUID = UUID(), wallpaper: Wallpaper, addedAt: Date = Date()) {
+    public init(id: UUID = UUID(), wallpaper: Wallpaper, addedAt: Date = Date(), name: String? = nil) {
         self.id = id
         self.wallpaper = wallpaper
         self.addedAt = addedAt
+        self.name = name.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    }
+
+    /// The name, or "Sunset · Mesh".
+    public var title: String { name ?? Self.defaultTitle(for: wallpaper) }
+
+    /// "Sunset · Mesh": the palette and the generator.
+    public static func defaultTitle(for wallpaper: Wallpaper) -> String {
+        "\(PresetPalettes.name(for: wallpaper.generator.colors)) · \(wallpaper.generator.kind.title)"
+    }
+
+    /// "Mesh · seed 42": under the title.
+    public var subtitle: String {
+        var parts = ["\(wallpaper.generator.kind.title)", "seed \(wallpaper.seedText)"]
+        if !wallpaper.pair.isStill { parts.append(wallpaper.pair.title) }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -140,17 +160,36 @@ public final class FavoritesStore: @unchecked Sendable {
         lock.withLock { favorites.contains { $0.wallpaper == wallpaper } }
     }
 
-    /// Adds the document unless it is one already; returns the favorite.
+    /// Adds the document unless it is one already (a name given then
+    /// renames the existing one); returns the favorite.
     @discardableResult
-    public func add(_ wallpaper: Wallpaper, at date: Date = Date()) throws -> Favorite {
-        try lock.withLock {
-            if let existing = favorites.first(where: { $0.wallpaper == wallpaper }) { return existing }
-            let favorite = Favorite(wallpaper: wallpaper, addedAt: date)
+    public func add(_ wallpaper: Wallpaper, at date: Date = Date(), name: String? = nil) throws -> Favorite {
+        let name = name.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        return try lock.withLock {
             var next = favorites
+            if let index = next.firstIndex(where: { $0.wallpaper == wallpaper }) {
+                guard let name, next[index].name != name else { return next[index] }
+                next[index].name = name
+                try file.save(File(favorites: LossyArray(next)))
+                favorites = next
+                return next[index]
+            }
+            let favorite = Favorite(wallpaper: wallpaper, addedAt: date, name: name)
             next.insert(favorite, at: 0)
             try file.save(File(favorites: LossyArray(next)))
             favorites = next
             return favorite
+        }
+    }
+
+    /// Renames a favorite; an empty name goes back to the derived title.
+    public func rename(_ favorite: Favorite, to name: String?) throws {
+        try lock.withLock {
+            guard let index = favorites.firstIndex(where: { $0.id == favorite.id }) else { return }
+            var next = favorites
+            next[index] = Favorite(id: favorite.id, wallpaper: favorite.wallpaper, addedAt: favorite.addedAt, name: name)
+            try file.save(File(favorites: LossyArray(next)))
+            favorites = next
         }
     }
 
@@ -173,6 +212,80 @@ public final class FavoritesStore: @unchecked Sendable {
         }
         try add(wallpaper)
         return true
+    }
+}
+
+// MARK: - History
+
+/// One document that reached a desktop, and when.
+public struct HistoryEntry: Codable, Hashable, Identifiable, Sendable {
+    public let id: UUID
+    public var wallpaper: Wallpaper
+    public var appliedAt: Date
+
+    public init(id: UUID = UUID(), wallpaper: Wallpaper, appliedAt: Date = Date()) {
+        self.id = id
+        self.wallpaper = wallpaper
+        self.appliedAt = appliedAt
+    }
+}
+
+/// What was applied, newest first, in `history.json`, bounded. Live apply
+/// lands a document after every change, so an entry is *one look*: a
+/// document with the same generator and seed as the newest entry replaces
+/// it (a slider moved), anything else is a new entry (a shuffle, a
+/// favorite, a new seed).
+public final class HistoryStore: @unchecked Sendable {
+    private struct File: Codable, Sendable {
+        var version = 1
+        var entries: LossyArray<HistoryEntry>
+    }
+
+    public let limit: Int
+    private let file: JSONFile<File>
+    private let lock = NSLock()
+    private var entries: [HistoryEntry]
+
+    public init(fileURL: URL, limit: Int = 40) {
+        self.limit = max(1, limit)
+        file = JSONFile(url: fileURL)
+        entries = Array(((try? file.load())?.entries.elements ?? []).prefix(self.limit))
+    }
+
+    public var all: [HistoryEntry] {
+        lock.withLock { entries }
+    }
+
+    public func record(_ wallpaper: Wallpaper, at date: Date = Date()) throws {
+        try lock.withLock {
+            var next = entries
+            if let first = next.first, first.wallpaper.seed == wallpaper.seed, first.wallpaper.generator.kind == wallpaper.generator.kind {
+                if first.wallpaper == wallpaper { return }
+                next[0] = HistoryEntry(id: first.id, wallpaper: wallpaper, appliedAt: date)
+            } else {
+                next.removeAll { $0.wallpaper == wallpaper }
+                next.insert(HistoryEntry(wallpaper: wallpaper, appliedAt: date), at: 0)
+            }
+            next = Array(next.prefix(limit))
+            try file.save(File(entries: LossyArray(next)))
+            entries = next
+        }
+    }
+
+    public func remove(_ entry: HistoryEntry) throws {
+        try lock.withLock {
+            let next = entries.filter { $0.id != entry.id }
+            guard next.count != entries.count else { return }
+            try file.save(File(entries: LossyArray(next)))
+            entries = next
+        }
+    }
+
+    public func removeAll() throws {
+        try lock.withLock {
+            try file.save(File(entries: LossyArray([])))
+            entries = []
+        }
     }
 }
 

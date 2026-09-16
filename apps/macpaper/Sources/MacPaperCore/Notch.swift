@@ -108,13 +108,63 @@ public enum NotchGeometry {
     /// against the menu bar's bottom, `contentHeight` tall, and kept inside
     /// the screen horizontally.
     public static func panelFrame(screenFrame: CGRect, menuBarHeight: CGFloat, notch: CGRect?, width: PanelWidth, contentHeight: CGFloat) -> CGRect {
-        let centerX = notch?.midX ?? screenFrame.midX
-        let width = min(width.points, screenFrame.width)
-        var x = centerX - width / 2
+        let anchor: PanelAnchor = notch.map { .notch($0, menuBarHeight: menuBarHeight) } ?? .topCenter(menuBarHeight: menuBarHeight)
+        return panelFrame(screenFrame: screenFrame, anchor: anchor, width: width.points, contentHeight: contentHeight)
+    }
+
+    /// The top inset the column hangs under: the notch's height, or the
+    /// menu bar plus the popover's gap on a display without a notch.
+    public static func topInset(for anchor: PanelAnchor) -> CGFloat {
+        switch anchor {
+        case .notch(let notch, let menuBarHeight): max(notch.height, menuBarHeight)
+        case .statusItem(_, let menuBarHeight), .topCenter(let menuBarHeight): menuBarHeight + PanelLayout.popoverGap
+        }
+    }
+
+    /// The column's frame for an anchor: on a notch, centered on it with
+    /// its top against the notch; under a menu-bar item, its trailing edge
+    /// on the item's, a gap under the menu bar, like the popover; else the
+    /// top center. `contentHeight` tall, kept inside the screen.
+    public static func panelFrame(screenFrame: CGRect, anchor: PanelAnchor, width: CGFloat, contentHeight: CGFloat) -> CGRect {
+        let width = min(width, screenFrame.width)
+        var x: CGFloat
+        switch anchor {
+        case .notch(let notch, _): x = notch.midX - width / 2
+        case .statusItem(let item, _): x = item.maxX - width
+        case .topCenter: x = screenFrame.midX - width / 2
+        }
         x = max(screenFrame.minX, min(x, screenFrame.maxX - width))
-        let top = screenFrame.maxY - max(menuBarHeight, notch?.height ?? 0)
+        let top = screenFrame.maxY - topInset(for: anchor)
         let height = min(contentHeight, top - screenFrame.minY)
         return CGRect(x: x, y: top - height, width: width, height: height)
+    }
+
+    /// The strip the column shades above itself: the menu-bar row over a
+    /// notch-anchored column, the column's width; nil for the other anchors
+    /// (nothing sits over the menu bar there).
+    public static func menuBarShadeFrame(screenFrame: CGRect, anchor: PanelAnchor, panelFrame: CGRect) -> CGRect? {
+        guard case .notch(_, let menuBarHeight) = anchor else { return nil }
+        let height = screenFrame.maxY - panelFrame.maxY
+        guard height > 0, menuBarHeight > 0 else { return nil }
+        return CGRect(x: panelFrame.minX, y: panelFrame.maxY, width: panelFrame.width, height: height)
+    }
+}
+
+/// What the column hangs from.
+public enum PanelAnchor: Equatable, Sendable {
+    /// The notch rect and the menu bar's height on that screen: the column
+    /// is centered on the notch, squared against it, and shades the menu
+    /// bar row.
+    case notch(CGRect, menuBarHeight: CGFloat)
+    /// The menu-bar item's frame on a screen without a notch: the column
+    /// opens under it as the popover does, rounded all round.
+    case statusItem(CGRect, menuBarHeight: CGFloat)
+    /// No notch and no item on this screen: the top center.
+    case topCenter(menuBarHeight: CGFloat)
+
+    public var isNotch: Bool {
+        if case .notch = self { return true }
+        return false
     }
 }
 
