@@ -172,3 +172,51 @@ struct FixRound2Tests {
         #expect(h.model.status?.tone == .error && h.model.status?.text.contains("never-show") == true)
     }
 }
+
+/// The merged panel-polish and generator-depth branches, at the app level:
+/// pins are the user's own setting, mirrored onto whatever document the
+/// draft shows; a preset applies through the same readability lift every
+/// other document goes through; the Generators list's family picker.
+@MainActor
+struct MergedPinsAndPaletteTests {
+    @Test("A pin mirrors into the draft at once and survives loading another document")
+    func pinMirrorsIntoDraft() {
+        let h = AppModelTests.Harness()
+        defer { h.tearDown() }
+        h.model.pin(.seed)
+        h.model.pin(.palette)
+        #expect(h.model.draft.pinned == h.model.pinnedKeys, "pinning mirrors into the draft at once")
+        h.model.load(Wallpaper.starter.reseeded(9))
+        #expect(h.model.draft.pinned == h.model.pinnedKeys, "load() mirrors the current pins onto whatever it shows")
+        h.model.unpin(.seed)
+        #expect(h.model.draft.pinned == [.palette], "unpinning mirrors too, without a fresh load")
+    }
+
+    @Test("applyPreset lifts the top shade only when the palette actually needs it; a preset that already reads is left alone")
+    func applyPresetLiftsOnlyWhenNeeded() {
+        let h = AppModelTests.Harness()
+        defer { h.tearDown() }
+        var liftedSomewhere = false, leftAloneSomewhere = false
+        for preset in Palettes.presets {
+            // A busy mesh, seeded so its control points land the same way
+            // every time: some preset/mesh pairs read as shipped, others
+            // need the strip shaded — exactly what applyPreset is for.
+            h.model.load(Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 3, colors: [.black, .white], jitter: 0.9, softness: 0.3)), seed: 7))
+            h.model.applyPreset(preset)
+            if h.model.draft.finish.topShade > 0 { liftedSomewhere = true } else { leftAloneSomewhere = true }
+            #expect(Side.allCases.allSatisfy { h.model.draft.menuBarReads(side: $0, context: h.model.readabilityContext) }, "\(preset.name): applyPreset must always leave a readable menu bar")
+        }
+        #expect(liftedSomewhere, "at least one preset needed the lift")
+        #expect(leftAloneSomewhere, "at least one preset already read and was left alone")
+    }
+
+    @Test("generatorChoice = .family(.relief) switches to a field of that family")
+    func generatorChoiceSwitchesFamily() {
+        let h = AppModelTests.Harness()
+        defer { h.tearDown() }
+        h.model.generatorChoice = .family(.relief)
+        guard case .field(let p) = h.model.editedGenerator else { Issue.record("not a field"); return }
+        #expect(p.family == .relief)
+        #expect(h.model.generatorChoice == .family(.relief))
+    }
+}
