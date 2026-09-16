@@ -76,7 +76,7 @@ final class NoteStoreFixRound2Tests: XCTestCase {
     /// `precious.txt` with it.
     @MainActor func testDiscardIfEmptyBeforeUnlinkHookDirectorySwapSurvives() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("saved provisional", for: note.id)
         try store.save(note.id)
         try store.setText("", for: note.id)
@@ -106,7 +106,7 @@ final class NoteStoreFixRound2Tests: XCTestCase {
     /// the foreign text once `keepAsForeign`'s rescan runs.
     @MainActor func testDiscardIfEmptyForeignRegularFileWrittenBeforeDiscardSurvives() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("saved provisional", for: note.id)
         try store.save(note.id)
         try store.setText("", for: note.id)
@@ -122,7 +122,7 @@ final class NoteStoreFixRound2Tests: XCTestCase {
     /// its own untouched file.
     @MainActor func testDiscardIfEmptyPlainCaseStillDeletesWithoutAHook() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("saved provisional", for: note.id)
         try store.save(note.id)
         try store.setText("", for: note.id)
@@ -205,7 +205,7 @@ final class NoteStoreFixRound2Tests: XCTestCase {
     /// never touched.
     @MainActor func testBeforeCreateHookCollisionOnAProvisionalNoteDivertsToANewName() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("mine", for: note.id)
         store.interleavingHook = { [store] interleaving in
             guard case .beforeCreate(let id) = interleaving, id == note.id else { return }

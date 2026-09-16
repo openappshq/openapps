@@ -59,7 +59,7 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertTrue(store.folderIsMissing)
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
         XCTAssertEqual(events, [.folderMissing, .reloaded])
-        XCTAssertThrowsError(try store.create(color: .coral, face: .sans)) { error in
+        XCTAssertThrowsError(try store.create(color: .coral)) { error in
             XCTAssertEqual(error as? StoreError, .folderMissing(folder))
         }
         // The folder appears (a volume mounts): the next rescan reads it.
@@ -74,7 +74,7 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor func testANewNoteIsNotWrittenUntilItHasText() throws {
         let store = makeStore()
-        let note = try store.create(color: .sky, face: .mono)
+        let note = try store.create(color: .sky, typeface: .face(.mono))
         XCTAssertTrue(note.id.rawValue.hasPrefix("note-"))
         XCTAssertEqual(try files(), [])
         XCTAssertEqual(try store.save(note.id), .notWritten)
@@ -92,16 +92,16 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor func testNewNotesLandOnTopOfTheDeck() throws {
         let store = makeStore()
-        let first = try store.create(color: .coral, face: .sans)
+        let first = try store.create(color: .coral)
         clock.addTimeInterval(60)
-        let second = try store.create(color: .coral, face: .sans)
+        let second = try store.create(color: .coral)
         XCTAssertEqual(store.active.map(\.id), [second.id, first.id])
         XCTAssertLessThan(second.order, first.order)
     }
 
     @MainActor func testClosingANewNoteNamesItsFileFromTheTitle() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("Groceries for Sunday\n- milk", for: note.id)
         let final = try store.finishProvisional(note.id)
         XCTAssertEqual(final.rawValue, "groceries-for-sunday")
@@ -124,7 +124,7 @@ final class NoteStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try write("groceries.md", "Groceries")
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("Groceries", for: note.id)
         XCTAssertEqual(try store.finishProvisional(note.id).rawValue, "groceries-2")
         XCTAssertEqual(try files(), ["groceries-2.md", "groceries.md"])
@@ -132,7 +132,7 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor func testAnUntitledNoteKeepsItsTimestampName() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("日本語のメモ", for: note.id)
         XCTAssertEqual(try store.finishProvisional(note.id), note.id)
         XCTAssertEqual(try files(), [note.id.fileName])
@@ -140,7 +140,7 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor func testAnEmptyNewNoteIsDiscardedWithItsProvisionalFile() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("x", for: note.id)
         try store.save(note.id)
         XCTAssertEqual(try files(), [note.id.fileName])
@@ -150,7 +150,7 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertNil(store.note(note.id))
         XCTAssertTrue(events.contains(.removed([note.id])))
         // A note that has closed once is never discarded, empty or not.
-        let kept = try store.create(color: .coral, face: .sans)
+        let kept = try store.create(color: .coral)
         try store.setText("keep", for: kept.id)
         let keptID = try store.finishProvisional(kept.id)
         try store.setText("", for: keptID)
@@ -167,7 +167,7 @@ final class NoteStoreTests: XCTestCase {
         var allowed = false
         store.access = { allowed }
         XCTAssertTrue(store.readOnly)
-        XCTAssertThrowsError(try store.create(color: .coral, face: .sans)) { XCTAssertEqual($0 as? StoreError, .readOnly) }
+        XCTAssertThrowsError(try store.create(color: .coral)) { XCTAssertEqual($0 as? StoreError, .readOnly) }
         XCTAssertThrowsError(try store.setText("B", for: NoteID("a"))) { XCTAssertEqual($0 as? StoreError, .readOnly) }
         XCTAssertThrowsError(try store.setColor(.mint, for: NoteID("a"))) { XCTAssertEqual($0 as? StoreError, .readOnly) }
         XCTAssertThrowsError(try store.archive(NoteID("a"))) { XCTAssertEqual($0 as? StoreError, .readOnly) }
@@ -211,7 +211,7 @@ final class NoteStoreTests: XCTestCase {
         let store = makeStore()
         var allowed = true
         store.access = { allowed }
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setPinned(true, for: note.id)
         XCTAssertTrue(store.hasUnsavedChanges(note.id))
         allowed = false
@@ -290,7 +290,7 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor func testTheFolderGoingAwayIsReportedOnSave() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("x", for: note.id)
         try FileManager.default.removeItem(at: folder)
         XCTAssertThrowsError(try store.save(note.id)) { XCTAssertEqual($0 as? StoreError, .folderMissing(folder)) }
@@ -324,7 +324,7 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor func testANewNoteKeepsColorChangesInMemoryUntilItHasText() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setColor(.mint, for: note.id)
         XCTAssertEqual(try files(), [])
         XCTAssertEqual(store.note(note.id)?.color, .mint)
@@ -367,7 +367,7 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor func testSwitchingFoldersSavesFirstAndReadsTheOther() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("Here", for: note.id)
         let other = folder.appendingPathComponent("other", isDirectory: true)
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)

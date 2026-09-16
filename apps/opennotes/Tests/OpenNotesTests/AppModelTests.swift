@@ -36,8 +36,9 @@ final class AppModelTests: XCTestCase {
     @MainActor func testTypingIsWrittenAfterTheDebounceAndClosingNamesTheFile() throws {
         let model = makeModel()
         let note = try XCTUnwrap(model.createNote())
-        XCTAssertEqual(note.color, .coral)
-        XCTAssertEqual(note.face, .sans)
+        // New notes: a random preset (an empty deck picks by the seed alone), no font of their own.
+        XCTAssertEqual(note.color, .preset(NotePaper.randomForNewNote(active: [], lastCreated: nil, seed: 0)))
+        XCTAssertNil(note.typeface)
         model.setText("Groceries\n- milk", for: note.id)
         XCTAssertEqual(model.statusLine(for: note.id), "Editing…")
         XCTAssertEqual(try files(), [])
@@ -147,7 +148,10 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.display, .main)
         XCTAssertEqual(preferences.hotkey, .default)
         XCTAssertEqual(preferences.face, .sans)
-        XCTAssertEqual(preferences.color, .coral)
+        XCTAssertNil(preferences.font)
+        XCTAssertEqual(preferences.typeface, .face(.sans))
+        XCTAssertEqual(preferences.size, 14)
+        XCTAssertEqual(preferences.newNoteColor, .random)
         XCTAssertEqual(preferences.autoArchiveDays, 0)
         XCTAssertTrue(preferences.usesDefaultFolder)
         // The update-test variant keeps its notes in its own folder.
@@ -157,7 +161,9 @@ final class PreferencesTests: XCTestCase {
         preferences.display = .every
         preferences.hotkey = nil
         preferences.face = .mono
-        preferences.color = .mint
+        preferences.font = "Georgia"
+        preferences.size = 18
+        preferences.newNoteColor = .fixed(.mint)
         preferences.autoArchiveDays = 30
         let chosen = FileManager.default.temporaryDirectory.appendingPathComponent("chosen", isDirectory: true)
         preferences.folder = chosen
@@ -166,8 +172,15 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(again.display, .every)
         XCTAssertNil(again.hotkey)
         XCTAssertEqual(again.face, .mono)
-        XCTAssertEqual(again.color, .mint)
+        XCTAssertEqual(again.font, "Georgia")
+        XCTAssertEqual(again.typeface, .family("Georgia"))
+        XCTAssertEqual(again.size, 18)
+        XCTAssertEqual(again.newNoteColor, .fixed(.mint))
         XCTAssertEqual(again.autoArchiveDays, 30)
+        // A face as the default clears the family.
+        again.typeface = .face(.serif)
+        XCTAssertNil(Preferences(defaults: temporary.defaults).font)
+        XCTAssertEqual(Preferences(defaults: temporary.defaults).typeface, .face(.serif))
         XCTAssertFalse(again.usesDefaultFolder)
         XCTAssertEqual(again.folder.path, chosen.path)
         again.resetFolder()
@@ -183,13 +196,15 @@ final class PreferencesTests: XCTestCase {
         preferences.hotkey = .default
         preferences.folder = FileManager.default.temporaryDirectory
         preferences.face = .mono
-        preferences.color = .sky
+        preferences.font = "Menlo"
+        preferences.size = 12
+        preferences.newNoteColor = .fixed(.sky)
         preferences.autoArchiveDays = 7
         let written = Set(temporary.defaults.dictionaryRepresentation().keys).intersection([
             Preferences.Key.side, Preferences.Key.display, Preferences.Key.hotkey, Preferences.Key.folder,
-            Preferences.Key.face, Preferences.Key.color, Preferences.Key.autoArchiveDays,
+            Preferences.Key.face, Preferences.Key.font, Preferences.Key.size, Preferences.Key.color, Preferences.Key.autoArchiveDays,
         ])
-        XCTAssertEqual(written.count, 7)
+        XCTAssertEqual(written.count, 9)
         for key in written {
             XCTAssertTrue(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(key), key)
         }

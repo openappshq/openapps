@@ -305,7 +305,7 @@ final class RulesTests: XCTestCase {
             appVersion: "0.1.0 (1000)", macOSVersion: "26.0", loginStatus: "on", licensing: "off (source build)", readOnly: true,
             side: .right, display: .main, hotkey: .default, hotkeyProblem: "⌥⌘N is taken by another app.",
             folder: "~/Documents/OpenNotes", folderIsMissing: false, watching: true, activeCount: 3, archivedCount: 1, unsavedCount: 0,
-            defaultFace: .sans, defaultColor: .coral, autoArchiveDays: 30, deckState: "pill", hostedDisplays: ["Built-in Retina Display"]
+            defaultFont: "Sans · 14 pt", defaultColor: "Random", autoArchiveDays: 30, deckState: "pill", hostedDisplays: ["Built-in Retina Display"]
         )
         let text = snapshot.text()
         XCTAssertEqual(text, """
@@ -317,7 +317,7 @@ final class RulesTests: XCTestCase {
         Hotkey: ⌥⌘N (⌥⌘N is taken by another app.)
         Folder: ~/Documents/OpenNotes · watcher on
         Notes: 3 active · 1 archived · 0 unsaved
-        Defaults: Sans · Coral · auto-archive after 30 days
+        Defaults: Sans · 14 pt · new notes Random · auto-archive after 30 days
         """)
     }
 }
