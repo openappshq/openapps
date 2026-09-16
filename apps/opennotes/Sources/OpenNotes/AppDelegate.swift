@@ -1,5 +1,6 @@
 import AppKit
 import OpenNotesCore
+import OpenNotesIntents
 import SwiftUI
 
 /// Owns the long-lived objects: the model, preferences, the login item,
@@ -17,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: SettingsWindowController?
     private var allNotesWindow: AllNotesWindowController?
     var onboarding: OnboardingWindowController?
+    /// The door for `opennotes://` links and the Shortcuts actions
+    /// (Automation/Automation.swift), and the card a refused link shows.
+    private(set) var automation: Automation?
+    private let refusal = RefusalPanel()
     #if OPENAPPS_LICENSING
     /// The record store, the manager and the controller bound to
     /// `licenseStatus` (Licensing/LicensingLaunch.swift).
@@ -66,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.toggleDeck = { [weak self] in self?.toggleDeck() }
         statusItem.deckIsShown = { [weak self] in self?.deck != nil }
         statusItem.quit = { NSApp.terminate(nil) }
+        startAutomation()
         registerURLHandler()
 
         deck = DeckHost(model: model, preferences: preferences, showAllNotes: { [weak self] in self?.showAllNotes() })
@@ -131,6 +137,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             allNotesWindow = AllNotesWindowController(model: model) { [weak self] id in self?.deck?.open(id) }
         }
         allNotesWindow?.show()
+    }
+
+    /// Links and Shortcuts write through the model like the hotkey does;
+    /// a note they make slides out of the deck (shown first if hidden),
+    /// and a refused write shows the note-shaped card by the deck's edge.
+    private func startAutomation() {
+        let automation = Automation(model: model)
+        automation.openNote = { [weak self] id in
+            guard let self else { return }
+            if self.deck == nil { self.toggleDeck() }
+            // The deck learns of a note the door just made through the
+            // model's observation, queued on the main queue as the store
+            // changed; the open is queued after it, so the deck knows the
+            // note by then.
+            DispatchQueue.main.async { [weak self] in self?.deck?.open(id) }
+        }
+        automation.newNote = { [weak self] in
+            guard let self else { return }
+            if self.deck == nil { self.toggleDeck() }
+            self.deck?.hotkey()
+        }
+        automation.showAllNotes = { [weak self] in self?.showAllNotes() }
+        automation.refuse = { [weak self] notice in
+            guard let self else { return }
+            self.refusal.show(notice: notice, color: self.preferences.color, side: self.preferences.side, license: self.licenseStatus)
+        }
+        self.automation = automation
+        // The Shortcuts actions run in this process and come through here.
+        IntentHost.perform = { [weak automation] request in
+            guard let automation else { throw Automation.Failure.storage("OpenNotes is not running.") }
+            return try automation.perform(request)
+        }
     }
 
     /// Show Deck / Hide Deck: hidden decks save their open note first.

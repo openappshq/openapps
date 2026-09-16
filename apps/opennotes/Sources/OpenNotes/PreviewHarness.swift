@@ -117,6 +117,21 @@ final class PreviewHarness {
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-\(name)-\(suffix).png") { failures += 1 }
             }
             setRestricted(false)
+            // Automation: a note with `=` lines and their answers; a note
+            // with links and the chip over one; the note-shaped refusal a
+            // read-only `opennotes://new` shows beside the deck.
+            let trip = notes.first { $0.title == "Trip budget" }?.id ?? notes[0].id
+            let arithmetic = DeckStage(content: content(state: .open(trip, editing: true), toast: false), side: preferences.side, dark: scheme == .dark)
+            if await !write(arithmetic, scheme: scheme, appearance: appearance, to: "deck-arithmetic-\(suffix).png") { failures += 1 }
+            let links = notes.first { $0.title == "Links" }?.id ?? notes[0].id
+            var linksStage = DeckStage(content: content(state: .open(links, editing: false), toast: false), side: preferences.side, dark: scheme == .dark)
+            linksStage.chip = (label: "openapps.space", line: 2)
+            if await !write(linksStage, scheme: scheme, appearance: appearance, to: "deck-links-\(suffix).png") { failures += 1 }
+            setRestricted(true)
+            var refusalStage = DeckStage(content: content(state: .pill, toast: false), side: preferences.side, dark: scheme == .dark)
+            refusalStage.refusal = RefusalCard(notice: model.readOnlyNotice, color: preferences.color, license: license)
+            if await !write(refusalStage, scheme: scheme, appearance: appearance, to: "refusal-\(suffix).png") { failures += 1 }
+            setRestricted(false)
             // The left edge, once.
             preferences.side = .left
             let left = DeckStage(content: content(state: .open(groceries, editing: true), toast: false), side: .left, dark: scheme == .dark)
@@ -163,6 +178,8 @@ final class PreviewHarness {
             ("# Snippets\n`brew upgrade --cask opennotes`\nsee https://openapps.space/opennotes/", .sky, .mono, false, 2, -86_400),
             ("Side project\nName ideas, none good yet.", .mint, .sans, false, 3, -3 * 86_400),
             ("Call mum\nSunday, after lunch.", .lilac, .sans, false, 4, -9 * 86_400),
+            ("Trip budget\nFlights $420\nHotel 3 * $95 =\nFood $18 * 4 = $72\nsum =\n\nsplit: $777 / 2 =\n1,250 * 8% =", .yellow, .sans, false, 5, -2 * 86_400),
+            ("Links\ndocs: https://openapps.space/opennotes/\nmail sam mailto:sam@example.com\nnotes: ~/Documents/OpenNotes/groceries.md\nsee www.example.org/page", .sky, .sans, false, 6, -4 * 86_400),
         ]
         for (text, color, face, pinned, order, age) in samples {
             let id = NoteFileName.id(for: Note.title(of: text), created: base) { _ in false }
@@ -218,10 +235,16 @@ final class PreviewHarness {
 
 /// A drawn desktop with a document window behind, the deck docked to the
 /// edge: what the real deck looks like in place, over light and dark.
+/// For the automation stages: the hover chip over a line of the open
+/// note, and the refusal card where the deck is.
 private struct DeckStage: View {
     let content: DeckContent
     let side: DeckSide
     let dark: Bool
+    /// The link chip, above this line (1-based) of the open note's text.
+    var chip: (label: String, line: Int)?
+    /// The note-shaped refusal beside the deck's edge.
+    var refusal: RefusalCard?
 
     var body: some View {
         let size = PreviewHarness.stageSize
@@ -248,6 +271,16 @@ private struct DeckStage: View {
             .padding(EdgeInsets(top: 40, leading: 60, bottom: 40, trailing: 60))
             DeckView(content: content)
                 .offset(x: frame.minX, y: size.height - frame.maxY)
+            if let chip, let note = content.layout.note {
+                // Above the line, as the editor places it: the 12 pt inset,
+                // the title line, then ~19 pt per line.
+                LinkChip(label: chip.label)
+                    .offset(x: frame.minX + note.minX + 12, y: size.height - frame.maxY + (frame.height - note.maxY) + 18 + CGFloat(chip.line - 2) * 19)
+            }
+            if let refusal {
+                let x = side == .right ? frame.maxX - DeckMetrics().pillWidth - DeckMetrics().gap - RefusalCard.size.width : frame.minX + DeckMetrics().pillWidth + DeckMetrics().gap
+                refusal.offset(x: x, y: (size.height - RefusalCard.size.height) / 2)
+            }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .clipped()

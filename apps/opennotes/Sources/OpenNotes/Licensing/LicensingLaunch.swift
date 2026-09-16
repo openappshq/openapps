@@ -128,8 +128,8 @@ extension AppDelegate {
 
     /// The one Apple-event handler for `opennotes://` links (scripts/bundle.sh
     /// registers the scheme in every build). Dispatch is by host in
-    /// `openDeepLink`; a later host (a Shortcuts action, say) is added
-    /// there, never as a second handler.
+    /// `openDeepLink`; a later host is added there, never as a second
+    /// handler.
     func registerURLHandler() {
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(handleURLEvent(_:withReply:)),
@@ -143,10 +143,13 @@ extension AppDelegate {
         openDeepLink(url)
     }
 
-    /// Dispatches by host: `activate` pre-fills a license key; anything else
-    /// is left alone.
+    /// Dispatches by host: `activate` pre-fills a license key; `new`,
+    /// `open` and `append` go through the automation door
+    /// (Automation/Automation.swift), which asks the license; anything
+    /// else is left alone.
     func openDeepLink(_ url: URL) {
-        openActivateLink(url)
+        if openActivateLink(url) { return }
+        if let request = AutomationLink.request(from: url) { automation?.openLink(request) }
     }
 
     /// `opennotes://activate?key=…` from the website's thanks page: only
