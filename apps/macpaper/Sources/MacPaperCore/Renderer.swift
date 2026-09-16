@@ -98,9 +98,13 @@ public struct WallpaperRenderer: Sendable {
     /// clock, the same seed throughout. Frame `frames / 2` is noon.
     public func renderFrames(_ wallpaper: Wallpaper, frames: Int, context: RenderContext, scale: Double = 1) -> [Raster] {
         let frames = max(2, frames)
-        return (0..<frames).map { i in
-            render(generator: wallpaper.generator.atTimeOfDay(Double(i) / Double(frames)), of: wallpaper, side: i * 2 >= frames / 2 && i * 2 < frames * 3 / 2 ? .light : .dark, context: context, scale: scale)
-        }
+        return (0..<frames).map { renderFrame(wallpaper, index: $0, of: frames, context: context, scale: scale) }
+    }
+
+    /// Frame `index` of a `frames`-frame time-of-day set, on its own.
+    public func renderFrame(_ wallpaper: Wallpaper, index i: Int, of frames: Int, context: RenderContext, scale: Double = 1) -> Raster {
+        let frames = max(2, frames)
+        return render(generator: wallpaper.generator.atTimeOfDay(Double(i) / Double(frames)), of: wallpaper, side: i * 2 >= frames / 2 && i * 2 < frames * 3 / 2 ? .light : .dark, context: context, scale: scale)
     }
 
     /// The one frame of a time-of-day document at this moment of the day.

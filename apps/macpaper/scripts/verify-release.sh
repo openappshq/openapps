@@ -159,6 +159,14 @@ if [[ "$REQUIRE_RELEASE" == 1 ]]; then
         || { echo "error: ${PINNED_REQUIREMENT_FILE} does not hold a requirement for ${BUNDLE_ID} (RELEASING.md, \"Signing certificate and update key\")" >&2; exit 1; }
     ../../scripts/release/verify-designated-requirement.sh "$APP" "$PINNED_REQUIREMENT_FILE"
     grep -q '^Authority=OpenApps HQ Release$' <<< "$signature" || { echo "error: not signed by 'OpenApps HQ Release'" >&2; exit 1; }
+    # The saver carries the same pin under its own identifier: the app's
+    # requirement with `.saver` appended to the bundle id.
+    saver_pinned="${pinned/identifier \"${BUNDLE_ID}\"/identifier \"${BUNDLE_ID}.saver\"}"
+    saver_actual="$(codesign --display -r- "$SAVER" 2>/dev/null | sed -n 's/^designated => //p')"
+    [[ "$saver_actual" == "$saver_pinned" ]] || { echo "error: the saver's designated requirement is '${saver_actual}', expected '${saver_pinned}'" >&2; exit 1; }
+    saver_signature="$(codesign --display --verbose=2 "$SAVER" 2>&1)"
+    grep -q '^Authority=OpenApps HQ Release$' <<< "$saver_signature" || { echo "error: the saver is not signed by 'OpenApps HQ Release'" >&2; exit 1; }
+    grep -q 'flags=.*runtime' <<< "$saver_signature" || { echo "error: the saver's hardened runtime is off" >&2; exit 1; }
 fi
 
 echo "==> Verified ${ZIP}"

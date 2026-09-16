@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 @testable import MacPaperCore
 import Testing
 
@@ -468,5 +469,48 @@ struct DocumentV2Tests {
         #expect(odd.pair == .timeOfDay(frames: 8))
         #expect(Generator.default(.dither, colors: [.black, .white], source: nil).kind == .dither)
         #expect(Wallpaper.starter.generator.recolored { _ in .black }.colors.allSatisfy { $0 == .black })
+    }
+}
+
+@Suite("Memory budgets")
+struct MemoryBudgetTests {
+    private static func frame(_ index: Int, in data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, index, nil)
+    }
+
+    @Test("The dither grid widens its cell until the samples fit the budget; small sizes keep the document's cell")
+    func ditherBudget() {
+        #expect(Ditherer.effectiveCell(1, for: PixelSize(width: 640, height: 400)) == 1)
+        #expect(Ditherer.effectiveCell(1, for: PixelSize(width: 3024, height: 1964)) == 2, "the 14-inch at 2x")
+        #expect(Ditherer.effectiveCell(1, for: PixelSize(width: 5120, height: 2880)) == 3, "5K")
+        #expect(Ditherer.effectiveCell(1, for: PixelSize(width: 6016, height: 3384)) == 3, "6K")
+        #expect(Ditherer.effectiveCell(8, for: PixelSize(width: 6016, height: 3384)) == 8, "a wider cell is kept")
+        for (w, h) in [(6016, 3384), (5120, 2880), (3024, 1964)] {
+            let cell = Ditherer.effectiveCell(1, for: PixelSize(width: w, height: h))
+            #expect(((w + cell - 1) / cell) * ((h + cell - 1) / cell) <= Ditherer.maxSamples)
+        }
+    }
+
+    @Test("A streamed time-of-day HEIC equals the one written from the whole set, frame by frame")
+    func streamedFrames() throws {
+        let document = Wallpaper.starter
+        let context = RenderContext(size: PixelSize(width: 48, height: 30))
+        let renderer = WallpaperRenderer()
+        let all = renderer.renderFrames(document, frames: 5, context: context)
+        var rendered: [Int] = []
+        let streamed = try DynamicDesktop.timeOfDay(frameCount: 5) { index in
+            rendered.append(index)
+            return renderer.renderFrame(document, index: index, of: 5, context: context)
+        }
+        #expect(rendered == [0, 1, 2, 3, 4], "each frame asked for once, in order")
+        // HEIC bytes are not stable run to run; the frames decode the same.
+        let whole = try DynamicDesktop.timeOfDay(frames: all)
+        #expect(DynamicDesktop.frameCount(in: streamed) == 5 && DynamicDesktop.record(in: streamed)?.name == "h24")
+        for index in 0..<5 {
+            let a = try #require(Self.frame(index, in: streamed)), b = try #require(Self.frame(index, in: whole))
+            #expect(a.width == b.width && a.height == b.height && a.dataProvider?.data == b.dataProvider?.data, "frame \(index)")
+        }
+        #expect(throws: DynamicDesktop.WriteError.noFrames) { try DynamicDesktop.timeOfDay(frameCount: 1) { _ in all[0] } }
     }
 }

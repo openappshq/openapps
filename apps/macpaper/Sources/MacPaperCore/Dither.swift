@@ -5,9 +5,23 @@ import Foundation
 /// paper) or to a palette taken from the image. Every mode is software and
 /// seeded, so the same image, document and size give the same bytes.
 public enum Ditherer {
+    /// The most samples a grid may hold: a cell that would exceed it is
+    /// coarsened (cell 1 on a 5K display is cell 3), so the sample and
+    /// error arrays stay under ~200 MB however large the display.
+    public static let maxSamples = 2_500_000
+
+    /// The cell actually used for a size: the document's, widened until the
+    /// grid fits the budget.
+    public static func effectiveCell(_ cell: Int, for size: PixelSize) -> Int {
+        let wanted = max(1, cell)
+        let pixels = Double(size.width) * Double(size.height)
+        let needed = Int((pixels / Double(maxSamples)).squareRoot().rounded(.up))
+        return max(wanted, needed)
+    }
+
     public static func render(_ p: DitherParameters, source: Raster?, seed: UInt64, size: PixelSize) -> Raster {
         guard let source else { return Raster(size: size, fill: p.background) }
-        let cell = max(1, p.cell)
+        let cell = effectiveCell(p.cell, for: size)
         if p.mode.isGlyphMode {
             return glyphs(p, source: source, size: size, cell: cell)
         }

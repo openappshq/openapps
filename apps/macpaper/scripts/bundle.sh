@@ -347,11 +347,15 @@ else
     echo "==> Signing ad-hoc (development build)"
     SIGN=(codesign --force --options runtime --timestamp=none --sign -)
 fi
-# Nested code first: the saver inside Resources, with the same identity.
-"${SIGN[@]}" "$SAVER"
+# Nested code first: the saver inside Resources, with the same certificate
+# and its own designated requirement (its bundle id, the same leaf), so the
+# installed module is pinned exactly as the app is.
 if [[ -n "$REQUIREMENT" ]]; then
+    SAVER_REQUIREMENT="${REQUIREMENT/identifier \"${BUNDLE_ID}\"/identifier \"${BUNDLE_ID}.saver\"}"
+    "${SIGN[@]}" -r="designated => ${SAVER_REQUIREMENT}" "$SAVER"
     "${SIGN[@]}" --entitlements "$ENTITLEMENTS" -r="designated => ${REQUIREMENT}" "$APP"
 else
+    "${SIGN[@]}" "$SAVER"
     "${SIGN[@]}" --entitlements "$ENTITLEMENTS" "$APP"
 fi
 codesign --verify --deep --strict --verbose=2 "$APP"
@@ -359,6 +363,11 @@ if [[ -n "$REQUIREMENT" ]]; then
     actual="$(codesign --display -r- "$APP" 2>/dev/null | sed -n 's/^designated => //p')"
     if [[ "$actual" != "$REQUIREMENT" ]]; then
         echo "error: signed with designated requirement '${actual}', expected '${REQUIREMENT}'" >&2
+        exit 1
+    fi
+    actual="$(codesign --display -r- "$SAVER" 2>/dev/null | sed -n 's/^designated => //p')"
+    if [[ "$actual" != "$SAVER_REQUIREMENT" ]]; then
+        echo "error: the saver is signed with designated requirement '${actual}', expected '${SAVER_REQUIREMENT}'" >&2
         exit 1
     fi
 fi

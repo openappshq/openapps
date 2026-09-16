@@ -38,11 +38,16 @@ public enum DynamicDesktop {
     /// brightest frame (noon, `n / 2`) is the light appearance, the first
     /// (midnight) the dark one.
     public static func timeOfDay(frames: [Raster]) throws -> Data {
-        guard frames.count >= 2 else { throw WriteError.noFrames }
-        let n = frames.count
+        try timeOfDay(frameCount: frames.count) { frames[$0] }
+    }
+
+    /// The same, one frame rendered at a time as the encoder asks for it,
+    /// so a 16-frame set never holds 16 full-size rasters at once.
+    public static func timeOfDay(frameCount n: Int, frame: (Int) throws -> Raster) throws -> Data {
+        guard n >= 2 else { throw WriteError.noFrames }
         let times = (0..<n).map { ["t": Double($0) / Double(n), "i": $0] as [String: Any] }
         let plist: [String: Any] = ["ap": ["l": n / 2, "d": 0], "ti": times]
-        return try write(frames: frames, record: (name: "h24", plist: plist))
+        return try write(frameCount: n, frame: frame, record: (name: "h24", plist: plist))
     }
 
     /// The record's plist (decoded) from a HEIC's first image, for tests
@@ -68,9 +73,13 @@ public enum DynamicDesktop {
     }
 
     private static func write(frames: [Raster], record: (name: String, plist: [String: Any])) throws -> Data {
-        guard !frames.isEmpty else { throw WriteError.noFrames }
+        try write(frameCount: frames.count, frame: { frames[$0] }, record: record)
+    }
+
+    private static func write(frameCount: Int, frame: (Int) throws -> Raster, record: (name: String, plist: [String: Any])) throws -> Data {
+        guard frameCount > 0 else { throw WriteError.noFrames }
         let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, frames.count, nil) else {
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, frameCount, nil) else {
             throw WriteError.encoder
         }
         let metadata = CGImageMetadataCreateMutable()
@@ -82,8 +91,9 @@ public enum DynamicDesktop {
         }
         // Lossless as HEIC allows: the highest quality the encoder takes.
         let options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 1.0]
-        for (index, frame) in frames.enumerated() {
-            guard let image = frame.cgImage else { throw WriteError.encoder }
+        for index in 0..<frameCount {
+            // One raster live at a time; the encoder keeps its own copy.
+            guard let image = try frame(index).cgImage else { throw WriteError.encoder }
             if index == 0 {
                 CGImageDestinationAddImageAndMetadata(destination, image, metadata, options as CFDictionary)
             } else {

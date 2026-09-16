@@ -175,8 +175,10 @@ public struct WallpaperApplier: Sendable {
                         try writeStill(wallpaper, side: .light, context: context, display: display.id, manifest: &manifest)
                     }
                 case (.timeOfDay(let frames), nil):
-                    let rendered = renderer.renderFrames(wallpaper, frames: frames, context: context)
-                    let heic = try DynamicDesktop.timeOfDay(frames: rendered)
+                    // Streamed: one frame rendered per encoder call, never
+                    // the whole set in memory.
+                    let count = max(2, frames)
+                    let heic = try DynamicDesktop.timeOfDay(frameCount: count) { renderer.renderFrame(wallpaper, index: $0, of: count, context: context) }
                     image = try applyDynamic(heic, format: .timeOfDay, wallpaper: wallpaper, display: display, manifest: &manifest) { manifest in
                         let moment = renderer.renderMoment(wallpaper, dayFraction: DayClock.fraction(of: now), context: context)
                         guard let png = moment.pngData() else { throw ApplyError.encoding }
