@@ -305,6 +305,121 @@ final class NoteStylerTests: XCTestCase {
         XCTAssertEqual(textView.string, "Todo\n- [x] milk")
         XCTAssertEqual(reported, ["Todo\n- [x] milk"])
     }
+
+    // MARK: - Arithmetic answers, drawn and committed
+
+    @MainActor func testApplyDimsACurrentAnswerAndStrikesAStaleOne() {
+        let text = "Budget\n3 * $95 =\n2 + 2 = 4\n3 * 3 = 4"
+        let storage = NSTextStorage(string: text)
+        let styler = NoteStyler(face: .sans, appearance: NSAppearance(named: .aqua), locale: Locale(identifier: "en_US"))
+        styler.apply(to: storage)
+        XCTAssertEqual(storage.string, text)
+        let ns = text as NSString
+        let currentLine = ns.range(of: "2 + 2 = 4")
+        let staleLine = ns.range(of: "3 * 3 = 4")
+        let currentFour = ns.range(of: "4", range: currentLine)
+        let staleFour = ns.range(of: "4", range: staleLine)
+        XCTAssertEqual(storage.attribute(.foregroundColor, at: currentFour.location, effectiveRange: nil) as? NSColor, styler.secondary)
+        XCTAssertNil(storage.attribute(.strikethroughStyle, at: currentFour.location, effectiveRange: nil))
+        XCTAssertNotNil(storage.attribute(.strikethroughStyle, at: staleFour.location, effectiveRange: nil))
+    }
+
+    @MainActor func testPreviewAttributedAppendsFreshAnswersWithoutTouchingApplysStorage() {
+        let text = "Budget\n3 * $95 =\n2 + 2 = 4\n3 * 3 = 4"
+        let styler = NoteStyler(face: .sans, appearance: NSAppearance(named: .aqua), locale: Locale(identifier: "en_US"))
+        let preview = String(styler.previewAttributed(text).characters)
+        XCTAssertTrue(preview.contains("$285"), preview)
+        XCTAssertTrue(preview.contains("9"), preview)
+        let storage = NSTextStorage(string: text)
+        styler.apply(to: storage)
+        XCTAssertEqual(storage.string, text, "the editor never writes a preview's drawn answers into the storage")
+    }
+
+    // MARK: - NoteTextView: answers, links and Tab
+
+    /// `Budget` (the title), a fresh `=` line, a stale one, then a web
+    /// link and a home-folder path.
+    @MainActor private func makeAnswersAndLinksTextView() -> NoteTextView {
+        let scrollView = NoteTextView.makeScrollableTextView()
+        let textView = scrollView.documentView as! NoteTextView
+        textView.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+        textView.styler = NoteStyler(face: .sans, appearance: NSAppearance(named: .aqua), locale: Locale(identifier: "en_US"))
+        textView.setText("Budget\n3 * $95 =\n3 * 3 = 4\nSee https://a.b and ~/Notes/x.md")
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        return textView
+    }
+
+    @MainActor func testTextViewExposesTheCurrentAnswersAndLinks() {
+        let textView = makeAnswersAndLinksTextView()
+        XCTAssertEqual(textView.answers.count, 2)
+        XCTAssertEqual(textView.links.map(\.kind), [.web, .path])
+    }
+
+    @MainActor func testInsertTabCommitsAFreshAnswerAndReportsOneChange() {
+        let textView = makeAnswersAndLinksTextView()
+        var reported: [String] = []
+        textView.onTextChange = { reported.append($0) }
+        let freshLine = (textView.string as NSString).range(of: "3 * $95 =")
+        textView.setSelectedRange(NSRange(location: NSMaxRange(freshLine), length: 0))
+        textView.insertTab(nil)
+        XCTAssertTrue(textView.string.contains("3 * $95 = $285"), textView.string)
+        XCTAssertEqual(reported.count, 1)
+    }
+
+    @MainActor func testInsertTabOnAStaleLineReplacesTheOldAnswer() {
+        let textView = makeAnswersAndLinksTextView()
+        let staleLine = (textView.string as NSString).range(of: "3 * 3 = 4")
+        textView.setSelectedRange(NSRange(location: staleLine.location, length: 0))
+        textView.insertTab(nil)
+        XCTAssertTrue(textView.string.contains("3 * 3 = 9"), textView.string)
+        XCTAssertFalse(textView.string.contains("3 * 3 = 4"), textView.string)
+    }
+
+    @MainActor func testInsertTabAtTheStartInsertsAnOrdinaryTab() {
+        let textView = makeAnswersAndLinksTextView()
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.insertTab(nil)
+        XCTAssertTrue(textView.string.hasPrefix("\tBudget"), textView.string)
+    }
+
+    @MainActor func testInsertTabChangesNothingWhenEditingIsRefused() {
+        let textView = makeAnswersAndLinksTextView()
+        textView.mayEdit = { false }
+        let before = textView.string
+        let freshLine = (textView.string as NSString).range(of: "3 * $95 =")
+        textView.setSelectedRange(NSRange(location: NSMaxRange(freshLine), length: 0))
+        textView.insertTab(nil)
+        XCTAssertEqual(textView.string, before)
+    }
+
+    @MainActor func testLinkAtPointFindsTheLinkUnderItsGlyphsAndNilElsewhere() {
+        let textView = makeAnswersAndLinksTextView()
+        guard let layoutManager = textView.layoutManager, let textContainer = textView.textContainer else { return XCTFail() }
+        let webLink = try! XCTUnwrap(textView.links.first { $0.kind == .web })
+        let glyphs = layoutManager.glyphRange(forCharacterRange: webLink.range, actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        rect.origin.x += textView.textContainerInset.width
+        rect.origin.y += textView.textContainerInset.height
+        let midpoint = NSPoint(x: rect.midX, y: rect.midY)
+        XCTAssertEqual(textView.link(at: midpoint)?.text, webLink.text)
+        XCTAssertNil(textView.link(at: NSPoint(x: 5, y: 5)))
+    }
+
+    // MARK: - LinkTarget
+
+    @MainActor func testLinkTargetURLForAHomePathHasTheEscapedFileName() {
+        let url = try! XCTUnwrap(LinkTarget.url(for: "~/x y.md"))
+        XCTAssertTrue(url.isFileURL)
+        XCTAssertTrue(url.path.hasSuffix("/x y.md"), url.path)
+    }
+
+    @MainActor func testLinkTargetURLForAUnicodeAddress() {
+        XCTAssertNotNil(LinkTarget.url(for: "https://例え.jp/道"))
+    }
+
+    @MainActor func testLinkTargetURLForMailto() {
+        XCTAssertEqual(LinkTarget.url(for: "mailto:a@b.c")?.scheme, "mailto")
+    }
 }
 
 /// The diagnostics line and the deck host's display choice.

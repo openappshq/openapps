@@ -31,6 +31,7 @@ if updateTesting { flavourDefines.append(.define("OPENNOTES_UPDATE_TESTING")) }
 // The shared licensing rules, records and badge (LICENSING.md).
 var appDependencies: [Target.Dependency] = [
     "OpenNotesCore",
+    "OpenNotesIntents",
     .product(name: "OpenAppsLicensing", package: "openapps-licensing"),
 ]
 var packageDependencies: [Package.Dependency] = [.package(path: "../../packages/openapps-licensing")]
@@ -71,9 +72,19 @@ let package = Package(
             name: "OpenNotesCore",
             swiftSettings: isolation
         ),
+        // The Shortcuts actions (App Intents), in their own module without
+        // the main-actor default: `@Parameter` storage is nonisolated by
+        // design, and each action hops to the main actor to perform through
+        // the door the app binds at launch. scripts/bundle.sh extracts
+        // their metadata for Shortcuts from this module's build.
+        .target(
+            name: "OpenNotesIntents",
+            dependencies: ["OpenNotesCore"]
+        ),
         // The menu-bar app: the deck window per display, the editor, All
         // Notes, Settings, the hotkey, the login item, the setup guide,
-        // licensing, the updater, the debug preview harness.
+        // licensing, the updater, the automation door, the debug preview
+        // harness.
         .executableTarget(
             name: "OpenNotes",
             dependencies: appDependencies + updaterDependencies,
@@ -101,7 +112,7 @@ let package = Package(
         .testTarget(
             name: "OpenNotesTests",
             dependencies: [
-                "OpenNotes", "OpenNotesCore",
+                "OpenNotes", "OpenNotesCore", "OpenNotesIntents",
                 .product(name: "OpenAppsLicensing", package: "openapps-licensing"),
             ] + updaterDependencies,
             swiftSettings: flavourDefines

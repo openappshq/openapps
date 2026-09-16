@@ -156,6 +156,24 @@ final class PreviewHarness {
                 let stage = DeckStage(content: content(state: .open(WelcomeNote.id, editing: false), toast: false, model: welcome), side: preferences.side, dark: scheme == .dark)
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-welcome-\(suffix).png") { failures += 1 }
             }
+            // Automation: a note with `=` lines and their answers; a note
+            // with links and the chip over one; the note-shaped refusal a
+            // read-only `opennotes://new` shows beside the deck.
+            let automation = sampleModel(Self.automationSamples)
+            let automationNotes = automation.model.active
+            let trip = automationNotes.first { $0.title == "Trip budget" }?.id ?? automationNotes[0].id
+            let arithmetic = DeckStage(content: content(state: .open(trip, editing: true), toast: false, model: automation.model), side: preferences.side, dark: scheme == .dark)
+            if await !write(arithmetic, scheme: scheme, appearance: appearance, to: "deck-arithmetic-\(suffix).png") { failures += 1 }
+            let links = automationNotes.first { $0.title == "Links" }?.id ?? automationNotes[0].id
+            var linksStage = DeckStage(content: content(state: .open(links, editing: false), toast: false, model: automation.model), side: preferences.side, dark: scheme == .dark)
+            linksStage.chip = (label: "openapps.space", line: 2)
+            if await !write(linksStage, scheme: scheme, appearance: appearance, to: "deck-links-\(suffix).png") { failures += 1 }
+            setRestricted(true)
+            var refusalStage = DeckStage(content: content(state: .pill, toast: false), side: preferences.side, dark: scheme == .dark)
+            refusalStage.refusal = RefusalCard(notice: model.readOnlyNotice, color: model.colorForNewNote, license: license)
+            if await !write(refusalStage, scheme: scheme, appearance: appearance, to: "refusal-\(suffix).png") { failures += 1 }
+            setRestricted(false)
+            try? FileManager.default.removeItem(at: automation.folder)
             // The left edge, once.
             preferences.side = .left
             let left = DeckStage(content: content(state: .open(groceries, editing: true), toast: false), side: .left, dark: scheme == .dark)
@@ -246,6 +264,13 @@ final class PreviewHarness {
         ("Ideas for the talk\nStart with the folder, not the app. Show the file in Finder first, then the deck, then the same note in Obsidian. The point is that nothing is locked in: the notes were always theirs.\n\n## Demo order\n1. hotkey\n2. edge\n3. All Notes\n4. iCloud Drive", .paper, nil, false, 9, -2 * 86_400),
     ]
 
+    /// Two notes for the automation stages, over their own folder: `=`
+    /// lines with their answers, and every kind of link.
+    private static let automationSamples: [Sample] = [
+        ("Trip budget\nFlights $420\nHotel 3 * $95 =\nFood $18 * 4 = $72\nsum =\n\nsplit: $777 / 2 =\n1,250 * 8% =", .yellow, nil, false, 0, -2 * 86_400),
+        ("Links\ndocs: https://openapps.space/opennotes/\nmail sam mailto:sam@example.com\nnotes: ~/Documents/OpenNotes/groceries.md\nsee www.example.org/page", .sky, nil, false, 1, -4 * 86_400),
+    ]
+
     private func seedNotes() {
         let base = Date()
         Self.write(Array(Self.samples.prefix(5)), into: folder, base: base)
@@ -267,9 +292,15 @@ final class PreviewHarness {
     /// samples, for All Notes' empty, one-note and ten-note stages. The
     /// caller removes the folder.
     private func allNotesModel(notes count: Int) -> (model: AppModel, folder: URL) {
-        let stageFolder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-preview-allnotes-\(UUID().uuidString)", isDirectory: true)
+        sampleModel(Array(Self.samples.prefix(count)))
+    }
+
+    /// A model over its own temporary folder holding these samples. The
+    /// caller removes the folder.
+    private func sampleModel(_ samples: [Sample]) -> (model: AppModel, folder: URL) {
+        let stageFolder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-preview-stage-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: stageFolder, withIntermediateDirectories: true)
-        Self.write(Array(Self.samples.prefix(count)), into: stageFolder, base: Date())
+        Self.write(samples, into: stageFolder, base: Date())
         let stage = AppModel(preferences: preferences, license: license, store: NoteStore(folder: stageFolder), watcher: FolderWatcher())
         stage.store.load(create: false)
         return (stage, stageFolder)
@@ -424,10 +455,16 @@ private struct FontsStage: View {
 
 /// A drawn desktop with a document window behind, the deck docked to the
 /// edge: what the real deck looks like in place, over light and dark.
+/// For the automation stages: the hover chip over a line of the open
+/// note, and the refusal card where the deck is.
 private struct DeckStage: View {
     let content: DeckContent
     let side: DeckSide
     let dark: Bool
+    /// The link chip, above this line (1-based) of the open note's text.
+    var chip: (label: String, line: Int)?
+    /// The note-shaped refusal beside the deck's edge.
+    var refusal: RefusalCard?
 
     var body: some View {
         let size = PreviewHarness.stageSize
@@ -454,6 +491,16 @@ private struct DeckStage: View {
             .padding(EdgeInsets(top: 40, leading: 60, bottom: 40, trailing: 60))
             DeckView(content: content)
                 .offset(x: frame.minX, y: size.height - frame.maxY)
+            if let chip, let note = content.layout.note {
+                // Above the line, as the editor places it: the 12 pt inset,
+                // the title line, then ~19 pt per line.
+                LinkChip(label: chip.label)
+                    .offset(x: frame.minX + note.minX + 12, y: size.height - frame.maxY + (frame.height - note.maxY) + 18 + CGFloat(chip.line - 2) * 19)
+            }
+            if let refusal {
+                let x = side == .right ? frame.maxX - DeckMetrics().pillWidth - DeckMetrics().gap - RefusalCard.size.width : frame.minX + DeckMetrics().pillWidth + DeckMetrics().gap
+                refusal.offset(x: x, y: (size.height - RefusalCard.size.height) / 2)
+            }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .clipped()

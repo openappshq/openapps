@@ -272,23 +272,190 @@ nonisolated public enum MarkdownLite {
             }
         }
 
-        // URLs.
-        for scheme in ["https://", "http://"] {
+        // Links, outside code.
+        for link in links(inLine: line, from: start, inCode: inCode) {
+            for k in link.range.location..<NSMaxRange(link.range) { styles[offset + k].link = link.target }
+        }
+    }
+
+    // MARK: - Links
+
+    /// A link found in the text: underlined live, opened with ⌘-click,
+    /// named by the hover chip. Never stored: the text keeps what was typed.
+    public struct Link: Hashable, Sendable {
+        public enum Kind: Hashable, Sendable {
+            /// `http://`, `https://` or a bare `www.` address.
+            case web
+            /// `mailto:`.
+            case mail
+            /// `file:///`.
+            case file
+            /// `~/…`, a path under the home folder.
+            case path
+        }
+
+        public var range: NSRange
+        public var kind: Kind
+        /// The address as typed.
+        public var text: String
+        /// What to open: `https://` put before a bare `www.`, otherwise the
+        /// text; a `~/` path is left for the app to expand.
+        public var target: String
+        /// What the hover chip says: the host, the mailbox, the file name.
+        public var display: String
+    }
+
+    /// Every link in the text, in order, code spans excluded: `http(s)://`,
+    /// `www.`, `mailto:`, `file:///` and `~/` paths, ending at whitespace
+    /// or a quote, without the sentence's trailing punctuation and without
+    /// a closing bracket the link did not open. Only the first `limit`
+    /// units are read (the editor's styling budget), so a giant note costs
+    /// one pass, never more.
+    public static func links(in text: String, limit: Int = styleLimit) -> [Link] {
+        let string = text as NSString
+        var result: [Link] = []
+        var index = 0
+        let end = min(string.length, max(0, limit))
+        while index < end {
+            let lineRange = string.lineRange(for: NSRange(location: index, length: 0))
+            let terminator = string.substring(with: lineRange).hasSuffix("\n") ? 1 : 0
+            // A line past the budget is read up to it.
+            let contentLength = min(lineRange.length - terminator, end - lineRange.location)
+            let line = string.substring(with: NSRange(location: lineRange.location, length: contentLength)) as NSString
+            let code = codeFlags(line)
+            for var link in links(inLine: line, from: 0, inCode: { $0 < code.count && code[$0] }) {
+                link.range.location += lineRange.location
+                result.append(link)
+            }
+            index = NSMaxRange(lineRange)
+            if lineRange.length == 0 { break }
+        }
+        return result
+    }
+
+    /// The link whose range holds `location` (the caret, a click).
+    public static func link(in text: String, at location: Int, limit: Int = styleLimit) -> Link? {
+        links(in: text, limit: limit).first { location >= $0.range.location && location <= NSMaxRange($0.range) }
+    }
+
+    private static let linkPrefixes: [(String, Link.Kind)] = [
+        ("https://", .web), ("http://", .web), ("www.", .web), ("mailto:", .mail), ("file:///", .file), ("~/", .path),
+    ]
+
+    private static func links(inLine line: NSString, from start: Int, inCode: (Int) -> Bool) -> [Link] {
+        let length = line.length
+        var found: [Link] = []
+        for (prefix, kind) in linkPrefixes {
             var search = NSRange(location: start, length: length - start)
             while search.length > 0 {
-                let found = line.range(of: scheme, options: [.caseInsensitive], range: search)
-                guard found.location != NSNotFound else { break }
-                var end = NSMaxRange(found)
+                let match = line.range(of: prefix, options: [.caseInsensitive], range: search)
+                guard match.location != NSNotFound else { break }
+                search = NSRange(location: NSMaxRange(match), length: length - NSMaxRange(match))
+                // A link starts a word: at the line's start or after a boundary.
+                guard match.location == start || isLinkBoundary(line.character(at: match.location - 1)), !inCode(match.location) else { continue }
+                var end = NSMaxRange(match)
                 while end < length, !isURLTerminator(line.character(at: end)) { end += 1 }
-                // Trailing punctuation belongs to the sentence, not the link.
-                while end > NSMaxRange(found), [46, 44, 41, 59, 58, 33, 63].contains(line.character(at: end - 1)) { end -= 1 }
-                if end > NSMaxRange(found), !inCode(found.location) {
-                    let url = line.substring(with: NSRange(location: found.location, length: end - found.location))
-                    for k in found.location..<end { styles[offset + k].link = url }
-                }
+                end = trimLinkEnd(line, from: match.location, to: end)
+                guard end > NSMaxRange(match) else { continue }
+                let range = NSRange(location: match.location, length: end - match.location)
+                // `www.` needs a host with a dot after it; a path needs a name.
+                let text = line.substring(with: range)
+                if kind == .web, prefix == "www.", !text.dropFirst(4).contains(".") { continue }
+                found.append(Link(range: range, kind: kind, text: text, target: target(for: text, kind: kind, prefix: prefix), display: display(for: text, kind: kind)))
                 search = NSRange(location: end, length: length - end)
             }
         }
+        // Prefixes overlap (`https://www.`): the earliest, longest wins.
+        found.sort { $0.range.location != $1.range.location ? $0.range.location < $1.range.location : $0.range.length > $1.range.length }
+        var kept: [Link] = []
+        for link in found where kept.last.map({ link.range.location >= NSMaxRange($0.range) }) ?? true {
+            kept.append(link)
+        }
+        return kept
+    }
+
+    /// Trailing punctuation belongs to the sentence, and a closing bracket
+    /// the link did not open belongs to the text around it. One pass over
+    /// the link counts the brackets; the trim then walks back once, so a
+    /// link followed by a wall of `)` costs its length, not its square.
+    private static func trimLinkEnd(_ line: NSString, from start: Int, to end: Int) -> Int {
+        var parens = 0
+        var squares = 0
+        for i in start..<end {
+            switch line.character(at: i) {
+            case 40: parens += 1
+            case 41: parens -= 1
+            case 91: squares += 1
+            case 93: squares -= 1
+            default: break
+            }
+        }
+        var end = end
+        while end > start {
+            let last = line.character(at: end - 1)
+            if [46, 44, 59, 58, 33, 63].contains(last) { // . , ; : ! ?
+                end -= 1
+                continue
+            }
+            if last == 41, parens < 0 { // an unopened )
+                parens += 1
+                end -= 1
+                continue
+            }
+            if last == 93, squares < 0 { // an unopened ]
+                squares += 1
+                end -= 1
+                continue
+            }
+            break
+        }
+        return end
+    }
+
+    private static func target(for text: String, kind: Link.Kind, prefix: String) -> String {
+        kind == .web && prefix == "www." ? "https://" + text : text
+    }
+
+    private static func display(for text: String, kind: Link.Kind) -> String {
+        switch kind {
+        case .web:
+            var rest = Substring(text)
+            if let scheme = rest.range(of: "://") { rest = rest[scheme.upperBound...] }
+            if let end = rest.firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" }) { rest = rest[..<end] }
+            if let at = rest.lastIndex(of: "@") { rest = rest[rest.index(after: at)...] }
+            return rest.lowercased()
+        case .mail:
+            return String(text.dropFirst("mailto:".count).prefix { $0 != "?" })
+        case .file, .path:
+            var path = kind == .file ? String(text.dropFirst("file://".count)) : text
+            if kind == .file { path = path.removingPercentEncoding ?? path }
+            while path.hasSuffix("/") && path.count > 1 { path.removeLast() }
+            let name = path.split(separator: "/").last.map(String.init) ?? path
+            return name.isEmpty ? path : name
+        }
+    }
+
+    /// What may come right before a link: a space, an opening bracket, a
+    /// quote, or a marker character.
+    private static func isLinkBoundary(_ c: unichar) -> Bool {
+        c == 32 || c == 9 || c == 40 || c == 91 || c == 60 || c == 34 || c == 39 || c == 42 || c == 95 || c == 96
+    }
+
+    /// One flag per unit of the line: inside a code span (the backticks
+    /// included), where nothing is interpreted.
+    private static func codeFlags(_ line: NSString) -> [Bool] {
+        let length = line.length
+        var flags = [Bool](repeating: false, count: length)
+        var i = 0
+        while i < length {
+            if line.character(at: i) == 96, let close = find(line, 96, from: i + 1, before: length), close > i + 1 {
+                for k in i...close { flags[k] = true }
+                i = close + 1
+            } else {
+                i += 1
+            }
+        }
+        return flags
     }
 
     private static func isBoundary(_ c: unichar) -> Bool {

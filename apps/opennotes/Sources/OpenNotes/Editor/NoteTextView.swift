@@ -23,14 +23,22 @@ enum EditorCommand: Hashable {
 
 /// The note's text view: plain-text paste, no smart substitutions, live
 /// Markdown-lite styling that only ever changes attributes, checkboxes
-/// toggled by a click on the box, Escape and the note commands reported
-/// to the owner. TextKit does the editing; nothing here replaces text
-/// except the three characters of a checkbox, through the same
-/// `shouldChangeText` / `didChangeText` path a keystroke takes.
+/// toggled by a click on the box, `=` lines answered after the line (drawn,
+/// never typed in unless Tab asks), links opened with ⌘-click or ⌥⏎ and
+/// named by a hover chip, Escape and the note commands reported to the
+/// owner. TextKit does the editing; nothing here replaces text except the
+/// three characters of a checkbox and the answer Tab commits, through the
+/// same `shouldChangeText` / `didChangeText` path a keystroke takes.
 final class NoteTextView: NSTextView {
     var styler = NoteStyler(face: .sans) {
         didSet { restyle() }
     }
+    /// The `=` lines and the links of the current text, read once per
+    /// change for drawing, Tab, the pointer and the keys.
+    private(set) var answers: [Arithmetic.Answer] = []
+    private(set) var links: [MarkdownLite.Link] = []
+    private var chip: LinkChipHost?
+    private var hoverArea: NSTrackingArea?
     var onTextChange: (String) -> Void = { _ in }
     var onCommand: (EditorCommand) -> Void = { _ in }
     var onFocus: () -> Void = {}
@@ -93,6 +101,12 @@ final class NoteTextView: NSTextView {
         styler.apply(to: textStorage)
         typingAttributes = styler.baseAttributes
         insertionPointColor = styler.ink
+        // What AppKit lays over `.link` ranges: the styler's link color, no
+        // pointing hand (a plain click places the caret).
+        linkTextAttributes = [.foregroundColor: styler.link, .underlineStyle: NSUnderlineStyle.single.rawValue]
+        answers = Arithmetic.answers(in: string, format: styler.arithmeticFormat)
+        links = MarkdownLite.links(in: string)
+        needsDisplay = true
     }
 
     override func didChangeText() {
@@ -126,6 +140,7 @@ final class NoteTextView: NSTextView {
     // MARK: - Checkboxes
 
     override func mouseDown(with event: NSEvent) {
+        if commandClick(at: event) { return }
         if isEditable, let toggle = checkboxToggle(at: event) {
             if shouldChangeText(in: toggle.range, replacementString: toggle.replacement) {
                 textStorage?.replaceCharacters(in: toggle.range, with: toggle.replacement)
@@ -152,10 +167,60 @@ final class NoteTextView: NSTextView {
         return (box.range, box.checked ? "[ ]" : "[x]")
     }
 
+    // MARK: - Answers
+
+    /// The fresh answers, drawn after their lines in the secondary color:
+    /// on every `=` line without an old answer, and after a stale one. The
+    /// text itself is untouched.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let layoutManager, let textContainer else { return }
+        for answer in answers where answer.needsDrawing {
+            guard answer.lineRange.length > 0 else { continue }
+            let last = NSRange(location: NSMaxRange(answer.lineRange) - 1, length: 1)
+            let glyphs = layoutManager.glyphRange(forCharacterRange: last, actualCharacterRange: nil)
+            var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            rect.origin.x += textContainerInset.width
+            rect.origin.y += textContainerInset.height
+            let point = NSPoint(x: rect.maxX + Self.answerGap, y: rect.minY)
+            guard dirtyRect.intersects(NSRect(x: point.x, y: point.y, width: bounds.width - point.x, height: rect.height)) else { continue }
+            NSAttributedString(string: answer.text, attributes: styler.answerAttributes).draw(at: point)
+        }
+    }
+
+    /// Between the line's end and its answer.
+    static let answerGap: CGFloat = 8
+
+    /// Tab on an `=` line writes the answer into the text (the only way it
+    /// reaches the file); anywhere else Tab is a Tab.
+    override func insertTab(_ sender: Any?) {
+        if let answer = Arithmetic.answer(in: string, at: selectedRange().location, format: styler.arithmeticFormat), answer.needsDrawing {
+            let edit = answer.commit
+            if shouldChangeText(in: edit.range, replacementString: edit.replacement) {
+                textStorage?.replaceCharacters(in: edit.range, with: edit.replacement)
+                didChangeText()
+                setSelectedRange(NSRange(location: edit.range.location + (edit.replacement as NSString).length, length: 0))
+            }
+            return
+        }
+        super.insertTab(sender)
+    }
+
     // MARK: - Keys
 
     override func cancelOperation(_ sender: Any?) {
         onCommand(.escape)
+    }
+
+    /// ⌥⏎ with the caret on a link opens it; every other key is TextKit's.
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == [.option], event.keyCode == 36 || event.keyCode == 76,
+           let link = MarkdownLite.link(in: string, at: selectedRange().location) {
+            open(link)
+            return
+        }
+        super.keyDown(with: event)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -194,12 +259,102 @@ final class NoteTextView: NSTextView {
 
     // MARK: - Links
 
+    /// A plain click on a link places the caret, as on any other text;
+    /// only ⌘-click (`mouseDown`) and ⌥⏎ open it.
     override func clicked(onLink link: Any, at charIndex: Int) {
-        if let url = link as? URL {
-            NSWorkspace.shared.open(url)
-        } else if let string = link as? String, let url = URL(string: string) {
-            NSWorkspace.shared.open(url)
+        setSelectedRange(NSRange(location: charIndex, length: 0))
+    }
+
+    /// ⌘-click on a link opens it via `NSWorkspace`; nothing is fetched.
+    private func commandClick(at event: NSEvent) -> Bool {
+        guard event.modifierFlags.contains(.command), let link = link(at: convert(event.locationInWindow, from: nil)) else { return false }
+        open(link)
+        return true
+    }
+
+    func open(_ link: MarkdownLite.Link) {
+        guard let url = LinkTarget.url(for: link.target) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// The link under a point in the view, if the point is on its glyphs.
+    func link(at point: NSPoint) -> MarkdownLite.Link? {
+        guard let layoutManager, let textContainer, !links.isEmpty else { return nil }
+        let inset = NSPoint(x: point.x - textContainerInset.width, y: point.y - textContainerInset.height)
+        let index = layoutManager.characterIndex(for: inset, in: textContainer, fractionOfDistanceBetweenInsertionPoints: nil)
+        guard let link = links.first(where: { index >= $0.range.location && index < NSMaxRange($0.range) }) else { return nil }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: link.range, actualCharacterRange: nil)
+        var hit = false
+        layoutManager.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: textContainer) { rect, stop in
+            if rect.insetBy(dx: -1, dy: -1).contains(inset) { hit = true; stop.pointee = true }
         }
+        return hit ? link : nil
+    }
+
+    // MARK: - Hover chip
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        if let link = link(at: point) { showChip(for: link) } else { hideChip() }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hideChip()
+    }
+
+    /// The chip above the link's first line: the host or the file name,
+    /// and how to open it. Nothing is fetched.
+    private func showChip(for link: MarkdownLite.Link) {
+        guard let layoutManager, let textContainer else { return }
+        let host: LinkChipHost
+        if let chip { host = chip } else {
+            host = LinkChipHost(rootView: LinkChip(label: link.display))
+            addSubview(host)
+            chip = host
+        }
+        host.rootView = LinkChip(label: link.display)
+        let glyphs = layoutManager.glyphRange(forCharacterRange: link.range, actualCharacterRange: nil)
+        var anchor = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphs.location, length: 1), in: textContainer)
+        anchor.origin.x += textContainerInset.width
+        anchor.origin.y += textContainerInset.height
+        let size = host.fittingSize
+        var x = anchor.minX
+        if x + size.width > bounds.width - 4 { x = max(4, bounds.width - 4 - size.width) }
+        var y = anchor.minY - size.height - 4
+        if y < 0 { y = anchor.maxY + 4 }
+        host.frame = NSRect(x: x, y: y, width: size.width, height: size.height)
+        host.isHidden = false
+    }
+
+    private func hideChip() {
+        chip?.isHidden = true
+    }
+}
+
+/// The hover chip's host: takes no clicks, so the link under it stays
+/// clickable.
+final class LinkChipHost: NSHostingView<LinkChip> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// What a link opens: a `~/` path under the home folder, otherwise the
+/// address, with characters a URL cannot hold percent-encoded.
+enum LinkTarget {
+    static func url(for target: String) -> URL? {
+        if target.hasPrefix("~/") {
+            return URL(fileURLWithPath: (target as NSString).expandingTildeInPath)
+        }
+        return URL(string: target) ?? URL(string: target, encodingInvalidCharacters: true)
     }
 }
 

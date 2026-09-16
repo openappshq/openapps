@@ -44,7 +44,9 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 - Saved 250 ms after typing stops, on every close, before sleep, when the app resigns active and at quit. Outside edits are picked up by a folder watcher (FSEvents) and by a rescan when the app becomes active. Every write is a transaction: the existing file is opened (never through a link), hashed in full through that descriptor and compared with what was last read or written; the replacement is created exclusively when the file is absent, or swapped in atomically with the displaced file checked to be the very one verified — an outside edit that lands at any point, before the check or between the check and the swap, is never overwritten: the file keeps it, and the user's text becomes its own note beside it, `<name> (conflict <date-time>).md` (unique; never over an existing file), which the open note switches to so typing continues. A save that fails (the folder gone, the disk full) keeps the text in the app, says so in the footer and retries every few seconds; a folder switch or a quit with unsaved text that cannot be written is held until it can (Try Again / Keep Editing). The app never deletes a file, except a brand-new empty note's own file: opened under its name, verified to be the same inode with the same content the app wrote, then unlinked by name (never recursively — a folder or a different file that took the name is left alone).
 - Budgets: a file over 1 MB is shown from its beginning (64 KB), read-only, and never written; note bodies are kept in memory up to 8 MB in total — beyond that the least recently used ones keep their first kilobyte (title and preview) and are read back when opened, searched or exported, never while open or unsaved; styling covers the first 64 000 characters of a note, the rest is plain.
 - Paste is plain text. Smart quotes, smart dashes and text replacement are off in every note.
-- Markdown-lite, styled live without changing a character: `#`, `##`, `###` headings, `**bold**`, `_italic_` / `*italic*`, `` `code` ``, `- ` / `* ` / `1. ` lists, `- [ ]` / `- [x]` checklists (a click on the box toggles it, `[ ]` ↔ `[x]` in the file), URLs underlined. Markers stay visible, dimmed. Nothing else is interpreted.
+- Markdown-lite, styled live without changing a character: `#`, `##`, `###` headings, `**bold**`, `_italic_` / `*italic*`, `` `code` ``, `- ` / `* ` / `1. ` lists, `- [ ]` / `- [x]` checklists (a click on the box toggles it, `[ ]` ↔ `[x]` in the file), links underlined (below). Markers stay visible, dimmed. Nothing else is interpreted.
+- Links: `http(s)://`, `www.`, `mailto:`, `file:///` and `~/…` paths underline live (a styled run, not stored; never inside a code span; the sentence's trailing punctuation and an unmatched closing bracket stay text, so `[text](https://…)` keeps working). ⌘-click, or ⌥⏎ with the caret on the link, opens it through the system (`NSWorkspace`); a plain click places the caret. While the pointer rests on a link a small chip names its host, mailbox or file name and says ⌘click — nothing is fetched, no network.
+- Inline arithmetic: a line ending in `=` (or `= ` and an earlier answer) evaluates the expression before the `=` — after a label of words if there is one (`Hotel 3 * $95 =`; a malformed expression such as `2 + (3 * 4 =` shows nothing, never its valid tail) — and shows the answer after the `=` in the ink's secondary colour, live as you type: `+ - * / ^ ( )`, `×` `÷`, a postfix `%` (`12% of 80`, `80 + 10%`; `10 % 3` is the remainder), thousands separators, `k` / `M` after a number, `$` / `€` / `£` carried into the answer (two decimals for money), `sum` for the amounts on the lines above up to a blank line (each line's trailing expression, or its last number), and the decimal separator of the user's locale in and out. Division by zero shows `÷0`, an answer past 10¹⁵ shows `overflow`, a line that isn't arithmetic shows nothing. **The answer is never written to the file** unless Tab is pressed on that line, which types it after the `=`; an earlier answer that no longer matches is dimmed and struck through, and Tab replaces it. Pure Swift over bounded input (200 characters, 32 levels), never `NSExpression`.
 - Fonts: three faces — Sans (Instrument Sans), Serif (the system serif), Mono (IBM Plex Mono) — and every family installed on the Mac (`NSFontManager`'s families, the system-private ones hidden), listed under their localised names, each row set in its own face, searchable. Settings → Notes holds the default font and size for new notes and for any note without its own; the open note's footer menu picks a face, Choose font… (the same list), the size, or Use default, and ⌘⇧M cycles the faces. The fanned tab's title and the All Notes list's title and preview line are set in the note's font at their own sizes. A family named in a file that isn't installed here renders in the default with a "isn't installed on this Mac" line in the footer; the file keeps the name, so the note comes back in it on a Mac that has the font (the iCloud Drive case). Bold and italic come from the family's own members through the font manager; a face without an italic is slanted. Code spans and checkboxes sit on the note's own grid when its font is monospaced.
 - Colours: 13 preset papers — coral, yellow, butter, mint, sage, sky, lagoon, lilac, rose, sand, slate, graphite, paper (every 0.1.0 name kept) — and Custom…, the system colour panel with its eyedropper. Each paper is tuned for both appearances: a light face with ink text, and in Dark Mode a deep face of the same hue, still saturated, so the tab, the open note and the All Notes bar read as one colour there too; the ink is neutral/950 or neutral/0, whichever reads at 4.5:1 or better (Graphite and a deep custom colour take the paper ink in both; a midtone neither reaches takes pure black or white); markers and metadata take the ink's softer shade at 3:1 or better (the body ink faded towards the paper when the shade falls short), links and ticked boxes the coral shade of the ink's polarity that reads at 4.5:1, else 3:1, else the ink. A custom colour is the Light Mode paper; its Dark Mode paper is derived (same hue, saturation 45–70 %, lightness stepped down until the ink reads at 5:1) and its inks chosen the same way. New notes: Settings → Notes → New notes is **Random** (fresh installs, and anyone who never chose one) — a preset that differs from the last note created and from the notes the new one lands between in the deck, chosen by the deck's state so the same deck gives the same paper — or one fixed colour. The pill's dash and the menu's swatches keep the light face in both appearances.
 - Pinned notes come first in the deck and are never auto-archived.
@@ -68,6 +70,32 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 | ⌥⌘↑ / ⌥⌘↓ | Move the open note one slot up / down the deck (inside its pinned or unpinned group) |
 | ⌥⌘L | All Notes |
 | ⌘, | Settings |
+| ⇥ on an `=` line | Types the answer into the note |
+| ⌘-click, ⌥⏎ on a link | Opens the link |
+
+## Automation
+
+Every entry point is an action (LICENSING.md): a write asks the projected license at that moment and, refused, writes nothing. A refused link shows a note-shaped card beside the deck — "Waits for a license", the read-only line, Settings → License from it — for ten seconds or until clicked; a refused Shortcuts action fails with the same read-only line. Reading never waits.
+
+URL scheme, registered in `Info.plist` (`CFBundleURLTypes`) in every build but the update-test variant; parameters are percent-decoded, `+` is a `+`; a text over 100 000 characters or a title over 1 000 is refused at the door (a link is dropped, an action fails saying so):
+
+| Link | Does |
+| --- | --- |
+| `opennotes://new?text=…&title=…&color=…` | Creates a note with the text (the title, when given, becomes its first line; `color` a preset's name or `#RRGGBB`, else the default — Settings' fixed colour or the random pick), written and named as a note closing would (front matter as the app writes it), and slides it out of the deck. Without text: the hotkey's empty note, focused |
+| `opennotes://open?title=…` | Slides out the note the title names: the first whose title is the query (case- and diacritic-insensitive), else starts with it, else contains it — active notes in deck order first, then archived (an archived match opens All Notes) |
+| `opennotes://append?title=…&text=…` | Appends the text as a line to that note (saved at once); creates a note with that title and text when none matches |
+| `opennotes://activate?key=…` | Pre-fills a license key (see "Licensing") |
+
+Shortcuts, Spotlight and Siri: App Intents in the app itself (no extension), the module `OpenNotesIntents`, guarded by `#if canImport(AppIntents)` so a source build on an older toolchain still builds; `scripts/bundle.sh` extracts their metadata for Shortcuts. A read-only refusal, a missing note or an empty text is the action's error.
+
+| Action | Parameters | Returns |
+| --- | --- | --- |
+| Create Note | Text (required, multiline), Title (optional), Color (optional: one of the 13 preset papers) | The note's file (URL) |
+| Append to Note | Title (required), Text (required, multiline) | — |
+| Get Note Text | Title (required) | The note's whole text — an error, never a part, when the body can't be read or the file is over 1 MB |
+| Open Note | Title (required) | — |
+
+"Create a note in OpenNotes" and "Open a note in OpenNotes" are offered as App Shortcuts. Titles match as for `open`.
 
 ## Menu bar
 
@@ -117,7 +145,7 @@ Once, on the first launch of the packaged app (never from `swift run`, never in 
 
 ## Out of scope
 
-Rich text, images, fonts that aren't installed on the Mac (nothing is bundled beyond the three faces), a database, our own sync, a notch surface, encryption of the files (FileVault does that), per-app notes, AutoPaste, inline math, OCR, timers, widgets, iPhone. Some are later tickets; none changes the file format.
+Rich text, images, fonts that aren't installed on the Mac (nothing is bundled beyond the three faces), a database, our own sync, a notch surface, encryption of the files (FileVault does that), per-app notes, AutoPaste, unit conversion and date arithmetic (the `=` line does numbers only), JavaScript or extensions, OCR, timers, widgets, iPhone. Some are later tickets; none changes the file format.
 
 ## Marketing only
 

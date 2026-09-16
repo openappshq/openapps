@@ -174,14 +174,21 @@ final class AppModel {
     }
 
     /// A new note in the colour Settings → Notes gives new notes (random
+    /// The paper the next new note takes: Settings' fixed colour, or the
+    /// random pick away from the last note created and the deck
+    /// neighbours (the refusal card shows it for the note that was not
+    /// written).
+    var colorForNewNote: NoteColor {
+        preferences.colorForNewNote(active: store.active, lastCreated: store.notes.values.max { $0.created < $1.created }, seed: store.notes.count)
+    }
+
     /// away from its neighbours, or the fixed one) and no font of its own
     /// (it follows the default); nil (and a footer problem) when the
     /// store refuses. Asked at the hotkey and at `+`.
     func createNote() -> Note? {
         guard allowed() else { return nil }
         do {
-            let color = preferences.colorForNewNote(active: store.active, lastCreated: store.notes.values.max { $0.created < $1.created }, seed: store.notes.count)
-            let note = try store.create(color: color)
+            let note = try store.create(color: colorForNewNote)
             saveProblem = nil
             return note
         } catch {

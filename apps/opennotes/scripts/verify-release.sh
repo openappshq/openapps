@@ -65,6 +65,14 @@ test -f "$APP/Contents/Resources/MenuBarIcon@2x.png"
 test -f "$APP/Contents/Resources/Fonts/IBMPlexMono-Regular.ttf"
 test -f "$APP/Contents/Resources/NOTICE"
 test ! -d "$APP/Contents/Frameworks" || { echo "error: the app embeds frameworks; OpenNotes has none (the updater is compiled in)" >&2; exit 1; }
+# The Shortcuts actions (design/products/opennotes.md, "Automation"): the
+# metadata scripts/bundle.sh extracts, naming every action.
+ACTIONS="$APP/Contents/Resources/Metadata.appintents/extract.actionsdata"
+test -f "$ACTIONS" || { echo "error: the App Intents metadata is missing; Shortcuts cannot list the actions" >&2; exit 1; }
+for action in CreateNoteIntent AppendToNoteIntent GetNoteTextIntent OpenNoteIntent; do
+    grep -Fq "\"${action}\"" "$ACTIONS" || { echo "error: the App Intents metadata lacks ${action}" >&2; exit 1; }
+done
+echo "shortcuts: Create Note, Append to Note, Get Note Text, Open Note"
 
 [[ -z "$(info NSAppTransportSecurity)" ]] || { echo "error: App Transport Security exceptions in a release" >&2; exit 1; }
 # The binary's strings, read once into a file: piped straight into `grep -q`,
