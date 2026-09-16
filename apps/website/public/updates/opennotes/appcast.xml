@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:openapps="https://openapps.space/xml-namespaces/releases">
+    <channel>
+        <title>OpenNotes</title>
+        <link>https://openapps.space/opennotes/</link>
+        <description>OpenNotes releases</description>
+        <language>en</language>
+        <item>
+            <title>OpenNotes 0.1.0</title>
+            <openapps:app>opennotes</openapps:app>
+            <openapps:channel>stable</openapps:channel>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:version>1000</sparkle:version>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <openapps:publishedAt>2026-09-16T20:40:38Z</openapps:publishedAt>
+            <pubDate>Wed, 16 Sep 2026 20:40:38 +0000</pubDate>
+            <description><![CDATA[OpenNotes 0.1.0. Release notes: https://github.com/openappshq/openapps/releases/tag/opennotes-v0.1.0]]></description>
+            <openapps:sha256>f5835ec06deb903b276eabe7f1d222de9c8e4bc721c3613451151adbab494959</openapps:sha256>
+            <enclosure url="https://github.com/openappshq/openapps/releases/download/opennotes-v0.1.0/OpenNotes-0.1.0.zip" length="3072525" type="application/octet-stream" sparkle:edSignature="XawJ4EnWjbjOOxJ5G1on5IBURzF/VEw0/R5+A7nmj1GUBVOxc1QbDw33/UOlqkcQhlwfPgXc4XskynnwSmzPAw=="/>
+        </item>
+    </channel>
+</rss>
+<!-- sparkle-signatures:
+edSignature: YBipySnNWfp5cWnogHuANiwoB3KRBt1n7TS3ZZHGraJscBcxthCEfCSi7z6WswHWW4UgTrvjXvj8HKPUgyZ+BQ==
+length: 1477
+-->
