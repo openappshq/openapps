@@ -74,26 +74,31 @@ nonisolated public enum OnboardingLaunch {
 /// trial nor a license record in the record store, both positively absent.
 /// Anything else — an upgrade, a reinstall over kept records, a setting the
 /// user once turned off — is left alone. Decided once; the flag makes every
-/// later launch leave the setting as is. Hertz has one such setting today,
-/// "Open at login"; automatic update checks join it with the updater
-/// (RELEASES.md, "In-app updater").
+/// later launch leave the setting as is. Two settings follow this rule
+/// (RELEASES.md, "In-app updater"): "Open at login" and "Check for updates
+/// automatically".
 nonisolated public struct FreshInstallDefault {
     public enum Key {
         /// The login-item default was applied (or found unnecessary); never again.
         public static let loginItemApplied = "loginItem.defaultApplied"
+        /// The automatic-update-check default was applied (or found unnecessary); never again.
+        public static let updateChecksApplied = "updates.checkDefaultApplied"
 
-        /// Every preference the app writes to its standard defaults domain:
-        /// any one present at launch, whatever its value, is an earlier
-        /// launch's preferences, and the install is not fresh. A stored
-        /// `false` toggle is a choice, so presence is what counts. The list
-        /// is by hand; add a key here when the app starts writing a new one.
+        /// Every preference the app writes to its standard defaults domain
+        /// (the updater's included): any one present at launch, whatever its
+        /// value, is an earlier launch's preferences, and the install is not
+        /// fresh. A stored `false` toggle is a choice, so presence is what
+        /// counts. The list is by hand; add a key here when the app starts
+        /// writing a new one.
         public static let earlierPreferenceEvidence: [String] = [
             // OnboardingLaunch
             OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step,
-            // This default's own flag: decided means an earlier launch resolved it.
-            loginItemApplied,
+            // These defaults' own flags: either decided means an earlier launch resolved it.
+            loginItemApplied, updateChecksApplied,
             // Preferences: the readout, the visible cards.
             "menuBarReadout", "showsDiagnosis", "showsSleepBlockers", "showsProcesses", "showsCleanupScout",
+            // OpenAppsUpdater (Updater.Key): both toggles and the last check.
+            "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
             // Releases before licensing: the one-screen welcome and the login
             // item's first-launch flag. Either present is an upgrade.
             "didShowWelcome", "didDefaultOpenAtLogin",
@@ -103,6 +108,11 @@ nonisolated public struct FreshInstallDefault {
     /// "Open at login".
     public static func loginItem(store: any FlagStore) -> FreshInstallDefault {
         FreshInstallDefault(store: store, key: Key.loginItemApplied)
+    }
+
+    /// "Check for updates automatically".
+    public static func updateChecks(store: any FlagStore) -> FreshInstallDefault {
+        FreshInstallDefault(store: store, key: Key.updateChecksApplied)
     }
 
     private let store: any FlagStore

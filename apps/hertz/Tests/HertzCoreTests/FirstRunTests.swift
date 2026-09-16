@@ -61,100 +61,222 @@ final class OnboardingLaunchTests: XCTestCase {
     }
 }
 
-/// "Open at login" on by default, once, on a demonstrably fresh install.
+/// "Open at login" and "Check for updates automatically" on by default,
+/// once, on a demonstrably fresh install (RELEASES.md, "In-app updater").
+/// Both follow one rule under their own flag, so every case runs for each.
 final class FreshInstallDefaultTests: XCTestCase {
+    private typealias Make = @Sendable (any FlagStore) -> FreshInstallDefault
+    private static let defaults: [(name: String, key: String, make: Make)] = [
+        ("loginItem", FreshInstallDefault.Key.loginItemApplied, { FreshInstallDefault.loginItem(store: $0) }),
+        ("updateChecks", FreshInstallDefault.Key.updateChecksApplied, { FreshInstallDefault.updateChecks(store: $0) }),
+    ]
+
+    /// Runs `body` once per setting, naming the setting in every failure.
+    private func forEachDefault(_ body: (_ make: Make, _ key: String, _ name: String) -> Void) {
+        for setting in Self.defaults { body(setting.make, setting.key, setting.name) }
+    }
+
     @MainActor func testFreshInstallTurnsOnOnce() {
-        let store = MemoryFlags()
-        let sut = FreshInstallDefault.loginItem(store: store)
-        XCTAssertFalse(sut.hadPreferences)
-        XCTAssertTrue(sut.shouldTurnOn(isOn: false, storageIsFresh: true))
-        XCTAssertTrue(sut.isDecided)
-        // Decided: a later launch, or the same launch asked again, changes nothing.
-        XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true))
-        XCTAssertFalse(FreshInstallDefault.loginItem(store: store).shouldTurnOn(isOn: false, storageIsFresh: true))
+        forEachDefault { make, key, name in
+            let store = MemoryFlags()
+            let sut = make(store)
+            XCTAssertFalse(sut.hadPreferences, name)
+            XCTAssertTrue(sut.shouldTurnOn(isOn: false, storageIsFresh: true), name)
+            XCTAssertTrue(sut.isDecided, name)
+            XCTAssertEqual(store.bools[key], true, name)
+            // Decided: a later launch, or the same launch asked again, changes nothing.
+            XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true), name)
+            XCTAssertFalse(make(store).shouldTurnOn(isOn: false, storageIsFresh: true), name)
+        }
     }
 
     @MainActor func testStorageStillUnknownDecidesNothing() {
-        let store = MemoryFlags()
-        let sut = FreshInstallDefault.loginItem(store: store)
-        XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: nil))
-        XCTAssertFalse(sut.isDecided, "nil is not an answer; the question stays open")
-        XCTAssertTrue(sut.shouldTurnOn(isOn: false, storageIsFresh: true))
+        forEachDefault { make, key, name in
+            let store = MemoryFlags()
+            let sut = make(store)
+            XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: nil), name)
+            XCTAssertFalse(sut.isDecided, "\(name): nil is not an answer; the question stays open")
+            XCTAssertNil(store.bools[key], name)
+            XCTAssertTrue(sut.shouldTurnOn(isOn: false, storageIsFresh: true), name)
+        }
     }
 
     @MainActor func testAKeptTrialOrLicenseRecordMeansNotFresh() {
-        let store = MemoryFlags()
-        let sut = FreshInstallDefault.loginItem(store: store)
-        XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: false))
-        XCTAssertTrue(sut.isDecided, "recorded whichever way it went")
+        forEachDefault { make, _, name in
+            let store = MemoryFlags()
+            let sut = make(store)
+            XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: false), name)
+            XCTAssertTrue(sut.isDecided, "\(name): recorded whichever way it went")
+        }
     }
 
     @MainActor func testAnUpgradeFromTheFreeReleasesIsLeftAlone() {
         // 0.1.x wrote these two; either present is an earlier launch, and a
-        // login item the user turned off there stays off.
-        for legacy in ["didShowWelcome", "didDefaultOpenAtLogin"] {
-            let store = MemoryFlags()
-            store.set(true, forKey: legacy)
-            let sut = FreshInstallDefault.loginItem(store: store)
-            XCTAssertTrue(sut.hadPreferences, legacy)
-            XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true), legacy)
-            XCTAssertTrue(sut.isDecided, legacy)
+        // login item the user turned off there stays off. Those releases had
+        // no updater either: the check default is recorded without turning
+        // on, since 0.1.x users were told the app never checks.
+        forEachDefault { make, _, name in
+            for legacy in ["didShowWelcome", "didDefaultOpenAtLogin"] {
+                let store = MemoryFlags()
+                store.set(true, forKey: legacy)
+                let sut = make(store)
+                XCTAssertTrue(sut.hadPreferences, "\(name): \(legacy)")
+                XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true), "\(name): \(legacy)")
+                XCTAssertTrue(sut.isDecided, "\(name): \(legacy)")
+            }
         }
     }
 
     @MainActor func testAStoredFalseToggleIsAnEarlierPreference() {
-        let store = MemoryFlags()
-        store.set(false, forKey: "showsProcesses")
-        let sut = FreshInstallDefault.loginItem(store: store)
-        XCTAssertTrue(sut.hadPreferences)
-        XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true))
+        // A card switched off, or the updater's check toggle stored as off:
+        // a choice, whatever its value, so the default leaves it.
+        forEachDefault { make, _, name in
+            for toggle in ["showsProcesses", "OpenAppsUpdater.checkAutomatically"] {
+                let store = MemoryFlags()
+                store.set(false, forKey: toggle)
+                let sut = make(store)
+                XCTAssertTrue(sut.hadPreferences, "\(name): \(toggle)")
+                XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true), "\(name): \(toggle)")
+                XCTAssertEqual(store.bools[toggle], false, "\(name): \(toggle) untouched")
+            }
+        }
     }
 
     @MainActor func testAnyRetainedAppPreferenceIsAnEarlierLaunch() {
-        for key in FreshInstallDefault.Key.earlierPreferenceEvidence {
-            let store = MemoryFlags()
-            store.otherValues.insert(key)
-            XCTAssertTrue(FreshInstallDefault.loginItem(store: store).hadPreferences, key)
+        forEachDefault { make, key, name in
+            for evidence in FreshInstallDefault.Key.earlierPreferenceEvidence where evidence != key {
+                let store = MemoryFlags()
+                store.otherValues.insert(evidence)
+                let sut = make(store)
+                XCTAssertTrue(sut.hadPreferences, "\(name): \(evidence)")
+                XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true), "\(name): \(evidence)")
+                XCTAssertTrue(sut.isDecided, "\(name): \(evidence): decided")
+            }
+            XCTAssertFalse(make(MemoryFlags()).hadPreferences, name)
         }
     }
 
     @MainActor func testTheEvidenceListNamesEveryPreferenceTheAppWrites() {
-        // Preferences.swift's keys, OnboardingLaunch's, and this default's own flag.
+        // Preferences.swift's keys, OnboardingLaunch's, both defaults' flags
+        // and the updater's (Updater.Key in packages/openapps-updater).
         let expected: Set<String> = [
             "menuBarReadout", "showsDiagnosis", "showsSleepBlockers", "showsProcesses", "showsCleanupScout",
-            OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step, FreshInstallDefault.Key.loginItemApplied,
+            OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step,
+            FreshInstallDefault.Key.loginItemApplied, FreshInstallDefault.Key.updateChecksApplied,
+            "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
             "didShowWelcome", "didDefaultOpenAtLogin",
         ]
         XCTAssertEqual(Set(FreshInstallDefault.Key.earlierPreferenceEvidence), expected)
     }
 
     @MainActor func testPreferencesWrittenByThisLaunchDoNotCount() {
-        // Created at launch, before the guide or a setting writes anything.
-        let store = MemoryFlags()
-        let sut = FreshInstallDefault.loginItem(store: store)
-        OnboardingLaunch.markShown(store: store)
-        store.otherValues.insert("menuBarReadout")
-        XCTAssertFalse(sut.hadPreferences)
-        XCTAssertTrue(sut.shouldTurnOn(isOn: false, storageIsFresh: true))
+        // Created at launch, before the guide, a setting or the updater
+        // writes anything.
+        forEachDefault { make, _, name in
+            let store = MemoryFlags()
+            let sut = make(store)
+            OnboardingLaunch.markShown(store: store)
+            store.otherValues.insert("menuBarReadout")
+            store.otherValues.insert("OpenAppsUpdater.lastCheck")
+            XCTAssertFalse(sut.hadPreferences, name)
+            XCTAssertTrue(sut.shouldTurnOn(isOn: false, storageIsFresh: true), name)
+        }
     }
 
     @MainActor func testAnExplicitChoiceWhileStorageIsPendingIsNeverUndone() {
-        let store = MemoryFlags()
-        let sut = FreshInstallDefault.loginItem(store: store)
-        XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: nil))
-        sut.markSuperseded() // the user switched it off in the guide meanwhile
-        XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true))
+        // Fresh launch, storage slow: the user flips the setting in the guide
+        // or Settings before storage answers; when it then says "fresh", the
+        // default must not turn it back on.
+        forEachDefault { make, _, name in
+            let store = MemoryFlags()
+            let sut = make(store)
+            XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: nil), name)
+            sut.markSuperseded() // on
+            sut.markSuperseded() // off again
+            XCTAssertTrue(sut.isDecided, name)
+            XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true), name)
+            XCTAssertFalse(make(store).shouldTurnOn(isOn: false, storageIsFresh: true), name)
+        }
+    }
+
+    @MainActor func testAnExplicitChoiceBeforeLaunchIsNeverUndone() {
+        // A toggle set on an earlier launch whose storage never answered (the
+        // flag was recorded then): decided, whatever the value.
+        forEachDefault { make, _, name in
+            let store = MemoryFlags()
+            make(store).markSuperseded()
+            let sut = make(store)
+            XCTAssertTrue(sut.isDecided, name)
+            XCTAssertTrue(sut.hadPreferences, "\(name): the flag itself is an earlier launch's preference")
+            XCTAssertFalse(sut.shouldTurnOn(isOn: false, storageIsFresh: true), name)
+            XCTAssertFalse(sut.shouldTurnOn(isOn: true, storageIsFresh: true), name)
+        }
     }
 
     @MainActor func testASettingAlreadyOnNeedsNothing() {
-        let store = MemoryFlags()
-        let sut = FreshInstallDefault.loginItem(store: store)
-        XCTAssertFalse(sut.shouldTurnOn(isOn: true, storageIsFresh: true))
-        XCTAssertTrue(sut.isDecided)
+        forEachDefault { make, _, name in
+            let store = MemoryFlags()
+            let sut = make(store)
+            XCTAssertFalse(sut.shouldTurnOn(isOn: true, storageIsFresh: true), name)
+            XCTAssertTrue(sut.isDecided, name)
+        }
     }
 
-    @MainActor func testTheLoginItemFlagKeepsItsStoredName() {
+    @MainActor func testALaterLaunchOfAFreshInstallNeverRevisits() {
+        // Decided on the first launch; a second launch finds the flag and
+        // asks nothing, even when storage still reports fresh and the user
+        // has since turned the setting off.
+        forEachDefault { make, _, name in
+            let store = MemoryFlags()
+            XCTAssertTrue(make(store).shouldTurnOn(isOn: false, storageIsFresh: true), name)
+            OnboardingLaunch.markShown(store: store)
+            let second = make(store)
+            XCTAssertTrue(second.isDecided, name)
+            XCTAssertFalse(second.shouldTurnOn(isOn: false, storageIsFresh: true), name)
+            XCTAssertFalse(second.shouldTurnOn(isOn: false, storageIsFresh: nil), name)
+        }
+    }
+
+    @MainActor func testTheTwoDefaultsAreDecidedIndependently() {
+        // Deciding one must not decide the other. Both are created at launch,
+        // before either writes: on a fresh install the login item resolving
+        // first (and recording its flag) does not make the update check see
+        // an earlier launch.
+        let store = MemoryFlags()
+        let loginItem = FreshInstallDefault.loginItem(store: store)
+        let updateChecks = FreshInstallDefault.updateChecks(store: store)
+        XCTAssertNotEqual(loginItem.key, updateChecks.key)
+        XCTAssertTrue(loginItem.shouldTurnOn(isOn: false, storageIsFresh: true))
+        XCTAssertTrue(loginItem.isDecided)
+        XCTAssertFalse(updateChecks.isDecided)
+        XCTAssertTrue(updateChecks.shouldTurnOn(isOn: false, storageIsFresh: true))
+        XCTAssertEqual(store.bools[FreshInstallDefault.Key.updateChecksApplied], true)
+    }
+
+    @MainActor func testAnUpgradeThatDecidedOnlyTheLoginItemOwesTheOtherDecision() {
+        // The licensed release before the updater had only the login-item
+        // default: its flag is an earlier launch's preference, so the update
+        // check is recorded as decided without turning on.
+        let store = MemoryFlags()
+        store.set(true, forKey: FreshInstallDefault.Key.loginItemApplied)
+        let updateChecks = FreshInstallDefault.updateChecks(store: store)
+        XCTAssertFalse(updateChecks.isDecided)
+        XCTAssertTrue(updateChecks.hadPreferences)
+        XCTAssertFalse(updateChecks.shouldTurnOn(isOn: false, storageIsFresh: true))
+        XCTAssertTrue(updateChecks.isDecided)
+    }
+
+    @MainActor func testTheFlagsKeepTheirStoredNames() {
+        // Installs that decided under an earlier version must still read as
+        // decided; the update flag matches OpenReaction's, so the rule reads
+        // the same across the apps.
         XCTAssertEqual(FreshInstallDefault.Key.loginItemApplied, "loginItem.defaultApplied")
         XCTAssertEqual(FreshInstallDefault.loginItem(store: MemoryFlags()).key, "loginItem.defaultApplied")
+        XCTAssertEqual(FreshInstallDefault.Key.updateChecksApplied, "updates.checkDefaultApplied")
+        XCTAssertEqual(FreshInstallDefault.updateChecks(store: MemoryFlags()).key, "updates.checkDefaultApplied")
+        let store = MemoryFlags()
+        store.set(true, forKey: "loginItem.defaultApplied")
+        XCTAssertTrue(FreshInstallDefault.loginItem(store: store).isDecided)
+        XCTAssertFalse(FreshInstallDefault.updateChecks(store: store).isDecided)
     }
 }
