@@ -693,8 +693,12 @@ public final class NoteStore {
                     NoteFile.removeTemporary(temporary.url)
                     throw StoreError.io("\(url.lastPathComponent): \(error)")
                 }
-                // The displaced file must be the very one that was verified.
-                if let displaced = NoteFile.identity(at: temporary.url), displaced == known.sameInode {
+                // The displaced file must be the very one that was verified
+                // (the inode now under the temporary name), holding the very
+                // bytes (re-hashed through the descriptor still open on it,
+                // so an in-place edit in the gap shows too).
+                if let displaced = NoteFile.identity(at: temporary.url), displaced == known.sameInode,
+                   let again = NoteFile.read(fd: fd, stat: info, cap: 0), again.identity.hash == known.hash, again.identity.size == known.size {
                     NoteFile.removeTemporary(temporary.url)
                     identities[id] = temporary.identity
                     dirty.remove(id)
