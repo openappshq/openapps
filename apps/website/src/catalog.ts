@@ -19,6 +19,11 @@ export type Product = {
    * asks for nothing. The install guide and the setup copy read this.
    */
   permissions?: readonly string[];
+  /**
+   * Where the app shows up once it opens, for the install guide's last step:
+   * "It <arrival>." Left out for an app that appears in the menu bar.
+   */
+  arrival?: string;
   icon: string;
   accent: "cobalt" | "orchid" | "green" | "tangerine" | "coral";
   /** Whether `/brand/<id>/wordmark-{ink,paper}.svg` exist; otherwise the name is set in type. */
@@ -207,6 +212,7 @@ export const products: Product[] = [
     platform: "macOS",
     price: "$5",
     permissions: [],
+    arrival: "shows up as a pill on the edge of your screen",
     icon: "/brand/opennotes/app-icon.svg",
     accent: "coral",
     wordmark: false,

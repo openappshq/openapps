@@ -153,6 +153,7 @@ export default function ThanksPage({
                   sourceUrl={licensing.installScriptSourceUrl}
                   brewCommand={licensing.brewCommand}
                   permissions={licensing.permissions}
+                  arrival={licensing.arrival}
                 />
                 <p>
                   {permissions}

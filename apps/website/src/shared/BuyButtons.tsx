@@ -47,6 +47,7 @@ export default function BuyButtons({
           sourceUrl={licensing.installScriptSourceUrl}
           brewCommand={brewCommand}
           permissions={licensing.permissions}
+          arrival={licensing.arrival}
         />
       )}
       {(downloadUrl || !installCommand) && (

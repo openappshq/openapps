@@ -32,6 +32,7 @@ function guideFor(app: string) {
       command={licensing.installCommand!}
       brewCommand={licensing.brewCommand}
       permissions={licensing.permissions}
+      arrival={licensing.arrival}
     />,
   );
 }
@@ -116,6 +117,17 @@ test.each(["hertz", "macpaper", "opennotes"])(
     expect(html).toContain(`brew install --cask openappshq/tap/${app}`);
   },
 );
+
+test("the last step says where the app shows up: the menu bar unless the catalog says otherwise", () => {
+  for (const app of ["openklack", "openreaction", "hertz", "macpaper"]) {
+    expect(guideFor(app), app).toContain(
+      "It appears in your menu bar, the strip at the top of your screen.",
+    );
+  }
+  const opennotes = guideFor("opennotes");
+  expect(opennotes).toContain("It shows up as a pill on the edge of your screen.");
+  expect(opennotes).not.toContain("menu bar");
+});
 
 test("without a Homebrew line the last step goes too", () => {
   const html = renderToStaticMarkup(

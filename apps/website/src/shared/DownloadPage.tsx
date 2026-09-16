@@ -28,6 +28,7 @@ export default function DownloadPage({
   name,
   permission,
   permissions = licensingFor(app).permissions,
+  arrival = licensingFor(app).arrival,
   requirements = DEFAULT_REQUIREMENTS,
   shareText,
   playgroundHref,
@@ -50,6 +51,8 @@ export default function DownloadPage({
   permission?: string;
   /** Everything macOS asks for, as the catalog lists it; the install guide names each. */
   permissions?: readonly string[];
+  /** Where the app shows up once it opens, as the catalog says; the install guide's last step. */
+  arrival?: string;
   /** The system line under the actions, for an app whose needs differ from the default. */
   requirements?: ReactNode;
   /** The post someone would actually send. Shown in full before they send it. */
@@ -114,6 +117,7 @@ export default function DownloadPage({
                     sourceUrl={installScriptSourceUrl}
                     brewCommand={brewCommand}
                     permissions={permissions}
+                    arrival={arrival}
                   />
                 )}
                 <div className="hero-actions">

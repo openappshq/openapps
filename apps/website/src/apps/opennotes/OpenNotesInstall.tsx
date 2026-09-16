@@ -20,9 +20,11 @@ export default function OpenNotesInstall({
     | "installCommand"
     | "installScriptSourceUrl"
     | "permissions"
+    | "arrival"
   >;
 }) {
-  const { name, brewCommand, installCommand, installScriptSourceUrl, permissions } = licensing;
+  const { name, brewCommand, installCommand, installScriptSourceUrl, permissions, arrival } =
+    licensing;
   if (!installCommand || !brewCommand) {
     return (
       <div className="on-install">
@@ -45,6 +47,7 @@ export default function OpenNotesInstall({
         sourceUrl={installScriptSourceUrl}
         brewCommand={brewCommand}
         permissions={permissions}
+        arrival={arrival}
       />
       <p className="on-install-note">
         OpenNotes lands in <code>/Applications</code> and docks its pill to the right edge of your

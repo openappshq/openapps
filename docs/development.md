@@ -39,7 +39,7 @@ apps/
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
   openreaction/               OpenReaction's Swift app
   hertz/                      Hertz's Swift app
-  macpaper/                   macPaper's Swift app (in development; no website page yet)
+  macpaper/                   macPaper's Swift app
   opennotes/                  OpenNotes' Swift app
 packages/
   openapps-licensing/         Swift: licensing rules, trial, record store and clients (LICENSING.md)

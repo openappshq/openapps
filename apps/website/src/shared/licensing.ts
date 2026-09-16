@@ -148,6 +148,8 @@ export interface AppLicensing {
   price: string;
   /** The macOS permissions it asks for on first launch, from the catalog; empty for none. */
   permissions: readonly string[];
+  /** Where the app shows up once it opens, from the catalog; undefined for the menu bar. */
+  arrival: string | undefined;
   /** Where paid checkout returns. */
   thanksUrl: string;
   /** The app's download page on this site, e.g. `/openreaction/download/`. */
@@ -213,6 +215,7 @@ export function licensingFor(appId: string, options: LicensingOptions = {}): App
     pageUrl: `${product.route}/`,
     price: product.price,
     permissions: product.permissions ?? [],
+    arrival: product.arrival,
     thanksUrl,
     downloadPageUrl: `${product.route}/download/`,
     available,

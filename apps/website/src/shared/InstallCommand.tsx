@@ -17,6 +17,7 @@ export default function InstallCommand({
   sourceUrl,
   brewCommand,
   permissions,
+  arrival,
 }: {
   /** `curl -fsSL https://openapps.space/install/<id> | sh`. */
   command: string;
@@ -28,6 +29,8 @@ export default function InstallCommand({
   brewCommand?: string | null;
   /** What macOS asks for on first launch, from the catalog; the guide names it. */
   permissions?: readonly string[];
+  /** Where the app shows up once it opens, from the catalog; the guide's last step says it. */
+  arrival?: string;
 }) {
   return (
     <div className="install-command">
@@ -36,6 +39,7 @@ export default function InstallCommand({
         command={command}
         brewCommand={brewCommand}
         permissions={permissions}
+        arrival={arrival}
       />
       <CopyRow value={command} label="install command" className="install-command-row" />
       <p className="install-command-note">

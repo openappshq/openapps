@@ -24,7 +24,11 @@ interface GuideProps {
   brewCommand?: string | null;
   /** What macOS will ask for on first launch; none for an app that needs nothing. */
   permissions?: readonly string[];
+  /** Where the app shows up once it opens, as the predicate of "It …"; the menu bar unless the catalog says otherwise. */
+  arrival?: string;
 }
+
+const MENU_BAR = "appears in your menu bar, the strip at the top of your screen";
 
 export default function InstallGuide(props: GuideProps) {
   return (
@@ -54,7 +58,13 @@ export default function InstallGuide(props: GuideProps) {
  * steps can be rendered and checked without the overlay, which only exists in
  * a browser.
  */
-export function InstallGuideContent({ name, command, brewCommand, permissions = [] }: GuideProps) {
+export function InstallGuideContent({
+  name,
+  command,
+  brewCommand,
+  permissions = [],
+  arrival = MENU_BAR,
+}: GuideProps) {
   return (
     <>
       <Modal.Header className="install-guide-header">
@@ -84,8 +94,8 @@ export function InstallGuideContent({ name, command, brewCommand, permissions = 
             <Keys keys={["Return"]} />.
           </Step>
           <Step title="Wait about ten seconds" art={<ArriveScene name={name} />}>
-            The script downloads {name}, checks it, puts it in Applications and opens it. It appears
-            in your menu bar, the strip at the top of your screen.
+            The script downloads {name}, checks it, puts it in Applications and opens it. It{" "}
+            {arrival}.
           </Step>
           {permissions.length > 0 && (
             <Step title="Say yes to macOS" art={<PermissionScene />}>

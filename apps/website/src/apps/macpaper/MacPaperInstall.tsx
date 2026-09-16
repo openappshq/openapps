@@ -20,9 +20,11 @@ export default function MacPaperInstall({
     | "installCommand"
     | "installScriptSourceUrl"
     | "permissions"
+    | "arrival"
   >;
 }) {
-  const { name, brewCommand, installCommand, installScriptSourceUrl, permissions } = licensing;
+  const { name, brewCommand, installCommand, installScriptSourceUrl, permissions, arrival } =
+    licensing;
   if (!installCommand || !brewCommand) {
     return (
       <div className="mp-install">
@@ -45,6 +47,7 @@ export default function MacPaperInstall({
         sourceUrl={installScriptSourceUrl}
         brewCommand={brewCommand}
         permissions={permissions}
+        arrival={arrival}
       />
       <p className="mp-install-note">
         macPaper lands in <code>/Applications</code> and opens from the notch, or in your menu bar
