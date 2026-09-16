@@ -180,7 +180,10 @@ export default function App() {
               <article>
                 <span className="feature-number">02</span>
                 <h3>Knows when to hush.</h3>
-                <p>Pauses when your microphone is in use. You can also mute specific apps.</p>
+                <p>
+                  Pauses while your microphone is in use through the built-in speakers, so your
+                  call never hears it. You can also mute specific apps.
+                </p>
               </article>
               <article>
                 <span className="feature-number">03</span>
