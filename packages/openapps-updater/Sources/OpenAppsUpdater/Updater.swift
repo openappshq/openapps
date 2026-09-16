@@ -152,11 +152,19 @@ public final class Updater {
     /// Test and diagnostics hooks.
     @ObservationIgnored public var onPhaseChange: ((Phase) -> Void)?
     @ObservationIgnored public var onStaged: ((StagedUpdate) -> Void)?
+    /// Every cycle that ran to its end, with its failure if any; a cycle the
+    /// toggle withdrew (`withdrawAutomaticWork`) is disowned and never reports.
     @ObservationIgnored public var onCheckFinished: (((any Error)?) -> Void)?
     /// What the quit path did: the install outcome and whether a reopen was arranged.
     @ObservationIgnored public var onQuitFinished: ((InstallOutcome, Bool) -> Void)?
 
     @ObservationIgnored private var work: Task<Void, Never>?
+    /// Which task owns `work` and `phase`. Every task the updater starts
+    /// takes the generation current at its start; cancelling one bumps it,
+    /// so the cancelled task's continuation — which may run only after a
+    /// replacement has started — changes nothing. Generation is checked
+    /// after every suspension point that ends in state being written.
+    @ObservationIgnored private var generation = 0
     @ObservationIgnored private var schedule: Timer?
     @ObservationIgnored private var retry: Task<Void, Never>?
     @ObservationIgnored private var consecutiveFailures = 0
@@ -172,7 +180,13 @@ public final class Updater {
         static let lastCheck = "OpenAppsUpdater.lastCheck"
     }
 
-    public init(configuration: UpdaterConfiguration) {
+    public convenience init(configuration: UpdaterConfiguration) {
+        self.init(configuration: configuration, protocolClasses: nil)
+    }
+
+    /// `protocolClasses` is the package's own test hook: `URLProtocol`
+    /// subclasses that stand in for the network.
+    init(configuration: UpdaterConfiguration, protocolClasses: [AnyClass]?) {
         self.configuration = configuration
         location = UpdateLocation.current(bundleURL: configuration.bundleURL)
         let defaults = configuration.defaults
@@ -184,6 +198,7 @@ public final class Updater {
         sessionConfiguration.httpShouldSetCookies = false
         sessionConfiguration.timeoutIntervalForRequest = 30
         sessionConfiguration.timeoutIntervalForResource = 15 * 60
+        if let protocolClasses { sessionConfiguration.protocolClasses = protocolClasses }
         session = URLSession(configuration: sessionConfiguration)
         log = Logger(subsystem: Bundle.main.bundleIdentifier ?? configuration.appID, category: "updates")
         trustedRequirement = try? CodeSignature.designatedRequirementOfRunningCode()
@@ -247,13 +262,11 @@ public final class Updater {
     private func withdrawAutomaticWork() {
         switch phase {
         case .checking where currentConsent == .automatic:
-            work?.cancel()
-            work = nil
+            cancelWork()
             log.notice("Cancelled the automatic update check")
             phase = .idle
         case .downloading(let item) where currentConsent == .automatic:
-            work?.cancel()
-            work = nil
+            cancelWork()
             log.notice("Cancelled the automatic download of \(item.version.description, privacy: .public)")
             discardStaging()
             phase = .idle
@@ -267,6 +280,28 @@ public final class Updater {
     }
 
     @ObservationIgnored private var currentConsent: UpdateConsent = .automatic
+
+    /// Cancels the running task and disowns it: whatever it still does on
+    /// its way out (its cancellation `catch`, its trailing cleanup) is stale.
+    private func cancelWork() {
+        work?.cancel()
+        work = nil
+        generation += 1
+    }
+
+    /// Starts a task that owns `work` until it finishes, unless it is
+    /// cancelled and disowned meanwhile. `body` receives an `isCurrent`
+    /// check to call after each suspension before writing state; a stale
+    /// task returns without touching anything.
+    private func startWork(_ body: @escaping @MainActor (_ isCurrent: @MainActor () -> Bool) async -> Void) {
+        generation += 1
+        let mine = generation
+        work = Task { [weak self] in
+            guard let self else { return }
+            await body { [weak self] in self?.generation == mine }
+            if generation == mine { work = nil }
+        }
+    }
 
     /// Removes what this updater staged. A preserved bundle of uncertain
     /// provenance is never touched here; only the user's discard removes it.
@@ -292,21 +327,23 @@ public final class Updater {
     public func installAvailable() {
         guard case .available(let item) = phase, !isBusy else { return }
         currentConsent = .manual
-        work = Task { [weak self] in
+        startWork { [weak self] isCurrent in
             guard let self else { return }
             do {
                 let staged = try await stage(item, consent: .manual)
+                guard isCurrent() else { return }
                 phase = .staged(staged)
                 onStaged?(staged)
                 restartToUpdate()
             } catch where Self.isCancellation(error) {
+                guard isCurrent() else { return }
                 discardStaging()
                 phase = .idle
             } catch {
+                guard isCurrent() else { return }
                 discardStaging()
                 phase = .failed(error.localizedDescription)
             }
-            work = nil
         }
     }
 
@@ -349,20 +386,21 @@ public final class Updater {
     private func run(consent: UpdateConsent, install: Bool) {
         currentConsent = consent
         phase = .checking
-        work = Task { [weak self] in
+        startWork { [weak self] isCurrent in
             guard let self else { return }
             var failure: (any Error)?
             do {
                 let item = try await check()
+                guard isCurrent() else { return }
                 recordCheck()
                 guard let item else {
                     phase = .upToDate
                     onCheckFinished?(nil)
-                    work = nil
                     return
                 }
                 if install, installsAutomatically, consent == .automatic {
                     let staged = try await stage(item, consent: .automatic)
+                    guard isCurrent() else { return }
                     // The toggle may have gone off while unpacking; then the work was cancelled above.
                     guard installsAutomatically else { throw CancellationError() }
                     phase = .staged(staged)
@@ -371,9 +409,11 @@ public final class Updater {
                     phase = .available(item)
                 }
             } catch where Self.isCancellation(error) {
+                guard isCurrent() else { return }
                 discardStaging()
                 phase = .idle
             } catch {
+                guard isCurrent() else { return }
                 failure = error
                 discardStaging()
                 phase = .failed(error.localizedDescription)
@@ -383,7 +423,6 @@ public final class Updater {
                 if failure != nil { consecutiveFailures += 1; scheduleRetry() } else { consecutiveFailures = 0 }
             }
             onCheckFinished?(failure)
-            work = nil
         }
     }
 
