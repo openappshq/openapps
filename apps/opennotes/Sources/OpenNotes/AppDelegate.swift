@@ -63,7 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // No record store to wait for in this build: the install is fresh
         // when no earlier launch left preferences behind. The parity ticket
         // makes storage the judge (LICENSING.md) and adds the setup guide.
-        loginItem.applyDefaultIfNeeded(storageIsFresh: true)
+        // An update-test build never registers a login item.
+        if !UpdateTesting.isCompiledIn {
+            loginItem.applyDefaultIfNeeded(storageIsFresh: true)
+        }
     }
 
     /// Every open note is saved before the process exits; the hotkey's

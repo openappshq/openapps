@@ -49,7 +49,7 @@ final class DeckPanelController {
         machine = DeckStateMachine(settings: DeckSettings(readOnly: model.readOnly), notes: model.deckOrder)
         layout = DeckGeometry.layout(state: .pill, side: preferences.side, visibleFrame: screen.visibleFrame, notes: model.deckOrder)
 
-        panel = NSPanel(contentRect: layout.panelFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel = DeckPanel(contentRect: layout.panelFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -273,6 +273,13 @@ final class DeckPanelController {
         outsideClickMonitor = nil
         localClickMonitor = nil
     }
+}
+
+/// A borderless panel cannot become key by default; the deck's must, so
+/// the caret can go into a note without the app coming forward.
+final class DeckPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
 
 /// Holds the hosting view and reports the pointer entering and leaving

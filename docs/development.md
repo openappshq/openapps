@@ -1,7 +1,7 @@
 # Development and release guide
 
 OpenApps HQ is one workspace for independent desktop apps and their marketing pages.
-OpenKlack, [OpenReaction](../apps/openreaction/README.md) and [Hertz](../apps/hertz/README.md) have independent native apps.
+OpenKlack, [OpenReaction](../apps/openreaction/README.md), [Hertz](../apps/hertz/README.md) and [OpenNotes](../apps/opennotes/README.md) have independent native apps.
 
 ## Run
 
@@ -37,6 +37,7 @@ apps/
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
   openreaction/               OpenReaction's Swift app
   hertz/                      Hertz's Swift app
+  opennotes/                  OpenNotes' Swift app
 packages/
   openapps-licensing/         Swift: licensing rules, trial, record store and clients (LICENSING.md)
   openapps-updater/           Swift: the in-app updater (RELEASES.md)
@@ -155,6 +156,10 @@ System-wide sound is implemented in the development desktop application below; p
 ## Hertz
 
 The menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift build`, `swift test`, `swift run Hertz`, `scripts/bundle.sh`; see [its README](../apps/hertz/README.md). It asks macOS for no permissions. Official builds compile licensing in from `packages/openapps-licensing` (`OPENAPPS_LICENSING=1` with a generated `LicensingConfig.swift`, [LICENSING.md](../LICENSING.md)): the 3-day trial, Settings → License, and the readings off after the trial; a build from source has none of it. Official builds also compile in the shared updater, `packages/openapps-updater` (`OPENAPPS_OFFICIAL=1`): the signed feed at `https://openapps.space/updates/hertz/appcast.xml`, automatic checks on for a fresh install, installing opt-in, `brew upgrade --cask hertz` always works ([RELEASES.md](../RELEASES.md), [its release guide](../apps/hertz/RELEASING.md)). The [product contract](../design/products/hertz.md) records approved behavior.
+
+## OpenNotes
+
+The edge-docked sticky notes app lives in `apps/opennotes` and is plain SwiftPM: `swift build`, `swift test`, `swift run OpenNotes`, `scripts/bundle.sh`; see [its README](../apps/opennotes/README.md). It asks macOS for no permissions: the global hotkey is a Carbon system hotkey, the deck is a non-activating panel that joins every Space and full-screen space above the status-bar level, and the notes are plain `.md` files in a folder the user chooses (`~/Documents/OpenNotes` by default), watched with FSEvents. `OpenNotesCore` (the file format, the Markdown-lite styler, the folder store with its conflict copies, search, export, archive and undo, the deck's state machine and geometry) is tested against temporary folders only; the debug binary's `--preview <dir>` renders the deck's states, All Notes and Settings to PNGs without opening a window, so UI changes are checked from the images. The flavour flags (`OPENAPPS_LICENSING=1`, `OPENAPPS_OFFICIAL=1`, `OPENNOTES_UPDATE_TEST=1`) and the `#if` seams are Hertz's; the licensing, trial, read-only-after-trial and updater wiring arrive with the parity ticket, and the release workflow with the pipeline ticket ([its release guide](../apps/opennotes/RELEASING.md)). The [product contract](../design/products/opennotes.md) records approved behavior.
 
 ## Desktop application (in development)
 
