@@ -156,7 +156,8 @@ final class PreviewHarness {
                 access: { false }, state: { .trialEnded }, restriction: { .trialEndedSample },
                 badge: { LicenseBadge.label(for: .trialEnded, appName: Licensing.appName) }, canBuy: true
             )
-            let restricted = NotchStage(backdrop: backdrop, content: PanelContent(model: model, width: preferences.width.points, showSettings: {}, quit: {}))
+            // With the pill in the header, as the licensing wiring fills the seam.
+            let restricted = NotchStage(backdrop: backdrop, content: PanelContent(model: model, width: preferences.width.points, header: AnyView(LicensePillHeader(license: license)), showSettings: {}, quit: {}))
             if await !write(restricted, scheme: scheme, appearance: appearance, to: "panel-restricted-\(suffix).png") { failures += 1 }
             license.bind(access: { true }, restriction: { nil }, canBuy: false)
             let settings = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: { "" })
