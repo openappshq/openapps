@@ -37,11 +37,13 @@ public enum PreferenceKey {
     public static let clockStyle = "clock.style"
     public static let clockPosition = "clock.position"
     public static let clockSize = "clock.size"
+    /// The parameters pinned against Shuffle, as JSON.
+    public static let pins = "shuffle.pins"
 
     public static let all: [String] = [
         notchEnabled, hostDisplay, trigger, direction, width, hideInFullscreen, hotkey,
         shuffleInterval, favoritesOnly, sameOnAllDisplays, exportFolder,
-        keepApplied, clockStyle, clockPosition, clockSize,
+        keepApplied, clockStyle, clockPosition, clockSize, pins,
     ]
 }
 

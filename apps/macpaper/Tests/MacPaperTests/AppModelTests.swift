@@ -62,6 +62,9 @@ struct AppModelTests {
                 exporter: exporter, imagePicker: picker, recipeDialog: recipeDialog, starterRecipes: starterRecipes, displays: { Harness.displays }
             )
             model.setExportReveal { _ in }
+            // The explicit actions are under test here; live apply has its
+            // own suite (LiveApplyTests).
+            model.appliesLive = false
             // Deterministic: the light side, a fixed accent, no pasteboard.
             model.systemAppearance = { .light }
             model.accentColor = { RGBAColor(hex: 0x304BFF) }

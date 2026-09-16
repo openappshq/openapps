@@ -34,6 +34,30 @@ public enum FieldFamily: String, Codable, CaseIterable, Hashable, Sendable {
         }
     }
 
+    /// One line under the family's name in the panel.
+    public var summary: String {
+        switch self {
+        case .interference: "A radial and a linear wave beat on the pixel grid."
+        case .relief: "Warped noise cut into terraces, rims lit like cut paper."
+        case .islands: "An archipelago above a sea level, shores dithered."
+        case .plate: "Chladni nodal lines gathering grains inside an aperture."
+        case .circuit: "Truchet ribbons joined into paths across tiles."
+        case .sky: "A horizon, two ridges and a cropped sun in large cells."
+        }
+    }
+
+    /// The SF Symbol the panel's lists use.
+    public var symbolName: String {
+        switch self {
+        case .interference: "circle.circle"
+        case .relief: "mountain.2"
+        case .islands: "water.waves"
+        case .plate: "sparkles"
+        case .circuit: "point.3.connected.trianglepath.dotted"
+        case .sky: "sun.horizon"
+        }
+    }
+
     /// The tone counts the family is designed for (the palette's size).
     public var toneRange: ClosedRange<Int> {
         switch self {

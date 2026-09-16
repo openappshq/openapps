@@ -67,6 +67,25 @@ final class Preferences {
     var clockSize: ClockSize {
         didSet { defaults.set(clockSize.rawValue, forKey: PreferenceKey.clockSize) }
     }
+    /// The parameters pinned in the panel: Shuffle keeps them. The
+    /// user's, not a document's — they survive loading a recipe — and
+    /// mirrored into the draft (`Wallpaper.pinned`) so a share or a
+    /// recipe file carries them.
+    var pins: Set<ParameterKey> {
+        didSet {
+            guard pins != oldValue else { return }
+            defaults.set((try? JSONEncoder().encode(pins.map(\.rawValue).sorted())) ?? Data(), forKey: PreferenceKey.pins)
+        }
+    }
+
+    /// The names an earlier panel build stored, mapped to the keys.
+    static let legacyPinNames: [String: ParameterKey] = [
+        "gradientShape": .gradientKind, "gradientAngle": .angle, "gradientCenter": .center, "gradientBlend": .interpolation,
+        "meshGrid": .columns, "meshJitter": .jitter, "meshSoftness": .softness,
+        "patternScale": .scale, "patternAngle": .angle,
+        "pixelizeBlock": .blockSize, "pixelizePalette": .paletteSize,
+        "ditherCell": .cell, "ditherPalette": .paletteSize,
+    ]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -89,6 +108,8 @@ final class Preferences {
         clockStyle = defaults.string(forKey: PreferenceKey.clockStyle).flatMap(ClockStyle.init(rawValue:)) ?? .off
         clockPosition = defaults.string(forKey: PreferenceKey.clockPosition).flatMap(ClockPosition.init(rawValue:)) ?? .bottomRight
         clockSize = defaults.string(forKey: PreferenceKey.clockSize).flatMap(ClockSize.init(rawValue:)) ?? .medium
+        let pinNames = defaults.data(forKey: PreferenceKey.pins).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+        pins = Set(pinNames.compactMap { ParameterKey(rawValue: $0) ?? Self.legacyPinNames[$0] })
     }
 
     /// The panel rules' view of the settings.

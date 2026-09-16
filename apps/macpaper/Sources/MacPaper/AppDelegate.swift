@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             quit: { NSApp.terminate(nil) }
         )
         notch.header = { [weak self] in self?.panelHeader?() ?? AnyView(EmptyView()) }
+        notch.statusItemFrame = { [weak statusItem] in statusItem?.buttonFrame }
         self.notch = notch
         statusItem.beforeOpen = { [weak notch] in notch?.closeAll() }
 

@@ -596,9 +596,10 @@ public enum ShufflePlanner {
         let pool = favoritesOnly && !favorites.isEmpty ? favorites : []
         let contextFor = context ?? { $0.renderContext }
         if sameOnAllDisplays {
+            // One document for every display: it must pass the gate on
+            // each display's own context.
             let avoid = Set(current.values)
-            let first = displays.first { $0.isMain } ?? displays[0]
-            if let pick = next(pool: pool, avoiding: avoid, template: template ?? current.values.first, renderer: renderer, context: contextFor(first), using: &generator) {
+            if let pick = next(pool: pool, avoiding: avoid, template: template ?? current.values.first, renderer: renderer, contexts: displays.map(contextFor), using: &generator) {
                 for display in displays { plan[display] = pick }
             }
         } else {
@@ -606,7 +607,7 @@ public enum ShufflePlanner {
             for display in displays.sorted(by: { $0.id < $1.id }) {
                 var avoid = taken
                 if let now = current[display.id] { avoid.insert(now) }
-                guard let pick = next(pool: pool, avoiding: avoid, template: template ?? current[display.id], renderer: renderer, context: contextFor(display), using: &generator) else { continue }
+                guard let pick = next(pool: pool, avoiding: avoid, template: template ?? current[display.id], renderer: renderer, contexts: [contextFor(display)], using: &generator) else { continue }
                 taken.insert(pick)
                 plan[display] = pick
             }
@@ -617,7 +618,7 @@ public enum ShufflePlanner {
     /// From the pool when there is one (the favorites), else one curated
     /// draw — nil when it finds nothing better. A pool with nothing left
     /// to avoid falls back to any entry.
-    static func next(pool: [Wallpaper], avoiding: Set<Wallpaper>, template: Wallpaper?, renderer: WallpaperRenderer, context: RenderContext, using generator: inout SeededGenerator) -> Wallpaper? {
+    static func next(pool: [Wallpaper], avoiding: Set<Wallpaper>, template: Wallpaper?, renderer: WallpaperRenderer, contexts: [RenderContext], using generator: inout SeededGenerator) -> Wallpaper? {
         if !pool.isEmpty {
             let candidates = pool.filter { !avoiding.contains($0) }
             let source = candidates.isEmpty ? pool : candidates
@@ -625,7 +626,7 @@ public enum ShufflePlanner {
         }
         // The gate's sameness veto already keeps the draw off the template;
         // a draw that still lands on a document to avoid is "nothing better".
-        guard let candidate = Shuffle.next(from: template, using: &generator, renderer: renderer, context: context).document, !avoiding.contains(candidate) else { return nil }
+        guard let candidate = Shuffle.next(from: template, using: &generator, renderer: renderer, contexts: contexts).document, !avoiding.contains(candidate) else { return nil }
         return candidate
     }
 }

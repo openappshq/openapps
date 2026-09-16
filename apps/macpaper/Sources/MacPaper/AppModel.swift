@@ -101,6 +101,73 @@ struct ApplyTarget: Equatable {
     var thisSpaceOnly = false
 }
 
+/// Where live applies land: the panel's header control. "Every display"
+/// is the only display choice while "same on all displays" is on.
+enum ApplyReach: String, CaseIterable, Hashable {
+    case everyDisplay, thisDisplay, thisSpace
+
+    var title: String {
+        switch self {
+        case .everyDisplay: "Every display"
+        case .thisDisplay: "This display"
+        case .thisSpace: "This Space only"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .everyDisplay: "rectangle.on.rectangle"
+        case .thisDisplay: "rectangle"
+        case .thisSpace: "rectangle.dashed"
+        }
+    }
+
+    /// The choices that make sense with the setting and the displays.
+    static func available(sameOnAllDisplays: Bool, displayCount: Int) -> [ApplyReach] {
+        if sameOnAllDisplays || displayCount < 2 { return [.everyDisplay, .thisSpace] }
+        return [.thisDisplay, .everyDisplay, .thisSpace]
+    }
+
+    var target: ApplyTarget {
+        switch self {
+        case .everyDisplay: ApplyTarget(scope: .allDisplays)
+        case .thisDisplay: ApplyTarget()
+        case .thisSpace: ApplyTarget(thisSpaceOnly: true)
+        }
+    }
+}
+
+/// Which section of the column shows.
+enum PanelSection: String, CaseIterable, Hashable, Identifiable {
+    case library, generators, palette, parameters, effects, export, history
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .library: "Library"
+        case .generators: "Generators"
+        case .palette: "Palette"
+        case .parameters: "Parameters"
+        case .effects: "Effects"
+        case .export: "Export"
+        case .history: "History"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .library: "books.vertical"
+        case .generators: "wand.and.stars"
+        case .palette: "paintpalette"
+        case .parameters: "slider.horizontal.3"
+        case .effects: "sparkles"
+        case .export: "square.and.arrow.up"
+        case .history: "clock.arrow.circlepath"
+        }
+    }
+}
+
 /// What Export writes.
 enum ExportKind: String, CaseIterable, Hashable {
     case png, svg, heicPair, phonePair
@@ -131,6 +198,7 @@ final class AppModel {
     @ObservationIgnored let applied: AppliedStore
     @ObservationIgnored let imports: ImportStore
     @ObservationIgnored let blocklist: BlocklistStore
+    @ObservationIgnored let history: HistoryStore
     @ObservationIgnored let renderer: WallpaperRenderer
     @ObservationIgnored let applier: WallpaperApplier
     @ObservationIgnored let exporter: any FileExporter
@@ -155,17 +223,31 @@ final class AppModel {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    /// The document being edited: shown, and applied on Apply. Every edit
-    /// goes through `edit`, the one gated entry (the license is asked at
-    /// the edit, never remembered), or through `load`, which only shows.
+    /// The document being edited: shown, and applied to the desktop as it
+    /// changes (live apply, below). Every edit goes through `edit`, the one
+    /// gated entry (the license is asked at the edit, never remembered),
+    /// or through `load`, which shows a document and lets live apply take
+    /// it to the desktop.
     private(set) var draft: Wallpaper {
         didSet {
             guard draft != oldValue else { return }
             favoritesRevision &+= 1
             schedulePreview()
             scheduleDraftSave()
+            scheduleLiveApply()
         }
     }
+
+    /// Whether changes reach the desktop on their own. On in the app; the
+    /// preview harness and the tests of the explicit actions turn it off.
+    @ObservationIgnored var appliesLive = true
+    /// How long after the last change a live apply starts.
+    @ObservationIgnored var liveApplyDelay: Duration = .milliseconds(150)
+    /// Where live applies land; the panel's header control.
+    var reach: ApplyReach
+    /// The section the column shows; kept across opens and shared by the
+    /// notch panel and the popover.
+    var panelSection: PanelSection = .library
 
     /// Changes the draft while the license allows generating, asked at the
     /// edit through `allowed()` — never a value a view captured when it was
@@ -189,7 +271,9 @@ final class AppModel {
     /// Shows a document (a favorite, a shared link, a shuffle's result):
     /// viewing is never gated.
     func load(_ wallpaper: Wallpaper) {
-        draft = wallpaper
+        var copy = wallpaper
+        copy.pinned = preferences.pins
+        draft = copy
     }
     /// The side the panel edits and shows: the Mac's appearance until the
     /// user picks one.
@@ -218,9 +302,25 @@ final class AppModel {
 
     @ObservationIgnored private var previewGeneration = 0
     @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingPreview: PreviewRequest?
+    @ObservationIgnored private var previewInFlight = false
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var statusTask: Task<Void, Never>?
     @ObservationIgnored private var exportWorkspace: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
+    /// Live apply: the generation of the last change, the debounce (a
+    /// scheduler the tests replace with a manual one), and the chain every
+    /// apply queues on so they land one at a time.
+    @ObservationIgnored private var liveGeneration = 0
+    @ObservationIgnored private var liveToken: (any ScheduledToken)?
+    @ObservationIgnored var liveScheduler: any DelayScheduler = TaskDelayScheduler()
+    @ObservationIgnored private var applyChain: Task<Void, Never>?
+    @ObservationIgnored private var queuedApplies = 0
+    /// How many live applies were started; the tests read it.
+    @ObservationIgnored private(set) var liveApplyCount = 0
+    /// Runs on the main actor after an apply's render, before the
+    /// generation check and any desktop call; the tests drive the
+    /// "superseded while rendering" path through it.
+    @ObservationIgnored var afterPrepare: @MainActor () -> Void = {}
 
     /// `starterRecipes` fill an absent library (the taste set on a fresh
     /// install); tests start empty.
@@ -239,10 +339,14 @@ final class AppModel {
         applied = AppliedStore(fileURL: paths.applied)
         imports = ImportStore(directory: paths.imports)
         blocklist = BlocklistStore(fileURL: paths.blocklist)
+        history = HistoryStore(fileURL: paths.history)
         renderer = WallpaperRenderer(images: imports)
         applier = WallpaperApplier(applier: desktop, renderer: renderer, cache: RenderCache(), directory: paths.appliedImages)
         appliedState = applied.current
-        draft = applied.current.draft ?? .starter
+        var opening = applied.current.draft ?? .starter
+        opening.pinned = preferences.pins
+        draft = opening
+        reach = preferences.sameOnAllDisplays ? .everyDisplay : .thisDisplay
         refreshDisplays()
         schedulePreview()
     }
@@ -286,27 +390,51 @@ final class AppModel {
     /// The side shown: the chosen one, else the Mac's appearance.
     var shownSide: Side { editingSide ?? systemAppearance() }
 
+    /// What a preview render is asked for.
+    private struct PreviewRequest {
+        let generation: Int
+        let wallpaper: Wallpaper
+        let context: RenderContext
+        let scale: Double
+        let side: Side
+    }
+
+    /// One preview render at a time: a request made while one is in flight
+    /// waits as the single pending one (a newer request replaces it), and
+    /// runs when the render lands. A slider dragged fast costs one render
+    /// in flight and one queued, never a pile of stale ones.
     private func schedulePreview() {
         previewGeneration &+= 1
-        let generation = previewGeneration
-        let wallpaper = draft
         let context = currentContext
-        let scale = Double(previewSize.width) / Double(context.size.width)
-        let side = shownSide
+        pendingPreview = PreviewRequest(
+            generation: previewGeneration, wallpaper: draft, context: context,
+            scale: Double(previewSize.width) / Double(context.size.width), side: shownSide
+        )
+        startPreviewIfIdle()
+    }
+
+    private func startPreviewIfIdle() {
+        guard !previewInFlight, let request = pendingPreview else { return }
+        pendingPreview = nil
+        previewInFlight = true
         let renderer = renderer
         let cache = previewCache
-        previewTask?.cancel()
         previewTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let key = RenderCache.Key(wallpaper: wallpaper, side: side, context: context.scaled(by: scale))
-            let raster = cache.render(key) { renderer.render(wallpaper, side: side, context: context, scale: scale) }
-            let readability = MenuBarReadability.assess(raster, stripHeight: context.scaled(by: scale).menuBarStrip, side: side)
-            guard !Task.isCancelled, let image = raster.cgImage else { return }
+            let scaled = request.context.scaled(by: request.scale)
+            let key = RenderCache.Key(wallpaper: request.wallpaper, side: request.side, context: scaled)
+            let raster = cache.render(key) { renderer.render(request.wallpaper, side: request.side, context: request.context, scale: request.scale) }
+            let readability = MenuBarReadability.assess(raster, stripHeight: scaled.menuBarStrip, side: request.side)
+            let image = raster.cgImage
             await MainActor.run {
-                guard let self, generation == self.previewGeneration else { return }
-                self.preview = image
-                self.previewWallpaper = wallpaper
-                self.previewSide = side
-                self.readability = readability
+                guard let self else { return }
+                self.previewInFlight = false
+                if request.generation == self.previewGeneration, let image {
+                    self.preview = image
+                    self.previewWallpaper = request.wallpaper
+                    self.previewSide = request.side
+                    self.readability = readability
+                }
+                self.startPreviewIfIdle()
             }
         }
     }
@@ -338,6 +466,18 @@ final class AppModel {
         set {
             guard newValue != editedGenerator.kind else { return }
             editedGenerator = .default(newValue, colors: editedGenerator.colors, source: editedGenerator.source)
+        }
+    }
+
+    /// The Generators list's view of the edited generator: a family for
+    /// a pixel field, the kind otherwise.
+    var generatorChoice: GeneratorChoice {
+        get { GeneratorChoice(editedGenerator) }
+        set {
+            switch newValue {
+            case .family(let family): fieldFamily = family
+            case .kind(let kind): generatorKind = kind
+            }
         }
     }
 
@@ -381,20 +521,23 @@ final class AppModel {
 
     // MARK: - Pins
 
-    /// The parameters Shuffle keeps from the draft.
-    var pinnedKeys: Set<ParameterKey> { draft.pinned }
+    /// The parameters Shuffle keeps: the user's pins (Preferences), the
+    /// draft mirroring them so a recipe or a share carries them.
+    var pinnedKeys: Set<ParameterKey> { preferences.pins }
 
-    func isPinned(_ key: ParameterKey) -> Bool { draft.pinned.contains(key) }
+    func isPinned(_ key: ParameterKey) -> Bool { preferences.pins.contains(key) }
 
     /// Pinning is not generating: it works in every license state.
     func pin(_ key: ParameterKey) {
-        guard !draft.pinned.contains(key) else { return }
-        draft.pinned.insert(key)
+        guard !preferences.pins.contains(key) else { return }
+        preferences.pins.insert(key)
+        draft.pinned = preferences.pins
     }
 
     func unpin(_ key: ParameterKey) {
-        guard draft.pinned.contains(key) else { return }
-        draft.pinned.remove(key)
+        guard preferences.pins.contains(key) else { return }
+        preferences.pins.remove(key)
+        draft.pinned = preferences.pins
     }
 
     func togglePin(_ key: ParameterKey) {
@@ -500,35 +643,37 @@ final class AppModel {
     func applyPalette(_ colors: [RGBAColor]) {
         guard !colors.isEmpty else { return }
         let colors = Palettes.usable(colors)
-        switch editedGenerator {
-        case .gradient(var p):
-            let count = min(max(colors.count, 2), GradientParameters.stopRange.upperBound)
-            p.stops = (0..<count).map { i in ColorStop(position: Double(i) / Double(count - 1), color: colors[i % colors.count]) }
-            editedGenerator = .gradient(p)
-        case .mesh(var p):
-            p.colors = Array(colors.prefix(MeshParameters.colorRange.upperBound))
-            editedGenerator = .mesh(p)
-        case .pattern(var p):
-            p.background = colors[0]
-            p.foreground = colors.count > 1 ? colors[colors.count - 1] : p.foreground
-            editedGenerator = .pattern(p)
-        case .solid(var p):
-            p.color = colors[0]
-            editedGenerator = .solid(p)
-        case .pixelize(var p):
-            p.background = colors[0]
-            editedGenerator = .pixelize(p)
-        case .dither(var p):
-            p.paper = colors[0]
-            p.ink = colors.count > 1 ? colors[colors.count - 1] : p.ink
-            editedGenerator = .dither(p)
-        case .field(var p):
-            p.tones = colors
-            editedGenerator = .field(p)
-        }
+        editedGenerator = editedGenerator.withPalette(colors)
         // The base follows the palette's ground, in the base's own kind.
         let kind = draft.base.kind
         if kind != .none { edit { $0.base = BaseLayer.default(kind, colors: colors) } }
+    }
+
+    /// One of the preset palettes: the colors, and the top shade lifted
+    /// where the menu bar would not read on a side (a small render, here).
+    func applyPreset(_ palette: Palette) {
+        guard allowed() else { return }
+        applyPalette(palette.tones)
+        let lifted = draft.liftingMenuBar(context: readabilityContext, renderer: renderer)
+        if lifted != draft { edit { $0 = lifted } }
+    }
+
+    /// The current display's context at a small size, for readability checks.
+    var readabilityContext: RenderContext {
+        currentContext.scaled(by: 160 / Double(currentContext.size.width))
+    }
+
+    /// The preset the edited generator's colors come from, if any.
+    var currentPreset: Palette? {
+        Palettes.preset(matching: editedGenerator.colors)
+    }
+
+    /// The colors of the edited generator, as a binding the palette row edits.
+    var paletteColors: Binding<[RGBAColor]> {
+        Binding(
+            get: { self.editedGenerator.colors },
+            set: { colors in self.applyPalette(colors) }
+        )
     }
 
     /// A preset palette, by name: the generator's tones and the base.
@@ -729,8 +874,97 @@ final class AppModel {
         favoritesRevision &+= 1
     }
 
+    /// The star on a history entry: any document, not only the draft.
+    func toggleFavoriteOf(_ wallpaper: Wallpaper) {
+        do {
+            let now = try favorites.toggle(wallpaper)
+            favoritesRevision &+= 1
+            show(now ? "Added to the library." : "Removed from the library.")
+        } catch {
+            show("Couldn’t save favorites: \(error.localizedDescription)", tone: .error)
+        }
+    }
+
     func load(_ favorite: Recipe) {
         load(favorite.wallpaper)
+    }
+
+    /// The Library's Save: the draft as a favorite under a name (empty:
+    /// the derived title). A document already saved is renamed.
+    /// The Library's rename: an empty name goes back to the derived one.
+    func rename(_ favorite: Recipe, to name: String) {
+        renameRecipe(favorite, to: name)
+    }
+
+    /// The name the Library's field starts with: the recipe's, or the
+    /// derived name of the draft.
+    var recipeTitle: String { recipeName }
+
+    /// Never show a favorite: blocked for shuffle and dropped from the
+    /// list; the draft is left alone.
+    func neverShow(_ favorite: Recipe) {
+        do {
+            try blocklist.add(favorite.wallpaper)
+            try? favorites.remove(favorite.wallpaper)
+            favoritesRevision &+= 1
+            show("Never shown again by shuffle.")
+        } catch {
+            show("Couldn’t save: \(error.localizedDescription)", tone: .error)
+        }
+    }
+
+    // MARK: - Thumbnails
+
+    /// Small renders of documents for the lists and grids, by document,
+    /// rendered once off the main actor. The harness warms them before it
+    /// draws (`ImageRenderer` runs no tasks).
+    private(set) var thumbnails: [Wallpaper: CGImage] = [:]
+    @ObservationIgnored private var thumbnailTasks: Set<Wallpaper> = []
+    nonisolated static let thumbnailSize = PixelSize(width: Int(PanelLayout.thumbnail * 2), height: Int(PanelLayout.thumbnail * 1.25))
+
+    /// The thumbnail, or nil while it renders (the view re-reads when it lands).
+    func thumbnail(for wallpaper: Wallpaper) -> CGImage? {
+        if let image = thumbnails[wallpaper] { return image }
+        guard !thumbnailTasks.contains(wallpaper) else { return nil }
+        thumbnailTasks.insert(wallpaper)
+        let renderer = renderer
+        Task { [weak self] in
+            let image = await Task.detached(priority: .utility) {
+                renderer.render(wallpaper, side: .light, context: RenderContext(size: Self.thumbnailSize, menuBarStrip: 4)).cgImage
+            }.value
+            guard let self else { return }
+            self.thumbnailTasks.remove(wallpaper)
+            if let image { self.thumbnails[wallpaper] = image }
+        }
+        return nil
+    }
+
+    /// Renders the thumbnails of these documents and waits for them.
+    func prepareThumbnails(for wallpapers: [Wallpaper]) async {
+        let renderer = renderer
+        for wallpaper in wallpapers where thumbnails[wallpaper] == nil {
+            let image = await Task.detached(priority: .utility) {
+                renderer.render(wallpaper, side: .light, context: RenderContext(size: Self.thumbnailSize, menuBarStrip: 4)).cgImage
+            }.value
+            if let image { thumbnails[wallpaper] = image }
+        }
+    }
+
+    // MARK: - History
+
+    var historyList: [HistoryEntry] {
+        _ = favoritesRevision
+        return history.all
+    }
+
+    func removeHistory(_ entry: HistoryEntry) {
+        try? history.remove(entry)
+        favoritesRevision &+= 1
+    }
+
+    func clearHistory() {
+        try? history.removeAll()
+        favoritesRevision &+= 1
     }
 
     /// Never show this: blocked for shuffle, dropped from the favorites,
@@ -756,12 +990,15 @@ final class AppModel {
 
     // MARK: - Sharing
 
-    /// `macpaper://s/<code>` on the pasteboard: the recipe, named.
-    func shareLink() {
+    /// `macpaper://s/<code>` on the pasteboard: the draft (named as the
+    /// library names it), or a favorite.
+    func shareLink(for wallpaper: Wallpaper? = nil) {
+        let wallpaper = wallpaper ?? draft
         do {
-            let url = try ShareCode.url(for: RecipeDocument(name: recipeName, palette: paletteName, wallpaper: draft))
+            let recipe = favorites.recipe(for: wallpaper)
+            let url = try ShareCode.url(for: RecipeDocument(name: recipe?.name ?? Recipe.defaultName(for: wallpaper), palette: Palettes.name(for: wallpaper.generator.colors), wallpaper: wallpaper))
             copyToPasteboard(url.absoluteString)
-            let note = draft.generator.source != nil || draft.darkGenerator?.source != nil ? " The photo is not in it; the receiver sees the background." : ""
+            let note = wallpaper.generator.source != nil || wallpaper.darkGenerator?.source != nil ? " The photo is not in it; the receiver sees the background." : ""
             show("Link copied.\(note)")
         } catch {
             show("Couldn’t make the link: \(error.localizedDescription)", tone: .error)
@@ -788,10 +1025,11 @@ final class AppModel {
 
     // MARK: - Apply and shuffle
 
-    /// Whether Apply, Shuffle and Export may run now (the license, and no
-    /// apply in flight). What a view reads to draw its buttons; every action
-    /// asks `allowed()` again at the click.
-    var canAct: Bool { license.hasAccess() && !isApplying }
+    /// Whether Shuffle and Export may run now (the license). Applies queue
+    /// behind one another, so one in flight blocks nothing. What a view
+    /// reads to draw its buttons; every action asks `allowed()` again at
+    /// the click.
+    var canAct: Bool { license.hasAccess() }
 
     /// What a refused action says.
     static let restrictedMessage = "Not done: the license doesn’t allow making wallpapers right now."
@@ -810,12 +1048,49 @@ final class AppModel {
 
     /// Applies the draft to this display, or to every display; "same on all
     /// displays" makes both the same. "This Space only" takes the display
-    /// off the pin until the next every-Space apply.
+    /// off the pin until the next every-Space apply. The explicit form:
+    /// a pending live apply is dropped, since this lands the same draft.
     func apply(_ target: ApplyTarget = ApplyTarget()) {
         guard allowed() else { return }
+        cancelLiveApply()
         let scope = target.scope ?? currentDisplay.map { .display($0.id) } ?? .allDisplays
         let plan = ApplyScope.plan(draft, scope: scope, displays: displays, sameOnAllDisplays: preferences.sameOnAllDisplays)
         run(plan, verb: target.thisSpaceOnly ? "Applied to this Space" : "Applied", perSpace: target.thisSpaceOnly)
+    }
+
+    /// Live apply: every change to the draft (a slider, a palette, a
+    /// generator, a loaded favorite) reaches the desktop on its own,
+    /// `liveApplyDelay` after the last one. The last state wins: a change
+    /// during the wait restarts it, a change during a render leaves that
+    /// render's files discarded before any desktop call, and applies queue
+    /// one behind another. Restricted, nothing is applied; the license
+    /// card in the panel says why, so the line stays quiet here.
+    private func scheduleLiveApply() {
+        guard appliesLive else { return }
+        liveGeneration &+= 1
+        let generation = liveGeneration
+        liveToken?.cancel()
+        liveToken = liveScheduler.schedule(after: liveApplyDelay) { [weak self] in
+            guard let self, generation == self.liveGeneration else { return }
+            self.liveApply(generation: generation)
+        }
+    }
+
+    private func liveApply(generation: Int) {
+        guard license.hasAccess(), !displays.isEmpty else { return }
+        let target = reach.target
+        let scope = target.scope ?? currentDisplay.map { .display($0.id) } ?? .allDisplays
+        let plan = ApplyScope.plan(draft, scope: scope, displays: displays, sameOnAllDisplays: preferences.sameOnAllDisplays)
+        liveApplyCount += 1
+        run(plan, verb: nil, perSpace: target.thisSpaceOnly, generation: generation)
+    }
+
+    /// Drops a pending live apply, and marks one in flight as superseded:
+    /// an explicit action lands the draft itself.
+    private func cancelLiveApply() {
+        liveToken?.cancel()
+        liveToken = nil
+        liveGeneration &+= 1
     }
 
     /// A curated document, applied at once (this display, or all of them
@@ -828,6 +1103,7 @@ final class AppModel {
         let targets = preferences.sameOnAllDisplays ? displays : currentDisplay.map { [$0] } ?? displays
         guard let plan = shufflePlan(for: targets, using: &generator) else { return }
         if let mine = currentDisplay.flatMap({ plan[$0] }) ?? plan.values.first { load(mine) }
+        cancelLiveApply()
         run(plan, verb: "Shuffled", perSpace: false)
     }
 
@@ -838,7 +1114,10 @@ final class AppModel {
         var generator = SeededGenerator(seed: .randomSeed())
         guard let plan = shufflePlan(for: displays, using: &generator) else { return }
         let draftWasApplied = currentApplied == draft
-        if draftWasApplied, let mine = currentDisplay.flatMap({ plan[$0] }) { load(mine) }
+        if draftWasApplied, let mine = currentDisplay.flatMap({ plan[$0] }) {
+            load(mine)
+            cancelLiveApply()
+        }
         run(plan, verb: "Shuffled", perSpace: false)
     }
 
@@ -877,40 +1156,68 @@ final class AppModel {
     /// HEIC gets: a deadline crossed while rendering, between two displays
     /// or between the refusal and the fallback leaves the rest undone and
     /// discarded, the desktop as it was.
-    private func run(_ plan: [DisplayInfo: Wallpaper], verb: String, perSpace: Bool) {
+    ///
+    /// Applies queue on one chain and land one at a time; `isApplying` is
+    /// true from the moment one is queued until the chain drains. A live
+    /// apply carries its `generation`: superseded while it waited, it is
+    /// skipped; superseded while it rendered, its files are discarded
+    /// before any desktop call. `verb` nil says nothing on success (live
+    /// applies; the preview's tag says "on the desktop").
+    private func run(_ plan: [DisplayInfo: Wallpaper], verb: String?, perSpace: Bool, generation: Int? = nil) {
         guard !plan.isEmpty else {
             show(displays.isEmpty ? "No display to apply to." : "Nothing left to shuffle to: every choice is on the never-show list.", tone: .error)
             return
         }
-        guard !isApplying else { return }
+        enqueue { [weak self] in
+            guard let self, generation == nil || generation == self.liveGeneration else { return }
+            await self.perform(plan, verb: verb, perSpace: perSpace, generation: generation)
+        }
+    }
+
+    /// Queues work on the apply chain; `isApplying` holds until it drains.
+    private func enqueue(_ work: @escaping @MainActor () async -> Void) {
+        queuedApplies += 1
         isApplying = true
-        let applier = applier
-        Task { [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<WallpaperApplier.Prepared, any Error> in
-                do { return .success(try applier.prepare(plan)) } catch { return .failure(error) }
-            }.value
+        let previous = applyChain
+        applyChain = Task { [weak self] in
+            await previous?.value
+            await work()
             guard let self else { return }
-            defer { self.isApplying = false }
-            let prepared: WallpaperApplier.Prepared
-            switch outcome {
-            case .success(let value): prepared = value
-            case .failure(let error):
-                self.show(error.localizedDescription, tone: .error)
-                return
-            }
-            let committed = await self.commit(prepared, access: { [weak self] in self?.license.hasAccess() ?? false })
-            self.record(committed.applied, perSpace: perSpace)
-            if committed.refused {
-                self.show(Self.restrictedMessage, tone: .error)
-            } else if !committed.failures.isEmpty {
-                self.show(WallpaperApplier.Failure(applied: committed.applied, failures: committed.failures).localizedDescription, tone: .error)
-            } else {
-                let images = committed.applied
-                let fallbacks = images.filter { $0.format == .fallbackStill }.count
-                var text = images.count == 1 ? "\(verb)." : "\(verb) to \(images.count) displays."
-                if fallbacks > 0 { text += " \(fallbacks == 1 ? "One display" : "\(fallbacks) displays") took a still instead of the pair; macPaper swaps it on theme change while it runs." }
-                self.show(text)
-            }
+            self.queuedApplies -= 1
+            if self.queuedApplies == 0 { self.isApplying = false }
+        }
+    }
+
+    private func perform(_ plan: [DisplayInfo: Wallpaper], verb: String?, perSpace: Bool, generation: Int?) async {
+        let applier = applier
+        let outcome = await Task.detached(priority: .userInitiated) { () -> Result<WallpaperApplier.Prepared, any Error> in
+            do { return .success(try applier.prepare(plan)) } catch { return .failure(error) }
+        }.value
+        let prepared: WallpaperApplier.Prepared
+        switch outcome {
+        case .success(let value): prepared = value
+        case .failure(let error):
+            show(error.localizedDescription, tone: .error)
+            return
+        }
+        afterPrepare()
+        if let generation, generation != liveGeneration {
+            // A newer change is on its way: this render never reaches a desktop.
+            for image in prepared.images { applier.discard(image) }
+            return
+        }
+        let committed = await commit(prepared, access: { [weak self] in self?.license.hasAccess() ?? false })
+        record(committed.applied, perSpace: perSpace)
+        if committed.refused {
+            show(Self.restrictedMessage, tone: .error)
+        } else if !committed.failures.isEmpty {
+            show(WallpaperApplier.Failure(applied: committed.applied, failures: committed.failures).localizedDescription, tone: .error)
+        } else if let verb {
+            let images = committed.applied
+            let fallbacks = images.filter { $0.format == .fallbackStill }.count
+            var text = images.count == 1 ? "\(verb)." : "\(verb) to \(images.count) displays."
+            if fallbacks > 0 { text += " \(fallbacks == 1 ? "One display" : "\(fallbacks) displays") took a still instead of the pair; macPaper swaps it on theme change while it runs." }
+            show(text)
         }
     }
 
@@ -990,6 +1297,9 @@ final class AppModel {
             show("Applied, but couldn’t save the record: \(error.localizedDescription)", tone: .error)
         }
         appliedState = applied.current
+        // The History section: one entry per look, newest first.
+        for wallpaper in Set(images.map(\.wallpaper)) { try? history.record(wallpaper) }
+        favoritesRevision &+= 1
     }
 
     /// Re-reads the applied file (the preview harness writes it directly).
@@ -1021,15 +1331,12 @@ final class AppModel {
         // The swap is an apply like any other: prepared off the main actor,
         // committed per display only while the license allows it now (a
         // restricted Mac keeps the side it has; the wallpaper stays).
-        isApplying = true
         let applier = applier
-        Task { [weak self] in
+        enqueue { [weak self] in
             let outcome = await Task.detached(priority: .userInitiated) { () -> WallpaperApplier.Prepared? in
                 try? applier.prepare(plan, side: side)
             }.value
-            guard let self else { return }
-            defer { self.isApplying = false }
-            guard let prepared = outcome else { return }
+            guard let self, let prepared = outcome else { return }
             let committed = await self.commit(prepared, access: { [weak self] in self?.license.hasAccess() ?? false })
             for image in committed.applied {
                 try? self.applied.update { $0.record(image, perSpace: false) }
@@ -1040,9 +1347,10 @@ final class AppModel {
 
     // MARK: - Export
 
-    func export(_ kind: ExportKind) {
+    /// Exports the draft, or a favorite from the Library.
+    func export(_ kind: ExportKind, of document: Wallpaper? = nil) {
         guard allowed(), !isExporting else { return }
-        let wallpaper = draft
+        let wallpaper = document ?? draft
         let context = currentContext
         let renderer = renderer
         let folder = preferences.exportFolder

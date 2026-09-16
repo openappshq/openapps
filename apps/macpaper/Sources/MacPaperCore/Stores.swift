@@ -23,6 +23,7 @@ public struct AppPaths: Sendable {
     public var favorites: URL { root.appendingPathComponent("favorites.json") }
     public var applied: URL { root.appendingPathComponent("applied.json") }
     public var blocklist: URL { root.appendingPathComponent("never.json") }
+    public var history: URL { root.appendingPathComponent("history.json") }
     public var imports: URL { root.appendingPathComponent("imports", isDirectory: true) }
     public var appliedImages: URL { root.appendingPathComponent("applied", isDirectory: true) }
 
@@ -96,6 +97,80 @@ struct LossyArray<Element: Codable & Sendable>: Codable, Sendable {
     }
 
     private struct Skip: Codable {}
+}
+
+// MARK: - History
+
+/// One document that reached a desktop, and when.
+public struct HistoryEntry: Codable, Hashable, Identifiable, Sendable {
+    public let id: UUID
+    public var wallpaper: Wallpaper
+    public var appliedAt: Date
+
+    public init(id: UUID = UUID(), wallpaper: Wallpaper, appliedAt: Date = Date()) {
+        self.id = id
+        self.wallpaper = wallpaper
+        self.appliedAt = appliedAt
+    }
+}
+
+/// What was applied, newest first, in `history.json`, bounded. Live apply
+/// lands a document after every change, so an entry is *one look*: a
+/// document with the same generator and seed as the newest entry replaces
+/// it (a slider moved), anything else is a new entry (a shuffle, a
+/// favorite, a new seed).
+public final class HistoryStore: @unchecked Sendable {
+    private struct File: Codable, Sendable {
+        var version = 1
+        var entries: LossyArray<HistoryEntry>
+    }
+
+    public let limit: Int
+    private let file: JSONFile<File>
+    private let lock = NSLock()
+    private var entries: [HistoryEntry]
+
+    public init(fileURL: URL, limit: Int = 40) {
+        self.limit = max(1, limit)
+        file = JSONFile(url: fileURL)
+        entries = Array(((try? file.load())?.entries.elements ?? []).prefix(self.limit))
+    }
+
+    public var all: [HistoryEntry] {
+        lock.withLock { entries }
+    }
+
+    public func record(_ wallpaper: Wallpaper, at date: Date = Date()) throws {
+        try lock.withLock {
+            var next = entries
+            if let first = next.first, first.wallpaper.seed == wallpaper.seed, first.wallpaper.generator.kind == wallpaper.generator.kind {
+                if first.wallpaper == wallpaper { return }
+                next[0] = HistoryEntry(id: first.id, wallpaper: wallpaper, appliedAt: date)
+            } else {
+                next.removeAll { $0.wallpaper == wallpaper }
+                next.insert(HistoryEntry(wallpaper: wallpaper, appliedAt: date), at: 0)
+            }
+            next = Array(next.prefix(limit))
+            try file.save(File(entries: LossyArray(next)))
+            entries = next
+        }
+    }
+
+    public func remove(_ entry: HistoryEntry) throws {
+        try lock.withLock {
+            let next = entries.filter { $0.id != entry.id }
+            guard next.count != entries.count else { return }
+            try file.save(File(entries: LossyArray(next)))
+            entries = next
+        }
+    }
+
+    public func removeAll() throws {
+        try lock.withLock {
+            try file.save(File(entries: LossyArray([])))
+            entries = []
+        }
+    }
 }
 
 // MARK: - Applied documents

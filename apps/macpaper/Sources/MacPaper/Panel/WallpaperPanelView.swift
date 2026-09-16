@@ -1,39 +1,40 @@
 import MacPaperCore
 import SwiftUI
 
-/// The panel's content, shared by the notch panel and the menu-bar popover:
-/// the preview, the side and pair controls, the generator and its
-/// parameters, the finishes and the composition, the actions, the
-/// favorites, the footer. While the license restricts the feature, the
-/// license card takes the generator's and the actions' place
-/// (design/products/macpaper.md).
+/// The column: an icon rail on the left and, beside it, the section it
+/// points at. Shared by the notch panel and the menu-bar popover. Dark in
+/// both appearances and opaque (`PanelTheme`): it hangs from the notch, so
+/// it is a piece of the same black, and no wallpaper reaches a label.
+/// Every change reaches the desktop on its own (live apply), so there is
+/// no Apply: the header says where changes land, the rail carries Shuffle
+/// and Collapse, the footer the seed. While the license restricts the
+/// feature, the license card takes the place of the sections that make
+/// wallpapers; Library and History still browse
+/// (design/products/macpaper.md, "Notch panel").
 struct WallpaperPanelView: View {
     @Bindable var model: AppModel
-    /// Squared top corners: the notch panel meets the menu bar.
-    var attachedToNotch = false
-    /// The notch panel follows the width setting; the popover is fixed.
-    var width: CGFloat = PanelMetrics.popoverWidth
-    /// A slot above the preview for the licensing wiring (the trial pill
-    /// or the license badge); nil draws nothing.
+    /// The column's width, from the setting and the widest control.
+    var width: CGFloat = PanelMetrics.width(for: .regular)
+    /// The column's height; nil sizes to the content (the harness).
+    var height: CGFloat? = nil
+    /// A slot in the header for the licensing wiring (the trial pill or
+    /// the license badge); nil draws nothing.
     var header: AnyView? = nil
     let showSettings: () -> Void
     let quit: () -> Void
-    /// The disclosures' initial state (the preview harness opens them).
-    var expandFinishes = false
-    var expandFavorites = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Collapse: closes the panel or the popover.
+    var dismiss: () -> Void = {}
     @Environment(\.previewRendering) private var previewRendering
-    @State private var showsFinishes = false
-    @State private var showsFavorites = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // The drop target is AppKit-backed: `ImageRenderer` cannot draw a
         // view that carries one, so the harness leaves it off.
         if previewRendering {
-            content
+            column
         } else {
-            content.onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                // A `.macpaper` file dropped anywhere on the panel is imported.
+            column.onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                // A `.macpaper` file dropped anywhere on the column is imported.
                 guard let provider = providers.first else { return false }
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url, url.pathExtension.lowercased() == RecipeDocument.fileExtension else { return }
@@ -44,172 +45,258 @@ struct WallpaperPanelView: View {
         }
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: Brand.Space.s12) {
-            if let header { header }
-            PreviewCard(model: model, width: width - 2 * Brand.Space.s16)
-            if let restriction = model.license.restriction() {
-                LicenseCard(restriction: restriction, license: model.license)
-                // Favorites keep working: the star for the shown document.
-                HStack {
-                    Spacer()
-                    FavoriteButton(model: model)
-                }
-            } else {
-                SideAndPairRow(model: model)
-                GeneratorPickerRow(model: model)
-                ParametersView(model: model)
-                DisclosureRow(title: "Finishes", detail: finishSummary, isExpanded: $showsFinishes) {
-                    FinishEditor(model: model)
-                }
-                CompositionRow(model: model)
-                ActionRow(model: model)
+    private var column: some View {
+        HStack(alignment: .top, spacing: 0) {
+            PanelRail(model: model, dismiss: dismiss)
+                .frame(width: PanelLayout.railWidth)
+                .frame(maxHeight: .infinity)
+            Rectangle().fill(Brand.Panel.hairline).frame(width: 1)
+            pane
+                .frame(maxHeight: .infinity, alignment: .top)
+                .clipped()
+        }
+        .frame(width: width)
+        .frame(height: height, alignment: .top)
+        .background(Brand.Panel.ground)
+        .environment(\.colorScheme, .dark)
+        .animation(Motion.standard(reduceMotion: reduceMotion), value: model.status)
+    }
+
+    private var pane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PanelHeader(model: model)
+                .padding(.horizontal, PanelLayout.paneInset)
+                .padding(.top, Brand.Space.s12)
+            if let header {
+                // The licensing slot: the trial pill on its own line under the title.
+                header
+                    .padding(.horizontal, PanelLayout.paneInset)
+                    .padding(.bottom, Brand.Space.s4)
             }
+            PreviewCard(model: model, width: PanelLayout.paneWidth(columnWidth: width))
+                .padding(.horizontal, PanelLayout.paneInset)
+                .padding(.top, Brand.Space.s8)
+            sectionBody
+            Spacer(minLength: 0)
             if let status = model.status {
                 StatusText(status: status)
+                    .padding(.horizontal, PanelLayout.paneInset)
+                    .padding(.bottom, Brand.Space.s8)
                     .transition(.opacity)
             }
-            if !model.favoriteList.isEmpty {
-                DisclosureRow(title: "Favorites", detail: "\(model.favoriteList.count)", isExpanded: $showsFavorites) {
-                    FavoritesStrip(model: model)
-                }
-            }
             UpdateHintRow(updates: model.updates)
+                .padding(.horizontal, PanelLayout.paneInset)
             Footer(model: model, showSettings: showSettings, quit: quit)
+                .padding(.horizontal, PanelLayout.paneInset)
+                .padding(.bottom, Brand.Space.s12)
         }
-        .padding(Brand.Space.s16)
-        .frame(width: width)
-        .animation(Motion.standard(reduceMotion: reduceMotion), value: model.status)
-        .animation(Motion.standard(reduceMotion: reduceMotion), value: model.generatorKind)
-        .background(Brand.canvas.opacity(0.001))
-        .onAppear {
-            if expandFinishes { showsFinishes = true }
-            if expandFavorites { showsFavorites = true }
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private var finishSummary: String {
-        var parts: [String] = []
-        if model.draft.finish.tint != nil { parts.append("tint") }
-        if model.draft.finish.duotone != nil { parts.append("duotone") }
-        if model.draft.finish.gradientMap != nil { parts.append("map") }
-        if model.draft.grain > 0 { parts.append("grain \(Int(model.draft.grain * 100))%") }
-        if model.draft.finish.topShade > 0 { parts.append("top shade") }
-        return parts.isEmpty ? "none" : parts.joined(separator: " · ")
+    /// The section, scrolling when taller than the column (the harness
+    /// draws no scroll view: a plain stack, clipped by the column).
+    @ViewBuilder
+    private var sectionBody: some View {
+        let content = SectionContent(model: model, width: PanelLayout.paneWidth(columnWidth: width))
+            .padding(.horizontal, PanelLayout.paneInset)
+            .padding(.vertical, Brand.Space.s12)
+        if height == nil {
+            content
+        } else if previewRendering {
+            // No scroll view under `ImageRenderer`: the overflow is clipped, the footer stays.
+            Color.clear
+                .overlay(alignment: .top) { content }
+                .clipped()
+        } else {
+            ScrollView(.vertical, showsIndicators: false) { content }
+        }
     }
 }
 
+/// The column's widths: the setting, or wider when a segmented control
+/// needs it to keep every label on one line.
 enum PanelMetrics {
-    static let popoverWidth: CGFloat = 420
+    /// The popover is the regular column.
+    static var popoverWidth: CGFloat { width(for: .regular) }
+
+    /// The widest segmented controls the pane draws, measured in the
+    /// segment font.
+    static var controlWidths: [CGFloat] {
+        [
+            LabelMeasure.segmentedWidth(Composition.allCases.map(\.title)),
+            LabelMeasure.segmentedWidth(GradientKind.allCases.map(\.title)),
+            LabelMeasure.segmentedWidth(PatternKind.allCases.map(\.title)),
+            LabelMeasure.segmentedWidth(ImageFit.allCases.map(\.title)),
+            LabelMeasure.segmentedWidth(ColorInterpolation.allCases.map(\.title)),
+            LabelMeasure.segmentedWidth(PairChoice.allCases.map(\.title)),
+            LabelMeasure.segmentedWidth(BaseKind.allCases.map(\.title)),
+            LabelMeasure.segmentedWidth(Side.allCases.map(\.title)),
+            LabelMeasure.segmentedWidth(FieldFamily.allCases.map(\.title)),
+        ] + FieldFamily.allCases.flatMap(\.knobs).compactMap { knob -> CGFloat? in
+            if case .choice(let titles) = knob.style { LabelMeasure.segmentedWidth(titles) } else { nil }
+        }
+    }
+
+    static func width(for setting: PanelWidth) -> CGFloat {
+        PanelLayout.columnWidth(setting: setting, controlWidths: controlWidths)
+    }
 }
 
-/// The generator: the pixel-field families first, then the other kinds,
-/// gradient last as the advanced pick; no solid (a flat color is a base).
-private struct GeneratorPickerRow: View {
+// MARK: - Header
+
+/// The section's title, where changes land, and the licensing slot.
+private struct PanelHeader: View {
     @Bindable var model: AppModel
-    @Environment(\.previewRendering) private var previewRendering
-
-    private enum Choice: Hashable {
-        case family(FieldFamily)
-        case kind(GeneratorKind)
-    }
-
-    private var selection: Binding<Choice> {
-        Binding(
-            get: { model.fieldFamily.map { .family($0) } ?? .kind(model.generatorKind) },
-            set: { choice in
-                switch choice {
-                case .family(let family): model.fieldFamily = family
-                case .kind(let kind): model.generatorKind = kind
-                }
-            }
-        )
-    }
-
-    private var currentTitle: String {
-        model.fieldFamily?.title ?? (model.generatorKind == .gradient ? "Gradient (advanced)" : model.generatorKind.title)
-    }
 
     var body: some View {
         HStack(spacing: Brand.Space.s8) {
-            Text("Generator").font(Brand.body(12)).foregroundStyle(Brand.textSecondary).frame(width: 64, alignment: .leading)
-            if previewRendering {
-                // `ImageRenderer` cannot draw the AppKit pop-up: a flat stand-in.
-                Text(currentTitle)
-                    .font(Brand.body(12))
-                    .foregroundStyle(Brand.textPrimary)
-                    .padding(.horizontal, Brand.Space.s8)
-                    .frame(width: 190, height: 28, alignment: .leading)
-                    .background(Brand.surface, in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
-            } else {
-                Picker("Generator", selection: selection) {
-                    Section("Pixel fields") {
-                        ForEach(FieldFamily.allCases, id: \.self) { family in
-                            Text(family.title).tag(Choice.family(family))
-                        }
-                    }
-                    Section {
-                        ForEach(GeneratorKind.pickable.filter { $0 != .field }, id: \.self) { kind in
-                            Text(kind == .gradient ? "Gradient (advanced)" : kind.title).tag(Choice.kind(kind))
-                        }
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 190)
-                .accessibilityLabel("Generator")
-            }
-            PinButton(key: .generator, model: model)
-            Spacer()
-            Text(model.recipeName)
-                .font(Brand.mono(10))
-                .foregroundStyle(Brand.textSecondary)
+            Text(model.panelSection.title)
+                .font(Brand.display(18))
+                .foregroundStyle(Brand.Panel.textPrimary)
                 .lineLimit(1)
-                .truncationMode(.middle)
+            Spacer(minLength: Brand.Space.s8)
+            ReachMenu(model: model)
+        }
+        .frame(height: PanelLayout.headerHeight)
+    }
+}
+
+/// Every display · this display · this Space only: where every change
+/// lands. "Same on all displays" leaves the display choice out.
+private struct ReachMenu: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let choices = ApplyReach.available(sameOnAllDisplays: model.preferences.sameOnAllDisplays, displayCount: model.displays.count)
+        Menu {
+            ForEach(choices, id: \.self) { reach in
+                Button {
+                    model.reach = reach
+                } label: {
+                    Label(reach.title, systemImage: reach.symbolName)
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: model.reach.symbolName).font(.system(size: 10, weight: .semibold))
+                Text(model.reach.title).font(Brand.body(12, weight: 600)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .foregroundStyle(Brand.Panel.textPrimary)
+            .padding(.horizontal, Brand.Space.s8)
+            .frame(height: 26)
+            .background(Brand.Panel.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(Brand.Panel.hairline, lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Changes land on: \(model.reach.title)")
+        .help("Where every change lands: every display, this display, or this Space only")
+        .onChange(of: choices) { _, next in
+            if !next.contains(model.reach) { model.reach = next[0] }
+        }
+    }
+}
+
+// MARK: - Sections
+
+private struct SectionContent: View {
+    @Bindable var model: AppModel
+    let width: CGFloat
+
+    var body: some View {
+        if let restriction = model.license.restriction(), model.panelSection.makesWallpapers {
+            LicenseCard(restriction: restriction, license: model.license)
+        } else {
+            switch model.panelSection {
+            case .library: LibrarySection(model: model)
+            case .generators: GeneratorsSection(model: model)
+            case .palette: PaletteSection(model: model, width: width)
+            case .parameters: ParametersSection(model: model)
+            case .effects: EffectsSection(model: model)
+            case .export: ExportSection(model: model)
+            case .history: HistorySection(model: model)
+            }
+        }
+    }
+}
+
+extension PanelSection {
+    /// The sections the license card replaces while restricted; Library
+    /// and History browse, which is never gated.
+    var makesWallpapers: Bool {
+        switch self {
+        case .library, .history: false
+        case .generators, .palette, .parameters, .effects, .export: true
         }
     }
 }
 
 // MARK: - Preview
 
+/// The current wallpaper in the display's aspect, capped in height, with
+/// its tags: the display's name when there is more than one, "on the
+/// desktop" while the draft is what the display shows, the menu-bar
+/// readability verdict, and the focal point for a framed image.
 private struct PreviewCard: View {
     let model: AppModel
-    /// The card's width: the preview's height follows the display's aspect
-    /// from it, so the card never gives way when the panel is squeezed.
     let width: CGFloat
+    private let maximumHeight: CGFloat = 200
 
     var body: some View {
         let size = model.previewSize
+        let natural = (width / size.aspectRatio).rounded()
+        let height = min(natural, maximumHeight)
         ZStack(alignment: .bottomLeading) {
             Group {
                 if let image = model.preview {
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .interpolation(.high)
+                        .aspectRatio(contentMode: .fill)
                 } else {
-                    Brand.surface
+                    Brand.Panel.surface
                 }
             }
-            .frame(width: width, height: (width / size.aspectRatio).rounded())
+            .frame(width: width, height: height)
             .overlay { focusOverlay }
             .clipShape(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).strokeBorder(Brand.borderSubtle.opacity(0.6), lineWidth: 1))
-            HStack(spacing: Brand.Space.s8) {
-                if let display = model.currentDisplay, model.displaysDiffer || model.displays.count > 1 {
-                    Tag(text: display.name)
-                }
-                if model.currentApplied == model.draft {
-                    Tag(text: "On the desktop")
-                } else if model.previewWallpaper != model.draft {
-                    Tag(text: "Rendering…")
-                }
-                if let readability = model.readability, model.previewWallpaper == model.draft {
-                    Tag(text: readability.reads ? "Menu bar: reads" : "Menu bar: low contrast", warning: !readability.reads)
+            .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            // The tags on one line where they fit, the display's name on its
+            // own line where they do not; never truncated.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Brand.Space.s8) { displayTag; stateTags }
+                VStack(alignment: .leading, spacing: Brand.Space.s4) {
+                    displayTag
+                    HStack(spacing: Brand.Space.s8) { stateTags }
                 }
             }
             .padding(Brand.Space.s8)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(previewLabel)
+    }
+
+    @ViewBuilder
+    private var displayTag: some View {
+        if let display = model.currentDisplay, model.displaysDiffer || model.displays.count > 1 {
+            Tag(text: display.name)
+        }
+    }
+
+    @ViewBuilder
+    private var stateTags: some View {
+        if model.currentApplied == model.draft {
+            Tag(text: "On the desktop")
+        } else if model.previewWallpaper != model.draft || model.isApplying {
+            Tag(text: "Rendering…")
+        }
+        if let readability = model.readability, model.previewWallpaper == model.draft {
+            Tag(text: readability.reads ? "Menu bar: reads" : "Menu bar: low contrast", warning: !readability.reads)
+        }
     }
 
     /// The focal point of a framed image: a ring the user drags.
@@ -249,6 +336,8 @@ private struct Tag: View {
         Text(text.uppercased())
             .font(Brand.mono(10, medium: true))
             .tracking(0.5)
+            .lineLimit(1)
+            .fixedSize()
             .foregroundStyle(warning ? Color.black : .white)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
@@ -256,266 +345,7 @@ private struct Tag: View {
     }
 }
 
-// MARK: - Side and pair
-
-/// Light / Dark for the side being edited, the pair mode, and the dark
-/// side's derive/reset.
-private struct SideAndPairRow: View {
-    @Bindable var model: AppModel
-
-    var body: some View {
-        HStack(spacing: Brand.Space.s8) {
-            SegmentedControl(title: "Side", selection: Binding(get: { model.shownSide }, set: { model.editingSide = $0 }), choices: Side.allCases.map { ($0, $0.title) })
-                .frame(width: 130)
-            Menu {
-                Button("Still") { model.setPair(.still) }
-                Button("Light / Dark pair") { model.setPair(.lightDark) }
-                Menu("Time of day") {
-                    ForEach(PairMode.frameCounts, id: \.self) { frames in
-                        Button("\(frames) frames") { model.setPair(.timeOfDay(frames: frames)) }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(model.draft.pair.title).font(Brand.body(12))
-                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
-                }
-                .foregroundStyle(Brand.textPrimary)
-                .padding(.horizontal, Brand.Space.s8)
-                .frame(minHeight: 28)
-                .background(Brand.surface, in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).strokeBorder(Brand.borderSubtle.opacity(0.6), lineWidth: 1))
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .accessibilityLabel("Pair: \(model.draft.pair.title)")
-            .help("Still, a light/dark pair, or a time-of-day set")
-            Spacer(minLength: 0)
-            if model.shownSide == .dark {
-                if model.draft.hasCustomDark {
-                    Button("Derive again") { model.resetDarkSide() }
-                        .buttonStyle(LinkButtonStyle())
-                        .help("Make the dark side from the light one again")
-                } else {
-                    Text("derived from light")
-                        .font(Brand.mono(10))
-                        .foregroundStyle(Brand.textSecondary)
-                }
-            } else if model.readability?.reads == false, model.draft.finish.topShade == 0 {
-                Button("Shade the top") { model.shadeTheTop() }
-                    .buttonStyle(LinkButtonStyle())
-                    .help("Shade the menu-bar strip so its text reads")
-            }
-        }
-    }
-}
-
-// MARK: - Finishes and composition
-
-private struct FinishEditor: View {
-    @Bindable var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Brand.Space.s8) {
-            LabeledSlider(title: "Grain", value: model.binding(\.grain), range: 0...1, format: { "\(Int($0 * 100))%" })
-            LabeledSlider(title: "Top shade", value: model.binding(\.finish.topShade), range: 0...1, format: { "\(Int($0 * 100))%" })
-            OptionalFinishRow(title: "Tint", isOn: Binding(get: { model.draft.finish.tint != nil }, set: { on in model.setFinish { $0.tint = on ? Tint(color: model.draft.generator.colors.first ?? .black, amount: 0.4) : nil } })) {
-                if let tint = model.draft.finish.tint {
-                    ColorWell(title: "Tint color", color: Binding(get: { tint.color }, set: { color in model.setFinish { $0.tint = Tint(color: color, amount: tint.amount) } }))
-                    Slider(value: Binding(get: { tint.amount }, set: { amount in model.setFinish { $0.tint = Tint(color: tint.color, amount: amount) } }), in: 0...1) { Text("Tint amount") }
-                        .labelsHidden()
-                        .tint(Brand.accentSolid)
-                    Text("\(Int(tint.amount * 100))%").font(Brand.mono(11)).foregroundStyle(Brand.textSecondary).frame(width: 44, alignment: .trailing)
-                }
-            }
-            OptionalFinishRow(title: "Duotone", isOn: Binding(get: { model.draft.finish.duotone != nil }, set: { on in model.setFinish { $0.duotone = on ? Duotone(shadow: RGBAColor(hex: 0x242B55), highlight: RGBAColor(hex: 0xFFD528)) : nil } })) {
-                if let duotone = model.draft.finish.duotone {
-                    Text("Shadow").font(Brand.body(12)).foregroundStyle(Brand.textSecondary)
-                    ColorWell(title: "Shadow", color: Binding(get: { duotone.shadow }, set: { color in model.setFinish { $0.duotone = Duotone(shadow: color, highlight: duotone.highlight) } }))
-                    Text("Highlight").font(Brand.body(12)).foregroundStyle(Brand.textSecondary)
-                    ColorWell(title: "Highlight", color: Binding(get: { duotone.highlight }, set: { color in model.setFinish { $0.duotone = Duotone(shadow: duotone.shadow, highlight: color) } }))
-                }
-            }
-            OptionalFinishRow(title: "Gradient map", isOn: Binding(get: { model.draft.finish.gradientMap != nil }, set: { on in model.setFinish { $0.gradientMap = on ? [ColorStop(position: 0, color: RGBAColor(hex: 0x163A29)), ColorStop(position: 1, color: RGBAColor(hex: 0xFFF1EA))] : nil } })) {
-                if let map = model.draft.finish.gradientMap {
-                    ColorRow(title: "", colors: Binding(
-                        get: { map.map(\.color) },
-                        set: { colors in
-                            let count = max(colors.count, 1)
-                            model.setFinish { $0.gradientMap = colors.enumerated().map { i, color in ColorStop(position: count == 1 ? 0 : Double(i) / Double(count - 1), color: color) } }
-                        }
-                    ), range: GradientParameters.stopRange, labelWidth: 0)
-                }
-            }
-        }
-    }
-}
-
-/// A finish with an on/off checkbox and its controls beside it while on.
-private struct OptionalFinishRow<Controls: View>: View {
-    let title: String
-    @Binding var isOn: Bool
-    @ViewBuilder let controls: () -> Controls
-
-    var body: some View {
-        HStack(spacing: Brand.Space.s8) {
-            Toggle(isOn: $isOn) {
-                Text(title).font(Brand.body(12)).foregroundStyle(Brand.textSecondary)
-            }
-            .toggleStyle(.checkbox)
-            .frame(width: 110, alignment: .leading)
-            if isOn { controls() }
-            Spacer(minLength: 0)
-        }
-    }
-}
-
-private struct CompositionRow: View {
-    @Bindable var model: AppModel
-
-    var body: some View {
-        HStack(spacing: Brand.Space.s8) {
-            Text("Notch")
-                .font(Brand.body(12))
-                .foregroundStyle(Brand.textSecondary)
-                .frame(width: 64, alignment: .leading)
-            SegmentedControl(title: "Composition", selection: model.binding(\.composition), choices: Composition.allCases.map { ($0, $0.title) })
-        }
-        .help("How the wallpaper composes around the notch of the display it is applied to")
-    }
-}
-
-/// A collapsible row with a summary of what is inside.
-struct DisclosureRow<Content: View>: View {
-    let title: String
-    let detail: String
-    @Binding var isExpanded: Bool
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Brand.Space.s8) {
-            Button {
-                isExpanded.toggle()
-            } label: {
-                HStack(spacing: Brand.Space.s8) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .bold))
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .foregroundStyle(Brand.textSecondary)
-                    Text(title).font(Brand.body(12, weight: 600)).foregroundStyle(Brand.textPrimary)
-                    Text(detail).font(Brand.mono(10)).foregroundStyle(Brand.textSecondary).lineLimit(1)
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(title), \(detail)")
-            .accessibilityAddTraits(isExpanded ? [.isSelected] : [])
-            if isExpanded { content() }
-        }
-    }
-}
-
-// MARK: - Actions
-
-private struct ActionRow: View {
-    let model: AppModel
-
-    var body: some View {
-        HStack(spacing: Brand.Space.s8) {
-            Button("Shuffle") { model.shuffle() }
-                .secondaryAction()
-                .disabled(!model.canAct)
-                .help("A random wallpaper, applied now")
-            applyButton
-            FavoriteButton(model: model)
-            Menu {
-                Section("Export") {
-                    ForEach(ExportKind.allCases, id: \.self) { kind in
-                        Button("Export as \(kind.title)") { model.export(kind) }
-                    }
-                }
-                Section("Share") {
-                    Button("Copy link") { model.shareLink() }
-                    Button("Remix (new seed)") { model.remix() }
-                }
-                Section("Recipe") {
-                    Button("Import Recipe…") { Task { await model.importRecipe() } }
-                    Button("Export Recipe…") { Task { await model.exportRecipe() } }
-                }
-                Section {
-                    Button("Never show this") { model.neverShowThis() }
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Brand.textSecondary)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .disabled(!model.canAct || model.isExporting)
-            .accessibilityLabel("More: export, share, never show")
-            .help("Export, share, remix, never show")
-        }
-    }
-
-    /// Apply, and a menu beside it: this display · all displays (while
-    /// displays keep their own), every Space (kept) · this Space only.
-    @ViewBuilder
-    private var applyButton: some View {
-        HStack(spacing: 1) {
-            Button(model.isApplying ? "Applying…" : "Apply") { model.apply() }
-                .buttonStyle(PrimaryButtonStyle())
-                .keyboardShortcut(.defaultAction)
-                .help(model.preferences.sameOnAllDisplays ? "Apply to every display, every Space" : "Apply to \(model.currentDisplay?.name ?? "this display")")
-            Menu {
-                if !model.preferences.sameOnAllDisplays, model.displays.count > 1 {
-                    Button("This display (\(model.currentDisplay?.name ?? "current"))") { model.apply() }
-                    Button("All displays") { model.apply(ApplyTarget(scope: .allDisplays)) }
-                    Divider()
-                }
-                Button("Every Space (kept)") { model.apply() }
-                Button("This Space only") { model.apply(ApplyTarget(thisSpaceOnly: true)) }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Brand.accentOn)
-                    .frame(width: 24, height: 32)
-                    .background(Brand.accentSolid, in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .accessibilityLabel("Apply to which display or Space")
-        }
-        .disabled(!model.canAct)
-    }
-}
-
-/// The star: favorites are browsing, not generating, so it works in every
-/// license state.
-private struct FavoriteButton: View {
-    let model: AppModel
-
-    var body: some View {
-        Button {
-            model.toggleFavorite()
-        } label: {
-            Image(systemName: model.isFavorite ? "star.fill" : "star")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(model.isFavorite ? Brand.accentText : Brand.textSecondary)
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(model.isFavorite ? "Remove from favorites" : "Add to favorites")
-        .help(model.isFavorite ? "Remove from favorites" : "Add to favorites")
-    }
-}
+// MARK: - Status and footer
 
 private struct StatusText: View {
     let status: StatusLine
@@ -524,97 +354,18 @@ private struct StatusText: View {
         HStack(alignment: .top, spacing: Brand.Space.s8) {
             Image(systemName: status.tone == .error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.system(size: 12))
-                .foregroundStyle(status.tone == .error ? Brand.dangerSolid : Brand.successSolid)
+                .foregroundStyle(status.tone == .error ? Brand.Panel.danger : Brand.Panel.success)
             Text(status.text)
                 .font(Brand.body(12))
-                .foregroundStyle(status.tone == .error ? Brand.dangerSolid : Brand.textSecondary)
+                .foregroundStyle(status.tone == .error ? Brand.Panel.danger : Brand.Panel.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
     }
 }
 
-// MARK: - Favorites
-
-/// The favorites as small renders: click loads one, the x removes it.
-private struct FavoritesStrip: View {
-    let model: AppModel
-    @Environment(\.previewRendering) private var previewRendering
-
-    var body: some View {
-        if previewRendering {
-            // `ImageRenderer` draws no scroll view: the first few, in a row.
-            HStack(spacing: Brand.Space.s8) {
-                ForEach(model.favoriteList.prefix(4)) { favorite in
-                    FavoriteThumbnail(model: model, favorite: favorite)
-                }
-            }
-            .frame(height: 64)
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Brand.Space.s8) {
-                    ForEach(model.favoriteList) { favorite in
-                        FavoriteThumbnail(model: model, favorite: favorite)
-                    }
-                }
-            }
-            .frame(height: 64)
-        }
-    }
-}
-
-private struct FavoriteThumbnail: View {
-    let model: AppModel
-    let favorite: Favorite
-    @State private var image: CGImage?
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Button {
-                model.load(favorite)
-            } label: {
-                Group {
-                    if let image {
-                        Image(decorative: image, scale: 1).resizable().interpolation(.medium)
-                    } else {
-                        Brand.surface
-                    }
-                }
-                .frame(width: 96, height: 60)
-                .clipShape(RoundedRectangle(cornerRadius: Brand.Radius.small + 2, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Brand.Radius.small + 2, style: .continuous).strokeBorder(favorite.wallpaper == model.draft ? Brand.accentSolid : Brand.borderSubtle.opacity(0.6), lineWidth: favorite.wallpaper == model.draft ? 2 : 1))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Recipe: \(favorite.name), seed \(favorite.wallpaper.seedText)")
-            .help(favorite.name)
-            .onDrag {
-                // The recipe as a `.macpaper` file.
-                guard let url = model.recipeDragURL(for: favorite) else { return NSItemProvider() }
-                return NSItemProvider(object: url as NSURL)
-            }
-            Button {
-                model.removeFavorite(favorite)
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white, .black.opacity(0.6))
-            }
-            .buttonStyle(.plain)
-            .padding(3)
-            .accessibilityLabel("Remove from favorites")
-        }
-        .task(id: favorite.id) {
-            let renderer = model.renderer
-            let wallpaper = favorite.wallpaper
-            image = await Task.detached(priority: .utility) {
-                renderer.render(wallpaper, side: .light, context: RenderContext(size: PixelSize(width: 192, height: 120), menuBarStrip: 4)).cgImage
-            }.value
-        }
-    }
-}
-
-// MARK: - Footer
-
+/// The quiet footer: the seed (click to type one, a die for a new one,
+/// a pin so Shuffle keeps it), Settings… and Quit.
 private struct Footer: View {
     let model: AppModel
     let showSettings: () -> Void
@@ -625,12 +376,13 @@ private struct Footer: View {
 
     var body: some View {
         HStack(spacing: Brand.Space.s8) {
-            MonoLabel("Seed")
+            PanelMonoLabel("Seed")
             if editingSeed {
                 TextField("Seed", text: $seedText)
                     .textFieldStyle(.plain)
-                    .font(Brand.mono(11))
-                    .frame(width: 130)
+                    .font(Brand.mono(12))
+                    .foregroundStyle(Brand.Panel.textPrimary)
+                    .frame(width: 140)
                     .focused($seedFocused)
                     .onSubmit { commitSeed() }
                     .onExitCommand { editingSeed = false }
@@ -642,10 +394,12 @@ private struct Footer: View {
                     seedFocused = true
                 } label: {
                     Text(model.draft.seedText)
-                        .font(Brand.mono(11))
-                        .foregroundStyle(Brand.textPrimary)
+                        .font(Brand.mono(12))
+                        .foregroundStyle(Brand.Panel.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .frame(maxWidth: 140)
+                        .fixedSize()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Seed \(model.draft.seedText); activate to edit")
@@ -656,18 +410,20 @@ private struct Footer: View {
             } label: {
                 Image(systemName: "dice")
             }
-            .buttonStyle(CardActionStyle())
+            .buttonStyle(PanelIconButtonStyle())
             .disabled(model.license.restriction() != nil)
             .accessibilityLabel("New seed")
             .help("New seed")
+            PinButton(pin: .seed, model: model)
             Spacer()
             Button("Settings…", action: showSettings)
-                .buttonStyle(LinkButtonStyle())
+                .buttonStyle(PanelLinkButtonStyle())
                 .keyboardShortcut(",", modifiers: .command)
             Button("Quit", action: quit)
-                .buttonStyle(LinkButtonStyle())
+                .buttonStyle(PanelLinkButtonStyle())
                 .keyboardShortcut("q", modifiers: .command)
         }
+        .frame(height: 32)
     }
 
     private func commitSeed() {
@@ -694,14 +450,14 @@ struct LicenseCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Brand.Space.s12) {
-            MonoLabel("License")
+            PanelMonoLabel("License")
             Text(restriction.title)
                 .font(Brand.display(20))
-                .foregroundStyle(Brand.textPrimary)
+                .foregroundStyle(Brand.Panel.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             Text(restriction.detail)
                 .font(Brand.body(13))
-                .foregroundStyle(Brand.textSecondary)
+                .foregroundStyle(Brand.Panel.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: Brand.Space.s8) {
                 ForEach(Array(restriction.actions.enumerated()), id: \.offset) { index, action in
@@ -709,11 +465,11 @@ struct LicenseCard: View {
                     let title = action == .buy && !license.canBuy ? "Buy a license — coming soon" : action.title
                     if index == 0 {
                         Button(title) { license.perform(action) }
-                            .buttonStyle(PrimaryButtonStyle())
+                            .buttonStyle(PanelPrimaryButtonStyle())
                             .disabled(action == .buy && !license.canBuy)
                     } else {
                         Button(title) { license.perform(action) }
-                            .secondaryAction()
+                            .buttonStyle(PanelSecondaryButtonStyle())
                             .disabled(action == .buy && !license.canBuy)
                     }
                 }
@@ -722,7 +478,8 @@ struct LicenseCard: View {
         }
         .padding(Brand.Space.s16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface(radius: Brand.Radius.control)
+        .background(Brand.Panel.surface, in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).strokeBorder(Brand.Panel.hairline, lineWidth: 1))
         .accessibilityElement(children: .contain)
     }
 }

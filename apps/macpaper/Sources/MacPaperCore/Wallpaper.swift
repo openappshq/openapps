@@ -149,6 +149,17 @@ public struct Wallpaper: Codable, Hashable, Sendable {
     /// Whether the dark side was edited by hand (nil derives it).
     public var hasCustomDark: Bool { darkGenerator != nil }
 
+    /// The document with one side's generator replaced (the dark side
+    /// materialised as its own).
+    public func withSideGenerator(_ side: Side, _ generator: Generator) -> Wallpaper {
+        var copy = self
+        switch side {
+        case .light: copy.generator = generator
+        case .dark: copy.darkGenerator = generator
+        }
+        return copy
+    }
+
     /// Every finish off, grain off: the render is the generator's own pixels.
     public var isPlain: Bool { grain == 0 && finish.isEmpty }
 
@@ -637,11 +648,105 @@ public enum GeneratorKind: String, Codable, CaseIterable, Hashable, Sendable {
     /// kinds (Curation.swift). Never a bare gradient, never a solid.
     public static let shuffleable: [GeneratorKind] = [.field, .dither, .pattern, .mesh]
 
+    /// The generators the panel's Generators section lists, in its order
+    /// (the pixel-field families expand first, see `GeneratorChoice`); a
+    /// flat color and a gradient are the base layer, chosen under Effects.
+    public static let panelOrder: [GeneratorKind] = [.field, .dither, .mesh, .pixelize, .pattern]
+
+    /// The kinds that only ever serve as a base under a texture.
+    public static let baseLayers: [GeneratorKind] = [.solid, .gradient]
+
+    public var isBaseLayer: Bool { Self.baseLayers.contains(self) }
+
+    /// One line under the generator's name in the panel.
+    public var summary: String {
+        switch self {
+        case .gradient: "A gradient on its own: linear, radial or conic."
+        case .mesh: "Control points blended into one soft field."
+        case .pattern: "Dots, lines, checks or noise in two colors."
+        case .solid: "One flat color."
+        case .pixelize: "Your photo in blocks, optionally a small palette."
+        case .dither: "Your photo — or the base — through Bayer, blue noise, halftone or ASCII."
+        case .field: "Six authored looks on a pixel grid: moiré, relief, islands, plate, circuit, sky."
+        }
+    }
+
+    /// The SF Symbol the panel's lists use.
+    public var symbolName: String {
+        switch self {
+        case .gradient: "square.lefthalf.filled"
+        case .mesh: "circle.hexagongrid"
+        case .pattern: "circle.grid.3x3"
+        case .solid: "square.fill"
+        case .pixelize: "squareshape.split.3x3"
+        case .dither: "checkerboard.rectangle"
+        case .field: "waveform.path"
+        }
+    }
+
     /// The generators that work on an imported image.
     public var needsSource: Bool { self == .pixelize || self == .dither }
 
     /// The generators whose ground is the base layer when one is set.
     public var takesBase: Bool { self == .pattern || self == .field || self == .dither || self == .pixelize }
+}
+
+/// One entry of the panel's Generators list: a pixel-field family or a
+/// generator kind, in the order the panel shows them — the six families
+/// first, then dither, mesh, pixelize and pattern. Gradient and solid are
+/// base layers, not entries.
+public enum GeneratorChoice: Hashable, Sendable, Identifiable {
+    case family(FieldFamily)
+    case kind(GeneratorKind)
+
+    public static let panelOrder: [GeneratorChoice] = FieldFamily.allCases.map { .family($0) } + GeneratorKind.panelOrder.filter { $0 != .field }.map { .kind($0) }
+
+    public var id: String {
+        switch self {
+        case .family(let family): "family.\(family.rawValue)"
+        case .kind(let kind): "kind.\(kind.rawValue)"
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .family(let family): family.title
+        case .kind(let kind): kind.title
+        }
+    }
+
+    public var summary: String {
+        switch self {
+        case .family(let family): family.summary
+        case .kind(let kind): kind.summary
+        }
+    }
+
+    public var symbolName: String {
+        switch self {
+        case .family(let family): family.symbolName
+        case .kind(let kind): kind.symbolName
+        }
+    }
+
+    public var kind: GeneratorKind {
+        switch self {
+        case .family: .field
+        case .kind(let kind): kind
+        }
+    }
+
+    /// The choice a document is: its family for a field, its kind otherwise.
+    public init(_ generator: Generator) {
+        if case .field(let p) = generator { self = .family(p.family) } else { self = .kind(generator.kind) }
+    }
+}
+
+extension Generator {
+    /// The pixel-field family, nil for the other kinds.
+    public var fieldFamily: FieldFamily? {
+        if case .field(let p) = self { p.family } else { nil }
+    }
 }
 
 /// The generator and its parameters. JSON carries a `type` discriminator
@@ -711,6 +816,43 @@ public enum Generator: Hashable, Sendable {
         case .pixelize(let p): p.source
         case .dither(let p): p.source
         default: nil
+        }
+    }
+
+    /// The same generator in another palette, as many of its colors as it
+    /// takes: a gradient's stops are respaced over them, a mesh takes up to
+    /// six, the two-color generators take the first as the ground and the
+    /// last as the ink, a field takes up to six tones. An empty palette
+    /// changes nothing; one color becomes a ramp of itself
+    /// (`Palettes.usable`), so no generator ever holds a single tone.
+    public func withPalette(_ colors: [RGBAColor]) -> Generator {
+        guard !colors.isEmpty else { return self }
+        let colors = Palettes.usable(colors)
+        switch self {
+        case .gradient(var p):
+            let count = min(max(colors.count, GradientParameters.stopRange.lowerBound), GradientParameters.stopRange.upperBound)
+            p.stops = (0..<count).map { i in ColorStop(position: Double(i) / Double(count - 1), color: colors[i % colors.count]) }
+            return .gradient(p)
+        case .mesh(var p):
+            p.colors = Array(colors.prefix(MeshParameters.colorRange.upperBound))
+            return .mesh(p)
+        case .pattern(var p):
+            p.background = colors[0]
+            p.foreground = colors.count > 1 ? colors[colors.count - 1] : p.foreground
+            return .pattern(p)
+        case .solid(var p):
+            p.color = colors[0]
+            return .solid(p)
+        case .pixelize(var p):
+            p.background = colors[0]
+            return .pixelize(p)
+        case .dither(var p):
+            p.paper = colors[0]
+            p.ink = colors.count > 1 ? colors[colors.count - 1] : p.ink
+            return .dither(p)
+        case .field(var p):
+            p.tones = colors
+            return .field(p)
         }
     }
 

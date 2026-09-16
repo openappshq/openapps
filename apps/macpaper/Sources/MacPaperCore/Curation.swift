@@ -37,6 +37,18 @@ public enum Shuffle {
         from template: Wallpaper?, pins: Set<ParameterKey>? = nil, using generator: inout SeededGenerator,
         families: [RecipeFamily] = RecipeFamily.all, renderer: WallpaperRenderer = WallpaperRenderer(), context: RenderContext = QualityGate.defaultContext
     ) -> Outcome {
+        next(from: template, pins: pins, using: &generator, families: families, renderer: renderer, contexts: [context])
+    }
+
+    /// The same draw for a document that goes to several displays at
+    /// once: a candidate passes only when the gate passes it on every
+    /// display's own context (its pixel size, menu-bar strip and notch);
+    /// the one repair is tried once for all of them.
+    public static func next(
+        from template: Wallpaper?, pins: Set<ParameterKey>? = nil, using generator: inout SeededGenerator,
+        families: [RecipeFamily] = RecipeFamily.all, renderer: WallpaperRenderer = WallpaperRenderer(), contexts: [RenderContext]
+    ) -> Outcome {
+        let contexts = contexts.isEmpty ? [QualityGate.defaultContext] : contexts
         let pinned = pins ?? template?.pinned ?? []
         let eligible = eligibleFamilies(families, template: template, pinned: pinned)
         var lastFailures: [GateFailure] = []
@@ -60,16 +72,28 @@ public enum Shuffle {
             candidate.seed = generator.next()
             if let template { candidate = Pins.apply(pinned, from: template, to: candidate) }
             candidate.pinned = pinned
-            var verdict = QualityGate.assess(candidate, renderer: renderer, context: context, previous: template)
-            if verdict.failures == [.menuBar], !pinned.contains(.topShade) {
-                // The one repair: shade the strip and ask again.
+            var failures = assess(candidate, renderer: renderer, contexts: contexts, previous: template)
+            if failures == [.menuBar], !pinned.contains(.topShade) {
+                // The one repair: shade the strip and ask again, everywhere.
                 candidate.finish.topShade = max(candidate.finish.topShade, 0.6)
-                verdict = QualityGate.assess(candidate, renderer: renderer, context: context, previous: template)
+                failures = assess(candidate, renderer: renderer, contexts: contexts, previous: template)
             }
-            if verdict.passes { return .document(candidate) }
-            lastFailures = verdict.failures
+            if failures.isEmpty { return .document(candidate) }
+            lastFailures = failures
         }
         return .nothingBetter(reason: lastFailures.map(\.rawValue).joined(separator: ", "))
+    }
+
+    /// The failures over every context, in order, without repeats; empty
+    /// when every display passes.
+    static func assess(_ candidate: Wallpaper, renderer: WallpaperRenderer, contexts: [RenderContext], previous: Wallpaper?) -> [GateFailure] {
+        var failures: [GateFailure] = []
+        for context in contexts {
+            for failure in QualityGate.assess(candidate, renderer: renderer, context: context, previous: previous).failures where !failures.contains(failure) {
+                failures.append(failure)
+            }
+        }
+        return failures
     }
 
     /// The families a pinned generator or family, and a document's photo,
@@ -122,18 +146,21 @@ public enum Pins {
         if pinned.contains(.palette) {
             // The template's colors in the candidate's generator and base.
             let colors = Palettes.usable(template.generator.colors)
-            out.generator = Generator.default(out.generator.kind, colors: colors, source: out.generator.source).carryingParameters(of: out.generator)
-            if case .field(var p) = out.generator { p.tones = colors; out.generator = .field(p) }
+            out.generator = out.generator.withPalette(colors)
             if !pinned.contains(.base) { out.base = BaseLayer.default(out.base.kind, colors: colors) }
         }
         // A photo is never dropped: a candidate that takes one gets the
         // template's, with its framing.
         out.generator = carrySource(from: template.generator, to: out.generator)
         out.generator = carryKnobs(pinned, from: template.generator, to: out.generator)
-        // A dark side edited by hand keeps its own pinned values too.
+        // A dark side edited by hand keeps its own pinned palette, photo
+        // and knobs, over the candidate's derived dark side.
         if let dark = template.darkGenerator {
-            out.darkGenerator = carryKnobs(pinned, from: dark, to: out.generator.darkened())
-            if out.darkGenerator == out.generator.darkened() { out.darkGenerator = nil }
+            var side = out.generator.darkened()
+            if pinned.contains(.palette) { side = side.withPalette(Palettes.usable(dark.colors)) }
+            side = carrySource(from: dark, to: side)
+            side = carryKnobs(pinned, from: dark, to: side)
+            out.darkGenerator = side == out.generator.darkened() ? nil : side
         }
         return out
     }
@@ -174,14 +201,15 @@ public enum Pins {
             if pinned.contains(.angle) { c.angle = t.angle }
             return .pattern(c)
         case (.mesh(let t), .mesh(var c)):
-            if pinned.contains(.columns) { c.columns = t.columns }
+            // The panel's one Grid pin is `.columns`: it keeps both.
+            if pinned.contains(.columns) { c.columns = t.columns; c.rows = t.rows }
             if pinned.contains(.rows) { c.rows = t.rows }
             if pinned.contains(.jitter) { c.jitter = t.jitter }
             if pinned.contains(.softness) { c.softness = t.softness }
             return .mesh(c)
         case (.dither(let t), .dither(var c)):
-            if pinned.contains(.ditherMode) { c.mode = t.mode }
-            if pinned.contains(.cell) { c.cell = t.cell }
+            if pinned.contains(.ditherMode) { c.mode = t.mode; c.cell = min(max(c.cell, t.mode.cellRange.lowerBound), t.mode.cellRange.upperBound) }
+            if pinned.contains(.cell) { c.cell = min(max(t.cell, c.mode.cellRange.lowerBound), c.mode.cellRange.upperBound) }
             if pinned.contains(.paletteSize) { c.paletteSize = t.paletteSize }
             if pinned.contains(.framing) { c.fit = t.fit; c.focus = t.focus }
             return .dither(c)
@@ -198,35 +226,6 @@ public enum Pins {
             return .gradient(c)
         default:
             return candidate
-        }
-    }
-}
-
-extension Generator {
-    /// The same kind with `other`'s non-color parameters: what a palette
-    /// swap keeps.
-    func carryingParameters(of other: Generator) -> Generator {
-        switch (self, other) {
-        case (.field(var mine), .field(let theirs)):
-            mine = FieldParameters(family: theirs.family, tones: mine.tones, values: theirs.values)
-            return .field(mine)
-        case (.pattern(var mine), .pattern(let theirs)):
-            mine.kind = theirs.kind; mine.scale = theirs.scale; mine.angle = theirs.angle
-            return .pattern(mine)
-        case (.mesh(var mine), .mesh(let theirs)):
-            mine.columns = theirs.columns; mine.rows = theirs.rows; mine.jitter = theirs.jitter; mine.softness = theirs.softness
-            return .mesh(mine)
-        case (.dither(var mine), .dither(let theirs)):
-            mine.mode = theirs.mode; mine.cell = theirs.cell; mine.paletteSize = theirs.paletteSize; mine.fit = theirs.fit; mine.focus = theirs.focus
-            return .dither(mine)
-        case (.pixelize(var mine), .pixelize(let theirs)):
-            mine.blockSize = theirs.blockSize; mine.paletteSize = theirs.paletteSize; mine.fit = theirs.fit; mine.focus = theirs.focus
-            return .pixelize(mine)
-        case (.gradient(var mine), .gradient(let theirs)):
-            mine.kind = theirs.kind; mine.angle = theirs.angle; mine.center = theirs.center; mine.interpolation = theirs.interpolation
-            return .gradient(mine)
-        default:
-            return self
         }
     }
 }
@@ -769,6 +768,32 @@ public enum QualityGate {
         var sum = 0
         for i in 0..<a.pixels.count where i % 4 != 3 { sum += abs(Int(a.pixels[i]) - Int(b.pixels[i])) }
         return Double(sum) / Double(a.width * a.height * 3 * 255)
+    }
+}
+
+extension Wallpaper {
+    /// Whether the menu bar's text reads over this document's top strip on
+    /// a side, by the gate's rule (`MenuBarReadability.readsEitherText`),
+    /// rendered small.
+    public func menuBarReads(side: Side, context: RenderContext, renderer: WallpaperRenderer = WallpaperRenderer()) -> Bool {
+        let raster = renderer.render(self, side: side, context: context)
+        return MenuBarReadability.assess(raster, stripHeight: context.menuBarStrip, side: side).readsEitherText
+    }
+
+    /// The document with the smallest top shade, in tenths from the one it
+    /// has, at which the menu bar reads on both sides; a full shade always
+    /// reads (the strip becomes one tone), so this ends. A preset applied
+    /// in the panel goes through here so no look lands with an unreadable
+    /// menu bar; Shuffle has its own single repair inside the gate.
+    public func liftingMenuBar(context: RenderContext, renderer: WallpaperRenderer = WallpaperRenderer()) -> Wallpaper {
+        var out = self
+        var shade = finish.topShade
+        while true {
+            out.finish.topShade = shade
+            if Side.allCases.allSatisfy({ out.menuBarReads(side: $0, context: context, renderer: renderer) }) { return out }
+            if shade >= 1 { return out }
+            shade = min(1, (shade * 10).rounded(.down) / 10 + 0.1)
+        }
     }
 }
 

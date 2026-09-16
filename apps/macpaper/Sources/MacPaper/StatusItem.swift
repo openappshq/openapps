@@ -33,6 +33,13 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     var isShown: Bool { popover?.isShown ?? false }
 
+    /// The item's frame in screen coordinates: where a display without a
+    /// notch hangs the column.
+    var buttonFrame: CGRect? {
+        guard let button = item.button, let window = button.window else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
     @objc func toggle() {
         if isShown {
             close()
@@ -49,7 +56,16 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             popover.behavior = .transient
             popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             popover.delegate = self
-            popover.contentViewController = NSHostingController(rootView: PopoverContent(model: model, header: header?(), showSettings: showSettings, quit: quit))
+            // The column is dark in both appearances (PanelTheme).
+            popover.appearance = NSAppearance(named: .darkAqua)
+            let screen = button.window?.screen ?? NSScreen.main
+            let height = PanelLayout.columnHeight(
+                screenHeight: screen?.frame.height ?? 900,
+                topInset: (screen.map(ScreenCatalog.menuBarHeight(of:)) ?? 24) + PanelLayout.popoverGap
+            )
+            popover.contentViewController = NSHostingController(rootView: PopoverContent(
+                model: model, height: height, header: header?(), showSettings: showSettings, quit: quit, dismiss: { [weak self] in self?.close() }
+            ))
             self.popover = popover
         }
         // The popover speaks for the display the menu bar item is on.
@@ -71,13 +87,17 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 }
 
+/// The same column as the notch panel, the regular width, as tall as the
+/// screen allows; the popover's own frame is around it.
 private struct PopoverContent: View {
     let model: AppModel
+    let height: CGFloat
     var header: AnyView? = nil
     let showSettings: () -> Void
     let quit: () -> Void
+    let dismiss: () -> Void
 
     var body: some View {
-        WallpaperPanelView(model: model, header: header, showSettings: showSettings, quit: quit)
+        WallpaperPanelView(model: model, width: PanelMetrics.popoverWidth, height: height, header: header, showSettings: showSettings, quit: quit, dismiss: dismiss)
     }
 }

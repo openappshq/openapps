@@ -46,6 +46,7 @@ struct PreferencesTests {
         preferences.clockStyle = .analog
         preferences.clockPosition = .topLeft
         preferences.clockSize = .large
+        preferences.pins = PinnedParameters([.seed, .palette])
         let reloaded = Preferences(defaults: defaults)
         #expect(!reloaded.keepApplied && reloaded.clockStyle == .analog && reloaded.clockPosition == .topLeft && reloaded.clockSize == .large)
         #expect(!reloaded.notchEnabled && reloaded.hostDisplay == .everyNotchedDisplay && reloaded.trigger == .hover)
@@ -53,6 +54,7 @@ struct PreferencesTests {
         #expect(reloaded.hotkey == Hotkey(keyCode: 49, modifiers: [.command, .shift]))
         #expect(reloaded.shuffleInterval == .hours3 && reloaded.favoritesOnly && !reloaded.sameOnAllDisplays)
         #expect(reloaded.exportFolder.path == "/tmp/exports")
+        #expect(reloaded.pins == PinnedParameters([.seed, .palette]))
         #expect(reloaded.panelSettings == PanelSettings(isEnabled: false, trigger: .hover, hideInFullscreen: false))
         reloaded.hotkey = nil
         #expect(Preferences(defaults: defaults).hotkey == nil, "not the default again")

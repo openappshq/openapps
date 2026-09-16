@@ -14,7 +14,7 @@ Open source · Mac native · No permissions · No telemetry · In development
 
 ## What it does
 
-Click or hover the notch and a panel drops down with the wallpaper on your desktop. Pick a generator, move a slider, press Apply:
+Click or hover the notch and a column drops down with the wallpaper on your desktop: a library of looks, the generators, the palette, the parameters and the effects, one section at a time. Pick a look, move a slider — every change lands on the desktop as you make it, and a pin beside any parameter keeps it through Shuffle:
 
 - **Pixel fields** — six authored looks on one sampled-field engine, every cell of the display's pixel grid one flat tone: **Moiré** (a radial and a linear wave beating inside a crescent, or two twisted lattices), **Relief** (warped noise cut into shifted terraces with lit rims), **Islands** (an archipelago with dithered shores), **Plate** (Chladni nodal lines gathering grains inside an aperture), **Circuit** (Truchet ribbons joined across tiles), **Sky** (a horizon, two ridges, a cropped sun, diffused into large cells)
 - **Dither** — Bayer, Floyd–Steinberg, blue noise, halftone or ASCII over a photo, or over the base layer when there is none
@@ -46,7 +46,7 @@ swift test             # MacPaperCore (generators and pixel fields with golden h
 scripts/bundle.sh      # release build → build/macPaper.app, ad-hoc signed
 ```
 
-To see the UI without changing anything on the Mac, the debug build has a preview harness: it draws the notch panel for every generator, the popover, the restricted state and Settings in light and dark to PNGs, with a throwaway defaults suite and a recording desktop applier, and quits:
+To see the UI without changing anything on the Mac, the debug build has a preview harness: it draws the column over four desktops (a saturated mesh, grey, near-black, near-white) at every width, every section, every generator's parameters, the column under a menu-bar item on a display without a notch, the popover, the restricted state and Settings in light and dark to PNGs, with a throwaway defaults suite and a recording desktop applier, and quits:
 
 ```sh
 swift build && .build/debug/MacPaper --preview /tmp/macpaper-preview
