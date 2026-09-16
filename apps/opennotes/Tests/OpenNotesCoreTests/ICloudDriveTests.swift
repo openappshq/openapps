@@ -648,4 +648,129 @@ final class ICloudDriveTests: XCTestCase {
             XCTAssertEqual($0 as? StoreError, .bodyUnavailable(NoteID("b")))
         }
     }
+
+    // MARK: - License lapses mid-read
+
+    @MainActor func testLicenseLapsingDuringTheVersionReadPreventsResolution() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "B")
+        ubiquity.ubiquitous = true
+        let url = folder.appendingPathComponent("a.md")
+        let store = makeStore()
+
+        let version = FakeVersion(data: "A")
+        var lapsed = false
+        version.onContents = {
+            guard !lapsed else { return }
+            lapsed = true
+            store.access = { false }
+        }
+        ubiquity.versions[url] = [version]
+        let base = NoteFileName.conflictStem(for: NoteID("a"), at: clock)
+
+        store.rescan()
+        XCTAssertFalse(version.resolved)
+        XCTAssertEqual(store.conflictVersionsWaiting, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(base + ".md").path))
+
+        store.access = { true }
+        store.rescan()
+        XCTAssertTrue(version.resolved)
+        XCTAssertEqual(store.conflictVersionsWaiting, 0)
+        XCTAssertEqual(try read(base + ".md"), "A")
+    }
+
+    @MainActor func testLicenseLapsingDuringAnIdenticalVersionReadStillCountsAsWaiting() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "A")
+        ubiquity.ubiquitous = true
+        let url = folder.appendingPathComponent("a.md")
+        let store = makeStore()
+
+        let version = FakeVersion(data: "A")
+        version.onContents = { store.access = { false } }
+        ubiquity.versions[url] = [version]
+
+        store.rescan()
+        XCTAssertFalse(version.resolved)
+        XCTAssertEqual(store.conflictVersionsWaiting, 1)
+        XCTAssertEqual(try files(), ["a.md"])
+    }
+
+    // MARK: - Recovery while read-only
+
+    @MainActor func testRecoveryWhileReadOnlyLeavesTemporariesInPlace() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "A")
+        let tempName = ".a.md.tmp-" + UUID().uuidString
+        try write(tempName, "stranded bytes")
+        let store = NoteStore(folder: folder, ubiquity: ubiquity) { [self] in clock }
+        store.onEvent = { [self] in events.append($0) }
+        store.access = { false }
+        store.load(create: true)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent(tempName).path))
+        XCTAssertTrue(try files().filter { $0.contains("(recovered") }.isEmpty)
+        XCTAssertEqual(store.strandedTemporariesWaiting, 1)
+        XCTAssertEqual(store.storageStatus, .recoveriesWaiting(1))
+        XCTAssertEqual(store.storageStatus.text, "1 recovered version waits for a license")
+
+        store.access = { true }
+        store.rescan()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(tempName).path))
+        XCTAssertEqual(try files().filter { $0.contains("(recovered") }.count, 1)
+        XCTAssertEqual(store.strandedTemporariesWaiting, 0)
+    }
+
+    // MARK: - Recovery folder guard
+
+    @MainActor func testRecoveryRefusesWhenTheFolderIsReplacedByALinkElsewhere() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "A")
+        let store = makeStore()
+
+        let aside = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-aside-\(UUID().uuidString)", isDirectory: true)
+        let elsewhere = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-elsewhere-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.removeItem(at: elsewhere)
+        }
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try write("a.md", "Elsewhere", in: elsewhere)
+        let tempName = ".a.md.tmp-" + UUID().uuidString
+        try write(tempName, "stranded bytes", in: elsewhere)
+        try FileManager.default.moveItem(at: folder, to: aside)
+        try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: elsewhere)
+
+        store.rescan()
+        let problem = try XCTUnwrap(store.recoveryProblem)
+        XCTAssertTrue(problem.contains("leads somewhere else"), problem)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: elsewhere.appendingPathComponent(tempName).path))
+        let recoveredInElsewhere = try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).filter { $0.contains("(recovered") }
+        XCTAssertTrue(recoveredInElsewhere.isEmpty)
+
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.moveItem(at: aside, to: folder)
+        store.rescan()
+        XCTAssertNil(store.recoveryProblem)
+    }
+
+    // MARK: - Recovery never masks a placeholder
+
+    @MainActor func testRecoveryNeverMasksAPlaceholder() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let tempName = ".a.md.tmp-" + UUID().uuidString
+        try write(tempName, "stranded bytes")
+        let base = NoteFileName.recoveredStem(for: "a", at: clock)
+        let placeholderName = ICloudDrive.placeholderName(for: NoteID(base))
+        try write(placeholderName, "placeholder")
+
+        let store = makeStore()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(base + ".md").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent(placeholderName).path))
+        XCTAssertEqual(try read("\(base)-2.md"), "stranded bytes")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(tempName).path))
+        XCTAssertEqual(store.strandedTemporariesWaiting, 0)
+    }
 }
