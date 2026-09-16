@@ -107,7 +107,7 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
 const questions = [
   [
     "What do I need to run it?",
-    "macOS 14 Sonoma or later, and Homebrew to install it. The release is signed with our release certificate. Building from source stays free and needs no key.",
+    "macOS 14 Sonoma or later; one Terminal line installs it, or Homebrew. The release is signed with our release certificate. Building from source stays free and needs no key.",
   ],
   [
     "Do I need a Mac with a notch?",

@@ -6,13 +6,23 @@ import { brewCasksFrom, dodoConfigFrom, licensingFor } from "../../shared/licens
 const dodo = dodoConfigFrom({ VITE_MACPAPER_DODO_PAID_PRODUCT_ID: "pdt_mpPaid" });
 const casks = brewCasksFrom({ VITE_MACPAPER_BREW_CASK: "openappshq/tap/macpaper" });
 
-test("shows the brew line once macPaper is on sale, with the trial and the upgrade command beside it", () => {
+test("shows the one-line install once macPaper is on sale, with the trial and Homebrew beside it", () => {
   const licensing = licensingFor("macpaper", { dodo, casks });
   const html = renderToStaticMarkup(<MacPaperInstall licensing={licensing} />);
-  expect(html).toContain('<code tabindex="-1">brew install --cask openappshq/tap/macpaper</code>');
+  expect(html).toContain(
+    '<code tabindex="-1">curl -fsSL https://openapps.space/install/macpaper | sh</code>',
+  );
+  expect(html).toContain('aria-label="Copy install command"');
+  expect(html).toContain(
+    "Prefer Homebrew? <code>brew install --cask openappshq/tap/macpaper</code>",
+  );
+  expect(html).toContain(
+    'href="https://github.com/openappshq/openapps/blob/main/apps/website/public/install/macpaper"',
+  );
   expect(html).toContain("3-day trial");
-  expect(html).toContain("brew upgrade --cask macpaper");
   expect(html).toContain("nothing to grant");
+  expect(html).toContain("checks for updates itself");
+  expect(html).not.toContain("brew upgrade");
   expect(html).not.toContain("Coming soon");
 });
 
@@ -26,4 +36,6 @@ test.each([
   expect(html).toContain("Coming soon");
   expect(html).toContain('aria-disabled="true"');
   expect(html).not.toContain("brew install");
+  expect(html).not.toContain("curl ");
+  expect(html).not.toContain("/install/");
 });

@@ -96,7 +96,12 @@ test("macPaper's page deep-links its own scheme, promises nothing to grant and r
   expect(html).not.toContain("Grant the permissions");
   expect(html).toContain('href="macpaper://activate?key=MP-1"');
   expect(html).toContain("Open macPaper");
-  expect(html).toContain('<code tabindex="-1">brew install --cask openappshq/tap/macpaper</code>');
+  expect(html).toContain(
+    '<code tabindex="-1">curl -fsSL https://openapps.space/install/macpaper | sh</code>',
+  );
+  expect(html).toContain(
+    "Prefer Homebrew? <code>brew install --cask openappshq/tap/macpaper</code>",
+  );
   expect(html).not.toContain("hertz://");
   expect(html).not.toContain("openklack://");
 });

@@ -19,14 +19,18 @@ const REQUIREMENTS = (
 
 export default function DownloadPage({
   // Only when the app's product and cask are configured; the download is a bonus.
+  installCommand = licensingFor("macpaper").installCommand,
   brewCommand = licensingFor("macpaper").brewCommand,
   downloadUrl = licensingFor("macpaper").downloadUrl,
 }: {
+  installCommand?: string | null;
   brewCommand?: string | null;
   downloadUrl?: string | null;
 }) {
   return (
     <Page
+      installCommand={installCommand}
+      installScriptSourceUrl={licensingFor("macpaper").installScriptSourceUrl}
       brewCommand={brewCommand}
       downloadUrl={downloadUrl}
       name="macPaper"

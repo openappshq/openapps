@@ -178,7 +178,7 @@ export const products: Product[] = [
         path: "download",
         entry: "Download",
         title: "Install · macPaper",
-        description: "Install macPaper with Homebrew. Nothing to grant, nothing to set up.",
+        description: "Install macPaper with one Terminal line. Nothing to grant, nothing to set up.",
         template: "src/apps/macpaper/template.html",
       },
       {
