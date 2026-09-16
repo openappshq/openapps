@@ -12,13 +12,23 @@ import { installLabel, licensingFor, TRIAL_DAYS, type AppLicensing } from "./lic
  * download, when one is configured, keeps its button beside it; without one the
  * command is the primary action and nothing points at a page that just repeats it.
  */
+/** What the apps need unless one says otherwise. */
+export const DEFAULT_REQUIREMENTS = (
+  <>
+    macOS 14+ <span aria-hidden="true">·</span> Apple Silicon
+  </>
+);
+
 export default function BuyButtons({
   app,
   small = false,
+  requirements = DEFAULT_REQUIREMENTS,
   licensing = licensingFor(app),
 }: {
   app: string;
   small?: boolean;
+  /** The system line after the trial, for an app whose needs differ from the default. */
+  requirements?: ReactNode;
   /** Overrides the environment's licensing (tests). */
   licensing?: AppLicensing;
 }) {
@@ -46,8 +56,7 @@ export default function BuyButtons({
       {/* Everything a spec sheet was carrying, in the one line where someone
           is actually deciding. */}
       <p className="buy-note">
-        Free {TRIAL_DAYS}-day trial, no signup <span aria-hidden="true">·</span> macOS 14+{" "}
-        <span aria-hidden="true">·</span> Apple Silicon
+        Free {TRIAL_DAYS}-day trial, no signup <span aria-hidden="true">·</span> {requirements}
       </p>
     </div>
   );

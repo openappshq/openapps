@@ -2,7 +2,7 @@ import "@fontsource/ibm-plex-mono/500.css";
 import "../styles.css";
 import { motion } from "motion/react";
 import { Link } from "@heroui/react";
-import { ArrowUpRight, Cpu, LockKeyhole, Stethoscope, Terminal } from "lucide-react";
+import { Cpu, LockKeyhole, Stethoscope } from "lucide-react";
 import { enter } from "@openapps/ui/transitions";
 import DashboardPreview from "../DashboardPreview";
 import KeyToken from "../../../shared/KeyToken";
@@ -10,8 +10,25 @@ import HqBadge from "../../../shared/HqBadge";
 import HertzInstall from "../HertzInstall";
 import { MarketingHeader, MarketingFooter, Legend } from "../../../shared/MarketingChrome";
 import Questions from "../../../shared/Questions";
-import { GITHUB_URL } from "../../../shared/github";
-import { brewCasks } from "../../../shared/licensing";
+import BuyButtons from "../../../shared/BuyButtons";
+import InstallLink from "../../../shared/InstallLink";
+import { installAction } from "../../../shared/installAction";
+import {
+  licensingFor,
+  MACS_PER_LICENSE,
+  OFFLINE_GRACE,
+  TRIAL_DAYS,
+} from "../../../shared/licensing";
+
+const licensing = licensingFor("hertz");
+const { price: PRICE } = licensing;
+
+/* Universal binary, so the default "Apple Silicon" line would undersell it. */
+const REQUIREMENTS = (
+  <>
+    macOS 14+ <span aria-hidden="true">·</span> No permissions
+  </>
+);
 
 const readings: [string, string][] = [
   ["CPU", "overall and per core, load average, temperature, fan speed and the kernel's thermal pressure"],
@@ -27,20 +44,24 @@ const readings: [string, string][] = [
 
 const questions = [
   [
-    "What does it cost?",
-    "Nothing. Hertz is free and MIT licensed, with no license key, no trial and no account. Install it with Homebrew or build it from source.",
+    "What do I need to run it?",
+    "macOS 14 Sonoma or later, and Homebrew to install it. The release is a universal binary signed with our release certificate; per-core detail and temperatures are best on Apple silicon. Building from source stays free and needs no key.",
   ],
   [
-    "What do I need to run it?",
-    "macOS 14 Sonoma or later. The release is a universal binary; per-core detail and temperatures are best on Apple silicon.",
+    "How do licenses and trials work?",
+    `Install Hertz and it works right away for ${TRIAL_DAYS} days on that Mac, with no signup. To keep it, pay ${PRICE} once for ${MACS_PER_LICENSE} Macs, forever. No subscription or account, and nothing is charged when the trial ends: the readings pause until you buy a license or build from source. Remove a Mac in Settings › License to free a seat, or contact support if you no longer have it.`,
+  ],
+  [
+    "Can I use it offline?",
+    `Official builds check the license once a day and work offline for ${OFFLINE_GRACE} after the last successful check. Free source builds never contact the license service.`,
   ],
   [
     "What permissions does it need?",
     "None. Everything comes from the kernel's own interfaces: Mach, libproc, IOKit, the SMC and CoreWLAN. Nothing to grant, nothing to revoke.",
   ],
   [
-    "Does it send anything anywhere?",
-    "No. Readings are shown and dropped; the only thing Hertz stores is your settings. It never checks for updates on its own, either: that is Homebrew's job.",
+    "What does the official build send anywhere?",
+    `Readings are shown and dropped; the only thing Hertz stores is your settings. Official builds include a ${TRIAL_DAYS}-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, its readings, and how you use the app are never sent. Builds from source never contact the license service. Hertz never checks for updates on its own, either: that is Homebrew's job.`,
   ],
   [
     "How accurate is it?",
@@ -73,7 +94,7 @@ export default function App() {
           { label: "Install", href: "#install" },
           { label: "Questions", href: "#questions" },
         ]}
-        action={{ label: "Install with Homebrew", href: "#install", icon: <Terminal size={16} /> }}
+        action={installAction("hertz")}
       />
       <main>
         <section className="hero" aria-labelledby="hero-title">
@@ -91,21 +112,7 @@ export default function App() {
                   read straight from the kernel every two seconds.
                 </p>
                 <div className="hero-actions">
-                  <Link className="button-link primary" href="#install">
-                    Install with Homebrew <Terminal size={18} aria-hidden="true" />
-                  </Link>
-                  <Link
-                    className="button-link secondary"
-                    href={`${GITHUB_URL}/tree/main/apps/hertz`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Browse the source <ArrowUpRight size={18} aria-hidden="true" />
-                  </Link>
-                  <p className="buy-note">
-                    Free and open source <span aria-hidden="true">·</span> macOS 14+{" "}
-                    <span aria-hidden="true">·</span> No permissions
-                  </p>
+                  <BuyButtons app="hertz" requirements={REQUIREMENTS} />
                 </div>
               </div>
             </div>
@@ -174,7 +181,7 @@ export default function App() {
                 <h3>Asks for nothing.</h3>
                 <p>
                   No permissions, no account, no telemetry, no update checks. Readings are shown and
-                  dropped; only your settings are kept.
+                  dropped, never stored or sent.
                 </p>
               </article>
             </div>
@@ -190,8 +197,9 @@ export default function App() {
               </div>
             </div>
             <div className="reveal">
-              {/* The cask once it exists (VITE_HERTZ_BREW_CASK); "Coming soon" until then. */}
-              <HertzInstall cask={brewCasks.hertz} />
+              {/* Live on the same gate as Buy (VITE_HERTZ_DODO_PAID_PRODUCT_ID and
+                  VITE_HERTZ_BREW_CASK); "Coming soon" until both are set. */}
+              <HertzInstall licensing={licensing} />
             </div>
           </div>
         </section>
@@ -209,15 +217,13 @@ export default function App() {
           <div className="closing-section page-width">
             <div>
               <h2 id="start-title">
-                Free.
+                Live.
                 <br />
                 Native.
                 <br />
                 Yours.
               </h2>
-              <Link className="button-link inverse" href="#install">
-                Install with Homebrew <Terminal size={20} aria-hidden="true" />
-              </Link>
+              <InstallLink app="hertz" className="button-link inverse" />
             </div>
             <img src="/brand/hertz/symbol-ink.svg" alt="" width="300" height="300" />
           </div>

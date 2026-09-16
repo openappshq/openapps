@@ -16,13 +16,15 @@ test("each product owns its routes and adding another product cannot shadow Open
     "/openreaction/download/",
     "/openreaction/thanks/",
     "/hertz/",
+    "/hertz/download/",
+    "/hertz/thanks/",
     "/another_route/",
     "/another_route/download/",
     "/another_route/thanks/",
   ]);
-  expect(combined[7]?.productId).toBe("another-app");
+  expect(combined[9]?.productId).toBe("another-app");
   expect(findPage("/openklack/download/")?.productId).toBe("openklack");
-  expect(combined[7]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(combined[9]?.module).toBe("./apps/another-app/pages/Home.tsx");
   expect(findPage("/openklack/thanks/trial/")).toBeUndefined();
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
   for (const path of ["/openklack", "/openklack/", "/openklack/index.html"])
@@ -36,13 +38,32 @@ test("each product owns its routes and adding another product cannot shadow Open
   expect(() => productPages([{ ...next, route: "/../escape" }])).toThrow("Invalid product");
 });
 
+test("every app is sold on the same terms: a price, a download page and a checkout return", () => {
+  expect(paidProducts.map((product) => product.id)).toEqual(["openklack", "openreaction", "hertz"]);
+  for (const product of products) {
+    expect(product.free, product.id).toBeUndefined();
+    expect(product.price, product.id).toBe("$5");
+    expect(product.pages.map((page) => page.path), product.id).toEqual(["", "download", "thanks"]);
+    const thanks = product.pages.find((page) => page.path === "thanks")!;
+    expect(thanks.checkoutReturn, product.id).toBe(true);
+    expect(thanks.noindex, product.id).toBe(true);
+  }
+});
+
 test("a free app has a home page only: no download page, no checkout return, no licensing", () => {
-  const hertz = products.find((product) => product.id === "hertz")!;
-  expect(hertz.free).toBe(true);
-  expect(hertz.price).toBe("Free");
-  expect(hertz.pages.map((page) => page.path)).toEqual([""]);
-  expect(pages.filter((page) => page.productId === "hertz").some((page) => page.checkoutReturn)).toBe(false);
-  expect(paidProducts.map((product) => product.id)).toEqual(["openklack", "openreaction"]);
+  const free = {
+    ...products[0]!,
+    id: "free-app",
+    route: "/free-app",
+    price: "Free",
+    free: true,
+    pages: products[0]!.pages.filter((page) => page.path === ""),
+  };
+  const combined = productPages([...products, free]);
+  const own = combined.filter((page) => page.productId === "free-app");
+  expect(own.map((page) => page.path)).toEqual(["/free-app/"]);
+  expect(own.some((page) => page.checkoutReturn)).toBe(false);
+  expect([...products, free].filter((product) => !product.free)).toEqual(products);
 });
 
 test("catalog routes emit separate static HTML entries with product metadata", () => {
@@ -71,7 +92,7 @@ test("catalog routes emit separate static HTML entries with product metadata", (
       'name="robots" content="noindex"',
     );
     expect(readFileSync(join(root, "openreaction/index.html"), "utf8")).not.toContain("noindex");
-    for (const file of ["thanks", "openreaction/thanks", "openklack/thanks"]) {
+    for (const file of ["thanks", "openreaction/thanks", "openklack/thanks", "hertz/thanks"]) {
       const html = readFileSync(join(root, `${file}/index.html`), "utf8");
       const head = html.slice(html.indexOf("<head>") + 6);
       // The referrer policy and capture script must precede every other head tag.
@@ -106,7 +127,13 @@ test("catalog routes emit separate static HTML entries with product metadata", (
     expect(hertz).toContain('content="/hertz/og.png"');
     expect(hertz).toContain('property="og:site_name" content="Hertz"');
     expect(hertz).not.toContain("__openappsCheckout");
-    expect(existsSync(join(root, "hertz/download/index.html"))).toBe(false);
+    expect(hertz).not.toContain("noindex");
+    expect(readFileSync(join(root, "hertz/download/index.html"), "utf8")).toContain(
+      "Install · Hertz",
+    );
+    expect(readFileSync(join(root, "hertz/thanks/index.html"), "utf8")).toContain(
+      'property="og:site_name" content="Hertz"',
+    );
     expect(inputs).toHaveLength(pages.length + 1);
   } finally {
     rmSync(root, { recursive: true });

@@ -14,14 +14,17 @@ import {
 const liveEnv = {
   VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
   VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
+  VITE_HERTZ_DODO_PAID_PRODUCT_ID: "pdt_hzPaid",
 };
 const casks = {
   openreaction: "openappshq/tap/openreaction",
   openklack: "openappshq/tap/openklack",
+  hertz: "openappshq/tap/hertz",
 };
 const downloads = {
   openreaction: "https://downloads.example/OpenReaction.dmg",
   openklack: "https://downloads.example/OpenKlack.dmg",
+  hertz: "https://downloads.example/Hertz.dmg",
 };
 import { activateUrl, cleanedUrl, parseCheckoutReturn, readCheckoutReturn } from "./thanks";
 import { CHECKOUT_GLOBAL } from "./checkoutCapture";
@@ -51,6 +54,7 @@ describe("dodoConfigFrom", () => {
     expect(config.products).toEqual({
       openreaction: { paid: "pdt_orPaid" },
       openklack: { paid: "pdt_okPaid" },
+      hertz: { paid: "pdt_hzPaid" },
     });
   });
 
@@ -60,7 +64,7 @@ describe("dodoConfigFrom", () => {
       VITE_DODO_CHECKOUT_ORIGIN: " https://test.checkout.dodopayments.com/ ",
     });
     expect(config.checkoutOrigin).toBe(DODO_CHECKOUT_ORIGINS.test);
-    expect(Object.keys(config.products)).toHaveLength(2);
+    expect(Object.keys(config.products)).toHaveLength(3);
   });
 
   it("sells nothing when the checkout origin is not Dodo's", () => {
@@ -87,6 +91,7 @@ describe("brewCasksFrom", () => {
       brewCasksFrom({
         VITE_OPENKLACK_BREW_CASK: ` ${casks.openklack} `,
         VITE_OPENREACTION_BREW_CASK: casks.openreaction,
+        VITE_HERTZ_BREW_CASK: casks.hertz,
       }),
     ).toEqual(casks);
     expect(brewCasksFrom({ VITE_OPENKLACK_BREW_CASK: "open-apps/tap-2/open-klack" })).toEqual({
@@ -119,10 +124,32 @@ describe("brewCasksFrom", () => {
 describe("licensingFor", () => {
   const dodo = dodoConfigFrom(liveEnv);
 
-  it("has nothing to say about a free app", () => {
-    expect(products.some((product) => product.free)).toBe(true);
-    for (const product of products.filter((product) => product.free)) {
-      expect(() => licensingFor(product.id, { dodo, casks })).toThrow("is free");
+  it("sells every app in the catalog; none is free today", () => {
+    expect(paidProducts).toEqual(products);
+    expect(products.some((product) => product.free)).toBe(false);
+  });
+
+  it("sells Hertz on the same gate as the others: its own product ID and cask, or nothing", () => {
+    const live = licensingFor("hertz", { dodo, casks, downloads: {} });
+    expect(live.available).toBe(true);
+    expect(live.scheme).toBe("hertz");
+    expect(live.brewCommand).toBe("brew install --cask openappshq/tap/hertz");
+    expect(live.buyUrl).toContain(`${DODO_CHECKOUT_ORIGINS.live}/buy/pdt_hzPaid?`);
+    expect(live.thanksUrl).toBe("https://openapps.space/hertz/thanks/");
+    // Another app's variables never sell Hertz.
+    const others = dodoConfigFrom({
+      VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
+      VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
+    });
+    const noHertzCask = brewCasksFrom({
+      VITE_OPENKLACK_BREW_CASK: casks.openklack,
+      VITE_OPENREACTION_BREW_CASK: casks.openreaction,
+    });
+    for (const override of [{ dodo: others }, { casks: noHertzCask }, { dodo: others, casks: noHertzCask }]) {
+      const closed = licensingFor("hertz", { dodo, casks, ...override });
+      expect(closed.available).toBe(false);
+      expect(closed.buyUrl).toBeNull();
+      expect(closed.brewCommand).toBeNull();
     }
   });
 
@@ -153,9 +180,9 @@ describe("licensingFor", () => {
 
   it.each([
     ["with no paid product ID (cask only)", { dodo: dodoConfigFrom({}) }],
-    ["with a malformed paid product ID", { dodo: dodoConfigFrom({ VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "nope", VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "nope" }) }],
+    ["with a malformed paid product ID", { dodo: dodoConfigFrom({ VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "nope", VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "nope", VITE_HERTZ_DODO_PAID_PRODUCT_ID: "nope" }) }],
     ["with no cask (product only)", { casks: {} }],
-    ["with a malformed cask", { casks: brewCasksFrom({ VITE_OPENKLACK_BREW_CASK: "openklack", VITE_OPENREACTION_BREW_CASK: "OpenAppsHQ/tap/openreaction" }) }],
+    ["with a malformed cask", { casks: brewCasksFrom({ VITE_OPENKLACK_BREW_CASK: "openklack", VITE_OPENREACTION_BREW_CASK: "OpenAppsHQ/tap/openreaction", VITE_HERTZ_BREW_CASK: "hertz.rb" }) }],
     ["with neither product nor cask", { dodo: dodoConfigFrom({}), casks: {} }],
     ["with only a direct download", { dodo: dodoConfigFrom({}), casks: {}, downloads }],
     ["with a product and a download but no cask", { casks: {}, downloads }],
@@ -175,6 +202,7 @@ describe("licensingFor", () => {
       macDownloadUrlsFrom({
         VITE_OPENKLACK_MAC_DOWNLOAD_URL: ` ${downloads.openklack} `,
         VITE_OPENREACTION_MAC_DOWNLOAD_URL: downloads.openreaction,
+        VITE_HERTZ_MAC_DOWNLOAD_URL: downloads.hertz,
       }),
     ).toEqual(downloads);
     for (const bad of ["", "http://x.example/a.dmg", "/OpenKlack.dmg", "javascript:alert(1)", "not a url"]) {
@@ -186,6 +214,7 @@ describe("licensingFor", () => {
     const http = macDownloadUrlsFrom({
       VITE_OPENKLACK_MAC_DOWNLOAD_URL: "http://downloads.example/OpenKlack.dmg",
       VITE_OPENREACTION_MAC_DOWNLOAD_URL: "http://downloads.example/OpenReaction.dmg",
+      VITE_HERTZ_MAC_DOWNLOAD_URL: "http://downloads.example/Hertz.dmg",
     });
     for (const product of paidProducts) {
       const licensing = licensingFor(product.id, { dodo, casks, downloads: http });

@@ -78,7 +78,7 @@ Repository → Settings → Environments:
 
 | Environment | Deployment branches | Secrets | Variables |
 | --- | --- | --- | --- |
-| `website-live` | `main` only | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `TRIAL_REGISTRY_D1_ID` (live database), `VITE_DODO_CHECKOUT_ORIGIN` (empty or `https://checkout.dodopayments.com`), `VITE_OPENKLACK_DODO_PAID_PRODUCT_ID`, `VITE_OPENREACTION_DODO_PAID_PRODUCT_ID` (live products), `VITE_OPENKLACK_BREW_CASK`, `VITE_OPENREACTION_BREW_CASK` (`owner/tap/name`, e.g. `openappshq/tap/openklack`), optionally `VITE_OPENKLACK_MAC_DOWNLOAD_URL`, `VITE_OPENREACTION_MAC_DOWNLOAD_URL` (https, a direct download shown beside the brew command) |
+| `website-live` | `main` only | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `TRIAL_REGISTRY_D1_ID` (live database), `VITE_DODO_CHECKOUT_ORIGIN` (empty or `https://checkout.dodopayments.com`), `VITE_OPENKLACK_DODO_PAID_PRODUCT_ID`, `VITE_OPENREACTION_DODO_PAID_PRODUCT_ID`, `VITE_HERTZ_DODO_PAID_PRODUCT_ID` (live products), `VITE_OPENKLACK_BREW_CASK`, `VITE_OPENREACTION_BREW_CASK`, `VITE_HERTZ_BREW_CASK` (`owner/tap/name`, e.g. `openappshq/tap/openklack`), optionally `VITE_OPENKLACK_MAC_DOWNLOAD_URL`, `VITE_OPENREACTION_MAC_DOWNLOAD_URL`, `VITE_HERTZ_MAC_DOWNLOAD_URL` (https, a direct download shown beside the brew command) |
 
 Put the Cloudflare secrets only in `website-live`, never as repository-level secrets, so no PR job can read them.
 

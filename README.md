@@ -2,7 +2,7 @@
 
 <a href="https://openapps.space"><img src="design/assets/openapps-hq/readme/cover.svg" alt="OpenApps HQ — Small apps. Room for personality." width="100%" /></a>
 
-Free, open-source Mac apps. One home for their code, websites, and design system.
+Open-source Mac apps, each $5 once after a free 3-day trial. One home for their code, websites, and design system.
 
 [Website](https://openapps.space) · [Development](docs/development.md) · [Design system](design/README.md) · [Issues](https://github.com/openappshq/openapps/issues)
 

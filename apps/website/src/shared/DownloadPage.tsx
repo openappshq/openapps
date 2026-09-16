@@ -4,6 +4,7 @@ import { Link } from "@heroui/react";
 import { motion } from "motion/react";
 import { ArrowUpRight, Download, Star } from "lucide-react";
 import { enter } from "@openapps/ui/transitions";
+import { DEFAULT_REQUIREMENTS } from "./BuyButtons";
 import { GITHUB_URL } from "./github";
 import { TRIAL_DAYS } from "./licensing";
 import KeyToken from "./KeyToken";
@@ -23,6 +24,7 @@ export default function DownloadPage({
   app,
   name,
   permission,
+  requirements = DEFAULT_REQUIREMENTS,
   shareText,
   playgroundHref,
   playgroundLabel,
@@ -36,8 +38,10 @@ export default function DownloadPage({
   /** Catalogue id, which selects the artwork and the icon. */
   app: string;
   name: string;
-  /** The one macOS permission the app needs on first launch. */
-  permission: string;
+  /** The one macOS permission the app needs on first launch; none for an app that asks for nothing. */
+  permission?: string;
+  /** The system line under the actions, for an app whose needs differ from the default. */
+  requirements?: ReactNode;
   /** The post someone would actually send. Shown in full before they send it. */
   shareText: string;
   playgroundHref: string;
@@ -105,9 +109,7 @@ export default function DownloadPage({
                     {playgroundLabel}
                   </Link>
                 </div>
-                <p className="buy-note">
-                  macOS 14+ <span aria-hidden="true">·</span> Apple Silicon
-                </p>
+                <p className="buy-note">{requirements}</p>
               </div>
             </div>
           </div>
@@ -123,21 +125,23 @@ export default function DownloadPage({
                 <div className="install-figure reveal">
                   <InstallAnimation app={app} name={name} />
                   <p>
-                    Then open {name} and allow {permission} when macOS asks. That is the whole
-                    setup.
+                    {permission
+                      ? `Then open ${name} and allow ${permission} when macOS asks. That is the whole setup.`
+                      : `Then open ${name}. It asks for no permissions, so that is the whole setup.`}
                   </p>
                 </div>
               </>
             ) : (
               <>
                 <h2 id="install-title" className="reveal">
-                  Then say yes once.
+                  {permission ? "Then say yes once." : "Then nothing to grant."}
                 </h2>
                 <div className="install-figure reveal">
                   {/* No disk image to rehearse: Homebrew puts the app in place and opens it. */}
                   <p>
-                    Homebrew puts {name} in your Applications folder and opens it. Allow{" "}
-                    {permission} when macOS asks. That is the whole setup.
+                    {permission
+                      ? `Homebrew puts ${name} in your Applications folder and opens it. Allow ${permission} when macOS asks. That is the whole setup.`
+                      : `Homebrew puts ${name} in your Applications folder and opens it. It asks for no permissions, so that is the whole setup.`}
                   </p>
                 </div>
               </>

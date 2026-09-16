@@ -56,11 +56,32 @@ test("falls back to the plain install step when the app has no cask", () => {
   expect(html).toContain('href="/openklack/download/"');
 });
 
+test("Hertz's page deep-links its own scheme and repeats its own command", () => {
+  returned("HZ-1");
+  const licensing = licensingFor("hertz", {
+    dodo: dodoConfigFrom({ VITE_HERTZ_DODO_PAID_PRODUCT_ID: "pdt_hzPaid" }),
+    casks: { hertz: "openappshq/tap/hertz" },
+    downloads: {},
+  });
+  const html = renderToStaticMarkup(
+    <ThanksPage app="hertz" asksPermissions={false} licensing={licensing} />,
+  );
+  expect(html).toContain("Hertz is");
+  expect(html).toContain("Nothing to grant.");
+  expect(html).not.toContain("Grant the permissions");
+  expect(html).toContain('href="hertz://activate?key=HZ-1"');
+  expect(html).toContain("Open Hertz");
+  expect(html).toContain('<code tabindex="-1">brew install --cask openappshq/tap/hertz</code>');
+  expect(html).not.toContain("openreaction://");
+  expect(html).not.toContain("openklack://");
+});
+
 test("the site-wide page lists every app and shows no command", () => {
   returned("LK-1,LK-2");
   const html = renderToStaticMarkup(<ThanksPage />);
   expect(html).not.toContain("brew install");
   expect(html).toContain("Get OpenKlack");
   expect(html).toContain("Get OpenReaction");
+  expect(html).toContain("Get Hertz");
   expect(html).toContain("Install the app");
 });

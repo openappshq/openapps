@@ -74,7 +74,7 @@ Start with the [design checklist](../design/system.md#adding-a-product) so the n
    Keep its components and styles beside that folder; use product-specific class names.
 3. Add one product to `apps/website/src/catalog.ts` with its id, route (for example `/another_route`), description, platform, status, brand imagery, asset sources, and pages.
    Every product needs a home page with `path: ""`; optional subpages use `path: "download"` or another segment.
-   A free app sets `free: true` and `price: "Free"`: it gets no download, thanks or checkout pages, is left out of licensing, and installs through the shared `HomebrewInstall` block (Hertz is the example).
+   A free app sets `free: true` and `price: "Free"`: it gets no download, thanks or checkout pages, is left out of licensing and of the trial registry, and installs with the same Homebrew command through its own install block. No app in the catalog is free today.
    `entry: "Home"` resolves to `pages/Home.tsx`; optional `template` preserves product-specific HTML metadata.
 4. Set `brandSource` to its exported brand directory and reference `/brand/<app-id>/` URLs in the catalog.
    Add any product-specific public assets through that product's `assets` list; destinations are relative to its route.
@@ -115,7 +115,7 @@ The website’s install links open `/openklack/download/`, a separate static HTM
 
 What no page code can prevent: the host that serves the thanks page receives the initial request, query string included. The build emits `dist/_headers` from the catalog (`apps/website/headers.ts`): every `noindex` page is served with `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex` and `Cache-Control: no-store`. On Cloudflare those pages are plain static asset requests that never run Worker code, and the Worker keeps Workers Logs off; don't enable Logpush or Workers Logs for it.
 
-Paid app pages offer the install (the Homebrew command, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the brew command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's page has no Buy and no download page: it shows the same Homebrew command once `VITE_HERTZ_BREW_CASK` is set, and “Coming soon” until then.
+Paid app pages offer the install (the Homebrew command, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the brew command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's page also keeps an install section with the command and the `brew upgrade` line, on the same gate (`VITE_HERTZ_DODO_PAID_PRODUCT_ID` and `VITE_HERTZ_BREW_CASK`).
 
 ## Sound library
 

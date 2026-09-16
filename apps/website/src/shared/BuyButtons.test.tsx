@@ -7,14 +7,17 @@ import { dodoConfigFrom, licensingFor } from "./licensing";
 const dodo = dodoConfigFrom({
   VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
   VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
+  VITE_HERTZ_DODO_PAID_PRODUCT_ID: "pdt_hzPaid",
 });
 const casks = {
   openreaction: "openappshq/tap/openreaction",
   openklack: "openappshq/tap/openklack",
+  hertz: "openappshq/tap/hertz",
 };
 const downloads = {
   openreaction: "https://downloads.example/OpenReaction.dmg",
   openklack: "https://downloads.example/OpenKlack.dmg",
+  hertz: "https://downloads.example/Hertz.dmg",
 };
 
 test("app pages offer the install with its trial and a priced purchase, and no trial checkout", () => {

@@ -22,9 +22,12 @@ function Support({ size = 14 }: { size?: number }) {
  */
 export default function ThanksPage({
   app,
+  asksPermissions = true,
   licensing = app ? licensingFor(app) : null,
 }: {
   app?: string;
+  /** False for an app that needs no macOS permission, so the install step promises none. */
+  asksPermissions?: boolean;
   /** Overrides the environment's licensing (tests). */
   licensing?: AppLicensing | null;
 }) {
@@ -33,6 +36,7 @@ export default function ThanksPage({
   const single = licensing && checkout.keys.length === 1 ? checkout.keys[0]! : null;
   const appName = licensing?.name ?? "the app";
   const seats = `It works on up to ${MACS_PER_LICENSE} Macs`;
+  const permissions = asksPermissions ? "Grant the permissions macOS asks for." : "Nothing to grant.";
 
   if (unconfirmed) {
     return (
@@ -145,7 +149,7 @@ export default function ThanksPage({
                 <p>Don’t have it yet? Paste this into Terminal, then open {licensing.name}.</p>
                 <InstallCommand command={licensing.brewCommand} />
                 <p>
-                  Grant the permissions macOS asks for.
+                  {permissions}
                   {licensing.downloadUrl && (
                     <>
                       {" "}
@@ -160,7 +164,7 @@ export default function ThanksPage({
               </>
             ) : (
               <p>
-                Move it to Applications and open it. Grant the permissions macOS asks for.
+                Move it to Applications and open it. {permissions}
                 {licensing && (
                   <>
                     {" "}
