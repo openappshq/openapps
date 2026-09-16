@@ -294,6 +294,7 @@ final class AppModel {
         guard store.folderIsUbiquitous else { return nil }
         let place = preferences.storage == .iCloudDrive ? "In iCloud Drive" : "In iCloud"
         if let storageProblem { return "\(place) · \(storageProblem)" }
+        if let problem = store.recoveryProblem { return "\(place) · \(problem)" }
         if let problem = store.conflictProblem { return "\(place) · \(problem)" }
         if let problem = store.downloadProblem { return "\(place) · \(problem)" }
         return "\(place) · \(store.storageStatus.text)"
@@ -304,7 +305,7 @@ final class AppModel {
     /// shows it whatever the folder.
     var folderProblem: String? {
         _ = revision
-        return storageProblem ?? store.conflictProblem
+        return storageProblem ?? store.recoveryProblem ?? store.conflictProblem
     }
 
     /// The folder the open panel returned: asked again here, since the

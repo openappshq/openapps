@@ -198,6 +198,12 @@ public final class NoteStore {
     /// Conflict versions found while read-only: nothing written, nothing
     /// resolved, until writing is allowed (the status line says so).
     public private(set) var conflictVersionsWaiting = 0
+    /// Hidden temporaries a cut-short write left that wait for a license
+    /// to be given a visible name (a rename is a write).
+    public private(set) var strandedTemporariesWaiting = 0
+    /// The temporaries could not be looked at: the folder no longer leads
+    /// where it did (`StoreError.folderReplaced`); nothing is renamed there.
+    public private(set) var recoveryProblem: String?
     /// Where the folder's path led when it was loaded (`realpath`): a
     /// write goes through only while it still leads there, so a folder
     /// swapped for a link to somewhere else is never written into.
@@ -309,6 +315,7 @@ public final class NoteStore {
     public var storageStatus: StorageStatus {
         if !heldForDownload.isEmpty { return .waiting }
         if conflictVersionsWaiting > 0 { return .conflictsWaiting(conflictVersionsWaiting) }
+        if strandedTemporariesWaiting > 0 { return .recoveriesWaiting(strandedTemporariesWaiting) }
         if !placeholders.isEmpty { return .notDownloaded(count: placeholders.count, requested: downloadRequested.count) }
         return .allOnThisMac
     }
@@ -693,8 +700,16 @@ public final class NoteStore {
                     conflictProblem = "A conflict version of \(name) could not be read (\(error.localizedDescription)); it is kept by iCloud and tried again."
                     continue
                 }
+                // The read took time; the license is asked again before
+                // anything is created or resolved, and once more at the
+                // file (`keepVersion`).
+                if readOnly {
+                    conflictVersionsWaiting += 1
+                    continue
+                }
                 // The file as it is now, read after the version.
                 if let current = NoteFile.open(url).identity(cap: 0), current.hash == NoteFile.hash(data), current.size == data.count {
+                    if readOnly { conflictVersionsWaiting += 1; continue }
                     version.markResolved()
                     continue
                 }
@@ -713,8 +728,7 @@ public final class NoteStore {
                         continue
                     }
                     do {
-                        _ = try NoteFile.createExclusively(fileURL(for: candidate), contents: text)
-                        kept = true
+                        kept = try keepVersion(text, as: candidate)
                     } catch NoteFile.Failure.exists {
                         candidate = NoteID("\(base)-\(counter)")
                         counter += 1
@@ -722,10 +736,24 @@ public final class NoteStore {
                         conflictProblem = "A conflict version of \(name) could not be kept as \(candidate.fileName) (\(error.localizedDescription)); it stays with iCloud and is tried again."
                         break
                     }
+                    if !kept { break }
                 }
                 if kept { version.markResolved() }
             }
         }
+    }
+
+    /// The file boundary of a kept version: the license asked one last
+    /// time, then the exclusive create. False (nothing written, the
+    /// version left unresolved and counted) when the license lapsed
+    /// between the read and here.
+    private func keepVersion(_ text: String, as candidate: NoteID) throws -> Bool {
+        guard !readOnly else {
+            conflictVersionsWaiting += 1
+            return false
+        }
+        _ = try NoteFile.createExclusively(fileURL(for: candidate), contents: text)
+        return true
     }
 
     /// A name a file or an iCloud placeholder holds: never created over,
@@ -764,15 +792,37 @@ public final class NoteStore {
     /// short holds a version nothing else has: it gets a visible name,
     /// `<name> (recovered <time>).md`, never over an existing file, and
     /// is read as a note like any other. One that cannot be moved stays.
+    /// Giving one a name is a write: refused while the folder no longer
+    /// leads where it did (`recoveryProblem`), and while read-only the
+    /// temporaries stay in place, counted for the status line, until
+    /// writing is allowed. The name is never one a file or an iCloud
+    /// placeholder holds.
     private func recoverStrandedTemporaries() {
+        strandedTemporariesWaiting = 0
+        recoveryProblem = nil
         let names = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? []
-        for name in names where name.hasPrefix(".") && name.contains(".md.tmp-") {
+        let stranded = names.filter { $0.hasPrefix(".") && $0.contains(".md.tmp-") }
+        guard !stranded.isEmpty else { return }
+        guard folderIsStillItself() else {
+            recoveryProblem = StoreError.folderReplaced(folder).errorDescription
+            return
+        }
+        for name in stranded {
             guard let range = name.range(of: ".md.tmp-") else { continue }
+            if readOnly {
+                strandedTemporariesWaiting += 1
+                continue
+            }
             let stem = String(name[name.index(after: name.startIndex)..<range.lowerBound])
             let base = NoteFileName.recoveredStem(for: stem, at: now())
             var candidate = base
             var counter = 2
             while counter < 1000 {
+                if isOccupied(NoteID(candidate)) {
+                    candidate = "\(base)-\(counter)"
+                    counter += 1
+                    continue
+                }
                 do {
                     try NoteFile.moveExclusively(folder.appendingPathComponent(name), to: folder.appendingPathComponent(candidate + ".md"))
                     break

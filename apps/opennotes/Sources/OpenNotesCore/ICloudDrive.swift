@@ -173,6 +173,9 @@ nonisolated public enum StorageStatus: Hashable, Sendable {
     /// Conflict versions iCloud kept that wait for a license to be written
     /// out as conflict copies.
     case conflictsWaiting(Int)
+    /// Hidden temporaries a cut-short write left that wait for a license to
+    /// be given a visible `(recovered …)` name.
+    case recoveriesWaiting(Int)
 
     public var text: String {
         switch self {
@@ -181,6 +184,7 @@ nonisolated public enum StorageStatus: Hashable, Sendable {
             requested > 0 ? "downloading \(requested) of \(count)" : "\(count) not downloaded"
         case .waiting: "waiting for iCloud"
         case .conflictsWaiting(let count): "\(count) conflict \(count == 1 ? "version waits" : "versions wait") for a license"
+        case .recoveriesWaiting(let count): "\(count) recovered \(count == 1 ? "version waits" : "versions wait") for a license"
         }
     }
 }
