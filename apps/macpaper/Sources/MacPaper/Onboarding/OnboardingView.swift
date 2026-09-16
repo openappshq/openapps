@@ -227,7 +227,9 @@ private struct LoginItemStep: View {
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text("The notch panel, the hotkey and a scheduled shuffle only work while macPaper runs. It opens at login and stays in the menu bar; there is nothing else it does in the background.")
+                Text(model.loginItem.isOn
+                    ? "The notch panel, the hotkey and a scheduled shuffle only work while macPaper runs. It opens at login and stays in the menu bar; there is nothing else it does in the background."
+                    : "The notch panel, the hotkey and a scheduled shuffle only work while macPaper runs. Turn this on and it opens at login and stays in the menu bar; there is nothing else it does in the background.")
                     .font(Brand.body(16))
                     .lineSpacing(4)
                     .foregroundStyle(Brand.textSecondary)

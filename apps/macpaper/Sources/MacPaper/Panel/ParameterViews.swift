@@ -1,8 +1,9 @@
 import MacPaperCore
 import SwiftUI
 
-/// The current generator's parameters. Each editor binds straight into the
-/// draft, so every change re-renders the preview.
+/// The current generator's parameters. Each editor binds into the draft
+/// through `AppModel.edited`, whose setter asks the license at the moment
+/// of the change; an allowed change re-renders the preview.
 struct ParametersView: View {
     @Bindable var model: AppModel
 
@@ -26,7 +27,7 @@ struct ParametersView: View {
     /// A binding to the parameters inside the enum: reads the current
     /// value, writes it back wrapped.
     private func binding<P>(_ value: P, wrap: @escaping (P) -> Generator) -> Binding<P> {
-        Binding(get: { value }, set: { model.draft.generator = wrap($0) })
+        Binding(get: { value }, set: { model.edited.generator = wrap($0) })
     }
 }
 

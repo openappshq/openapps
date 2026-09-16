@@ -11,8 +11,9 @@ struct AppModelTests {
     final class MemoryExporter: FileExporter {
         var exported: [(String, Data)] = []
         var refuse = false
-        func export(_ data: Data, named name: String, to folder: URL) async throws -> URL {
+        func export(_ data: Data, named name: String, to folder: URL, mayWrite: @escaping @MainActor () -> Bool) async throws -> URL {
             if refuse { throw CocoaError(.fileWriteNoPermission) }
+            guard mayWrite() else { throw AppModel.Refused() }
             exported.append((name, data))
             return folder.appendingPathComponent(name)
         }
@@ -177,9 +178,9 @@ struct AppModelTests {
         let seed = h.model.draft.seed
         h.model.reseed()
         #expect(h.model.draft.seed != seed)
-        #expect(h.model.setSeed(" 12345 "))
+        #expect(h.model.setSeed(" 12345 ") == .set)
         #expect(h.model.draft.seedText == "12345")
-        #expect(!h.model.setSeed("twelve"))
+        #expect(h.model.setSeed("twelve") == .notANumber)
         #expect(h.model.draft.seedText == "12345")
     }
 

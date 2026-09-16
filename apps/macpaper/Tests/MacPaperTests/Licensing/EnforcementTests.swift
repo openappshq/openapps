@@ -85,7 +85,9 @@ struct EnforcementTests {
         model.export(.png)
         model.export(.svg)
         model.reseed()
-        #expect(!model.setSeed("42"), sourceLocation: sourceLocation)
+        #expect(model.setSeed("42") == .refused, sourceLocation: sourceLocation)
+        model.generatorKind = model.generatorKind == .solid ? .mesh : .solid
+        model.edited.grain = 0.77
         await harness.settle()
         #expect(harness.desktop.calls.count == desktopBefore, "nothing applied while restricted", sourceLocation: sourceLocation)
         #expect(harness.exporter.exported.count == exportsBefore, "nothing exported while restricted", sourceLocation: sourceLocation)

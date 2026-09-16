@@ -38,7 +38,7 @@ final class PreviewHarness {
     ]
 
     private struct NoExport: FileExporter {
-        func export(_ data: Data, named name: String, to folder: URL) async throws -> URL {
+        func export(_ data: Data, named name: String, to folder: URL, mayWrite: @escaping @MainActor () -> Bool) async throws -> URL {
             print("PREVIEW_EXPORT \(name) \(data.count) bytes")
             return folder.appendingPathComponent(name)
         }

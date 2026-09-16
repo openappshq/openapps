@@ -71,7 +71,9 @@ license restricts it, the panel and the popover show one card in the
 generator's place, Shuffle (manual and scheduled), Apply, Export and a new
 seed are off, and the wallpaper already applied stays. Every action asks the
 controller's projection of the latest snapshot to the current clocks at the
-click, so a deadline no timer has delivered yet still refuses. Settings →
+click and again after every wait (the image picker, a render, a save panel,
+each display's desktop call), so a deadline no timer has delivered yet still
+refuses and nothing started under the trial commits after it. Settings →
 License shows the state, Buy a license (the website states the price, the
 app never does), the key field and Remove this Mac; the trial pill sits in
 the panel's header and the Settings title bar.

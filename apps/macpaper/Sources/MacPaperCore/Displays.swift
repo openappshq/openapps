@@ -85,6 +85,11 @@ public struct WallpaperApplier: Sendable {
         public let applied: [AppliedImage]
         public let failures: [(DisplayID, String)]
 
+        public init(applied: [AppliedImage], failures: [(DisplayID, String)]) {
+            self.applied = applied
+            self.failures = failures
+        }
+
         public var errorDescription: String? {
             failures.map { "Display \($0.0): \($0.1)" }.joined(separator: "\n")
         }
@@ -104,12 +109,46 @@ public struct WallpaperApplier: Sendable {
         self.keptPerDisplay = max(1, keptPerDisplay)
     }
 
-    /// Applies each display's document. Displays with the same document and
-    /// pixel size share one render (and, through the cache, the same
-    /// document applied again shares it too).
+    /// A display's file, rendered and written but not yet on the desktop:
+    /// `commit` puts it there, `discard` removes it again.
+    public struct PreparedImage: Equatable, Sendable {
+        public let display: DisplayID
+        public let wallpaper: Wallpaper
+        public let url: URL
+    }
+
+    /// What `prepare` made of a plan: the files it could write, and the
+    /// displays it could not render or write for.
+    public struct Prepared: Sendable {
+        public var images: [PreparedImage]
+        public var failures: [(DisplayID, String)]
+    }
+
+    /// Applies each display's document: `prepare`, then `commit` for each
+    /// file. Displays with the same document and pixel size share one render
+    /// (and, through the cache, the same document applied again shares it
+    /// too). The app runs the two halves apart, so that what reaches the
+    /// desktop can be decided per display at the moment of the commit.
     public func apply(_ plan: [DisplayInfo: Wallpaper]) throws -> [AppliedImage] {
+        let prepared = try prepare(plan)
         var applied: [AppliedImage] = []
-        var failures: [(DisplayID, String)] = []
+        var failures = prepared.failures
+        for image in prepared.images {
+            do {
+                applied.append(try commit(image))
+            } catch {
+                failures.append((image.display, error.localizedDescription))
+            }
+        }
+        if !failures.isEmpty { throw Failure(applied: applied, failures: failures) }
+        return applied
+    }
+
+    /// Renders and writes each display's file, touching no desktop. The
+    /// files are recorded in the manifest, so an uncommitted one is owned
+    /// like any other and pruned in time; `discard` removes it at once.
+    public func prepare(_ plan: [DisplayInfo: Wallpaper]) throws -> Prepared {
+        var prepared = Prepared(images: [], failures: [])
         try prepareDirectory()
         var manifest = AppliedManifest.load(in: directory)
         for (display, wallpaper) in plan.sorted(by: { $0.key.id < $1.key.id }) {
@@ -119,16 +158,38 @@ public struct WallpaperApplier: Sendable {
                 }
                 guard let png = raster.pngData() else { throw ApplyError.encoding }
                 let url = try write(png, for: display.id, extension: "png", manifest: &manifest)
-                try applier.apply(imageAt: url, to: display.id)
-                applied.append(AppliedImage(display: display.id, wallpaper: wallpaper, url: url))
-                prune(display: display.id, manifest: &manifest)
+                prepared.images.append(PreparedImage(display: display.id, wallpaper: wallpaper, url: url))
             } catch {
-                failures.append((display.id, error.localizedDescription))
+                prepared.failures.append((display.id, error.localizedDescription))
             }
         }
         manifest.save(in: directory)
-        if !failures.isEmpty { throw Failure(applied: applied, failures: failures) }
-        return applied
+        return prepared
+    }
+
+    /// Hands one prepared file to the desktop applier, then prunes that
+    /// display's older files. The only place a desktop changes.
+    public func commit(_ image: PreparedImage) throws -> AppliedImage {
+        try applier.apply(imageAt: image.url, to: image.display)
+        var manifest = AppliedManifest.load(in: directory)
+        prune(display: image.display, manifest: &manifest)
+        manifest.save(in: directory)
+        return AppliedImage(display: image.display, wallpaper: image.wallpaper, url: image.url)
+    }
+
+    /// Removes a prepared file that will not be committed, and its
+    /// manifest entry, so a refused apply leaves nothing behind and never
+    /// pushes the file the desktop shows out of the kept window.
+    public func discard(_ image: PreparedImage) {
+        var manifest = AppliedManifest.load(in: directory)
+        let name = image.url.lastPathComponent
+        if let entry = manifest.entry(named: name, for: image.display) {
+            manifest.remove(entry, for: image.display)
+            manifest.save(in: directory)
+        }
+        let realDirectory = URL(fileURLWithPath: directory.path).resolvingSymlinksInPath().standardizedFileURL.path
+        guard Self.isOwnedRegularFile(image.url, inside: realDirectory) else { return }
+        try? FileManager.default.removeItem(at: image.url)
     }
 
     enum ApplyError: Error, LocalizedError {
@@ -236,6 +297,10 @@ struct AppliedManifest: Codable, Sendable {
 
     mutating func remove(_ entry: Entry, for display: DisplayID) {
         files[String(display)]?.removeAll { $0 == entry }
+    }
+
+    func entry(named name: String, for display: DisplayID) -> Entry? {
+        files[String(display)]?.first { $0.name == name }
     }
 
     /// Every name the manifest holds for a display, newest last.

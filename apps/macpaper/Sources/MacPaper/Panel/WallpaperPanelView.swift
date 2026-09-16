@@ -28,6 +28,11 @@ struct WallpaperPanelView: View {
             PreviewCard(model: model)
             if let restriction = model.license.restriction() {
                 LicenseCard(restriction: restriction, license: model.license)
+                // Favorites keep working: the star for the shown document.
+                HStack {
+                    Spacer()
+                    FavoriteButton(model: model)
+                }
             } else {
                 GeneratorPicker(model: model)
                 ParametersView(model: model)
@@ -125,7 +130,7 @@ private struct GrainSlider: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        LabeledSlider(title: "Grain", value: $model.draft.grain, range: 0...1, format: { "\(Int($0 * 100))%" })
+        LabeledSlider(title: "Grain", value: $model.edited.grain, range: 0...1, format: { "\(Int($0 * 100))%" })
     }
 }
 
@@ -142,18 +147,7 @@ private struct ActionRow: View {
                 .disabled(!model.canAct)
                 .help("A random wallpaper, applied now")
             applyButton
-            Button {
-                model.toggleFavorite()
-            } label: {
-                Image(systemName: model.isFavorite ? "star.fill" : "star")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(model.isFavorite ? Brand.accentText : Brand.textSecondary)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.isFavorite ? "Remove from favorites" : "Add to favorites")
-            .help(model.isFavorite ? "Remove from favorites" : "Add to favorites")
+            FavoriteButton(model: model)
             Menu {
                 ForEach(WallpaperExport.Format.allCases, id: \.self) { format in
                     Button("Export as \(format.title)") { model.export(format) }
@@ -206,6 +200,27 @@ private struct ActionRow: View {
             }
             .disabled(!model.canAct)
         }
+    }
+}
+
+/// The star: favorites are browsing, not generating, so it works in every
+/// license state.
+private struct FavoriteButton: View {
+    let model: AppModel
+
+    var body: some View {
+        Button {
+            model.toggleFavorite()
+        } label: {
+            Image(systemName: model.isFavorite ? "star.fill" : "star")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(model.isFavorite ? Brand.accentText : Brand.textSecondary)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.isFavorite ? "Remove from favorites" : "Add to favorites")
+        .help(model.isFavorite ? "Remove from favorites" : "Add to favorites")
     }
 }
 
@@ -284,10 +299,14 @@ private struct Footer: View {
     }
 
     private func commitSeed() {
-        if model.setSeed(seedText) {
+        switch model.setSeed(seedText) {
+        case .set:
             editingSeed = false
-        } else {
+        case .notANumber:
             model.show("A seed is a whole number up to 18446744073709551615.", tone: .error)
+        case .refused:
+            // The model's status line says why; the field stays.
+            break
         }
     }
 }

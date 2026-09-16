@@ -5,9 +5,11 @@ import UniformTypeIdentifiers
 
 /// Writes an export where the user asked, or asks where. The app's writes
 /// the export folder and falls back to a save panel; the preview harness
-/// writes nothing.
+/// writes nothing. `mayWrite` is asked right before any bytes are written,
+/// after every wait of the exporter's own (a save panel left open): a
+/// `false` answer throws `AppModel.Refused` and writes nothing.
 protocol FileExporter {
-    func export(_ data: Data, named name: String, to folder: URL) async throws -> URL
+    func export(_ data: Data, named name: String, to folder: URL, mayWrite: @escaping @MainActor () -> Bool) async throws -> URL
 }
 
 /// Picks an image to pixelize. The app's is an open panel; the harness's
@@ -17,7 +19,8 @@ protocol ImagePicker {
 }
 
 struct PanelFileExporter: FileExporter {
-    func export(_ data: Data, named name: String, to folder: URL) async throws -> URL {
+    func export(_ data: Data, named name: String, to folder: URL, mayWrite: @escaping @MainActor () -> Bool) async throws -> URL {
+        guard mayWrite() else { throw AppModel.Refused() }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let url = folder.appendingPathComponent(name)
@@ -31,6 +34,8 @@ struct PanelFileExporter: FileExporter {
             panel.allowedContentTypes = [UTType(filenameExtension: (name as NSString).pathExtension) ?? .data]
             NSApp.activate()
             guard panel.runModal() == .OK, let url = panel.url else { throw CocoaError(.userCancelled) }
+            // The panel may have stayed open across a deadline.
+            guard mayWrite() else { throw AppModel.Refused() }
             try data.write(to: url, options: .atomic)
             return url
         }
@@ -79,13 +84,28 @@ final class AppModel {
     @ObservationIgnored let previewCache = RenderCache(maxBytes: 48 * 1024 * 1024, maxEntries: 24)
     @ObservationIgnored private let displaySource: @MainActor () -> [DisplayInfo]
 
-    /// The document being edited: shown, and applied on Apply.
+    /// The document being edited: shown, and applied on Apply. Set here
+    /// only by the model's own gated paths, by `load` (a favorite, which is
+    /// browsing, not generating) and by fixtures; every editor binds
+    /// `edited`, whose setter asks the license first.
     var draft: Wallpaper {
         didSet {
             guard draft != oldValue else { return }
             favoritesRevision &+= 1
             schedulePreview()
             scheduleDraftSave()
+        }
+    }
+
+    /// The draft as the panel's editors see it: reads are the draft, and
+    /// every write — a parameter, a color, the grain — asks `allowed()` at
+    /// that moment, so a control retained across a deadline changes,
+    /// renders and saves nothing.
+    var edited: Wallpaper {
+        get { draft }
+        set {
+            guard allowed() else { return }
+            draft = newValue
         }
     }
     /// The display the panel speaks for: its aspect for the preview, its
@@ -197,7 +217,7 @@ final class AppModel {
     var generatorKind: GeneratorKind {
         get { draft.generator.kind }
         set {
-            guard newValue != draft.generator.kind else { return }
+            guard newValue != draft.generator.kind, allowed() else { return }
             draft.generator = .default(newValue, colors: draft.generator.colors)
         }
     }
@@ -208,12 +228,21 @@ final class AppModel {
         draft = draft.reseeded()
     }
 
-    /// Sets the seed the user typed, if it is one.
-    func setSeed(_ text: String) -> Bool {
-        guard allowed() else { return false }
-        guard let seed = UInt64(text.trimmingCharacters(in: .whitespaces)) else { return false }
+    /// What became of a typed seed.
+    enum SeedEntry: Equatable {
+        case set
+        /// Not a whole number in range; the draft is unchanged.
+        case notANumber
+        /// The license refused; the status line says so, the draft is unchanged.
+        case refused
+    }
+
+    /// Sets the seed the user typed, if it is one and the license allows.
+    func setSeed(_ text: String) -> SeedEntry {
+        guard allowed() else { return .refused }
+        guard let seed = UInt64(text.trimmingCharacters(in: .whitespaces)) else { return .notANumber }
         draft = draft.reseeded(seed)
-        return true
+        return .set
     }
 
     /// Imports an image for Pixelize, switching the generator to it.
@@ -224,12 +253,19 @@ final class AppModel {
     }
 
     /// Decodes off the main actor, bounded by the import size (a huge photo
-    /// is scaled down while decoding, never held whole).
+    /// is scaled down while decoding, never held whole). The license is
+    /// asked before the decode (the picker may have stayed open across a
+    /// deadline) and again before the draft takes the result.
     func importImage(at url: URL) async {
+        guard allowed() else { return }
         let imports = imports
         let outcome = await Task.detached(priority: .userInitiated) { () -> Result<ImageReference, any Error> in
             do { return .success(try imports.importImage(at: url)) } catch { return .failure(error) }
         }.value
+        // Lapsed during the decode: the draft keeps its source. The store's
+        // copy is content-addressed and may already belong to a favorite, so
+        // it is left where it is.
+        guard allowed() else { return }
         switch outcome {
         case .success(let reference):
             if case .pixelize(var p) = draft.generator {
@@ -296,6 +332,9 @@ final class AppModel {
     /// What a refused action says.
     static let restrictedMessage = "Not done: the license doesn’t allow making wallpapers right now."
 
+    /// Thrown by an exporter whose `mayWrite` answered no.
+    struct Refused: Error {}
+
     /// The license, asked at the moment of the action — never a value a
     /// view captured when it was built — so a click after a deadline that
     /// no timer has delivered yet does nothing but say why.
@@ -346,6 +385,10 @@ final class AppModel {
         Dictionary(uniqueKeysWithValues: displays.compactMap { display in appliedState.wallpaper(for: display.id).map { (display.id, $0) } })
     }
 
+    /// Renders and writes off the main actor (`prepare`), then commits each
+    /// display's file to the desktop here, asking the license before every
+    /// one: a deadline crossed while rendering, or between two displays,
+    /// leaves the rest undone and discarded, the desktop as it was.
     private func run(_ plan: [DisplayInfo: Wallpaper], verb: String) {
         guard !plan.isEmpty else {
             show("No display to apply to.", tone: .error)
@@ -355,20 +398,40 @@ final class AppModel {
         isApplying = true
         let applier = applier
         Task { [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<[AppliedImage], any Error> in
-                do { return .success(try applier.apply(plan)) } catch { return .failure(error) }
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<WallpaperApplier.Prepared, any Error> in
+                do { return .success(try applier.prepare(plan)) } catch { return .failure(error) }
             }.value
             guard let self else { return }
-            self.isApplying = false
+            defer { self.isApplying = false }
+            let prepared: WallpaperApplier.Prepared
             switch outcome {
-            case .success(let images):
-                self.record(images)
-                self.show(images.count == 1 ? "\(verb)." : "\(verb) to \(images.count) displays.")
-            case .failure(let failure as WallpaperApplier.Failure):
-                self.record(failure.applied)
-                self.show(failure.localizedDescription, tone: .error)
+            case .success(let value): prepared = value
             case .failure(let error):
                 self.show(error.localizedDescription, tone: .error)
+                return
+            }
+            var applied: [AppliedImage] = []
+            var failures = prepared.failures
+            var refused = false
+            for image in prepared.images {
+                guard !refused, self.license.hasAccess() else {
+                    refused = true
+                    applier.discard(image)
+                    continue
+                }
+                do {
+                    applied.append(try applier.commit(image))
+                } catch {
+                    failures.append((image.display, error.localizedDescription))
+                }
+            }
+            self.record(applied)
+            if refused {
+                self.show(Self.restrictedMessage, tone: .error)
+            } else if !failures.isEmpty {
+                self.show(WallpaperApplier.Failure(applied: applied, failures: failures).localizedDescription, tone: .error)
+            } else {
+                self.show(applied.count == 1 ? "\(verb)." : "\(verb) to \(applied.count) displays.")
             }
         }
     }
@@ -414,12 +477,17 @@ final class AppModel {
                 self.show("Couldn’t render the export.", tone: .error)
                 return
             }
+            // The render may have crossed a deadline; the exporter asks
+            // again right before writing, after any panel of its own.
+            guard self.allowed() else { return }
             do {
-                let url = try await self.exporter.export(data, named: name, to: folder)
+                let url = try await self.exporter.export(data, named: name, to: folder) { [weak self] in self?.allowed() ?? false }
                 self.show("Exported \(url.lastPathComponent).")
                 self.exportWorkspace(url)
             } catch CocoaError.userCancelled {
                 // Nothing to say.
+            } catch is Refused {
+                // `allowed()` has said why.
             } catch {
                 self.show("Couldn’t export: \(error.localizedDescription)", tone: .error)
             }

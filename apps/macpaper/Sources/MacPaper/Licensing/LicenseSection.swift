@@ -42,6 +42,10 @@ struct LicenseSection: View {
                 .font(Brand.body(12))
                 .foregroundStyle(Brand.textSecondary)
         }
+        .onAppear {
+            // A link that arrived before Settings existed.
+            if let pending = license.pendingKey { key = pending }
+        }
         .onChange(of: license.pendingKey) { _, pending in
             if let pending { key = pending }
         }
