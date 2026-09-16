@@ -1022,11 +1022,8 @@ public final class NoteStore {
 
     static func parse(id: NoteID, contents: String, fileDate: Date, fallbackCreated: Date, truncated: Bool = false) -> Note {
         let parsed = FrontMatter.parse(contents)
-        var text = parsed.text
-        // The blank line serialize() puts after the block is not text.
-        if parsed.hadFrontMatter, text.hasPrefix("\n") { text.removeFirst() }
         var note = Note(
-            id: id, text: text, color: parsed.color ?? .coral, face: parsed.face ?? .sans,
+            id: id, text: parsed.text, color: parsed.color ?? .coral, face: parsed.face ?? .sans,
             pinned: parsed.pinned ?? false, archived: parsed.archived ?? false, order: Note.clampOrder(parsed.order ?? 0),
             created: parsed.created ?? fallbackCreated, modified: max(parsed.modified ?? fileDate, fileDate)
         )

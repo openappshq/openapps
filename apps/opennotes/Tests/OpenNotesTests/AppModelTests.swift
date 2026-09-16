@@ -175,6 +175,15 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(Preferences(defaults: temporary.defaults).folder.lastPathComponent, defaultLeaf)
     }
 
+    @MainActor func testHadEarlierPreferencesIsTrueOnlyWithStoredEvidence() throws {
+        let fresh = try TemporaryDefaults()
+        XCTAssertFalse(Preferences(defaults: fresh.defaults).hadEarlierPreferences)
+        let seeded = try TemporaryDefaults()
+        seeded.defaults.set(true, forKey: WelcomeNote.Key.decided)
+        XCTAssertTrue(Preferences(defaults: seeded.defaults).hadEarlierPreferences)
+        XCTAssertTrue(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(WelcomeNote.Key.decided))
+    }
+
     @MainActor func testEveryKeyWrittenIsFreshInstallEvidence() throws {
         let temporary = try TemporaryDefaults()
         let preferences = Preferences(defaults: temporary.defaults)
