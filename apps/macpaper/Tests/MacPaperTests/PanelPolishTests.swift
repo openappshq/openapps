@@ -184,10 +184,10 @@ struct LiveApplyTests {
         await land(h, scheduler)
         #expect(h.model.appliedState.wallpaper(for: 1)?.seed == 11)
         let before = h.desktop.calls.count
-        h.model.applyPreset(PresetPalettes.named("Sea")!)
+        h.model.applyPreset(Palettes.preset(named: "Sea")!)
         await land(h, scheduler)
         #expect(h.desktop.calls.count == before + 2)
-        #expect(PresetPalettes.matching(h.model.appliedState.wallpaper(for: 1)!.generator.colors)?.name == "Sea")
+        #expect(Palettes.preset(matching: h.model.appliedState.wallpaper(for: 1)!.generator.colors)?.name == "Sea")
         #expect(Side.allCases.allSatisfy { h.model.draft.menuBarReads(side: $0, context: h.model.readabilityContext) }, "a preset lands with a readable menu bar")
         let beforeShuffle = h.desktop.calls.count
         h.model.shuffle(seed: 5)
@@ -252,16 +252,21 @@ struct LiveApplyTests {
     func pins() async {
         let (h, _) = harness()
         defer { h.tearDown() }
-        h.model.load(Wallpaper(generator: .mesh(MeshParameters(columns: 2, rows: 2, colors: PresetPalettes.named("Sea")!.colors, jitter: 0.77, softness: 0.5)), seed: 4))
+        h.model.load(Wallpaper(generator: .mesh(MeshParameters(columns: 2, rows: 2, colors: Palettes.preset(named: "Sea")!.tones, jitter: 0.77, softness: 0.5)), seed: 4))
         h.model.togglePin(.palette)
-        h.model.togglePin(.meshJitter)
-        #expect(h.model.isPinned(.palette) && h.model.pins.pins == [.palette, .meshJitter])
+        // No curated family makes a mesh, so keeping the mesh generator
+        // itself across a shuffle takes the `.generator` pin (Shuffle then
+        // keeps the template's generator verbatim); `.jitter` on top is
+        // what carries a per-side knob into a materialised dark side.
+        h.model.togglePin(.generator)
+        h.model.togglePin(.jitter)
+        #expect(h.model.isPinned(.palette) && h.model.pinnedKeys == [.palette, .generator, .jitter])
         h.model.shuffle(seed: 8)
         await h.settle()
         guard case .mesh(let p) = h.model.draft.generator else { Issue.record("the generator changed"); return }
-        #expect(p.jitter == 0.77 && p.colors == PresetPalettes.named("Sea")!.colors)
+        #expect(p.jitter == 0.77 && p.colors == Palettes.preset(named: "Sea")!.tones)
         #expect(h.model.draft.seed != 4)
-        #expect(Preferences(defaults: h.defaults).pins == h.model.pins, "persisted")
+        #expect(Preferences(defaults: h.defaults).pins == h.model.pinnedKeys, "persisted")
         // Editing the dark side: its pinned jitter survives as the dark side's.
         h.model.editingSide = .dark
         h.model.materializeDarkSide()
@@ -281,15 +286,17 @@ struct LiveApplyTests {
     func library() async {
         let (h, _) = harness()
         defer { h.tearDown() }
-        h.model.load(StarterRecipes.all[0].wallpaper)
-        #expect(h.model.recipeTitle == "Tangerine · Mesh")
+        let starter = TasteSet.recipes[0].wallpaper
+        h.model.load(starter)
+        let derivedName = Recipe.defaultName(for: starter)
+        #expect(h.model.recipeTitle == derivedName)
         h.model.saveRecipe(named: "  ")
-        #expect(h.model.favoriteList[0].title == "Tangerine · Mesh")
+        #expect(h.model.favoriteList[0].name == derivedName)
         h.model.saveRecipe(named: "Desk")
-        #expect(h.model.favoriteList.count == 1 && h.model.favoriteList[0].title == "Desk" && h.model.recipeTitle == "Desk")
+        #expect(h.model.favoriteList.count == 1 && h.model.favoriteList[0].name == "Desk" && h.model.recipeTitle == "Desk")
         h.model.neverShow(h.model.favoriteList[0])
         #expect(h.model.favoriteList.isEmpty && h.model.blockedCount == 1)
-        #expect(h.model.draft == StarterRecipes.all[0].wallpaper, "the draft is left alone")
+        #expect(h.model.draft == starter, "the draft is left alone")
     }
 
     @Test("Preview renders coalesce: one in flight, one pending, the last state shown")
@@ -315,7 +322,7 @@ struct PanelWidthTests {
     @Test("Every segmented control fits the compact column on one line, and the width setting grows only when it must")
     func segmentsFit() {
         let pane = PanelLayout.paneWidth(columnWidth: PanelMetrics.width(for: .compact))
-        for labels in [Composition.allCases.map(\.title), GradientKind.allCases.map(\.title), PatternKind.allCases.map(\.title), ImageFit.allCases.map(\.title), PairChoice.allCases.map(\.title), BaseLayer.allCases.map(\.title)] {
+        for labels in [Composition.allCases.map(\.title), GradientKind.allCases.map(\.title), PatternKind.allCases.map(\.title), ImageFit.allCases.map(\.title), PairChoice.allCases.map(\.title), BaseKind.allCases.map(\.title)] {
             let width = LabelMeasure.segmentedWidth(labels)
             #expect(width <= pane, "\(labels) needs \(width) in a pane of \(pane)")
             // Every segment is at least as wide as its widest label plus the padding.
@@ -329,7 +336,11 @@ struct PanelWidthTests {
             #expect(PanelLayout.paneWidth(columnWidth: width) >= widest, "the widest control fits the \(setting.rawValue) column")
             #expect(width == max(setting.points, ceil(widest + PanelLayout.railWidth + 2 * PanelLayout.paneInset)))
         }
-        #expect(PanelMetrics.width(for: .regular) == PanelWidth.regular.points, "the regular column needs no growth")
+        // The six-family generator picker (FieldFamily.allCases) now needs
+        // more than the regular column's default: the loop above already
+        // proves every setting, regular included, grows to fit it and
+        // nothing wraps — so there is no separate "regular needs no
+        // growth" invariant to hold any more.
         // The time-of-day frame stepper sits under the pair segments, on its own line; it fits on any width too.
         let stepper = LabelMeasure.width(of: "16 frames", font: NSFont(name: "IBMPlexMono-Regular", size: 12) ?? .monospacedSystemFont(ofSize: 12, weight: .regular)) + 2 * 26 + 2 * Brand.Space.s4
         #expect(stepper <= pane)

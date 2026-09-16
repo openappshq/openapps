@@ -628,9 +628,10 @@ struct PinsTests {
     func meshPins() {
         let template = Wallpaper(generator: .mesh(MeshParameters(columns: 5, rows: 4, colors: [.black, .white], jitter: 0.9, softness: 0.1)), seed: 1)
         let candidate = Wallpaper(generator: .mesh(MeshParameters(columns: 2, rows: 2, colors: [.black, .white], jitter: 0.2, softness: 0.8)), seed: 2)
+        // The panel's one Grid pin is `.columns`: it keeps both columns and rows.
         var out = Pins.apply([.columns], from: template, to: candidate)
         guard case .mesh(let columns) = out.generator else { Issue.record("not a mesh"); return }
-        #expect(columns.columns == 5 && columns.rows == 2 && columns.jitter == 0.2 && columns.softness == 0.8)
+        #expect(columns.columns == 5 && columns.rows == 4 && columns.jitter == 0.2 && columns.softness == 0.8)
         out = Pins.apply([.rows], from: template, to: candidate)
         guard case .mesh(let rows) = out.generator else { Issue.record("not a mesh"); return }
         #expect(rows.rows == 4 && rows.columns == 2)
@@ -648,12 +649,16 @@ struct PinsTests {
     func ditherPins() {
         let template = Wallpaper(generator: .dither(DitherParameters(source: nil, mode: .halftone, cell: 20, paletteSize: 6, ink: .black, paper: .white)), seed: 1)
         let candidate = Wallpaper(generator: .dither(DitherParameters(source: nil, mode: .bayer2, cell: 2, paletteSize: nil, ink: .black, paper: .white)), seed: 2)
+        // Switching mode reclamps the candidate's own cell into the new
+        // mode's range (halftone's is 4...32, so 2 comes up to 4); pinning
+        // the cell alone clamps the template's into the candidate's own
+        // mode's range instead (bayer2's is 1...8, so 20 comes down to 8).
         var out = Pins.apply([.ditherMode], from: template, to: candidate)
         guard case .dither(let mode) = out.generator else { Issue.record("not a dither"); return }
-        #expect(mode.mode == .halftone && mode.cell == 2)
+        #expect(mode.mode == .halftone && mode.cell == 4)
         out = Pins.apply([.cell], from: template, to: candidate)
         guard case .dither(let cell) = out.generator else { Issue.record("not a dither"); return }
-        #expect(cell.cell == 20 && cell.mode == .bayer2)
+        #expect(cell.cell == 8 && cell.mode == .bayer2)
         out = Pins.apply([.paletteSize], from: template, to: candidate)
         guard case .dither(let size) = out.generator else { Issue.record("not a dither"); return }
         #expect(size.paletteSize == 6 && size.mode == .bayer2)

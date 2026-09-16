@@ -46,7 +46,7 @@ struct PreferencesTests {
         preferences.clockStyle = .analog
         preferences.clockPosition = .topLeft
         preferences.clockSize = .large
-        preferences.pins = PinnedParameters([.seed, .palette])
+        preferences.pins = [.seed, .palette]
         let reloaded = Preferences(defaults: defaults)
         #expect(!reloaded.keepApplied && reloaded.clockStyle == .analog && reloaded.clockPosition == .topLeft && reloaded.clockSize == .large)
         #expect(!reloaded.notchEnabled && reloaded.hostDisplay == .everyNotchedDisplay && reloaded.trigger == .hover)
@@ -54,7 +54,7 @@ struct PreferencesTests {
         #expect(reloaded.hotkey == Hotkey(keyCode: 49, modifiers: [.command, .shift]))
         #expect(reloaded.shuffleInterval == .hours3 && reloaded.favoritesOnly && !reloaded.sameOnAllDisplays)
         #expect(reloaded.exportFolder.path == "/tmp/exports")
-        #expect(reloaded.pins == PinnedParameters([.seed, .palette]))
+        #expect(reloaded.pins == [.seed, .palette])
         #expect(reloaded.panelSettings == PanelSettings(isEnabled: false, trigger: .hover, hideInFullscreen: false))
         reloaded.hotkey = nil
         #expect(Preferences(defaults: defaults).hotkey == nil, "not the default again")
@@ -74,6 +74,21 @@ struct PreferencesTests {
         let preferences = Preferences(defaults: defaults)
         #expect(preferences.direction == .down)
         #expect(preferences.hotkey == nil)
+    }
+
+    @Test("A pins file from an earlier panel build, stored under its old names, decodes to the new parameter keys")
+    func legacyPinNames() throws {
+        let temporary = try TemporaryDefaults()
+        defer { temporary.remove() }
+        let defaults = temporary.defaults
+        let stored = ["gradientShape", "gradientAngle", "gradientCenter", "gradientBlend", "meshGrid", "meshJitter", "meshSoftness", "patternScale", "patternAngle", "pixelizeBlock", "pixelizePalette", "ditherCell", "ditherPalette", "seed"]
+        defaults.set(try JSONEncoder().encode(stored), forKey: PreferenceKey.pins)
+        let preferences = Preferences(defaults: defaults)
+        #expect(preferences.pins == [.gradientKind, .angle, .center, .interpolation, .columns, .jitter, .softness, .scale, .angle, .blockSize, .paletteSize, .cell, .paletteSize, .seed])
+        for (legacy, key) in Preferences.legacyPinNames {
+            #expect(ParameterKey(rawValue: legacy) == nil, "\(legacy) collides with a current key")
+            #expect(Preferences.legacyPinNames[legacy] == key)
+        }
     }
 }
 

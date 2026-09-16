@@ -179,8 +179,11 @@ struct AppModelTests {
         // A pinned generator the gate always refuses (a bare gradient):
         // every attempt on every display fails `.bare`, so the plan comes
         // back empty and shuffle() must not fall back to an unvalidated
-        // candidate (fix round 1, P0-1).
-        let bare = Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1, pinned: [.generator])
+        // candidate (fix round 1, P0-1). Pins are the user's own setting
+        // (Preferences.pins), not carried on the Wallpaper literal — `load`
+        // always mirrors the current preference onto the draft.
+        h.preferences.pins = [.generator]
+        let bare = Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1)
         h.model.load(bare)
         let before = h.model.draft
         h.model.shuffle()
