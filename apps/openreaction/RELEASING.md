@@ -269,7 +269,12 @@ The cask launches the app: it opens without a Gatekeeper dialog (the cask
 cleared quarantine; a zip downloaded by hand instead needs right-click →
 Open once), the onboarding window asks for Accessibility and Input
 Monitoring, and after granting both, typing `:tada:` in TextEdit turns into
-🎉. Settings must have a License section with the Buy link and an Updates
+🎉. Also verify a Chromium app (Chrome's address bar or a text field on a
+page) and an Electron app (VS Code, or an Electron chat app that is not
+excluded): `:tada:` must turn into 🎉 there too — that path enables the app's
+accessibility tree on activation and, where the field still can't be read
+back, falls back to typed replacement, and neither can be exercised by the
+test suite. Settings must have a License section with the Buy link and an Updates
 section with "Check for updates automatically" **on** (a fresh install),
 "Download and install automatically" **off** and a working "Check Now" (a
 source build has neither section). Turning the second toggle on, quitting

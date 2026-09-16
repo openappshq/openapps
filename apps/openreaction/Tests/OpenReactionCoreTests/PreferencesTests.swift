@@ -112,6 +112,47 @@ struct PreferencesTests {
         #expect(!exclusions.entries.contains { $0.bundleIdentifier == "org.example.OldTerminal" })
     }
 
+    // MARK: Typed replacement
+
+    @Test func typedReplacementIsOnByDefaultAndOffPerApp() {
+        var settings = TypedReplacementSettings()
+        #expect(settings.isEnabled("com.google.Chrome"))
+        #expect(settings.isEnabled(nil)) // unknown app keeps the default, on
+        settings.setEnabled(false, bundleIdentifier: "com.google.Chrome")
+        #expect(!settings.isEnabled("com.google.Chrome"))
+        #expect(settings.isEnabled("com.microsoft.VSCode"))
+        settings.setEnabled(true, bundleIdentifier: "com.google.Chrome")
+        #expect(settings == TypedReplacementSettings())
+    }
+
+    @Test func typedReplacementDisableIgnoresEmptyAndDedupes() {
+        var settings = TypedReplacementSettings()
+        settings.disable(["com.google.Chrome", "", "com.google.Chrome", "com.microsoft.VSCode"])
+        #expect(settings.disabled == ["com.google.Chrome", "com.microsoft.VSCode"])
+        #expect(settings.disabledBundleIdentifiers == ["com.google.Chrome", "com.microsoft.VSCode"])
+        #expect(settings.hasUserChanges)
+    }
+
+    @Test func typedReplacementRestoreDefaultsClearsEveryChange() {
+        var settings = TypedReplacementSettings()
+        settings.disable(["com.google.Chrome"])
+        #expect(settings.hasUserChanges)
+        settings.restoreDefaults()
+        #expect(!settings.hasUserChanges)
+        #expect(settings.isEnabled("com.google.Chrome"))
+    }
+
+    @Test func typedReplacementRoundTripsAsDifferences() throws {
+        var settings = TypedReplacementSettings()
+        settings.setEnabled(false, bundleIdentifier: "com.google.Chrome")
+        let data = try JSONEncoder().encode(settings)
+        #expect(String(decoding: data, as: UTF8.self).contains("com.google.Chrome"))
+        #expect(try JSONDecoder().decode(TypedReplacementSettings.self, from: data) == settings)
+        // An empty payload decodes to the default (on everywhere).
+        let empty = try JSONDecoder().decode(TypedReplacementSettings.self, from: Data("{}".utf8))
+        #expect(empty == TypedReplacementSettings())
+    }
+
     @Test func frecencyFavorsFrequentAndRecentUse() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let day: TimeInterval = 24 * 60 * 60

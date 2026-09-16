@@ -111,6 +111,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             let toggle = item("Suggest in \(name)", #selector(toggleFrontmostApp))
             toggle.state = controller.exclusions.isExcluded(bundleID) ? .off : .on
             menu.addItem(toggle)
+            // Typed replacement matters only where OpenReaction is on.
+            if !controller.exclusions.isExcluded(bundleID) {
+                let typed = item("Typed replacement in \(name)", #selector(toggleFrontmostTypedReplacement))
+                typed.state = controller.typedReplacement.isEnabled(bundleID) ? .on : .off
+                menu.addItem(typed)
+            }
         }
 
         menu.addItem(.separator())
@@ -154,6 +160,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func toggleFrontmostApp() {
         guard let bundleID = frontmostApp?.bundleIdentifier else { return }
         controller.setExcluded(!controller.exclusions.isExcluded(bundleID), bundleIdentifier: bundleID)
+    }
+
+    @objc private func toggleFrontmostTypedReplacement() {
+        guard let bundleID = frontmostApp?.bundleIdentifier else { return }
+        controller.setTypedReplacement(!controller.typedReplacement.isEnabled(bundleID), bundleIdentifier: bundleID)
     }
 
     @objc private func openOnboarding() {

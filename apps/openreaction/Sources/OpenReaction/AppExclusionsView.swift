@@ -176,6 +176,136 @@ struct AppExclusionsSection: View {
 
 }
 
+/// Settings section for the typed-replacement fallback: it is on everywhere by
+/// default, so this lists only the apps the user has switched it off in, and
+/// lets them add more or switch one back on.
+struct TypedReplacementSection: View {
+    let controller: AppController
+
+    @State private var apps = InstalledAppStore()
+    @State private var runningApps: [RunningApp] = []
+
+    private var disabled: [String] { controller.typedReplacement.disabledBundleIdentifiers }
+
+    var body: some View {
+        Section {
+            ForEach(disabled, id: \.self) { bundleIdentifier in
+                let app = apps.info(for: bundleIdentifier)
+                HStack(spacing: Brand.Space.s12) {
+                    Image(nsImage: app.icon)
+                        .resizable()
+                        .frame(width: 24, height: 24)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(app.name)
+                            .font(Brand.body(14))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if app.isInstalled == false {
+                            Text("Not installed")
+                                .font(Brand.body(12))
+                                .foregroundStyle(Brand.textSecondary)
+                        }
+                    }
+                    Spacer(minLength: Brand.Space.s8)
+                    Button {
+                        controller.setTypedReplacement(true, bundleIdentifier: bundleIdentifier)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Turn typed replacement back on in \(app.name)")
+                    .accessibilityLabel("Turn typed replacement on in \(app.name)")
+                }
+                .padding(.vertical, 2)
+            }
+            if disabled.isEmpty {
+                Text("Typed replacement is on in every app.")
+                    .font(Brand.body(13))
+                    .foregroundStyle(Brand.textSecondary)
+            }
+            HStack(spacing: Brand.Space.s8) {
+                Button(action: addFromOpenPanel) {
+                    Image(systemName: "plus")
+                }
+                .help("Turn typed replacement off in an app from Applications")
+                .accessibilityLabel("Turn typed replacement off in an app")
+
+                Menu {
+                    if runningApps.isEmpty {
+                        Text("No other apps running")
+                    }
+                    ForEach(runningApps) { app in
+                        Button {
+                            controller.disableTypedReplacement([app.bundleIdentifier])
+                        } label: {
+                            Label { Text(app.name) } icon: { Image(nsImage: app.icon) }
+                        }
+                        .disabled(!controller.typedReplacement.isEnabled(app.bundleIdentifier))
+                    }
+                } label: {
+                    Text("Add Running App")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .onAppear(perform: refreshRunningApps)
+                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+                    refreshRunningApps()
+                }
+                .accessibilityLabel("Turn typed replacement off in a running app")
+
+                Spacer()
+
+                Button("Restore Defaults") { controller.restoreDefaultTypedReplacement() }
+                    .disabled(!controller.typedReplacement.hasUserChanges)
+            }
+        } header: {
+            MonoLabel("Typed replacement")
+        } footer: {
+            Text("Some apps — Chrome and other Chromium or Electron apps — don’t let OpenReaction read the field back to confirm the caret. There, OpenReaction falls back to deleting what it saw you type and typing the emoji, trusting it is still at the caret. Turn it off for an app to keep OpenReaction from typing into fields it can’t read.")
+                .font(Brand.body(12))
+                .foregroundStyle(Brand.textSecondary)
+        }
+    }
+
+    private func addFromOpenPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose apps"
+        panel.message = "OpenReaction will not use typed replacement in the apps you choose."
+        panel.prompt = "Choose"
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        guard panel.runModal() == .OK else { return }
+        let identifiers = panel.urls.compactMap { url -> String? in
+            guard let bundleIdentifier = Bundle(url: url)?.bundleIdentifier, !bundleIdentifier.isEmpty,
+                  bundleIdentifier != Bundle.main.bundleIdentifier else { return nil }
+            return bundleIdentifier
+        }
+        controller.disableTypedReplacement(identifiers)
+    }
+
+    private func refreshRunningApps() {
+        let own = Bundle.main.bundleIdentifier
+        runningApps = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { app -> RunningApp? in
+                guard let bundleIdentifier = app.bundleIdentifier, bundleIdentifier != own else { return nil }
+                return RunningApp(
+                    bundleIdentifier: bundleIdentifier,
+                    name: app.localizedName ?? bundleIdentifier,
+                    icon: app.icon ?? NSImage(named: NSImage.applicationIconName) ?? NSImage()
+                )
+            }
+            .reduce(into: [RunningApp]()) { list, app in
+                if !list.contains(where: { $0.bundleIdentifier == app.bundleIdentifier }) { list.append(app) }
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+}
+
 private struct RunningApp: Identifiable {
     let bundleIdentifier: String
     let name: String

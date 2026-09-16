@@ -85,11 +85,16 @@ final class CaretLocator: @unchecked Sendable {
 
     /// Read-only verification, in order:
     /// 1. The focused element must be the remembered one (`CFEqual`, same pid)
-    ///    and must answer that it is not a secure field.
+    ///    and must answer that it is not a secure field. Anything else refuses:
+    ///    focus may have moved, or the field might be secure.
     /// 2. The selection must be readable, empty, and at least `typed` long.
     /// 3. The text before the caret must be readable and equal `typed`.
-    /// Anything else refuses. The host is never modified here; the gate posts
-    /// key events later, if it still may.
+    /// A mismatch at 2 or 3 (a real selection, not enough room, differing text)
+    /// refuses. But when the focused element is confirmed and not secure and
+    /// the selection or the text simply cannot be read — the Chromium/Electron
+    /// case, where the tree exposes nothing — the answer is `.unverifiable`:
+    /// the gate may fall back to typed replacement if the app allows it. The
+    /// host is never modified here; the gate posts key events later, if it may.
     private func verifyTarget(_ target: FocusTarget, typed: String, text: String) -> VerifyResult {
         guard let remembered = elements[target] else { return .refused }
         let systemWide = AXUIElementCreateSystemWide()
@@ -99,13 +104,22 @@ final class CaretLocator: @unchecked Sendable {
         AXUIElementSetMessagingTimeout(focused, Self.messagingTimeout)
         var pid: pid_t = 0
         guard AXUIElementGetPid(focused, &pid) == .success, pid == target.pid else { return .refused }
+        // A nil answer (the question could not be delivered) also refuses: the
+        // field is not confirmed non-secure, so typed replacement is unsafe.
         guard Self.secureFieldCheck(focused) == false else { return .refused }
 
-        guard let selection = Self.selectedRange(focused), selection.length == 0 else { return .refused }
+        // No readable selection: the field exposes no text tree. Not a
+        // mismatch, so the gate may fall back to typed replacement.
+        guard let selection = Self.selectedRange(focused) else { return .unverifiable(text: text) }
+        // A readable selection that is non-empty, or has too little text before
+        // the caret to hold the token, is a real mismatch: refuse.
+        guard selection.length == 0 else { return .refused }
         let count = typed.utf16.count
         guard selection.location >= count else { return .refused }
+        // The selection is readable but the text is not: still the opaque-tree
+        // case, so fall back rather than refuse.
         guard let before = Self.string(focused, CFRange(location: selection.location - count, length: count)) else {
-            return .refused
+            return .unverifiable(text: text)
         }
         return before == typed ? .keystrokes(text: text) : .refused
     }

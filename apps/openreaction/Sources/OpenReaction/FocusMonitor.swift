@@ -1,5 +1,20 @@
 import AppKit
 import ApplicationServices
+import OpenReactionCore
+
+/// Turns on a Chromium or Electron app's accessibility tree the first time it
+/// becomes frontmost, so its text fields become readable.
+struct SystemAccessibilityTreeEnabler: AccessibilityTreeEnabling {
+    func enableTree(pid: Int32) {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        // Chromium reads AXEnhancedUserInterface, Electron AXManualAccessibility;
+        // setting both covers either. Failures are ignored: an app that does
+        // not honour them simply stays as it was.
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    }
+}
 
 /// Reports when keyboard focus may have moved, so capture closes until the
 /// focused element is re-checked.
@@ -9,6 +24,11 @@ import ApplicationServices
 /// messaging timeout: registration talks to the target process and a busy
 /// app must not stall the main thread. Registrations are generation-checked
 /// so a slow one for an app that is no longer frontmost is discarded.
+///
+/// On the same worker pass it enables the frontmost app's accessibility tree
+/// once per pid per launch (never for excluded apps), then re-runs tracking,
+/// so Chromium and Electron apps expose the focused editable the verified
+/// insertion path needs.
 @MainActor
 final class FocusMonitor {
     /// Called on the main actor whenever focus may have moved.
@@ -16,12 +36,21 @@ final class FocusMonitor {
     /// Called on the main actor when focused-element notifications for the
     /// frontmost app start or stop arriving. Capture stays closed while false.
     var onTrackingChange: ((Bool) -> Void)?
+    /// Whether a bundle id is excluded. The tree is never enabled for an
+    /// excluded app. Nil is treated as not excluded.
+    var isExcluded: ((String?) -> Bool)?
     private(set) var isObservingFrontmost = false
 
     private let queue = DispatchQueue(label: "com.openappshq.openreaction.focus-observer", qos: .userInitiated)
+    private let treeEnabler: any AccessibilityTreeEnabling
+    private var activation = AccessibilityActivation()
     private var observer: AXObserver?
     private var generation = 0
     private var activationObserver: NSObjectProtocol?
+
+    init(treeEnabler: any AccessibilityTreeEnabling = SystemAccessibilityTreeEnabler()) {
+        self.treeEnabler = treeEnabler
+    }
 
     func start() {
         guard activationObserver == nil else { return }
@@ -53,9 +82,16 @@ final class FocusMonitor {
         onTrackingChange?(false)
         onFocusChange?()
 
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        let pid = app.processIdentifier
+        let excluded = isExcluded?(app.bundleIdentifier) ?? false
+        // Decide on the main actor (where the seen-pid set lives); the write
+        // itself runs on the worker with a bounded timeout, once per pid.
+        let enableTree = activation.shouldEnable(pid: pid, excluded: excluded)
         let refcon = ObserverRegistry.Refcon(Unmanaged.passUnretained(self).toOpaque())
+        let treeEnabler = self.treeEnabler
         queue.async { [weak self] in
+            if enableTree { treeEnabler.enableTree(pid: pid) }
             let created = ObserverRegistry.register(pid: pid, refcon: refcon)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {

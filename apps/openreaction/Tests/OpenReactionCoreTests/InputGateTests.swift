@@ -269,6 +269,19 @@ struct InputGateTests {
         return id
     }
 
+    /// Verifies as `.unverifiable` (no field to read back) and commits; returns
+    /// the transaction id in `posting`. The posted effect is identical to the
+    /// verified path: N backspaces (the typed count) then one Unicode event.
+    private func postFallback(_ harness: inout Harness) -> Int {
+        let id = startReplacement(&harness)
+        let effects = harness.run(harness.gate.verifyResult(transaction: id, .unverifiable(text: "🎉")))
+        #expect(effects == [.post(transaction: id, deleteCount: 6, text: "🎉"), .armWatchdog(transaction: id)])
+        let commit = harness.gate.commit(transaction: id, secureInput: false)
+        harness.run(commit.effects)
+        #expect(commit.proceed)
+        return id
+    }
+
     // MARK: H1 — nothing is retained until a token probe says the field is safe
 
     @Test func colonIsHeldUntilTheTokenProbeAnswers() {
@@ -668,6 +681,90 @@ struct InputGateTests {
         #expect(harness.gate.flushAck(transaction: id).isEmpty)
         #expect(harness.gate.timeout(transaction: id).isEmpty)
         #expect(harness.gate.verifyResult(transaction: id + 5, .keystrokes(text: "x")).isEmpty)
+    }
+
+    // MARK: Typed-replacement fallback — Chromium/Electron fields
+
+    @Test func unverifiableFallbackPostsBackspacesAndEmojiWhenAllowed() {
+        var harness = harnessWithToken()
+        let id = postFallback(&harness)
+        let done = harness.ack()
+        #expect(ended(done, id, recorded: true))
+        #expect(!harness.gate.isHolding)
+        // The emoji is a boundary: a new colon starts a fresh hold.
+        #expect(harness.press(41, ":", modifiers: .shift).decision == .hold)
+    }
+
+    @Test func verifiedPathIsStillPreferredWhenAXAnswers() {
+        // Even with typed replacement off, an app that reads back gets the
+        // verified path.
+        var harness = harnessWithToken()
+        harness.gate.frontmostApp(excluded: false, typedReplacement: false)
+        let id = postReplacement(&harness)
+        #expect(ended(harness.ack(), id, recorded: true))
+    }
+
+    @Test func unverifiableRefusedWhenTypedReplacementOff() {
+        var harness = harnessWithToken()
+        harness.gate.frontmostApp(excluded: false, typedReplacement: false)
+        let id = startReplacement(&harness)
+        let effects = harness.run(harness.gate.verifyResult(transaction: id, .unverifiable(text: "🎉")))
+        #expect(posts(effects).isEmpty)
+        #expect(effects.contains(.postFlush(transaction: id)))
+        #expect(ended(harness.ack(), id, recorded: false))
+        #expect(harness.gate.token == nil)
+    }
+
+    @Test func unverifiableRefusedWhenFocusGenerationBumpedBeforeVerify() {
+        var harness = harnessWithToken()
+        let id = startReplacement(&harness)
+        // Focus moved after the closing colon: the tail is no longer trusted.
+        harness.run(harness.gate.focusMayHaveMoved())
+        #expect(harness.gate.verifyResult(transaction: id, .unverifiable(text: "🎉")).isEmpty)
+        #expect(ended(harness.ack(), id, recorded: false))
+    }
+
+    @Test func focusChangeBetweenFallbackAuthorizeAndCommitRefusesTheCommit() {
+        var harness = harnessWithToken()
+        let id = startReplacement(&harness)
+        harness.run(harness.gate.verifyResult(transaction: id, .unverifiable(text: "🎉")))
+        harness.run(harness.gate.focusMayHaveMoved())
+        #expect(!harness.gate.commit(transaction: id, secureInput: false).proceed)
+    }
+
+    @Test func secureInputBetweenFallbackAuthorizeAndCommitRefusesAndCancels() {
+        var harness = harnessWithToken()
+        let id = startReplacement(&harness)
+        harness.run(harness.gate.verifyResult(transaction: id, .unverifiable(text: "🎉")))
+        let commit = harness.gate.commit(transaction: id, secureInput: true)
+        harness.run(commit.effects)
+        #expect(!commit.proceed)
+        #expect(commit.effects.contains(.postFlush(transaction: id)))
+        #expect(ended(harness.ack(), id, recorded: false))
+    }
+
+    @Test func excludedAppNeverReachesFallback() {
+        // An excluded app never starts a token, so verification never runs.
+        var harness = makeHarness()
+        harness.gate.frontmostApp(excluded: true, typedReplacement: true)
+        let effects = harness.type(":tada:")
+        #expect(probes(effects).isEmpty)
+        #expect(insertions(effects).isEmpty)
+        #expect(!harness.gate.isHolding)
+    }
+
+    @Test func keysHeldDuringFallbackReplacementAreReplayedInOrder() {
+        var harness = harnessWithToken()
+        let id = postFallback(&harness)
+        // Ownership/holds work exactly as in the verified path: a mouse and a
+        // key typed during the replacement are held and replayed after it.
+        #expect(harness.mouse(.down).decision == .hold)
+        #expect(harness.press(7, "x").decision == .hold)
+        let heldIDs = [harness.nextID - 1, harness.nextID]
+        let drain = harness.ack()
+        #expect(replays(drain) == [heldIDs])
+        #expect(!harness.gate.capturesText)
+        #expect(ended(harness.ack(), id, recorded: true))
     }
 
     // MARK: H3 — releases wait for their replayed press to be acknowledged

@@ -291,8 +291,8 @@ final class GateRunner: @unchecked Sendable {
         }
     }
 
-    func frontmostApp(excluded: Bool) {
-        state.withLock { state in state.gate.frontmostApp(excluded: excluded) }
+    func frontmostApp(excluded: Bool, typedReplacement: Bool) {
+        state.withLock { state in state.gate.frontmostApp(excluded: excluded, typedReplacement: typedReplacement) }
     }
 
     func pickerVisibility(_ frame: CGRect?) {
