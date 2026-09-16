@@ -11,22 +11,27 @@ struct GeneratorTests {
     static let size = PixelSize(width: 192, height: 120)
     static let renderer = WallpaperRenderer()
 
+    // Regenerated for generator depth: the gradient and mesh rasters now
+    // round through the ordered dither (Renderer.swift's `OrderedDither`),
+    // and grain is luma-weighted (`Generators.applyGrain`), so every
+    // gradient, mesh and grainy solid hash moved. Patterns (dots, lines,
+    // checks, noise) touch neither path and kept their old hashes.
     static let golden: [(String, Wallpaper, String)] = [
         ("linear gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, angle: 135, stops: [
             ColorStop(position: 0, color: RGBAColor(hex: 0xFF7A2F)), ColorStop(position: 1, color: RGBAColor(hex: 0x304BFF)),
-        ])), seed: 1), "93b0603e70cec007e0844cd38a1f82becf9bda63daa079a8fe18573357737007"),
+        ])), seed: 1), "0e09ea6075a59fa332297385448e25071b5c67cdc19e065536e4b74ebf1da84d"),
         ("radial gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .radial, center: Point(x: 0.3, y: 0.4), stops: [
             ColorStop(position: 0, color: .white), ColorStop(position: 0.5, color: RGBAColor(hex: 0x91DCB4)), ColorStop(position: 1, color: RGBAColor(hex: 0x163A29)),
-        ])), seed: 1), "59612feef57a004bdcdfa2a2cd63d64d80d68f119774d673a4dfe0bddd74b00b"),
+        ])), seed: 1), "a6bb2c494b0092207a41142e8d12a03618117d2151403029fab4062b8710e2a9"),
         ("conic gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .conic, angle: 30, stops: [
             ColorStop(position: 0, color: RGBAColor(hex: 0xFFD528)), ColorStop(position: 0.5, color: RGBAColor(hex: 0xF3A0DC)), ColorStop(position: 1, color: RGBAColor(hex: 0xFFD528)),
-        ])), seed: 1), "db624a43dda84956bd93ba8688cbf872904825c873a56d1dec24d669e2f55b8b"),
-        ("mesh", Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: Palettes.all[1], jitter: 0.6, softness: 0.5)), seed: 42), "38558fefcf1dd71e3fe775978b259751b4cbe89cec1c40a77ddff756eb8b25a5"),
+        ])), seed: 1), "a93fa07be6019ccb93197db3ee9317d8d76b1371ce3a8e2a70fe869cf63ae757"),
+        ("mesh", Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: Palettes.all[1], jitter: 0.6, softness: 0.5)), seed: 42), "359dc9ed9614ec898a5a1c9c4d9306ab99db7beb7d8d6fb96f7b55610c594918"),
         ("dots", Wallpaper(generator: .pattern(PatternParameters(kind: .dots, foreground: .white, background: RGBAColor(hex: 0x242B55), scale: 24)), seed: 7), "cb23ec9b2419fb278577e5b8132650d21e7a89b1f14e84b449b0aeb0ce5530a9"),
         ("lines", Wallpaper(generator: .pattern(PatternParameters(kind: .lines, foreground: RGBAColor(hex: 0xFF7A2F), background: RGBAColor(hex: 0xFFF1EA), scale: 20, angle: 45)), seed: 7), "bf6a49a1b307a45d1ffc2179a82f7035e831c450d47d37c097039a196885ce83"),
         ("checks", Wallpaper(generator: .pattern(PatternParameters(kind: .checks, foreground: RGBAColor(hex: 0x141414), background: RGBAColor(hex: 0xEBEBEB), scale: 16, angle: 0)), seed: 7), "6edc0bed4fe5654e8bb1d1b3f2716b9beb47249956add6c31309dd008bb17380"),
         ("noise", Wallpaper(generator: .pattern(PatternParameters(kind: .noise, foreground: RGBAColor(hex: 0xA6B2FF), background: RGBAColor(hex: 0x242B55), scale: 40)), seed: 99), "6e0d9ea1c4cc5364d3889f3814aaa85dcc94a577f845957dad9cf10a46a6bc1c"),
-        ("solid with grain", Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0x236B48))), seed: 3, grain: 0.3), "8e6f9280bc0855337de7573af3e3da5e31aadbc7fca3c3b5376a41cc43c9f130"),
+        ("solid with grain", Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0x236B48))), seed: 3, grain: 0.3), "c65041aebd7868562ff8ef54cdeff735a1dea356375be5a1d8b34edc57ef0ba2"),
     ]
 
     @Test("Deterministic seeds give the golden hashes", arguments: golden.indices)

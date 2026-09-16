@@ -52,15 +52,20 @@ struct FinishTests {
     static let renderer = WallpaperRenderer()
     static let base = Wallpaper(generator: .gradient(GradientParameters(kind: .linear, angle: 0, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1)
 
+    // Regenerated for generator depth: gradient and mesh bytes now round
+    // through the ordered dither (Renderer.swift's `OrderedDither`), which
+    // moves every case whose generator or base is a gradient or a mesh
+    // (oklch gradient, tint/duotone/gradient map over `base`, emerge mesh).
+    // Solid-generator cases (top shade, contours, pill) are untouched.
     static let golden: [(String, Wallpaper, String)] = [
-        ("oklch gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, angle: 0, stops: [ColorStop(position: 0, color: RGBAColor(hex: 0xFF0000)), ColorStop(position: 1, color: RGBAColor(hex: 0x0000FF))], interpolation: .oklch)), seed: 1), "1d007b1b1bd02dbba2e1aad3310a9e151878874521ceb65794763ab5d32fcda1"),
-        ("tint", Wallpaper(generator: base.generator, seed: 1, finish: Finish(tint: Tint(color: RGBAColor(hex: 0xFF7A2F), amount: 0.4))), "6743eb638ddb59c2ac954fc26344bdb9e637a3954a0643b9485edd22aa485267"),
-        ("duotone", Wallpaper(generator: base.generator, seed: 1, finish: Finish(duotone: Duotone(shadow: RGBAColor(hex: 0x242B55), highlight: RGBAColor(hex: 0xFFD528)))), "59d98ec3251ee13f27b0d6e85a857e8feda23cad5996c89889abf00dd33e1a38"),
-        ("gradient map", Wallpaper(generator: base.generator, seed: 1, finish: Finish(gradientMap: [ColorStop(position: 0, color: RGBAColor(hex: 0x163A29)), ColorStop(position: 0.5, color: RGBAColor(hex: 0x91DCB4)), ColorStop(position: 1, color: .white)])), "d735dbde628c5982b175ceb8f0c9bb91be13b0d746e5681332eaa8d5df71dec6"),
+        ("oklch gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, angle: 0, stops: [ColorStop(position: 0, color: RGBAColor(hex: 0xFF0000)), ColorStop(position: 1, color: RGBAColor(hex: 0x0000FF))], interpolation: .oklch)), seed: 1), "93a667f3df493a6224e4fa9e7783511c3e89982ff9c248923199580e873f55e9"),
+        ("tint", Wallpaper(generator: base.generator, seed: 1, finish: Finish(tint: Tint(color: RGBAColor(hex: 0xFF7A2F), amount: 0.4))), "b06b0d2dce4b3a484f20421e7956a75f2f3d9235c50ee24d65708610cf295ba8"),
+        ("duotone", Wallpaper(generator: base.generator, seed: 1, finish: Finish(duotone: Duotone(shadow: RGBAColor(hex: 0x242B55), highlight: RGBAColor(hex: 0xFFD528)))), "87a7112195142a03fc7140de4df0d0818bc0de591f9b82dde870db795fdb54c5"),
+        ("gradient map", Wallpaper(generator: base.generator, seed: 1, finish: Finish(gradientMap: [ColorStop(position: 0, color: RGBAColor(hex: 0x163A29)), ColorStop(position: 0.5, color: RGBAColor(hex: 0x91DCB4)), ColorStop(position: 1, color: .white)])), "cd4de606f181ff812ded51b219a3fabdb9aeec0b0dba219ae21caef979dc69c0"),
         ("top shade", Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0xFFFFFF))), seed: 1, finish: Finish(topShade: 0.6)), "21ca93e97f0e5f0519f19d694af68cb3fe4b950bfe0f7b180a2f63431811e8ae"),
         ("contours", Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0x242B55))), seed: 1, composition: .contours), "b9610f822cf2710ef5a241dc778b441dfaa1d88ad49c9a48fddcf7a4d7c4dd68"),
         ("pill", Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0xFFB48A))), seed: 1, composition: .pill), "48f63616f31736a8209227829bb68c73f6109923a22b0491ee0e38db018faa1a"),
-        ("emerge mesh", Wallpaper(generator: .mesh(MeshParameters(columns: 2, rows: 2, colors: Palettes.all[1])), seed: 4, composition: .emerge), "62a0c663d9589561f101df54887ed31e61ba36c15a79f3ab686b66882e4e9dc1"),
+        ("emerge mesh", Wallpaper(generator: .mesh(MeshParameters(columns: 2, rows: 2, colors: Palettes.all[1])), seed: 4, composition: .emerge), "45d0ed9ccbc7369a7419fd58a0a7626faae14ff775e9cb44cf1c97f2915a854a"),
     ]
 
     @Test("Golden hashes for finishes and compositions", arguments: golden.indices)
@@ -174,9 +179,13 @@ struct DitherTests {
     static let renderer = WallpaperRenderer(images: MemoryImages([reference: ramp]))
     static let size = PixelSize(width: 128, height: 64)
 
+    // Regenerated for generator depth: Floyd–Steinberg now diffuses
+    // serpentine (rows alternate direction and the stencil mirrors with
+    // them, ToneDither's pattern reused for the dither lab), so only that
+    // mode's hash moved; the ordered and blue-noise modes are unaffected.
     static let golden: [(DitherMode, Int, String)] = [
         (.bayer2, 2, "f6a904c01f2607537d5a7f1372a152d38e9a2ecb03ca2f3c4e8c143f7b3dda91"),
-        (.bayer4, 2, "446933598194a5a6d69dbe4b05f27cac05dfd64382c7c802a8ac62d673a47e86"), (.bayer8, 1, "46d3f240aa61ea341f22fee4757ff00f57883497ab3b29adc8005ba41f0e3d8d"), (.floydSteinberg, 2, "aa2374fecd22309626bdc3ac52e6a057c80af388781f1035960464f864591f7f"), (.blueNoise, 2, "eef10296dbcf0b0d322e8af5a4f01609073da7ea518c67d647d9e125b58a49f5"), (.halftone, 8, "405122825ae568e3362afb2f720e6a329b4d73b8512016a5ad48ec44d23744ac"), (.ascii, 6, "cb9cc61471be9ca0978a5fbdc33e6c6a843f57e579d0d65b531d398a51cedf3c"),
+        (.bayer4, 2, "446933598194a5a6d69dbe4b05f27cac05dfd64382c7c802a8ac62d673a47e86"), (.bayer8, 1, "46d3f240aa61ea341f22fee4757ff00f57883497ab3b29adc8005ba41f0e3d8d"), (.floydSteinberg, 2, "5954234a265d906275ef533ce3fe1939d12ba4031b28689ac8b45f7888a0ea50"), (.blueNoise, 2, "eef10296dbcf0b0d322e8af5a4f01609073da7ea518c67d647d9e125b58a49f5"), (.halftone, 8, "405122825ae568e3362afb2f720e6a329b4d73b8512016a5ad48ec44d23744ac"), (.ascii, 6, "cb9cc61471be9ca0978a5fbdc33e6c6a843f57e579d0d65b531d398a51cedf3c"),
     ]
 
     @Test("Golden hashes per mode", arguments: golden.indices)

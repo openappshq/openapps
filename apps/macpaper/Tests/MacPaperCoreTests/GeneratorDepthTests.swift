@@ -306,8 +306,14 @@ struct CuratedShuffleTests {
         if case .field(let q) = plan[display]?.generator { #expect(q.family == p.family) } else { Issue.record("the plan lost the generator") }
     }
 
-    @Test("Known-bad documents fail the gate, the taste set passes it")
-    func gate() {
+    // Split from one "known-bad fails, taste set passes" test so the
+    // known-bad half is green while the taste set is still being curated
+    // (TasteSet.swift): `knownBad` needs nothing from the coordinator,
+    // `tasteSetPasses` will go green once the taste set lands (it may also
+    // need the field goldens above regenerated, if the curation changes the
+    // generator math again).
+    @Test("Known-bad documents fail the gate for the expected reason; the same document twice is refused for sameness")
+    func knownBad() {
         let bad: [(String, Wallpaper, GateFailure)] = [
             ("bare gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1), .bare),
             ("grainy gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1, grain: 0.3), .flat),
@@ -320,13 +326,76 @@ struct CuratedShuffleTests {
             let verdict = QualityGate.assess(document, renderer: Self.renderer, context: Self.context)
             #expect(!verdict.passes && verdict.failures.contains(failure), "\(name): \(verdict.failures)")
         }
+        // The same document again is refused for sameness.
+        let first = TasteSet.recipes[0].wallpaper
+        #expect(QualityGate.assess(first, renderer: Self.renderer, context: Self.context, previous: first).failures.contains(.sameAsBefore))
+    }
+
+    @Test("The taste set passes the gate")
+    func tasteSetPasses() {
         for recipe in TasteSet.recipes {
             let verdict = QualityGate.assess(recipe.wallpaper, renderer: Self.renderer, context: QualityGate.defaultContext)
             #expect(verdict.passes, "\(recipe.name): \(verdict.failures) \(verdict.metrics)")
         }
-        // The same document again is refused for sameness.
-        let first = TasteSet.recipes[0].wallpaper
-        #expect(QualityGate.assess(first, renderer: Self.renderer, context: Self.context, previous: first).failures.contains(.sameAsBefore))
+    }
+
+    /// A data-driven table of known-bad documents, each failing the gate
+    /// for a specific, named reason: `previous` is set only for the
+    /// sameness case, which assesses the document against itself.
+    static let badDocuments: [(String, Wallpaper, Wallpaper?, GateFailure)] = [
+        ("bare gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1), nil, .bare),
+        ("grainy gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1, grain: 0.3), nil, .flat),
+        ("flat fill", Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0x304BFF))), seed: 1), nil, .flat),
+        ("plain mesh", Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: Palettes.all[1])), seed: 1, grain: 0.1), nil, .flat),
+        ("mud pattern", Wallpaper(generator: .pattern(PatternParameters(kind: .checks, foreground: RGBAColor(hex: 0x7A7A72), background: RGBAColor(hex: 0x6A6A62), scale: 24)), seed: 1), nil, .mud),
+        ("near-identical tones", Wallpaper(generator: .field(FieldParameters(family: .interference, tones: [RGBAColor(hex: 0x303030), RGBAColor(hex: 0x353535)])), seed: 1), nil, .palette),
+        (
+            "a 2-tone moiré at cell 64 with reach 0.2: mostly ground",
+            {
+                var p = FieldParameters(family: .interference, tones: [RGBAColor(hex: 0x141414), RGBAColor(hex: 0xE8E8E8)])
+                p[.cellSize] = 64
+                p[.reach] = 0.2
+                return Wallpaper(generator: .field(p), seed: 1)
+            }(),
+            nil, .quiet
+        ),
+        ("a repeat of the previous document", TasteSet.recipes[1].wallpaper, TasteSet.recipes[1].wallpaper, .sameAsBefore),
+    ]
+
+    @Test("Known-bad documents, data-driven: each fails the gate for its own named reason", arguments: badDocuments.indices)
+    func badDocumentsTable(index: Int) {
+        let (name, document, previous, failure) = Self.badDocuments[index]
+        let verdict = QualityGate.assess(document, renderer: Self.renderer, context: Self.context, previous: previous)
+        #expect(!verdict.passes && verdict.failures.contains(failure), "\(name): \(verdict.failures)")
+    }
+
+    /// One known-good document per shuffle family, from a fixed seed that
+    /// passes the gate at the default (14") context — the same bar the
+    /// taste set is held to. Seed 1 with the "Neon Night" preset happens to
+    /// pass for nine of the ten families; only "Pixelized photo" (no photo
+    /// in a unit test, so it renders as a flat background) needed a search.
+    static let knownGoodSeeds: [(String, UInt64, String)] = [
+        ("Moiré atlas", 1, "Neon Night"),
+        ("Moiré lattice", 1, "Neon Night"),
+        ("Contour relief", 1, "Neon Night"),
+        ("Pixel archipelago", 1, "Neon Night"),
+        ("Resonance plate", 1, "Neon Night"),
+        ("Woven circuit", 1, "Neon Night"),
+        ("Memory sky", 1, "Neon Night"),
+        ("Dithered base", 1, "Neon Night"),
+        ("Pattern grid", 1, "Neon Night"),
+    ]
+
+    @Test("A known-good document per shuffle family passes the gate at the default context", arguments: knownGoodSeeds.indices)
+    func knownGoodTable(index: Int) {
+        let (name, seed, paletteName) = Self.knownGoodSeeds[index]
+        let family = RecipeFamily.named(name)!
+        let palette = Palettes.preset(named: paletteName)!
+        var g = SeededGenerator(seed: seed)
+        var wallpaper = family.draw(palette, &g)
+        wallpaper.seed = seed
+        let verdict = QualityGate.assess(wallpaper, renderer: Self.renderer, context: QualityGate.defaultContext)
+        #expect(verdict.passes, "\(name) @\(seed) \(paletteName): \(verdict.failures) \(verdict.metrics)")
     }
 
     @Test("The taste set is at least 30 recipes with stable ids, names and documents")
@@ -423,8 +492,17 @@ struct BudgetTests {
     }
 }
 
-/// The golden hashes of the pixel fields (GoldenHashes.swift keeps them
-/// beside the other suites' values).
+/// The golden hashes of the pixel fields, one per `FieldFamily`, at cell 4
+/// on the Magma preset (`FieldTests.document`): each family is a new
+/// generator, so there is no "before" to diff against — these are simply
+/// the current arithmetic's bytes, pinned so a future change is deliberate.
 enum GoldenHashes {
-    static let fields: [String: String] = [:]
+    static let fields: [String: String] = [
+        FieldFamily.interference.rawValue: "5ece5c6c09dafbc636d5a2425649aa9f321eaadcec0b295e9623c787cfcdf07a",
+        FieldFamily.relief.rawValue: "465fb533d40b084d0ac9e3c3cc16e14b9498aadbdb2228f9f072188b7f469f7a",
+        FieldFamily.islands.rawValue: "ba6e3c76b3130f69b37ed215adde89d13ae1244978db1615fd4471e06785a651",
+        FieldFamily.plate.rawValue: "83b8f1473658d92f3c5b9154b55d591fcc9bc28dbb5d4e29adc87176666ecdf6",
+        FieldFamily.circuit.rawValue: "26a4edee4879e00abfb968df984c59dc49dcb38b4187454a1a60ef221de1be37",
+        FieldFamily.sky.rawValue: "64c0e16c07ab02e8d565541d58b6af0334bad54fcba8edecaf9a7bdff64f6605",
+    ]
 }
