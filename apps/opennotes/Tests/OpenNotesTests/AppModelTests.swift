@@ -194,11 +194,13 @@ final class PreferencesTests: XCTestCase {
         preferences.face = .mono
         preferences.color = .sky
         preferences.autoArchiveDays = 7
+        preferences.hideFromScreenSharing = true
         let written = Set(temporary.defaults.dictionaryRepresentation().keys).intersection([
             Preferences.Key.side, Preferences.Key.display, Preferences.Key.hotkey, Preferences.Key.folder,
             Preferences.Key.face, Preferences.Key.color, Preferences.Key.autoArchiveDays,
+            Preferences.Key.hideFromScreenSharing, FreshInstallDefault.Key.screenSharingApplied,
         ])
-        XCTAssertEqual(written.count, 7)
+        XCTAssertEqual(written.count, 9)
         for key in written {
             XCTAssertTrue(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(key), key)
         }
