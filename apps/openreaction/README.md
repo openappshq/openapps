@@ -71,7 +71,7 @@ To check the picker's look without permissions or the event tap:
 swift run OpenReaction --preview-picker   # ← → move the selection
 ```
 
-The setup guide, the settings window and every license pill, the same way (debug builds only; no tap, a throwaway preferences suite, permission and relaunch actions that touch nothing, in-memory license storage and services that never answer; ⌘] and ⌘[ move the guide between steps). With a directory it renders each window in light and dark appearance as PNGs and quits:
+The setup guide, the settings window and every license pill, the same way (debug builds only; no tap, a throwaway preferences suite, permission and relaunch actions that touch nothing, in-memory license storage and services that never answer; ⌘] and ⌘[ move the guide between steps, ⌘D shows the drag-to-grant helper on a permission step — it stays without System Settings and prints a drag from its icon). With a directory it renders each window, the helper included, in light and dark appearance as PNGs and quits:
 
 ```sh
 swift run OpenReaction --preview-setup            # interactive

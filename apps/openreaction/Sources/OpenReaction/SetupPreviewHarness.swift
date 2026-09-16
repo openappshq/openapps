@@ -19,8 +19,10 @@ import SwiftUI
 /// so Activate and Try again go nowhere. The event tap is never installed:
 /// `AppController.start()` is not called.
 ///
-/// ⌘] and ⌘[ move the guide between steps. With a directory, each window
-/// is rendered there in light and dark appearance and the app quits.
+/// ⌘] and ⌘[ move the guide between steps; ⌘D shows or hides the
+/// drag-to-grant helper on a permission step (it stays without System
+/// Settings, and a drag from its icon is printed). With a directory, each
+/// window is rendered there in light and dark appearance and the app quits.
 @MainActor
 final class SetupPreviewHarness {
     nonisolated static let suite = "space.openapps.openreaction.preview-setup"
@@ -182,6 +184,11 @@ final class SetupPreviewHarness {
         }
         #endif
         onboarding.model.onOpenLicense = { [settings] in settings.showLicense() }
+        // System Settings is never opened, so the helper is not tied to it;
+        // its drag still puts the app's URL on the pasteboard, which is harmless.
+        onboarding.permissionHelper.followsSystemSettings = false
+        onboarding.permissionHelper.fadesIn = false
+        onboarding.permissionHelper.onDragBegan = { print("PREVIEW_DRAG_BEGAN \($0.path)") }
 
         pills = Self.window(title: "License pills", size: CGSize(width: 900, height: 420))
         pills.contentView = NSHostingView(rootView: PillGallery(labels: states.all) {})
@@ -204,6 +211,7 @@ final class SetupPreviewHarness {
             switch event.charactersIgnoringModifiers {
             case "]": self.step(by: 1); return nil
             case "[": self.step(by: -1); return nil
+            case "d": self.toggleHelper(); return nil
             default: return event
             }
         }
@@ -220,6 +228,16 @@ final class SetupPreviewHarness {
         let all = OnboardingStep.allCases
         let current = all.firstIndex(of: onboarding.model.displayedStep) ?? 0
         onboarding.model.previewStep = all[(current + delta + all.count) % all.count]
+    }
+
+    /// The helper for the step's permission, or away again.
+    private func toggleHelper() {
+        let helper = onboarding.permissionHelper
+        if helper.isVisible {
+            helper.close()
+        } else if let kind = onboarding.model.displayedStep.permission {
+            helper.show(kind)
+        }
     }
 
     private static func window(title: String, size: CGSize) -> NSWindow {
@@ -249,10 +267,16 @@ final class SetupPreviewHarness {
                     write(window, to: directory.appendingPathComponent("onboarding-\(step)-\(suffix).png"))
                     if let kind = step.permission {
                         // "Open System Settings" against the inert actions: the
-                        // waiting state and the guide panel, nothing else.
+                        // waiting state and the drag-to-grant helper, nothing else.
                         onboarding.model.request(kind)
                         try? await Task.sleep(for: .milliseconds(500))
                         write(window, to: directory.appendingPathComponent("onboarding-\(step)-requested-\(suffix).png"))
+                        let helper = onboarding.permissionHelper
+                        if helper.isVisible, let content = helper.window.contentView {
+                            helper.window.appearance = NSAppearance(named: appearance)
+                            try? await Task.sleep(for: .milliseconds(300))
+                            writeContent(content, to: directory.appendingPathComponent("helper-\(kind.rawValue)-\(suffix).png"))
+                        }
                     }
                 }
             }
@@ -272,6 +296,18 @@ final class SetupPreviewHarness {
         }
         print("PREVIEW_RENDERED \(directory.path)")
         NSApp.terminate(nil)
+    }
+
+    /// The helper's content drawn by its own view: the window server hands
+    /// back an empty image for the borderless floating panel while the display
+    /// is off (a render over SSH), where `write` still works for the titled
+    /// windows. The card's material draws its light fallback, whatever the
+    /// appearance; the real panel is glass.
+    private func writeContent(_ view: NSView, to url: URL) {
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return }
+        try? data.write(to: url)
     }
 
     /// The whole window as composited on screen, title bar included.
