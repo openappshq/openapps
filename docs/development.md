@@ -36,7 +36,7 @@ apps/
   site-worker/                Cloudflare Worker: serves the site, runs /api/trial on D1
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
   openreaction/               OpenReaction's Swift app
-  hertz/                      Hertz's Swift app (free; no licensing)
+  hertz/                      Hertz's Swift app
 packages/
   openapps-licensing/         Swift: licensing rules, trial, record store and clients (LICENSING.md)
   openapps-updater/           Swift: the in-app updater (RELEASES.md)
@@ -154,7 +154,7 @@ System-wide sound is implemented in the development desktop application below; p
 
 ## Hertz
 
-The free menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift build`, `swift test`, `swift run Hertz`, `scripts/bundle.sh`; see [its README](../apps/hertz/README.md). It has no licensing, no trial and no in-app updater (`brew upgrade --cask hertz`), and asks macOS for no permissions. The [product contract](../design/products/hertz.md) records approved behavior.
+The menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift build`, `swift test`, `swift run Hertz`, `scripts/bundle.sh`; see [its README](../apps/hertz/README.md). It asks macOS for no permissions. Official builds compile licensing in from `packages/openapps-licensing` (`OPENAPPS_LICENSING=1` with a generated `LicensingConfig.swift`, [LICENSING.md](../LICENSING.md)): the 3-day trial, Settings → License, and the readings off after the trial; a build from source has none of it. Hertz has no in-app updater yet (`brew upgrade --cask hertz`). The [product contract](../design/products/hertz.md) records approved behavior.
 
 ## Desktop application (in development)
 

@@ -1,6 +1,6 @@
 # Licensing
 
-How every OpenApps HQ app sells and checks licenses. OpenKlack and OpenReaction follow this document, and any new app under `apps/` must too. If an app needs to differ, change this document first.
+How every OpenApps HQ app sells and checks licenses. OpenKlack, OpenReaction and Hertz follow this document, and any new app under `apps/` must too. If an app needs to differ, change this document first.
 
 ## Principles
 
@@ -32,6 +32,7 @@ One business (OpenApps) with **one brand per app**, so checkout, card statements
 | --- | --- | --- |
 | OpenKlack | `brnd_0Nnask8u9RICKzhm6lKrS` | `DODOPAY_OPENKLACK` |
 | OpenReaction | `brnd_0NnarnziynbFJozfJUS5T` | `DODOPAY_OPENREACTION` |
+| Hertz | `brnd_0NniF9PTsSTRMlLCgmVc5` | `DODOPAY_HERTZ` |
 
 Each app has **one product** under its brand, created in test mode first and copied to live:
 
@@ -98,7 +99,7 @@ The apps never show a price: the buy button says "Buy a license" and opens the w
 
 A license always wins over the trial: while a license record exists, the app is in a license state, and the trial record is ignored (but kept).
 
-"Off" stops only the app's core feature (sounds, the emoji picker). The menu bar, Settings, License and Quit always work. Licensing never crashes the app, deletes settings or blocks quitting. When the trial ends, the app says so once (a notification or the menu bar item) and opens nothing on its own.
+"Off" stops only the app's core feature (sounds, the emoji picker, Hertz's live readings). The menu bar, Settings, License and Quit always work. Licensing never crashes the app, deletes settings or blocks quitting. When the trial ends, the app says so once (a notification or the menu bar item) and opens nothing on its own.
 
 ## Rules
 

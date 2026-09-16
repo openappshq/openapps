@@ -5,8 +5,11 @@ name: Hertz
 # publishes only when asked). The release follows RELEASES.md: build, sign
 # with the stable OpenApps HQ Release certificate, verify the pinned
 # designated requirement, zip, publish the GitHub Release, bump the cask.
+# The release compiles licensing in (LICENSING.md) against Dodo live mode
+# with the paid product ID from the hertz-release environment; the checks
+# job compiles the same flavour against test mode with a placeholder ID.
 # Hertz has no in-app updater, so there is no feed to write; Homebrew is the
-# update path. Setup and secrets: apps/hertz/RELEASING.md.
+# update path. Setup, variables and secrets: apps/hertz/RELEASING.md.
 #
 # The paths filter applies to branch pushes and pull requests; tag pushes
 # always run, which is what the release needs.
@@ -14,6 +17,7 @@ on:
   pull_request:
     paths:
       - apps/hertz/**
+      - packages/openapps-licensing/**
       - scripts/release/**
       - packaging/homebrew/**
       - .github/workflows/hertz.yml
@@ -23,6 +27,7 @@ on:
     tags: [hertz-v*]
     paths:
       - apps/hertz/**
+      - packages/openapps-licensing/**
       - scripts/release/**
       - packaging/homebrew/**
       - .github/workflows/hertz.yml
@@ -51,6 +56,10 @@ defaults:
     working-directory: apps/hertz
 
 env:
+  # The checks job compiles the licensed flavour against Dodo test mode with a
+  # placeholder product ID; nothing built with it is ever published, and
+  # verify-release.sh --release refuses a binary that contains it.
+  PLACEHOLDER_PAID_PRODUCT_ID: pdt_placeholder_hertz
   # The release tag this run is about: the pushed tag, or hertz-v<input> on a
   # manual run from a branch. Build and publish serialise per tag, so a
   # second run for the same version queues behind the first instead of racing it.
@@ -72,14 +81,27 @@ jobs:
           xcodebuild -version
           swift --version
       # HertzCoreTests is pure logic (health score, diagnosis, process tree,
-      # formatting, cleanup path rules against a temporary directory); nothing
-      # in it reads the live system or needs a permission.
-      - name: Build and test
+      # formatting, cleanup path rules against a temporary directory, the
+      # first-run flags); HertzTests drives the licensing package's manager
+      # with fake stores and clients. Nothing in either reads the live
+      # system, the record store or the network, or needs a permission.
+      - name: Build and test the source flavour
         run: swift test
-      - name: Lint the release scripts
+      - name: Build and test the licensed flavour
+        env:
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_DODO_ENV: test
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
         run: |
-          brew install shellcheck >/dev/null
+          scripts/generate-licensing-config.sh Sources/Hertz/Licensing/LicensingConfig.swift
+          swift test --scratch-path .build/licensed
+      - name: Test the licensing package
+        run: swift test --package-path ../../packages/openapps-licensing
+      - name: Lint the release scripts and this workflow
+        run: |
+          brew install shellcheck actionlint >/dev/null
           shellcheck scripts/*.sh ../../scripts/release/*.sh ../../packaging/homebrew/bump-cask.sh
+          actionlint ../../.github/workflows/hertz.yml
       - name: Check the cask template
         # bump-cask.sh must accept the template as a first release and refuse a rewrite.
         run: |
@@ -89,9 +111,17 @@ jobs:
           ../../packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest"
           grep -q '^  version "0.1.0"$' "$cask"
           if ../../packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$(printf 'b%.0s' $(seq 1 64))" 2>/dev/null; then echo "rewrite accepted"; exit 1; fi
-      - name: Build an ad-hoc signed development app
+      # The official flavour as an ad-hoc signed development app, against
+      # Dodo test mode with the placeholder ID; it verifies like a release
+      # except for the signature and the live configuration.
+      - name: Build an ad-hoc signed official development app
         env:
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_OFFICIAL: "1"
+          OPENAPPS_DODO_ENV: test
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
           UNIVERSAL: "1"
+          SCRATCH_PATH: .build/official
         run: |
           scripts/bundle.sh
           scripts/make-zip.sh
@@ -181,6 +211,9 @@ jobs:
           RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           PUBLISH: ${{ steps.version.outputs.publish }}
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
+          OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
+          OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
         run: |
           missing=0
           for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD; do
@@ -191,10 +224,21 @@ jobs:
               if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the hertz-release environment; publishing needs it."; missing=1; fi
             done
           fi
+          if [ -z "$OPENAPPS_DODO_PAID_PRODUCT_ID" ]; then
+            echo "::error::Variable OPENAPPS_DODO_PAID_PRODUCT_ID is not set in the hertz-release environment."; missing=1
+          fi
           if grep -q '^NOT GENERATED' release/designated-requirement.txt; then
             echo "::error::release/designated-requirement.txt has not been generated yet (RELEASES.md)."; missing=1
           fi
           [ "$missing" = 0 ] || exit 1
+          case "$OPENAPPS_DODO_PAID_PRODUCT_ID" in
+            pdt_*) ;;
+            *) echo "::error::OPENAPPS_DODO_PAID_PRODUCT_ID must be a Dodo product ID (pdt_…)."; exit 1 ;;
+          esac
+          # The generator validates the URLs' shape; this only reports what is configured.
+          for name in OPENAPPS_BUY_URL OPENAPPS_SUPPORT_URL; do
+            if [ -n "${!name}" ]; then echo "$name: set"; else echo "$name: not set (the app's default applies)"; fi
+          done
       - name: Build, sign and verify the universal app
         # The identity lives in a temporary keychain for exactly this step;
         # with-signing-keychain.sh removes it before the step ends and fails
@@ -205,6 +249,12 @@ jobs:
           RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
           VERSION: ${{ steps.version.outputs.version }}
           UNIVERSAL: "1"
+          OPENAPPS_LICENSING: "1"
+          OPENAPPS_OFFICIAL: "1"
+          OPENAPPS_DODO_ENV: live
+          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
+          OPENAPPS_BUY_URL: ${{ vars.OPENAPPS_BUY_URL }}
+          OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
         run: ../../scripts/release/with-signing-keychain.sh scripts/bundle.sh
       - name: Confirm the signing identity is gone
         run: |
