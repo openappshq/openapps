@@ -15,6 +15,10 @@ enum EditorCommand: Hashable {
     case togglePin
     /// ⌘⇧M.
     case toggleFace
+    /// ⌥⌘↑: the open note one slot up the deck.
+    case moveUp
+    /// ⌥⌘↓: one slot down.
+    case moveDown
 }
 
 /// The note's text view: plain-text paste, no smart substitutions, live
@@ -166,6 +170,16 @@ final class NoteTextView: NSTextView {
             case "a": onCommand(.archive); return true
             case "p": onCommand(.togglePin); return true
             case "m": onCommand(.toggleFace); return true
+            default: break
+            }
+        }
+        // ⌥⌘↑ / ⌥⌘↓ by key code: the arrows carry no character to match,
+        // and a real keyboard's arrow event also carries the function and
+        // numeric-pad bits, which are not modifiers the user pressed.
+        if flags.subtracting([.function, .numericPad]) == [.command, .option] {
+            switch event.keyCode {
+            case 126: onCommand(.moveUp); return true
+            case 125: onCommand(.moveDown); return true
             default: break
             }
         }

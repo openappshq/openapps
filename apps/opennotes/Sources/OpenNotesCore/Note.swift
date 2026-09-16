@@ -36,6 +36,19 @@ nonisolated public enum NoteColor: String, CaseIterable, Sendable, Codable {
         }
     }
 
+    /// The bar along a tab's outer edge: the colour's own mid tone, so
+    /// the papers tell apart at a glance in both appearances.
+    public var bar: UInt32 {
+        switch self {
+        case .coral: 0xF0653F
+        case .yellow: 0xE3B517
+        case .mint: 0x3FAE79
+        case .sky: 0x6F7FF2
+        case .lilac: 0xD56DBC
+        case .paper: 0xA3A3A3
+        }
+    }
+
     /// The fill under paper text in Dark Mode.
     public var darkFace: UInt32 {
         switch self {
@@ -163,7 +176,9 @@ nonisolated public enum FrontMatter {
         public var order: Int?
         public var created: Date?
         public var modified: Date?
-        /// The text after the block (the whole file when there is none).
+        /// The text after the block (the whole file when there is none),
+        /// the one blank line `serialize` puts after the block dropped, so
+        /// `parse(serialize(note)).text == note.text`.
         public var text: String
         /// Whether a block OpenNotes recognises was found.
         public var hadFrontMatter: Bool
@@ -175,7 +190,8 @@ nonisolated public enum FrontMatter {
 
     /// Parses a file's contents. The block must start on the first line and
     /// close with a `---` line; unknown keys are ignored, and a block with
-    /// no known key is not consumed.
+    /// no known key is not consumed. The blank line `serialize` writes after
+    /// the block is the file's, not the text's: one is dropped.
     public static func parse(_ contents: String) -> Parsed {
         var result = Parsed(text: contents, hadFrontMatter: false)
         let lines = contents.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -202,7 +218,9 @@ nonisolated public enum FrontMatter {
         }
         guard known else { return result }
         result.hadFrontMatter = true
-        result.text = lines[(close + 1)...].joined(separator: "\n")
+        var text = lines[(close + 1)...].joined(separator: "\n")
+        if text.hasPrefix("\n") { text.removeFirst() }
+        result.text = text
         return result
     }
 

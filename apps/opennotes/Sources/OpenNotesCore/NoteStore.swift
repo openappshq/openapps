@@ -506,6 +506,29 @@ public final class NoteStore {
         return note
     }
 
+    /// The app's own note (`WelcomeNote`), written whole and at once: the
+    /// file is created exclusively — never over one that appeared meanwhile
+    /// — and the note is in memory, clean, as if read. The license is not
+    /// asked: this runs on the launch that first reads the folder, before
+    /// an official build's storage has answered, and only on a fresh
+    /// install (the app's caller decides), which is always in its trial.
+    public func plant(_ note: Note) throws {
+        guard !folderIsMissing else { throw StoreError.folderMissing(folder) }
+        guard notes[note.id] == nil else { throw StoreError.io("\(note.id.fileName) is already there.") }
+        do {
+            identities[note.id] = try NoteFile.createExclusively(fileURL(for: note.id), contents: FrontMatter.serialize(note))
+        } catch NoteFile.Failure.exists {
+            throw StoreError.io("\(note.id.fileName) is already there.")
+        } catch {
+            throw StoreError.io("\(note.id.fileName): \(error)")
+        }
+        var planted = note
+        planted.bodyIsLoaded = true
+        planted.truncated = false
+        store(planted)
+        onEvent(.updated([note.id]))
+    }
+
     /// One below the lowest active order, so the note lands on top. Orders
     /// are clamped on read, and if the lowest is at the floor anyway the
     /// active notes are renumbered first, so this never overflows.
@@ -999,11 +1022,8 @@ public final class NoteStore {
 
     static func parse(id: NoteID, contents: String, fileDate: Date, fallbackCreated: Date, truncated: Bool = false) -> Note {
         let parsed = FrontMatter.parse(contents)
-        var text = parsed.text
-        // The blank line serialize() puts after the block is not text.
-        if parsed.hadFrontMatter, text.hasPrefix("\n") { text.removeFirst() }
         var note = Note(
-            id: id, text: text, color: parsed.color ?? .coral, face: parsed.face ?? .sans,
+            id: id, text: parsed.text, color: parsed.color ?? .coral, face: parsed.face ?? .sans,
             pinned: parsed.pinned ?? false, archived: parsed.archived ?? false, order: Note.clampOrder(parsed.order ?? 0),
             created: parsed.created ?? fallbackCreated, modified: max(parsed.modified ?? fileDate, fileDate)
         )

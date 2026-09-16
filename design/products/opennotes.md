@@ -19,15 +19,18 @@ One deck per hosted display, docked to the **right** edge (Settings: left), vert
 | State | Looks like | Enters | Leaves |
 | --- | --- | --- | --- |
 | Pill | A 14 pt strip on the edge, one dash per active note in the note's color, rounded ends; 8 dashes at most, a dot for "more" | Launch; the fan collapsing; Escape or a click outside an open note | The pointer reaching the edge for 120 ms |
-| Fan | Tabs shingled down the edge, 40 pt wide, one per active note (8 at most, then "+N"), the title reading down the tab in the note's color; a `+` tab at the end | The pill, after the pointer has rested on the edge; the hotkey while read-only; an open note closing | The pointer leaving the edge and the deck for 350 ms; a tab click; Escape |
+| Fan | Tabs stacked down the edge as separate papers, 40 × 112 pt, 6 pt apart, one per active note, every one; the title reading down the tab (up on the left edge); what does not fit scrolls; a `+` tab fixed under the fan | The pill, after the pointer has rested on the edge; the hotkey while read-only; an open note closing | The pointer leaving the edge and the deck for 350 ms; a tab click; Escape |
 | Open | One note slid out of the deck as a 320 × 360 pt card next to its tab; the other tabs stay as the fan | A tab click; the hotkey (a new note, focused); ⌘W from another open note (the next one); "Open" in All Notes | Escape (saves, slides back to the fan); a click outside; the hotkey again; ⌘W with no next note; Archive |
 | Editing | The open note with the keyboard focus (the app is active, the caret in the text) | A click in the text; the hotkey's new note | Escape; a click outside |
 
 Rules:
 
 - Hover opens the fan, and only the fan: a note never opens on its own.
+- **Tabs are papers, not a slab:** each tab is the note's face with a hairline edge and a soft shadow, a 3 pt bar of the note's colour (its mid tone, `noteBars` in the tokens) along its outer edge, the pin glyph when pinned, and the title along the tab at a readable size, cut with an ellipsis. Each fanned tab leans at its own small, stable angle (1.5–3°, either way, and up to 3 pt in from the edge — seeded from the note's file name, never from a launch, so it leans the same way every time and never jitters), so neighbours read as papers stuck on one by one; the open note's tab and a lifted tab are straight. Hover lifts a tab a little out from the edge; a drag lifts it more.
+- **Overflow scrolls:** every active note has a tab; when the stack is taller than the screen leaves between the margins and the `+` tab, the fan scrolls — trackpad or wheel over the tabs, a drag along the deck axis off the tabs, ↑ / ↓ while the deck has the keyboard, and a lifted tab held at either end scrolls the fan under it. A fade over 28 pt at the top or the bottom shows only while more tabs lie beyond that end. The open note's tab, or the last one used, is brought into view when the fan opens or the note opens, and the scroll is otherwise the user's. No "+N more" tab; the `+` tab stays put under the fan. The pill is unchanged (8 dashes at most, a dot for more).
 - The open note stays open while the pointer is elsewhere; only Escape, a click outside, the hotkey, Archive or ⌘W close it. Closing always saves.
-- Every change of state is one movement (180 ms, ease-out); Reduce Motion makes them instant.
+- **Drag to reorder:** a tab pressed and moved 6 pt along the deck lifts (a little larger, a deeper shadow) and follows the pointer up and down the deck only, the other tabs sliding out of its way with a spring; letting go drops it in the gap, and the drop writes `order` through the very same path the All Notes list uses (one write, only the notes whose position changed). A shorter press is a click and opens the note. Pinned notes stay first: a lift never crosses the group boundary — the tab gives a little past it and snaps back to the group's edge, and no drag pins or unpins (that is the pin's job). Escape puts a lifted tab back; the fan stays out while a tab is held, whatever the pointer does. While read-only nothing lifts; the license card and the footer say why. The keyboard does the same: ⌥⌘↑ / ⌥⌘↓ move the open note one slot, VoiceOver has Move up / Move down on every tab, and each move is announced ("Groceries moved to position 2 of 5").
+- Every change of state is one movement (180 ms, ease-out); the reorder is a spring (300 ms); Reduce Motion makes them instant.
 - The deck reads `~/Documents/OpenNotes` (Settings: any folder) and shows what is there, so a note written by another app appears within a second.
 - **Read-only** (after the trial, [LICENSING.md](../../LICENSING.md); see "Licensing"): the deck stays visible and every note opens and can be read, searched and exported; the text is not editable, the hotkey and `+` fan the deck instead of creating, archive and the swatches are off, and the open note's footer says why. Nothing the user wrote is ever hidden or changed.
 
@@ -45,11 +48,12 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 - Two faces: Sans (Instrument Sans) and Mono (IBM Plex Mono); a default in Settings, and the open note's footer switches its own note.
 - Six colors: coral, yellow, mint, sky, lilac, paper. The default is coral (Settings). Colors follow the appearance: a light face with ink text, a deep face with paper text in Dark Mode; the tab and the pill dash keep the light face in both.
 - Pinned notes come first in the deck and are never auto-archived.
+- **The welcome note:** the first launch into a folder with no notes writes one note of the app's own, `welcome.md` ("Welcome to OpenNotes", yellow, unpinned, order 0): a short tour of exactly the Markdown above — a `##` and a `###` heading, `**bold**`, `_italic_`, `` `code` ``, a URL, `- ` and `1. ` lines, a `- [ ]` and a `- [x]` box — and of the hotkey, the edge, the footer, archive with undo, drag to reorder and All Notes, every line true for the build that wrote it. Exactly once: decided on the launch that first reads the folder and never revisited, so a welcome the user archived or deleted is not written again, a folder chosen later with notes in it gets none, and neither does an upgrade (the decision is fresh-install evidence like every other first-run flag). It is the one file the app writes without asking the license: a first launch is a fresh install, and a fresh install is in its trial. From then on it is the user's note like any other.
 - Archive, not delete: ⌘⇧A or the footer moves a note out of the deck (`archived: true` in the file); a toast in the deck offers Undo for 10 s. Archived notes stay in the folder, in search, and in All Notes → Archived, where Restore brings one back. Auto-archive (Settings → Notes: off, 7, 30 or 90 days) archives unpinned notes untouched for that long, at launch and then whenever the next note falls due (nothing runs while it is off). Deleting a file is the Finder's job.
 
 ## All Notes
 
-⌥⌘L, the menu-bar item or the deck's fan footer opens one window: a search field (titles and text, case- and diacritic-insensitive, live), Active / Archived, a list (color bar, title, first line, age; drag to reorder the active list, which writes `order` to the files) and a preview pane with Open, Pin / Unpin, Archive / Restore, Export… (`.md` as saved without the front matter, or `.txt` with the markers stripped), Reveal in Finder. Export and Reveal work in read-only too; Pin, Archive, Restore and reordering wait for a license, and the license card above the list says so.
+⌥⌘L, the menu-bar item or the deck's fan footer opens one window: a search field (titles and text, case- and diacritic-insensitive, live), Active / Archived, a list (color bar, title, first line, age; drag to reorder the active list, which writes `order` to the files — the same write a drag on the deck's tabs makes) and a preview pane with Open, Pin / Unpin, Archive / Restore, Export… (`.md` as saved without the front matter, or `.txt` with the markers stripped), Reveal in Finder. Export and Reveal work in read-only too; Pin, Archive, Restore and reordering wait for a license, and the license card above the list says so.
 
 ## Keyboard
 
@@ -61,6 +65,7 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 | ⌘⇧A | Archive the open note (Undo for 10 s) |
 | ⌘⇧P | Pin / unpin the open note |
 | ⌘⇧M | Switch the open note between Sans and Mono |
+| ⌥⌘↑ / ⌥⌘↓ | Move the open note one slot up / down the deck (inside its pinned or unpinned group) |
 | ⌥⌘L | All Notes |
 | ⌘, | Settings |
 
@@ -82,7 +87,7 @@ A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes�
 
 | Situation | Behavior |
 | --- | --- |
-| Fresh install (no earlier preferences, both records positively absent) | Open at login and Check for updates automatically are turned on once, after storage answers, each under its own flag; never revisited |
+| Fresh install (no earlier preferences, both records positively absent) | Open at login and Check for updates automatically are turned on once, after storage answers, each under its own flag; never revisited. With no earlier preferences and an empty notes folder, the welcome note is written once, under its own flag (see "Notes") |
 | The notes folder is missing | Created on launch (the default under Documents); a chosen folder that has gone (an unmounted volume) shows one note-shaped message in the deck, "Can't find the notes folder", with Choose… in Settings; nothing is created elsewhere |
 | A file can't be parsed | Front matter that isn't ours is left alone; the whole file is the text and the note takes the defaults. It is saved back only if the user edits it, and then with front matter |
 | A save fails | The note stays open with its text, the footer says "Couldn't save" and why, the next keystroke retries |

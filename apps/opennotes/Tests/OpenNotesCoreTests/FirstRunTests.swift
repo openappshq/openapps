@@ -141,11 +141,12 @@ final class FreshInstallDefaultTests: XCTestCase {
     }
 
     @MainActor func testTheEvidenceListNamesEveryPreferenceTheAppWrites() {
-        // Preferences.swift's keys, OnboardingLaunch's, both defaults' flags
-        // and the updater's (Updater.Key in packages/openapps-updater).
+        // Preferences.swift's keys, OnboardingLaunch's, the welcome note's
+        // decision, both defaults' flags and the updater's (Updater.Key in
+        // packages/openapps-updater).
         let expected: Set<String> = [
             "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.color", "notes.autoArchiveDays",
-            OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step,
+            OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step, WelcomeNote.Key.decided,
             FreshInstallDefault.Key.loginItemApplied, FreshInstallDefault.Key.updateChecksApplied,
             "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
         ]

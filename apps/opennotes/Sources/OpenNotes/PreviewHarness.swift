@@ -97,6 +97,13 @@ final class PreviewHarness {
         }
         seedNotes()
         model.store.load(create: false)
+        // A second, empty folder taken through the model's own launch
+        // path: the welcome note is what `start()` plants there.
+        let welcome = welcomeModel()
+        defer { if let folder = welcome?.store.folder { try? FileManager.default.removeItem(at: folder) } }
+        let three = seededModel(count: 3)
+        let twelve = seededModel(count: 12)
+        defer { for folder in [three, twelve].compactMap({ $0?.store.folder }) { try? FileManager.default.removeItem(at: folder) } }
         var failures = 0
         let notes = model.active
         let groceries = notes.first { $0.title == "Groceries" }?.id ?? notes[0].id
@@ -117,6 +124,35 @@ final class PreviewHarness {
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-\(name)-\(suffix).png") { failures += 1 }
             }
             setRestricted(false)
+            // A tab lifted mid-drag: the third note pulled up past the
+            // second, which has slid into the gap.
+            var dragContent = content(state: .fan, toast: false)
+            if notes.count > 2 {
+                let slot = dragContent.layout.tabs[2].frame
+                dragContent.staticDrag = DeckDrag(id: notes[2].id, centerY: dragContent.layout.panelFrame.height - slot.midY - 1.3 * dragContent.layout.tabStep)
+            }
+            let drag = DeckStage(content: dragContent, side: preferences.side, dark: scheme == .dark)
+            if await !write(drag, scheme: scheme, appearance: appearance, to: "deck-drag-\(suffix).png") { failures += 1 }
+            // The fan with three tabs (no fade), and with twelve: scrolled
+            // to the top (a fade below), the middle (both), the bottom (a
+            // fade above), each tab at its own tilt.
+            if let three {
+                let stage = DeckStage(content: content(state: .fan, toast: false, model: three), side: preferences.side, dark: scheme == .dark)
+                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-fan-3-\(suffix).png") { failures += 1 }
+            }
+            if let twelve {
+                let top = content(state: .fan, toast: false, model: twelve)
+                for (name, offset) in [("top", 0), ("middle", top.layout.maxScroll / 2), ("bottom", top.layout.maxScroll)] {
+                    let stage = DeckStage(content: content(state: .fan, toast: false, model: twelve, scroll: offset), side: preferences.side, dark: scheme == .dark)
+                    if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-fan-12-\(name)-\(suffix).png") { failures += 1 }
+                }
+            }
+            // The welcome note, as the first launch into an empty folder
+            // leaves it: open, every marker styled.
+            if let welcome {
+                let stage = DeckStage(content: content(state: .open(WelcomeNote.id, editing: false), toast: false, model: welcome), side: preferences.side, dark: scheme == .dark)
+                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-welcome-\(suffix).png") { failures += 1 }
+            }
             // The left edge, once.
             preferences.side = .left
             let left = DeckStage(content: content(state: .open(groceries, editing: true), toast: false), side: .left, dark: scheme == .dark)
@@ -175,13 +211,49 @@ final class PreviewHarness {
         try? Data(FrontMatter.serialize(archived).utf8).write(to: folder.appendingPathComponent(archived.id.fileName))
     }
 
+    /// A model started over an empty temporary folder, exactly as a first
+    /// launch is: the throwaway suite has no earlier preferences, so the
+    /// welcome note is planted. Nil when the folder could not be made.
+    private func welcomeModel() -> AppModel? {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-preview-welcome-\(UUID().uuidString)", isDirectory: true)
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
+        let model = AppModel(preferences: preferences, license: license, store: NoteStore(folder: folder), watcher: FolderWatcher())
+        model.start()
+        guard model.note(WelcomeNote.id) != nil else {
+            print("PREVIEW_WELCOME_MISSING")
+            return nil
+        }
+        return model
+    }
+
+    /// A model over a temporary folder with this many notes, titles and
+    /// colours varied so the fan reads as a stack of different papers.
+    private func seededModel(count: Int) -> AppModel? {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-preview-\(count)-\(UUID().uuidString)", isDirectory: true)
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
+        let titles = ["Groceries", "Standup 16 Sep", "Snippets", "Side project", "Call mum", "Reading list", "Dentist Thursday", "Gift ideas", "Q4 plan notes", "Packing", "Recipes to try", "Passwords to rotate"]
+        let colors = NoteColor.allCases
+        let base = Date()
+        for index in 0..<count {
+            let title = titles[index % titles.count]
+            let id = NoteFileName.id(for: title, created: base) { candidate in FileManager.default.fileExists(atPath: folder.appendingPathComponent(candidate.fileName).path) }
+            let note = Note(id: id, text: "\(title)\nA line or two of text.", color: colors[index % colors.count], face: .sans, pinned: index == 0, order: index, created: base.addingTimeInterval(-Double(index) * 3600), modified: base.addingTimeInterval(-Double(index) * 3600))
+            try? Data(FrontMatter.serialize(note).utf8).write(to: folder.appendingPathComponent(id.fileName))
+        }
+        let store = NoteStore(folder: folder)
+        store.load(create: false)
+        let model = AppModel(preferences: preferences, license: license, store: store, watcher: FolderWatcher())
+        return model
+    }
+
     /// The stage's screen: a 900 × 700 desktop.
     static let stageSize = CGSize(width: 900, height: 700)
 
-    private func content(state: DeckState, toast: Bool) -> DeckContent {
+    private func content(state: DeckState, toast: Bool, model: AppModel? = nil, scroll: CGFloat = 0) -> DeckContent {
+        let model = model ?? self.model
         let notes = model.active
         let visible = CGRect(origin: .zero, size: Self.stageSize)
-        let layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: visible, notes: notes.map(\.id), toast: toast)
+        let layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: visible, notes: notes.map(\.id), toast: toast, scroll: scroll)
         let open = state.openNote.flatMap { model.note($0) }
         let status: String
         if model.readOnly { status = model.readOnlyNotice } else if state.isEditing { status = "Editing…" } else { status = open.map { "Saved · \(Age.text($0.modified))" } ?? "" }

@@ -329,7 +329,7 @@ private struct TipsStep: View {
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
                 tip("keyboard", "\(model.preferences.hotkey?.displayString ?? "The hotkey") makes a new note from any app and puts the caret in it; Escape saves it and slides it back. Change the hotkey in Settings → General.")
-                tip("rectangle.righthalf.inset.filled", "Rest the pointer on the \(model.preferences.side == .right ? "right" : "left") edge and the deck fans out; click a tab to open a note, click anywhere else to close it. ⌘W moves to the next note, ⌘⇧A archives, ⌘⇧P pins.")
+                tip("rectangle.righthalf.inset.filled", "Rest the pointer on the \(model.preferences.side == .right ? "right" : "left") edge and the deck fans out; click a tab to open a note, click anywhere else to close it; drag a tab up or down to reorder. ⌘W moves to the next note, ⌘⇧A archives, ⌘⇧P pins.")
                 tip("list.bullet.rectangle", "⌥⌘L opens All Notes: search, Active and Archived, drag to reorder, and Export or Reveal in Finder for any note.")
                 if Licensing.isCompiledIn {
                     tip("key", "The trial, buying a license and entering a key live under Settings → License. When the trial ends nothing opens on its own: your notes stay readable and exportable, and writing waits for a license.")
