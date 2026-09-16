@@ -29,7 +29,7 @@ Rules:
 - The open note stays open while the pointer is elsewhere; only Escape, a click outside, the hotkey, Archive or ⌘W close it. Closing always saves.
 - Every change of state is one movement (180 ms, ease-out); Reduce Motion makes them instant.
 - The deck reads `~/Documents/OpenNotes` (Settings: any folder) and shows what is there, so a note written by another app appears within a second.
-- **Read-only** (after the trial, [LICENSING.md](../../LICENSING.md)): the deck stays visible and every note opens and can be read, exported and archived; the text is not editable, the hotkey and `+` fan the deck instead of creating, and the open note's footer says why. Nothing the user wrote is ever hidden.
+- **Read-only** (after the trial, [LICENSING.md](../../LICENSING.md); see "Licensing"): the deck stays visible and every note opens and can be read, searched and exported; the text is not editable, the hotkey and `+` fan the deck instead of creating, archive and the swatches are off, and the open note's footer says why. Nothing the user wrote is ever hidden or changed.
 
 ## Capture
 
@@ -49,7 +49,7 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 
 ## All Notes
 
-⌥⌘L, the menu-bar item or the deck's fan footer opens one window: a search field (titles and text, case- and diacritic-insensitive, live), Active / Archived, a list (color bar, title, first line, age; drag to reorder the active list, which writes `order` to the files) and a preview pane with Open, Pin / Unpin, Archive / Restore, Export… (`.md` as saved without the front matter, or `.txt` with the markers stripped), Reveal in Finder. Export and Reveal work in read-only too.
+⌥⌘L, the menu-bar item or the deck's fan footer opens one window: a search field (titles and text, case- and diacritic-insensitive, live), Active / Archived, a list (color bar, title, first line, age; drag to reorder the active list, which writes `order` to the files) and a preview pane with Open, Pin / Unpin, Archive / Restore, Export… (`.md` as saved without the front matter, or `.txt` with the markers stripped), Reveal in Finder. Export and Reveal work in read-only too; Pin, Archive, Restore and reordering wait for a license, and the license card above the list says so.
 
 ## Keyboard
 
@@ -74,9 +74,9 @@ A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes�
 | --- | --- |
 | General | Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off); Deck side (right / left); Display (the main display; the display with the pointer — the deck moves when the pointer reaches another display's edge, never while a note is open; every display); Hotkey (the recorder; a taken or refused key says so); Notes folder (the path and Choose…; unsaved text is written to the old folder first, and the switch waits if it can't be; files are never moved) |
 | Notes | Face (Sans / Mono) for new notes; Color for new notes; Auto-archive untouched notes (off / 7 / 30 / 90 days) |
-| License (official builds) | The shared section ([LICENSING.md](../../LICENSING.md)): state, Buy a license, paste a key, Remove this Mac; the trial pill in the title bar |
-| Updates (official builds) | The shared section ([RELEASES.md](../../RELEASES.md)) |
-| About | What OpenNotes reads (the notes folder) and where it goes (nowhere; the only network calls are the license check, the trial registry and the update check, none in a source build); MIT; Copy Diagnostics (version, login state, side, display, hotkey and its problem, folder path, note counts, watcher state, the build's licensing flavour) |
+| License (official builds) | The shared section ([LICENSING.md](../../LICENSING.md)): state, Buy a license (opens the website; never a price), paste a key, Remove this Mac (confirmed); storage and journal problems named; a key from the `opennotes://activate` link waits for Activate; the trial pill in the title bar |
+| Updates | The shared section ([RELEASES.md](../../RELEASES.md)): Check for updates automatically (on once for a fresh install), Download and install automatically (off until turned on), the status with Check Now / Install and Restart / Restart to Update / Try Again, "Move OpenNotes to Applications to enable updates"; a source build says it has no updater |
+| About | What OpenNotes reads (the notes folder) and where it goes (nowhere; the only network calls are the license check, the trial registry and the update check, named per flavour, none in a source build); MIT; Show setup guide; Copy Diagnostics (version, login state, side, display, hotkey and its problem, folder path, note counts, watcher state, the build's licensing flavour and where the license stands, never the key) |
 
 ## Defaults and recovery
 
@@ -93,9 +93,21 @@ A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes�
 | The system refuses a rename in the middle of a write (a full disk, a provider hiccup) | Nothing is deleted: every version stays on disk under some name (the outside version as `<name> (conflict …).md`, or in a hidden temporary that the next folder read gives a `<name> (recovered …).md` name), the footer says so, and the note is read again before it is written again |
 | Hotkey taken by another app | Settings → General shows "⌥⌘N is taken by another app" under the recorder; the menu-bar item still creates notes |
 | The display hosting the deck goes away | The deck moves to the next host by the Display setting; an open note is saved first |
-| Read-only (trial ended, license needed) | See "The deck": visible, readable, exportable, archivable; not editable, no new notes |
+| Read-only (trial ended, license needed) | See "Licensing": visible, readable, searchable, exportable; nothing changed, nothing new |
 
 No permissions, no accounts, no telemetry. Diagnostics are copied only on request and only to the pasteboard. The privacy copy every licensed app ships (LICENSING.md, "Privacy copy") is OpenNotes' too.
+
+## Licensing
+
+Official builds follow [LICENSING.md](../../LICENSING.md): a 3-day trial from the first launch, no signup, one license for 3 Macs, bought on the website (the app never states a price). OpenNotes' core feature is writing notes, and the restriction is **read-only**, decided with the user: while the trial has ended, a license is revoked, a check is required, the trial can't reach the registry, the clock is behind, or a record can't be read, the deck stays visible and every note stays readable, searchable and exportable — the files are the user's and not one is changed. What waits for a license: creating a note (the hotkey and `+` fan the deck instead), editing text (typing, paste, a checkbox click), renaming (a new note's file keeps its provisional name until it next closes allowed), pin, color and face, archiving and unarchiving (the undo toast included), reordering, auto-archive, and changing the notes folder. The folder watcher keeps reflecting outside edits.
+
+The entitlement is never a stored flag: every action asks the license's projection at that moment, and every continuation asks again — the 250 ms save debounce, a note closing, quit, the folder panel returning, the hourly auto-archive — and the store asks once more at the file, so nothing is written after a deadline that passed between two renders. A refused save keeps the text in memory, unsaved (at most the last quarter second of typing), until writing is allowed again.
+
+What says so: the pill (the trial's remaining days, or the short reason) at the top of the open note, above All Notes, in the Settings title bar and on the guide's welcome step; the license card above All Notes' list (title, what it means, Buy a license / Enter a key / Try again per state); the open note's footer line with a lock ("Read-only: …; Settings → License"), the lock on the `+` tab, the dimmed swatches, and the status menu's first line — each opens Settings → License. Nothing opens on its own when the trial ends.
+
+## Setup guide
+
+Once, on the first launch of the packaged app (never from `swift run`, never in the update-test variant), and again from Settings → About → Show setup guide, resuming at the furthest step reached: Welcome (what the deck is, the hotkey; the trial line and the pill from the real license state), Nothing to grant (what OpenNotes touches: the notes folder, the pasteboard when pasting; the network calls of this flavour), Your notes are files (the folder in use, iCloud Drive or an Obsidian vault as the folder, Open Settings), Starts with your Mac (the login item from its real state, the switch), Tips (the hotkey, the edge, All Notes, and in official builds where the license lives). Skip for now at any step keeps the progress.
 
 ## Out of scope
 
