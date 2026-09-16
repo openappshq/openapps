@@ -320,6 +320,8 @@ nonisolated public struct DeckMetrics: Hashable, Sendable {
     public var plusTabHeight: CGFloat = 40
     public var noteWidth: CGFloat = 320
     public var noteHeight: CGFloat = 360
+    public var toastWidth: CGFloat = 260
+    public var toastHeight: CGFloat = 36
     public var gap: CGFloat = 8
     /// Room for the open note's shadow, and the pointer past the edge.
     public var margin: CGFloat = 24
@@ -344,12 +346,14 @@ nonisolated public struct DeckLayout: Hashable, Sendable {
     public var tabs: [Tab]
     public var plusTab: CGRect
     public var note: CGRect?
+    /// The archive toast ("Archived … · Undo"), under the deck, while one shows.
+    public var toast: CGRect?
 }
 
 nonisolated public enum DeckGeometry {
     /// The layout for a state. `visibleFrame` is the screen's, in AppKit
     /// coordinates; the deck is centred on it vertically and clamped inside.
-    public static func layout(state: DeckState, side: DeckSide, visibleFrame: CGRect, notes: [NoteID], metrics: DeckMetrics = DeckMetrics()) -> DeckLayout {
+    public static func layout(state: DeckState, side: DeckSide, visibleFrame: CGRect, notes: [NoteID], toast: Bool = false, metrics: DeckMetrics = DeckMetrics()) -> DeckLayout {
         let shown = Array(notes.prefix(metrics.maxTabs))
         let hidden = max(0, notes.count - shown.count)
         var tabCount = shown.count + (hidden > 0 ? 1 : 0)
@@ -357,8 +361,8 @@ nonisolated public enum DeckGeometry {
         let fanHeight = tabCount == 0 ? 0 : metrics.tabHeight + CGFloat(tabCount - 1) * step
         let stackHeight = fanHeight + (tabCount == 0 ? 0 : metrics.gap) + metrics.plusTabHeight
         let pillHeight = max(metrics.pillMinHeight, CGFloat(min(notes.count, metrics.maxTabs + 1)) * metrics.dashSpacing + 2 * metrics.dashSpacing)
-        let contentHeight: CGFloat
-        let contentWidth: CGFloat
+        var contentHeight: CGFloat
+        var contentWidth: CGFloat
         switch state {
         case .pill:
             contentHeight = pillHeight
@@ -369,6 +373,10 @@ nonisolated public enum DeckGeometry {
         case .open:
             contentHeight = max(stackHeight, metrics.noteHeight)
             contentWidth = metrics.tabWidth + metrics.gap + metrics.noteWidth
+        }
+        if toast {
+            contentWidth = max(contentWidth, metrics.toastWidth)
+            contentHeight += metrics.gap + metrics.toastHeight
         }
         let panelHeight = min(contentHeight + 2 * metrics.margin, visibleFrame.height)
         let panelWidth = contentWidth + metrics.margin
@@ -401,6 +409,10 @@ nonisolated public enum DeckGeometry {
             let noteX = side == .right ? edgeX(width: metrics.tabWidth) - metrics.gap - metrics.noteWidth : metrics.tabWidth + metrics.gap
             note = CGRect(x: noteX, y: top - metrics.noteHeight, width: metrics.noteWidth, height: metrics.noteHeight)
         }
-        return DeckLayout(panelFrame: panelFrame, pill: pill, tabs: tabs, plusTab: plusTab, note: note)
+        var toastRect: CGRect?
+        if toast {
+            toastRect = CGRect(x: edgeX(width: metrics.toastWidth), y: metrics.margin, width: metrics.toastWidth, height: metrics.toastHeight)
+        }
+        return DeckLayout(panelFrame: panelFrame, pill: pill, tabs: tabs, plusTab: plusTab, note: note, toast: toastRect)
     }
 }

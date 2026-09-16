@@ -73,6 +73,12 @@ nonisolated public struct ArchiveUndo: Hashable, Sendable {
         public let id: NoteID
         public let title: String
         public let deadline: Date
+
+        public init(id: NoteID, title: String, deadline: Date) {
+            self.id = id
+            self.title = title
+            self.deadline = deadline
+        }
     }
 
     public private(set) var pending: [Pending] = []

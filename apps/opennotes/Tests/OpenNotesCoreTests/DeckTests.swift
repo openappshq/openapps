@@ -212,6 +212,16 @@ final class DeckGeometryTests: XCTestCase {
         XCTAssertEqual(layout.tabs.dropLast().compactMap(\.id), Array(many.prefix(8)))
     }
 
+    @MainActor func testTheToastWidensTheDeckAndSitsUnderIt() {
+        let layout = DeckGeometry.layout(state: .pill, side: .right, visibleFrame: screen, notes: ids, toast: true)
+        XCTAssertEqual(layout.panelFrame.width, 260 + 24)
+        XCTAssertEqual(layout.toast?.minY, 24)
+        XCTAssertEqual(layout.toast?.maxX, layout.panelFrame.width)
+        XCTAssertEqual(layout.pill.maxX, layout.panelFrame.width)
+        XCTAssertGreaterThan(layout.pill.minY, layout.toast?.maxY ?? 0)
+        XCTAssertNil(DeckGeometry.layout(state: .pill, side: .right, visibleFrame: screen, notes: ids).toast)
+    }
+
     @MainActor func testNoNotesStillLeavesAPillAndAPlus() {
         let layout = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: [])
         XCTAssertEqual(layout.tabs, [])
