@@ -39,9 +39,17 @@ final class WelcomeNoteTests: XCTestCase {
     }
 
     @MainActor func testTheTourNamesTheRealGesturesAndKeys() {
-        for phrase in ["⌥⌘↑", "Drag a tab", "⌥⌘L", "Escape"] {
+        for phrase in ["⌥⌘↑", "Drag a tab", "⌥⌘L", "Escape", "⌘-click", "⌘⇧M", "Serif", "thirteen papers", "iCloud Drive", "opennotes://new", "Append to Note"] {
             XCTAssertTrue(WelcomeNote.text.contains(phrase), phrase)
         }
+    }
+
+    /// The `=` line answers (the answer is drawn, never written), and the
+    /// link line is one link the text view opens.
+    @MainActor func testTheArithmeticLineAnswersAndTheLinkIsOne() {
+        let answers = Arithmetic.answers(in: WelcomeNote.text, format: Arithmetic.Format(locale: Locale(identifier: "en_US")))
+        XCTAssertEqual(answers.map(\.text), ["$285"])
+        XCTAssertEqual(MarkdownLite.links(in: WelcomeNote.text).map(\.target), ["https://openapps.space/opennotes/"])
     }
 
     @MainActor func testTheNoteIsYellowUnpinnedAndOnTop() {

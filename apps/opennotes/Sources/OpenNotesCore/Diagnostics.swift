@@ -16,6 +16,9 @@ nonisolated public struct DiagnosticsSnapshot: Hashable, Sendable {
     public var hotkeyProblem: String?
     public var folder: String
     public var folderIsMissing: Bool
+    /// The storage choice ("On this Mac", "iCloud Drive", "Other folder") and,
+    /// for a folder in iCloud, the sync-relevant state.
+    public var storage: String
     public var watching: Bool
     public var activeCount: Int
     public var archivedCount: Int
@@ -28,7 +31,7 @@ nonisolated public struct DiagnosticsSnapshot: Hashable, Sendable {
     public var deckState: String
     public var hostedDisplays: [String]
 
-    public init(appVersion: String, macOSVersion: String, loginStatus: String, licensing: String, readOnly: Bool, side: DeckSide, display: DeckDisplay, hotkey: Hotkey?, hotkeyProblem: String?, folder: String, folderIsMissing: Bool, watching: Bool, activeCount: Int, archivedCount: Int, unsavedCount: Int, defaultFont: String, defaultColor: String, autoArchiveDays: Int, deckState: String, hostedDisplays: [String]) {
+    public init(appVersion: String, macOSVersion: String, loginStatus: String, licensing: String, readOnly: Bool, side: DeckSide, display: DeckDisplay, hotkey: Hotkey?, hotkeyProblem: String?, folder: String, folderIsMissing: Bool, storage: String = "On this Mac", watching: Bool, activeCount: Int, archivedCount: Int, unsavedCount: Int, defaultFont: String, defaultColor: String, autoArchiveDays: Int, deckState: String, hostedDisplays: [String]) {
         self.appVersion = appVersion
         self.macOSVersion = macOSVersion
         self.loginStatus = loginStatus
@@ -40,6 +43,7 @@ nonisolated public struct DiagnosticsSnapshot: Hashable, Sendable {
         self.hotkeyProblem = hotkeyProblem
         self.folder = folder
         self.folderIsMissing = folderIsMissing
+        self.storage = storage
         self.watching = watching
         self.activeCount = activeCount
         self.archivedCount = archivedCount
@@ -61,7 +65,7 @@ nonisolated public struct DiagnosticsSnapshot: Hashable, Sendable {
         var hotkeyLine = "Hotkey: " + (hotkey?.displayString ?? "none")
         if let hotkeyProblem { hotkeyLine += " (\(hotkeyProblem))" }
         lines.append(hotkeyLine)
-        lines.append("Folder: \(folder)" + (folderIsMissing ? " (missing)" : "") + " · watcher \(watching ? "on" : "off")")
+        lines.append("Folder: \(folder)" + (folderIsMissing ? " (missing)" : "") + " · \(storage) · watcher \(watching ? "on" : "off")")
         lines.append("Notes: \(activeCount) active · \(archivedCount) archived · \(unsavedCount) unsaved")
         lines.append("Defaults: \(defaultFont) · new notes \(defaultColor) · auto-archive \(AutoArchive.title(days: autoArchiveDays).lowercased())")
         return lines.joined(separator: "\n")

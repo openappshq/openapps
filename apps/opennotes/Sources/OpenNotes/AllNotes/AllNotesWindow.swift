@@ -100,6 +100,14 @@ struct AllNotesView: View {
                     }
                 }
             }
+            // iCloud's state while the folder is iCloud's: one line under
+            // the split, nothing otherwise.
+            if let line = model.storageStatusLine {
+                Divider()
+                StorageStatusRow(line: line)
+                    .padding(.horizontal, Brand.Space.s16)
+                    .padding(.vertical, Brand.Space.s8)
+            }
             // An update asking for something (official builds): one line
             // under the split, nothing otherwise.
             if model.updates.hint() != nil {
@@ -236,9 +244,12 @@ struct AllNotesView: View {
     }
 
     /// The color as the deck's pill dash, the title with the pin, the age,
-    /// the title and the first line in the note's own font.
+    /// the title and the first line in the note's own font. A note iCloud
+    /// has not downloaded is only its file name: greyed, "Downloading…"
+    /// where the preview line goes, a cloud glyph in place of the age.
     private func row(_ note: Note) -> some View {
         let look = model.appearance(of: note)
+        let downloading = note.isDownloading && !note.bodyIsLoaded
         return HStack(alignment: .center, spacing: 10) {
             Capsule()
                 .fill(look.swatch)
@@ -249,7 +260,7 @@ struct AllNotesView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(note.title)
                         .font(Font(look.nsFont(size: 13, weight: 600)))
-                        .foregroundStyle(Brand.textPrimary)
+                        .foregroundStyle(downloading ? Brand.textSecondary : Brand.textPrimary)
                         .lineLimit(1)
                     if note.pinned {
                         Image(systemName: "pin.fill")
@@ -258,14 +269,21 @@ struct AllNotesView: View {
                             .accessibilityHidden(true)
                     }
                     Spacer(minLength: Brand.Space.s8)
-                    Text(Age.text(note.modified))
-                        .font(Brand.body(11))
-                        .monospacedDigit()
-                        .foregroundStyle(Brand.textSecondary)
-                        .lineLimit(1)
-                        .fixedSize()
+                    if downloading {
+                        Image(systemName: "icloud.and.arrow.down")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Brand.textSecondary)
+                            .accessibilityHidden(true)
+                    } else {
+                        Text(Age.text(note.modified))
+                            .font(Brand.body(11))
+                            .monospacedDigit()
+                            .foregroundStyle(Brand.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                 }
-                Text(note.preview.isEmpty ? " " : note.preview)
+                Text(downloading ? "Downloading…" : (note.preview.isEmpty ? " " : note.preview))
                     .font(Font(look.nsFont(size: 12)))
                     .foregroundStyle(Brand.textSecondary)
                     .lineLimit(1)
@@ -354,8 +372,12 @@ struct AllNotesView: View {
                     .disabled(model.readOnly)
             }
             Spacer(minLength: 0)
+            // Nothing to export while the body is not here (a note not
+            // downloaded, or unreadable): the store refuses too, so the
+            // name never goes out as text.
             if previewRendering {
                 chip("Export…", symbol: "square.and.arrow.up", compact: compact) {}
+                    .disabled(!note.bodyIsLoaded)
             } else {
                 Menu {
                     ForEach(ExportFormat.allCases, id: \.self) { format in
@@ -368,6 +390,7 @@ struct AllNotesView: View {
                 .buttonStyle(ChipButtonStyle(tone: .quiet))
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .disabled(!note.bodyIsLoaded)
                 .help("Export…")
                 .accessibilityLabel("Export…")
             }
@@ -401,9 +424,19 @@ struct AllNotesView: View {
         let dark = colorScheme == .dark
         let look = model.appearance(of: note)
         return VStack(alignment: .leading, spacing: 0) {
-            PreviewText(text: note.text, look: look, dark: dark)
-                .padding(Brand.Space.s16)
-                .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+            if note.isDownloading, !note.bodyIsLoaded {
+                // Selecting asked iCloud for the file; the text follows
+                // once it is here.
+                Text(model.statusLine(for: note.id))
+                    .font(Font(look.nsFont()))
+                    .foregroundStyle(look.inkSecondary)
+                    .padding(Brand.Space.s16)
+                    .frame(maxWidth: .infinity, minHeight: 180, alignment: .center)
+            } else {
+                PreviewText(text: note.text, look: look, dark: dark)
+                    .padding(Brand.Space.s16)
+                    .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+            }
             HStack(spacing: Brand.Space.s8) {
                 Text(AllNotesText.footer(note, missingFamily: look.missingFamily))
                     .lineLimit(1)
@@ -516,6 +549,8 @@ enum AllNotesText {
         var parts = ["Created \(note.created.formatted(date: .abbreviated, time: .omitted))", edited(note.modified, now: now), note.id.fileName]
         if note.truncated {
             parts.append("over 1 MB; shown from the start, read-only")
+        } else if note.isDownloading, !note.bodyIsLoaded {
+            parts.append("not downloaded yet")
         } else if !note.bodyIsLoaded {
             parts.append("can’t read the file right now; shown in part")
         }
@@ -544,6 +579,7 @@ enum AllNotesText {
 
     /// The row for VoiceOver: the title, pinned, the age.
     static func rowLabel(_ note: Note, now: Date = Date()) -> String {
-        [note.title, note.pinned ? "pinned" : nil, Age.text(note.modified, now: now)].compactMap { $0 }.joined(separator: ", ")
+        let state = note.isDownloading && !note.bodyIsLoaded ? "downloading" : Age.text(note.modified, now: now)
+        return [note.title, note.pinned ? "pinned" : nil, state].compactMap { $0 }.joined(separator: ", ")
     }
 }

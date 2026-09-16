@@ -23,6 +23,13 @@ final class OnboardingModel {
     @ObservationIgnored var onOpenSettings: (() -> Void)?
     /// Opens All Notes: from the tips.
     @ObservationIgnored var onOpenAllNotes: (() -> Void)?
+    /// The files step's choice: On this Mac / iCloud Drive / Other
+    /// folder… (`AppModel.setStorage`, the chooser for the last).
+    @ObservationIgnored var onChooseStorage: ((StorageChoice) -> Void)?
+    /// What the last switch copied, and whether the folder is missing,
+    /// from the app's model; nothing without one (tests, the harness).
+    @ObservationIgnored var storageNotice: () -> String? = { nil }
+    @ObservationIgnored var folderIsMissing: () -> Bool = { false }
     @ObservationIgnored var onClose: (() -> Void)?
 
     init(loginItem: LoginItem, license: LicenseStatus, preferences: Preferences, defaults: any FlagStore = UserDefaults.standard) {
@@ -99,7 +106,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private let defaults: any FlagStore
     private var window: NSWindow?
 
-    init(loginItem: LoginItem, license: LicenseStatus, preferences: Preferences, showSettings: @escaping () -> Void, showAllNotes: @escaping () -> Void, defaults: any FlagStore = UserDefaults.standard) {
+    init(loginItem: LoginItem, license: LicenseStatus, preferences: Preferences, showSettings: @escaping () -> Void, showAllNotes: @escaping () -> Void, chooseStorage: @escaping (StorageChoice) -> Void = { _ in }, defaults: any FlagStore = UserDefaults.standard) {
         self.defaults = defaults
         model = OnboardingModel(loginItem: loginItem, license: license, preferences: preferences, defaults: defaults)
         super.init()
@@ -107,6 +114,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         model.onOpenLicense = { [license] in license.openLicense() }
         model.onOpenSettings = showSettings
         model.onOpenAllNotes = showAllNotes
+        model.onChooseStorage = chooseStorage
     }
 
     func show() {
@@ -146,10 +154,24 @@ extension AppDelegate {
             onboarding = OnboardingWindowController(
                 loginItem: loginItem, license: licenseStatus, preferences: preferences,
                 showSettings: { [weak self] in self?.showSettings() },
-                showAllNotes: { [weak self] in self?.showAllNotes() }
+                showAllNotes: { [weak self] in self?.showAllNotes() },
+                chooseStorage: { [weak self] in self?.chooseStorage($0) }
             )
+            onboarding?.model.storageNotice = { [weak self] in self?.model.storageNotice }
+            onboarding?.model.folderIsMissing = { [weak self] in self?.model.store.folderIsMissing ?? false }
         }
         onboarding?.show()
+    }
+
+    /// The guide's storage choice: the same rule as Settings (the license
+    /// asked at the click, and again when the chooser returns).
+    private func chooseStorage(_ choice: StorageChoice) {
+        guard choice == .other else {
+            model.setStorage(choice)
+            return
+        }
+        guard model.mayChangeFolder() else { return }
+        if let url = FolderChooser.present(current: preferences.folder) { model.setFolder(url) }
     }
 
     /// Once, on the first launch of the packaged app. `swift run` builds

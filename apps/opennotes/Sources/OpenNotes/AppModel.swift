@@ -34,6 +34,14 @@ final class AppModel {
     private(set) var saveProblem: String?
     /// A note's text went to a conflict copy; the footer says so once.
     private(set) var lastConflict: (id: NoteID, original: NoteID)?
+    /// What the last storage switch copied (Settings shows it under the
+    /// choice until the next switch).
+    private(set) var storageNotice: String?
+    /// The store's last `storageProblem` (a write it could not settle
+    /// cleanly; every version on disk under some name), shown in the
+    /// note's footer, All Notes and Settings until the next write of any
+    /// note goes through without one.
+    private(set) var storageProblem: String?
     /// The pending Undo for the deck's toast.
     private(set) var undo = ArchiveUndo()
     /// The trial ended or a license is needed: the store refuses every
@@ -53,6 +61,10 @@ final class AppModel {
     @ObservationIgnored private var saveTimers: [NoteID: Timer] = [:]
     @ObservationIgnored private var retryTimer: Timer?
     @ObservationIgnored private var rescanTimer: Timer?
+    /// The rescan every `ubiquityRescanInterval` while the folder is
+    /// iCloud's, and the one that confirms a file found missing is gone.
+    @ObservationIgnored private var ubiquityTimer: Timer?
+    @ObservationIgnored private var removalTimer: Timer?
     @ObservationIgnored private var autoArchiveTimer: Timer?
     @ObservationIgnored private var undoTimer: Timer?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -60,6 +72,10 @@ final class AppModel {
     static let saveDebounce: TimeInterval = 0.25
     /// A failed write is tried again this often while it keeps failing.
     static let retryInterval: TimeInterval = 5
+    /// While the folder is iCloud's the folder is read again this often
+    /// besides the watcher: iCloud brings files in by rename, and a
+    /// placeholder turning into a file is not always an event.
+    static let ubiquityRescanInterval: TimeInterval = 30
 
     init(preferences: Preferences, license: LicenseStatus = LicenseStatus(), store: NoteStore? = nil, watcher: FolderWatcher = FolderWatcher(), now: @escaping () -> Date = Date.init) {
         self.preferences = preferences
@@ -85,6 +101,8 @@ final class AppModel {
             for timer in saveTimers.values { timer.invalidate() }
             retryTimer?.invalidate()
             rescanTimer?.invalidate()
+            ubiquityTimer?.invalidate()
+            removalTimer?.invalidate()
             autoArchiveTimer?.invalidate()
             undoTimer?.invalidate()
             for observer in observers { NotificationCenter.default.removeObserver(observer) }
@@ -95,11 +113,12 @@ final class AppModel {
     /// Reads the folder, starts the watcher, the activation rescan, the
     /// flushes on resign, sleep and quit, and auto-archive when it is on.
     func start() {
-        store.load(create: preferences.usesDefaultFolder)
+        store.load(create: preferences.createsFolder)
         plantWelcomeNoteIfNeeded()
         watcher.watch(store.folder)
+        scheduleUbiquityRescan()
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.store.rescan() }
+            MainActor.assumeIsolated { self?.rescan() }
         })
         // Pending text reaches the disk before the Mac sleeps or the user
         // moves on; a failure keeps it dirty and the retry timer running.
@@ -122,6 +141,8 @@ final class AppModel {
         guard allowed() else { return }
         _ = flush()
         scheduleAutoArchive(runNow: true)
+        // Conflict versions found while read-only are written out now.
+        rescan()
     }
 
     /// The welcome note (`WelcomeNote`), once: the launch that first reads
@@ -225,6 +246,7 @@ final class AppModel {
         saveTimers[id]?.invalidate()
         saveTimers[id] = nil
         do {
+            storageProblem = nil
             let outcome = try store.save(id)
             saveProblem = nil
             revision += 1
@@ -247,6 +269,7 @@ final class AppModel {
     func flush() -> [NoteID: String] {
         for timer in saveTimers.values { timer.invalidate() }
         saveTimers = [:]
+        if !store.unsavedNotes.isEmpty { storageProblem = nil }
         let problems = store.saveAll()
         saveProblem = problems.isEmpty ? nil : "Couldn’t save: \(problems.values.sorted().first ?? "")"
         revision += 1
@@ -287,6 +310,44 @@ final class AppModel {
         allowed()
     }
 
+    /// Where the notes live, as Settings and the guide show it.
+    var storage: StorageChoice {
+        _ = revision
+        return preferences.storage
+    }
+
+    /// The radio in Settings and the guide: On this Mac / iCloud Drive
+    /// (only while iCloud Drive is reachable) / Other folder… (the
+    /// chooser, `setFolder`). Asked at the click; the folder change that
+    /// follows copies the notes over (`folderChanged`).
+    @discardableResult
+    func setStorage(_ choice: StorageChoice) -> Bool {
+        guard allowed() else { return false }
+        if choice == .iCloudDrive, !Preferences.iCloudIsAvailable { return false }
+        preferences.setStorage(choice)
+        return true
+    }
+
+    /// The footer's line about iCloud while the folder is iCloud's
+    /// (iCloud Drive, or Desktop & Documents kept there): nil otherwise.
+    var storageStatusLine: String? {
+        _ = revision
+        guard store.folderIsUbiquitous else { return nil }
+        let place = preferences.storage == .iCloudDrive ? "In iCloud Drive" : "In iCloud"
+        if let storageProblem { return "\(place) · \(storageProblem)" }
+        if let problem = store.conflictProblem { return "\(place) · \(problem)" }
+        if let problem = store.downloadProblem { return "\(place) · \(problem)" }
+        return "\(place) · \(store.storageStatus.text)"
+    }
+
+    /// A problem the folder has that is not one note's: the store's last
+    /// unsettled write, a conflict version it could not keep. Settings
+    /// shows it whatever the folder.
+    var folderProblem: String? {
+        _ = revision
+        return storageProblem ?? store.conflictProblem
+    }
+
     /// The folder the open panel returned: asked again here, since the
     /// panel may have stayed open across a deadline. Refused, the
     /// preference and the store are left as they are.
@@ -297,12 +358,10 @@ final class AppModel {
         return true
     }
 
-    /// Back to `~/Documents/OpenNotes`; the same rule.
+    /// Back to `~/Documents/OpenNotes`; the same rule ("On this Mac").
     @discardableResult
     func useDefaultFolder() -> Bool {
-        guard allowed() else { return false }
-        preferences.resetFolder()
-        return true
+        setStorage(.thisMac)
     }
 
     /// Out of the deck, with a 10-second Undo. The id is resolved through
@@ -361,12 +420,20 @@ final class AppModel {
         _ = revision
         if readOnly { return readOnlyNotice }
         if let saveProblem { return saveProblem }
+        if let storageProblem { return storageProblem }
         if let lastConflict, lastConflict.id == id { return "“\(lastConflict.original.fileName)” was changed outside; your text continues here, in \(id.fileName)." }
         guard let note = store.note(id) else { return "" }
+        if let refused = store.downloadProblems[id] { return "iCloud Drive refused the download (\(refused)); asked again on the next look." }
+        if note.isDownloading, !note.bodyIsLoaded { return "Downloading from iCloud Drive…" }
+        if note.isDownloading { return "Waiting for iCloud Drive to bring the file back; your text is kept." }
         if !note.bodyIsLoaded { return "Can’t read this note right now; shown in part." }
         if note.truncated { return "Too large to edit here; shown in part." }
         if store.hasUnsavedChanges(id) { return "Editing…" }
-        return "Saved · \(Age.text(note.modified, now: now()))"
+        var line = "Saved · \(Age.text(note.modified, now: now()))"
+        if store.folderIsUbiquitous {
+            line += store.storageStatus == .allOnThisMac ? " · in iCloud Drive" : " · iCloud Drive: \(store.storageStatus.text)"
+        }
+        return line
     }
 
     func clearConflictNotice() {
@@ -378,12 +445,16 @@ final class AppModel {
     /// The chosen folder changed: pending text is written to the old one
     /// first; if any of it cannot be, the setting goes back to the old
     /// folder and the footer says why (the text stays, dirty, retried).
+    /// The notes are copied to the new folder, never moved (the report
+    /// is the notice under the choice), and the watcher follows.
     private func folderChanged() {
         let old = store.folder
         guard preferences.folder != old else { return }
         do {
-            try store.switchFolder(to: preferences.folder, create: preferences.usesDefaultFolder)
+            let report = try store.switchFolder(to: preferences.folder, create: preferences.createsFolder, copyingNotes: true)
+            storageNotice = report.summary
             watcher.watch(store.folder)
+            scheduleUbiquityRescan()
             saveProblem = nil
         } catch {
             saveProblem = "Couldn’t switch folders: \(error.localizedDescription)"
@@ -396,7 +467,30 @@ final class AppModel {
     private func scheduleRescan() {
         rescanTimer?.invalidate()
         rescanTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.store.rescan() }
+            MainActor.assumeIsolated { self?.rescan() }
+        }
+    }
+
+    /// The store reads the folder again; a file it did not find is
+    /// confirmed gone by one more read after the grace, so a delete shows
+    /// within a second and a rename in progress never drops a note.
+    func rescan() {
+        store.rescan()
+        removalTimer?.invalidate()
+        removalTimer = nil
+        guard !store.pendingRemovals.isEmpty else { return }
+        removalTimer = Timer.scheduledTimer(withTimeInterval: NoteStore.removalGrace + 0.3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rescan() }
+        }
+    }
+
+    /// The periodic read while the folder is iCloud's; nothing otherwise.
+    private func scheduleUbiquityRescan() {
+        ubiquityTimer?.invalidate()
+        ubiquityTimer = nil
+        guard store.folderIsUbiquitous else { return }
+        ubiquityTimer = Timer.scheduledTimer(withTimeInterval: Self.ubiquityRescanInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rescan() }
         }
     }
 
@@ -443,6 +537,10 @@ final class AppModel {
             // A note that could fall due may have appeared or changed: the
             // next wake follows it (nothing runs now, nothing while off).
             if preferences.autoArchiveDays > 0 { scheduleAutoArchive(runNow: false) }
+        case .storageProblem(let message):
+            // A write the store could not settle cleanly: nothing was
+            // deleted, every version is on disk, and the footer says where.
+            storageProblem = message
         default:
             break
         }
@@ -454,6 +552,7 @@ final class AppModel {
     private func attempt(_ work: () throws -> Void) {
         guard allowed() else { return }
         do {
+            storageProblem = nil
             try work()
             saveProblem = nil
         } catch {

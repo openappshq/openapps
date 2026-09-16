@@ -314,6 +314,8 @@ struct DeckView: View {
         let lifted = placement.lifted
         let isHovered = hovered == tab.id && !lifted
         let canMove = !content.readOnly && order.count > 1
+        // A note iCloud has not downloaded is only its file name: greyed.
+        let downloading = note.map { $0.isDownloading && !$0.bodyIsLoaded } ?? false
         // Straight when open or lifted; otherwise the note's own lean.
         let tilt = DeckTilt.tilt(for: tab.id)
         let straight = isOpen || lifted
@@ -327,13 +329,14 @@ struct DeckView: View {
             .scaleEffect(lifted ? 1.05 : 1, anchor: content.side == .right ? .trailing : .leading)
             .position(center(placement.frame))
             .offset(x: inward * towardsScreen)
+            .opacity(downloading ? 0.55 : 1)
             .zIndex(lifted ? 1000 : isHovered ? 500 : Double(placement.slot))
             .onHover { inside in
                 if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
             }
             .gesture(tabGesture(for: tab, canMove: canMove))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(note.map { ($0.pinned ? "Pinned note: " : "Note: ") + $0.title } ?? tab.id.rawValue)
+            .accessibilityLabel(note.map { ($0.pinned ? "Pinned note: " : "Note: ") + $0.title + (downloading ? ", downloading" : "") } ?? tab.id.rawValue)
             .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
             .accessibilityHint(canMove ? "Drag along the deck to reorder" : "")
             .accessibilityAction { content.onTab(tab.id) }
@@ -531,7 +534,14 @@ struct NoteCard: View {
             LicensePillHeader(license: content.license)
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
-            if previewRendering {
+            if note.isDownloading, !note.bodyIsLoaded {
+                // Only the file name until iCloud brings the file; opening
+                // it asked for the download.
+                Text("Downloading…")
+                    .font(Font(look.nsFont()))
+                    .foregroundStyle(look.inkSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if previewRendering {
                 // `ImageRenderer` draws no NSTextView: the styled text, static.
                 // As an overlay, so a long note (the welcome note) is cut
                 // at the card's edge the way the scroll view cuts it,

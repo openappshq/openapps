@@ -60,6 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // thing the model may write (an auto-archive sweep at launch) asks
         // the projected license, never a status nobody has bound yet.
         startLicensing()
+        // Every default of the launch has read the evidence: the display
+        // default (Preferences.swift) may be recorded now.
+        preferences.commitLaunchDefaults()
         model.start()
 
         let statusItem = StatusItemController(model: model, preferences: preferences)
