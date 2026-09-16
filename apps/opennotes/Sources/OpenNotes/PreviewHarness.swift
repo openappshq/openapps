@@ -364,7 +364,11 @@ final class PreviewHarness {
         let model = model ?? self.model
         let notes = model.active
         let visible = CGRect(origin: .zero, size: Self.stageSize)
-        let layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: visible, notes: notes.map(\.id), toast: toast, scroll: scroll)
+        var layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: visible, notes: notes.map(\.id), toast: toast, scroll: scroll)
+        // The open note's tab is in view, as the controller keeps it.
+        if let open = state.openNote, let revealed = DeckGeometry.scroll(revealing: open, in: layout), revealed != scroll {
+            layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: visible, notes: notes.map(\.id), toast: toast, scroll: revealed)
+        }
         let open = state.openNote.flatMap { model.note($0) }
         let status: String
         if model.readOnly { status = model.readOnlyNotice } else if state.isEditing { status = "Editing…" } else { status = open.map { model.statusLine(for: $0.id) } ?? "" }
