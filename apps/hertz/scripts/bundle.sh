@@ -14,16 +14,19 @@
 # which must equal the one pinned in release/designated-requirement.txt.
 # Without them the app is ad-hoc signed. Hertz asks for no permissions, so an
 # ad-hoc development build loses nothing between rebuilds; the stable
-# certificate is what lets `brew upgrade` replace the app in place without
-# macOS treating it as a different app.
+# certificate is the identity every update must satisfy (the in-app updater
+# evaluates it, and `brew upgrade` replaces the same app in place).
 #
 # Environment:
 #
 #   VERSION       CFBundleShortVersionString, MAJOR.MINOR.PATCH. Defaults to
 #                 the `hertz-vX.Y.Z` tag on HEAD, else 0.0.0 (a development
 #                 build; official releases always come from a tag).
-#   BUILD_NUMBER  CFBundleVersion. Defaults to the commit count on HEAD, so it
-#                 only ever grows along the main branch.
+#                 CFBundleVersion is derived from it, MAJOR*1000000 + MINOR*1000
+#                 + PATCH, so build order is release order: the updater compares
+#                 builds, and a back-port from a later commit never outranks the
+#                 release it patches. (Releases before the updater, 0.1.x, used
+#                 the commit count; every derived build is higher.)
 #   UNIVERSAL=1   Build one arm64 + x86_64 binary (the release configuration).
 #                 Default: the host architecture only.
 #   SCRATCH_PATH  SwiftPM's scratch path (default .build).
@@ -42,14 +45,29 @@
 # generates Sources/Hertz/Licensing/LicensingConfig.swift (gitignored) and
 # refuses to build a licensed app without the paid product ID.
 #
-# OPENAPPS_OFFICIAL=1 marks the official flavour; official releases set both
-# OPENAPPS_LICENSING and OPENAPPS_OFFICIAL. It adds nothing yet: the in-app
-# updater is a separate step (RELEASES.md, "Hertz, for now").
+# Updates (RELEASES.md, "In-app updater") are compiled out by default too.
+# OPENAPPS_OFFICIAL=1 compiles the shared OpenAppsUpdater package in and pins
+# the feed (https://openapps.space/updates/hertz/appcast.xml) and the public
+# update key from release/sparkle-public-key.txt in Info.plist (SUFeedURL,
+# SUPublicEDKey). A fresh install checks for updates automatically (decided
+# once, with licensing's record store as the fresh-install test; RELEASES.md);
+# downloads stay off until the user turns them on. Official releases set both
+# OPENAPPS_LICENSING and OPENAPPS_OFFICIAL.
+#
+# An ad-hoc signed official build may pin a throwaway key instead with
+# UPDATE_PUBLIC_ED_KEY (the CI checks job does); a release-signed build
+# always pins the committed key.
+#
+# HERTZ_UPDATE_TEST=1 (with OPENAPPS_OFFICIAL=1) builds the variant
+# scripts/update-e2e.sh runs: bundle identifier com.openappshq.hertz.updatetest,
+# no URL scheme, no login item and no setup guide
+# (Sources/Hertz/Updates/UpdateTesting.swift), and UPDATE_FEED_URL (an
+# http://127.0.0.1 feed is allowed) overriding the pinned feed. None of that
+# is accepted for any other build, and scripts/verify-release.sh refuses it.
 #
 # Signing uses the hardened runtime, no sandbox (libproc, IOKit and the SMC
 # user client are unavailable to a sandboxed process) and
-# scripts/Hertz.entitlements. There is no in-app updater: updates come from
-# Homebrew (RELEASES.md).
+# scripts/Hertz.entitlements.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -58,6 +76,20 @@ BUNDLE_ID="com.openappshq.hertz"
 APP="build/${APP_NAME}.app"
 ENTITLEMENTS="scripts/${APP_NAME}.entitlements"
 SCRATCH_PATH="${SCRATCH_PATH:-.build}"
+FEED_URL="https://openapps.space/updates/hertz/appcast.xml"
+OFFICIAL="${OPENAPPS_OFFICIAL:-0}"
+UPDATE_TEST="${HERTZ_UPDATE_TEST:-0}"
+if [[ "$UPDATE_TEST" == "1" && "$OFFICIAL" != "1" ]]; then
+    echo "error: HERTZ_UPDATE_TEST=1 needs OPENAPPS_OFFICIAL=1 (the updater is what it tests)" >&2
+    exit 1
+fi
+if [[ "$UPDATE_TEST" == "1" ]]; then
+    BUNDLE_ID="${BUNDLE_ID}.updatetest"
+    FEED_URL="${UPDATE_FEED_URL:-$FEED_URL}"
+elif [[ -n "${UPDATE_FEED_URL:-}" ]]; then
+    echo "error: UPDATE_FEED_URL is accepted only with HERTZ_UPDATE_TEST=1" >&2
+    exit 1
+fi
 
 # Version: explicit, else the release tag on HEAD, else a development marker.
 if [[ -z "${VERSION:-}" ]]; then
@@ -69,11 +101,14 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "error: VERSION must be MAJOR.MINOR.PATCH (got '${VERSION}')" >&2
     exit 1
 fi
-BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
-if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
-    echo "error: BUILD_NUMBER must be an integer (got '${BUILD_NUMBER}')" >&2
+# CFBundleVersion, derived from the version (RELEASES.md): the updater and
+# the feed compare builds, so they must order exactly as releases do.
+IFS=. read -r major minor patch <<< "$VERSION"
+if (( major > 999 || minor > 999 || patch > 999 )); then
+    echo "error: each part of VERSION must be at most 999 (got '${VERSION}')" >&2
     exit 1
 fi
+BUILD_NUMBER=$(( major * 1000000 + minor * 1000 + patch ))
 
 # Release signing (inside scripts/release/with-signing-keychain.sh, which
 # exports both): the requirement is derived from the bundle identifier and
@@ -91,19 +126,43 @@ if [[ -n "$SIGNING_IDENTITY" || -n "$SIGNING_KEYCHAIN" ]]; then
     test -f "$SIGNING_KEYCHAIN" || { echo "error: keychain ${SIGNING_KEYCHAIN} not found" >&2; exit 1; }
     # The form scripts/release/designated-requirement.sh prints from the certificate.
     REQUIREMENT="identifier \"${BUNDLE_ID}\" and certificate leaf = H\"$(printf '%s' "$SIGNING_IDENTITY" | tr '[:upper:]' '[:lower:]')\""
-    pinned="$(tr -d '\r' < release/designated-requirement.txt | sed -e 's/[[:space:]]*$//' | grep -v '^$' || true)"
-    if [[ "$pinned" != "$REQUIREMENT" ]]; then
-        echo "error: the signing certificate does not give the pinned designated requirement (RELEASING.md, \"Signing certificate\")" >&2
-        echo "  pinned:  ${pinned}" >&2
-        echo "  derived: ${REQUIREMENT}" >&2
+    if [[ "$UPDATE_TEST" != "1" ]]; then
+        pinned="$(tr -d '\r' < release/designated-requirement.txt | sed -e 's/[[:space:]]*$//' | grep -v '^$' || true)"
+        if [[ "$pinned" != "$REQUIREMENT" ]]; then
+            echo "error: the signing certificate does not give the pinned designated requirement (RELEASING.md, \"Signing certificate and update key\")" >&2
+            echo "  pinned:  ${pinned}" >&2
+            echo "  derived: ${REQUIREMENT}" >&2
+            exit 1
+        fi
+    fi
+fi
+
+# The public update key official builds pin. A release-signed build must use
+# the committed one; an ad-hoc build (CI checks) or the update-test variant
+# may pin a throwaway key with UPDATE_PUBLIC_ED_KEY.
+PUBLIC_ED_KEY=""
+if [[ "$OFFICIAL" == "1" ]]; then
+    if [[ -n "${UPDATE_PUBLIC_ED_KEY:-}" && -n "$SIGNING_IDENTITY" && "$UPDATE_TEST" != "1" ]]; then
+        echo "error: UPDATE_PUBLIC_ED_KEY is accepted only for ad-hoc signed builds; a release pins release/sparkle-public-key.txt" >&2
         exit 1
     fi
+    PUBLIC_ED_KEY="${UPDATE_PUBLIC_ED_KEY:-$(head -n 1 release/sparkle-public-key.txt)}"
+    if [[ ! "$PUBLIC_ED_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+        echo "error: release/sparkle-public-key.txt holds no update key; create one with scripts/create-update-key.sh (RELEASING.md, \"Signing certificate and update key\")" >&2
+        exit 1
+    fi
+    case "$FEED_URL" in
+        https://*) ;;
+        http://127.0.0.1:*) [[ "$UPDATE_TEST" == "1" ]] || { echo "error: an http feed is only for update tests" >&2; exit 1; } ;;
+        *) echo "error: UPDATE_FEED_URL must be https:// (or http://127.0.0.1:<port> for an update test), got '${FEED_URL}'" >&2; exit 1 ;;
+    esac
 fi
 
 CONFIG_FILE="Sources/Hertz/Licensing/LicensingConfig.swift"
 rm -f "$CONFIG_FILE"
-# A local registry over plain http (test builds only; the config generator
-# enforces that) needs App Transport Security's local-networking exception.
+# A local registry or update feed over plain http (test builds only; the
+# config generator and the checks above enforce that) needs App Transport
+# Security's local-networking exception.
 NEEDS_LOCAL_NETWORKING=0
 if [[ "${OPENAPPS_LICENSING:-0}" == "1" ]]; then
     scripts/generate-licensing-config.sh "$CONFIG_FILE"
@@ -111,6 +170,12 @@ if [[ "${OPENAPPS_LICENSING:-0}" == "1" ]]; then
     if [[ "${OPENAPPS_TRIAL_REGISTRY_BASE_URL:-}" == http://* ]]; then NEEDS_LOCAL_NETWORKING=1; fi
 else
     echo "==> Licensing off (source build: no License UI, no trial, no license network calls)"
+fi
+if [[ "$OFFICIAL" == "1" ]]; then
+    echo "==> Updater on (feed ${FEED_URL}; a fresh install checks automatically, downloads stay off until the user turns them on)"
+    if [[ "$FEED_URL" == http://* ]]; then NEEDS_LOCAL_NETWORKING=1; fi
+else
+    echo "==> Updater off (source build: no update checks)"
 fi
 ATS_PLIST=""
 if [[ "$NEEDS_LOCAL_NETWORKING" == 1 ]]; then
@@ -122,7 +187,10 @@ if [[ "$NEEDS_LOCAL_NETWORKING" == 1 ]]; then
 fi
 # The website's thanks page opens hertz://activate?key=… to pre-fill the key;
 # a build without licensing registers the scheme too and ignores the link.
-URL_TYPES_PLIST="<key>CFBundleURLTypes</key>
+# The update-test variant must never catch the real app's links.
+URL_TYPES_PLIST=""
+if [[ "$UPDATE_TEST" != "1" ]]; then
+    URL_TYPES_PLIST="<key>CFBundleURLTypes</key>
     <array>
         <dict>
             <key>CFBundleURLName</key>
@@ -133,6 +201,14 @@ URL_TYPES_PLIST="<key>CFBundleURLTypes</key>
             </array>
         </dict>
     </array>"
+fi
+UPDATER_PLIST=""
+if [[ "$OFFICIAL" == "1" ]]; then
+    UPDATER_PLIST="<key>SUFeedURL</key>
+    <string>${FEED_URL}</string>
+    <key>SUPublicEDKey</key>
+    <string>${PUBLIC_ED_KEY}</string>"
+fi
 
 ARCH_FLAGS=()
 if [[ "${UNIVERSAL:-0}" == "1" ]]; then
@@ -142,7 +218,8 @@ else
     echo "==> Building release binary (${VERSION}, build ${BUILD_NUMBER})"
 fi
 export OPENAPPS_LICENSING="${OPENAPPS_LICENSING:-0}"
-export OPENAPPS_OFFICIAL="${OPENAPPS_OFFICIAL:-0}"
+export OPENAPPS_OFFICIAL="$OFFICIAL"
+export HERTZ_UPDATE_TEST="$UPDATE_TEST"
 swift build -c release --scratch-path "$SCRATCH_PATH" --product "$APP_NAME" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
 BIN_DIR="$(swift build -c release --scratch-path "$SCRATCH_PATH" --show-bin-path ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"})"
 
@@ -188,6 +265,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     </array>
     ${URL_TYPES_PLIST}
     ${ATS_PLIST}
+    ${UPDATER_PLIST}
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key>

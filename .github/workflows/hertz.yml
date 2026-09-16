@@ -2,14 +2,15 @@ name: Hertz
 
 # Checks on every change to the app; a signed universal release when a
 # `hertz-v<MAJOR.MINOR.PATCH>` tag is pushed (or on manual dispatch, which
-# publishes only when asked). The release follows RELEASES.md: build, sign
-# with the stable OpenApps HQ Release certificate, verify the pinned
-# designated requirement, zip, publish the GitHub Release, bump the cask.
-# The release compiles licensing in (LICENSING.md) against Dodo live mode
-# with the paid product ID from the hertz-release environment; the checks
-# job compiles the same flavour against test mode with a placeholder ID.
-# Hertz has no in-app updater, so there is no feed to write; Homebrew is the
-# update path. Setup, variables and secrets: apps/hertz/RELEASING.md.
+# publishes only when asked). The release flow follows RELEASES.md: build
+# and sign with the stable OpenApps HQ Release certificate, verify the pinned
+# designated requirement, zip, update-sign, publish the GitHub Release,
+# commit the feed, verify live, bump the cask. The release compiles licensing
+# in (LICENSING.md) against Dodo live mode with the paid product ID from the
+# hertz-release environment and the in-app updater with the committed update
+# key; the checks job compiles the same flavour against test mode with a
+# placeholder ID and a throwaway key. Setup, variables and secrets:
+# apps/hertz/RELEASING.md.
 #
 # The paths filter applies to branch pushes and pull requests; tag pushes
 # always run, which is what the release needs.
@@ -18,6 +19,7 @@ on:
     paths:
       - apps/hertz/**
       - packages/openapps-licensing/**
+      - packages/openapps-updater/**
       - scripts/release/**
       - packaging/homebrew/**
       - .github/workflows/hertz.yml
@@ -28,6 +30,7 @@ on:
     paths:
       - apps/hertz/**
       - packages/openapps-licensing/**
+      - packages/openapps-updater/**
       - scripts/release/**
       - packaging/homebrew/**
       - .github/workflows/hertz.yml
@@ -39,7 +42,7 @@ on:
         type: string
         default: ""
       publish:
-        description: Publish the release (creates the hertz-v<version> tag at this commit if it does not exist), then bump the cask
+        description: Publish a GitHub Release (creates the hertz-v<version> tag at this commit if it does not exist), then commit the feed and bump the cask
         type: boolean
         default: false
       allow_older:
@@ -83,20 +86,25 @@ jobs:
       # HertzCoreTests is pure logic (health score, diagnosis, process tree,
       # formatting, cleanup path rules against a temporary directory, the
       # first-run flags); HertzTests drives the licensing package's manager
-      # with fake stores and clients. Nothing in either reads the live
-      # system, the record store or the network, or needs a permission.
+      # with fake stores and clients and, in the official flavour, the
+      # updater's wiring against a never-started updater. Nothing in either
+      # reads the live system, the record store or the network, or needs a
+      # permission.
       - name: Build and test the source flavour
         run: swift test
-      - name: Build and test the licensed flavour
+      - name: Build and test the official flavour
         env:
           OPENAPPS_LICENSING: "1"
+          OPENAPPS_OFFICIAL: "1"
           OPENAPPS_DODO_ENV: test
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
         run: |
           scripts/generate-licensing-config.sh Sources/Hertz/Licensing/LicensingConfig.swift
-          swift test --scratch-path .build/licensed
+          swift test --scratch-path .build/official
       - name: Test the licensing package
         run: swift test --package-path ../../packages/openapps-licensing
+      - name: Test the updater package
+        run: swift test --package-path ../../packages/openapps-updater
       - name: Lint the release scripts and this workflow
         run: |
           brew install shellcheck actionlint >/dev/null
@@ -111,9 +119,11 @@ jobs:
           ../../packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest"
           grep -q '^  version "0.1.0"$' "$cask"
           if ../../packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$(printf 'b%.0s' $(seq 1 64))" 2>/dev/null; then echo "rewrite accepted"; exit 1; fi
-      # The official flavour as an ad-hoc signed development app, against
-      # Dodo test mode with the placeholder ID; it verifies like a release
-      # except for the signature and the live configuration.
+      # The official flavour (licensing and the updater) as an ad-hoc signed
+      # development app, against Dodo test mode with the placeholder ID and
+      # a throwaway update key so the build does not depend on the real key;
+      # it verifies like a release except for the signature and the live
+      # configuration.
       - name: Build an ad-hoc signed official development app
         env:
           OPENAPPS_LICENSING: "1"
@@ -121,8 +131,10 @@ jobs:
           OPENAPPS_DODO_ENV: test
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
           UNIVERSAL: "1"
-          SCRATCH_PATH: .build/official
+          SCRATCH_PATH: .build/official-app
         run: |
+          UPDATE_PUBLIC_ED_KEY="$(xcrun swift -e 'import CryptoKit; print(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString())')"
+          export UPDATE_PUBLIC_ED_KEY
           scripts/bundle.sh
           scripts/make-zip.sh
           scripts/verify-release.sh dist/Hertz-*.zip
@@ -133,8 +145,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # Builds, signs, verifies and zips the release. Read-only token: it never
-  # touches tags, releases or the tap; that is the later jobs' business.
+  # Builds, signs, verifies and packages the release. Read-only token: it
+  # never touches tags, releases, the feed or the tap.
   release:
     # Only the canonical repository releases; a fork keeps the checks and nothing else.
     if: github.repository == 'openappshq/openapps' && (startsWith(github.ref, 'refs/tags/hertz-v') || github.event_name == 'workflow_dispatch')
@@ -154,13 +166,13 @@ jobs:
       commit: ${{ steps.version.outputs.commit }}
       # The digest of the zip as verified here, and the id of the artifact it
       # was uploaded as: later jobs trust these, not what they download.
-      sha256: ${{ steps.verify.outputs.sha256 }}
+      sha256: ${{ steps.package.outputs.sha256 }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-          # Full history: the build number is the commit count on HEAD.
+          # The tags too, for bundle.sh's version fallback (`git describe`).
           fetch-depth: 0
       - name: Select Xcode 26
         run: |
@@ -204,11 +216,13 @@ jobs:
         # Everything the release needs is checked up front, so a missing
         # secret fails here with its name and never produces a signed build
         # that cannot be published. Only public material is committed: the
-        # pinned requirement must have been generated.
+        # pinned requirement and the update public key must have been generated.
         env:
           RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
           RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           RULESET_READ_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           PUBLISH: ${{ steps.version.outputs.publish }}
           OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ vars.OPENAPPS_DODO_PAID_PRODUCT_ID }}
@@ -216,20 +230,23 @@ jobs:
           OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
         run: |
           missing=0
-          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD; do
+          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD SPARKLE_ED_PRIVATE_KEY; do
             if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the hertz-release environment."; missing=1; fi
           done
+          # Only publication uses these, but a missing token should fail before a long build, not after.
           if [ "$PUBLISH" = true ]; then
-            for name in RULESET_READ_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
+            for name in RULESET_READ_TOKEN FEED_COMMIT_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
               if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the hertz-release environment; publishing needs it."; missing=1; fi
             done
           fi
           if [ -z "$OPENAPPS_DODO_PAID_PRODUCT_ID" ]; then
             echo "::error::Variable OPENAPPS_DODO_PAID_PRODUCT_ID is not set in the hertz-release environment."; missing=1
           fi
-          if grep -q '^NOT GENERATED' release/designated-requirement.txt; then
-            echo "::error::release/designated-requirement.txt has not been generated yet (RELEASES.md)."; missing=1
-          fi
+          for file in release/designated-requirement.txt release/sparkle-public-key.txt; do
+            if grep -q '^NOT GENERATED' "$file"; then
+              echo "::error::$file has not been generated yet; create the release certificate and update key first (apps/hertz/RELEASING.md, \"Signing certificate and update key\")."; missing=1
+            fi
+          done
           [ "$missing" = 0 ] || exit 1
           case "$OPENAPPS_DODO_PAID_PRODUCT_ID" in
             pdt_*) ;;
@@ -239,11 +256,11 @@ jobs:
           for name in OPENAPPS_BUY_URL OPENAPPS_SUPPORT_URL; do
             if [ -n "${!name}" ]; then echo "$name: set"; else echo "$name: not set (the app's default applies)"; fi
           done
-      - name: Build, sign and verify the universal app
+      - name: Build, sign and verify the universal release
         # The identity lives in a temporary keychain for exactly this step;
         # with-signing-keychain.sh removes it before the step ends and fails
-        # if it can still be found. bundle.sh refuses a certificate whose
-        # designated requirement is not the pinned one.
+        # if it can still be found. bundle.sh signs with the pinned designated
+        # requirement and refuses a certificate that does not produce it.
         env:
           RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
           RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
@@ -257,20 +274,24 @@ jobs:
           OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
         run: ../../scripts/release/with-signing-keychain.sh scripts/bundle.sh
       - name: Confirm the signing identity is gone
+        # Nothing after this point may sign: the zip, the feed, the upload and
+        # the publish only need the update key and tokens.
         run: |
           if security find-identity -p codesigning 2>/dev/null | grep -q 'OpenApps HQ Release'; then
             echo "::error::The release signing identity is still available after the build."; exit 1
           fi
-      - name: Zip and verify the release
-        id: verify
+      - name: Zip, verify and sign the update
+        id: package
         env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Feed verification needs OpenSSL 3 (Ed25519); macOS ships LibreSSL.
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
           scripts/make-zip.sh
           scripts/verify-release.sh --release "dist/Hertz-$VERSION.zip"
-          cd dist
-          shasum -a 256 "Hertz-$VERSION.zip" | tee "Hertz-$VERSION.zip.sha256"
-          echo "sha256=$(cut -d' ' -f1 "Hertz-$VERSION.zip.sha256")" >> "$GITHUB_OUTPUT"
+          scripts/make-appcast.sh "dist/Hertz-$VERSION.zip"
+          echo "sha256=$(cut -d' ' -f1 "dist/Hertz-$VERSION.zip.sha256")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         id: upload
         with:
@@ -278,6 +299,7 @@ jobs:
           path: |
             apps/hertz/dist/*.zip
             apps/hertz/dist/*.sha256
+            apps/hertz/dist/appcast.xml
           if-no-files-found: error
 
   # Publishes the verified zip. The only job with a token that can write
@@ -321,39 +343,98 @@ jobs:
           ALLOW_OLDER: ${{ inputs.allow_older == true }}
         run: scripts/publish-release.sh
 
-  # Once the release is public: check the public zip has the verified digest,
-  # then bump the cask in the tap. No build runs here and no signing material
-  # is present.
-  cask:
+  # Once the release is public: commit the signed feed to main (the website
+  # deploy serves it), verify the live feed and zip, then bump the cask.
+  # No build runs here and no signing material is present; the feed was
+  # signed by the release job and is only checked again here.
+  feed:
     if: github.repository == 'openappshq/openapps'
     needs: [release, publish]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     environment: hertz-release
     concurrency:
       group: hertz-publish
       cancel-in-progress: false
     permissions:
       contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: main
           persist-credentials: false
-      - name: Verify the public download
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.release.outputs.artifact_id }}
+          path: apps/hertz/dist
+          merge-multiple: true
+      - name: Check the feed against the published release
         env:
-          GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.release.outputs.version }}
           EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
         run: |
-          url="https://github.com/$GH_REPO/releases/download/hertz-v$VERSION/Hertz-$VERSION.zip"
-          curl -fsSL --retry 5 --retry-delay 10 -o "$RUNNER_TEMP/Hertz-$VERSION.zip" "$url"
-          actual="$(sha256sum "$RUNNER_TEMP/Hertz-$VERSION.zip" | cut -d' ' -f1)"
-          if [ "$actual" != "$EXPECTED_SHA256" ]; then
-            echo "::error::$url has SHA-256 $actual, but the release job verified $EXPECTED_SHA256."; exit 1
+          cd apps/hertz
+          read -r version _ url sha256 < <(scripts/verify-appcast.sh dist/appcast.xml "dist/Hertz-$VERSION.zip")
+          expected_url="https://github.com/openappshq/openapps/releases/download/hertz-v$VERSION/Hertz-$VERSION.zip"
+          if [ "$version" != "$VERSION" ] || [ "$sha256" != "$EXPECTED_SHA256" ] || [ "$url" != "$expected_url" ]; then
+            echo "::error::dist/appcast.xml announces $version $sha256 at $url, not $VERSION $EXPECTED_SHA256 at $expected_url"; exit 1
           fi
-          echo "ok: $url $actual"
+      - name: Never move the stable feed backwards
+        # The feed and the cask only ever advance. A back-port (allow_older)
+        # is published as a GitHub Release and nothing else: installed apps
+        # never downgrade anyway, and the cask refuses lower versions.
+        id: order
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          ALLOW_OLDER: ${{ inputs.allow_older == true }}
+        run: |
+          current=""
+          if [ -f apps/website/public/updates/hertz/appcast.xml ]; then
+            read -r current _ < <(cd apps/hertz && scripts/verify-appcast.sh ../website/public/updates/hertz/appcast.xml)
+          fi
+          if [ -n "$current" ] && [ "$current" != "$VERSION" ] && [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" = "$current" ]; then
+            if [ "$ALLOW_OLDER" != true ]; then
+              echo "::error::The live feed is at $current, newer than $VERSION; a lower version is never promoted."; exit 1
+            fi
+            echo "::notice::$VERSION is a back-port below the live feed's $current: the release is published, the feed and the cask stay at $current."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Commit the feed to main
+        if: steps.order.outputs.promote == 'true'
+        env:
+          FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p apps/website/public/updates/hertz
+          cp apps/hertz/dist/appcast.xml apps/website/public/updates/hertz/appcast.xml
+          git config user.name "openapps-release"
+          git config user.email "release@openapps.space"
+          git add apps/website/public/updates/hertz/appcast.xml
+          if git diff --cached --quiet; then echo "The feed already names $VERSION."; exit 0; fi
+          git commit -m "Point Hertz's update feed at $VERSION"
+          # The token is passed per command and never written to .git/config.
+          for _ in 1 2 3; do
+            if git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" push "https://github.com/$REPO.git" HEAD:main; then exit 0; fi
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" pull --rebase "https://github.com/$REPO.git" main
+          done
+          echo "::error::Could not push the feed to main after 3 attempts."; exit 1
+      - name: Verify the live feed and download
+        if: steps.order.outputs.promote == 'true'
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+          # The website deploys from main after the commit above.
+          WAIT_SECONDS: "1500"
+        run: apps/hertz/scripts/verify-live.sh "$VERSION" "$EXPECTED_SHA256"
       - name: Bump the cask
-        working-directory: .
+        if: steps.order.outputs.promote == 'true'
         env:
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           VERSION: ${{ needs.release.outputs.version }}

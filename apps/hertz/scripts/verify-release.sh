@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Checks a release zip the way a user's Mac will: unpacks it, verifies the
-# app's signature and, for a release, that its designated requirement is
-# exactly the pinned one (RELEASES.md, "Verification before publishing").
+# Checks a release zip the way a user's Mac and the updater will: unpacks it,
+# verifies the app's signature and, for a release, that its designated
+# requirement is exactly the pinned one (RELEASES.md, "Verification before
+# publishing").
 #
 #   scripts/verify-release.sh dist/Hertz-1.2.3.zip             # local, ad-hoc OK
 #   scripts/verify-release.sh --release dist/Hertz-1.2.3.zip   # release: everything must pass
 #
 # Without --release an ad-hoc signed build only gets the structural checks
-# (signature integrity, bundle layout, universal binary); the designated
-# requirement is reported, not compared. With --release the requirement must
-# equal release/designated-requirement.txt (PINNED_REQUIREMENT_FILE overrides
-# the path for local rehearsals) and the signer must be the OpenApps HQ
-# Release certificate. Notarization and Gatekeeper are not involved: the app
-# is not notarized, and the cask clears quarantine.
+# (signature integrity, bundle layout, universal binary, derived build
+# number, updater configuration); the designated requirement is reported,
+# not compared. With --release the requirement must equal
+# release/designated-requirement.txt (PINNED_REQUIREMENT_FILE overrides the
+# path for local rehearsals), the signer must be the OpenApps HQ Release
+# certificate, licensing must be compiled in against Dodo's live host, the
+# updater must be compiled in with the committed public key, and nothing of
+# the update-test variant may be present. Notarization and Gatekeeper are
+# not involved: the app is not notarized, and the cask clears quarantine.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -37,9 +41,12 @@ echo "==> App bundle"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 info() { plutil -extract "$1" raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true; }
 VERSION="$(info CFBundleShortVersionString)"
-echo "version: ${VERSION} ($(info CFBundleVersion))"
+BUILD="$(info CFBundleVersion)"
+echo "version: ${VERSION} (${BUILD})"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: version '${VERSION}' is not MAJOR.MINOR.PATCH" >&2; exit 1; }
-[[ "$(info CFBundleVersion)" =~ ^[0-9]+$ ]] || { echo "error: CFBundleVersion is not an integer" >&2; exit 1; }
+IFS=. read -r major minor patch <<< "$VERSION"
+[[ "$BUILD" == "$(( major * 1000000 + minor * 1000 + patch ))" ]] \
+    || { echo "error: CFBundleVersion ${BUILD} is not derived from ${VERSION} (RELEASES.md: builds order as releases do)" >&2; exit 1; }
 echo "bundle id: $(info CFBundleIdentifier)"
 [[ "$(info CFBundleIdentifier)" == "$BUNDLE_ID" ]] || { echo "error: bundle identifier is not ${BUNDLE_ID}" >&2; exit 1; }
 [[ "$ZIP" == *"/${APP_NAME}-${VERSION}.zip" || "$ZIP" == "${APP_NAME}-${VERSION}.zip" ]] \
@@ -57,18 +64,19 @@ test -f "$APP/Contents/Resources/AppIcon.icns"
 test -f "$APP/Contents/Resources/MenuBarIcon@2x.png"
 test -f "$APP/Contents/Resources/Fonts/IBMPlexMono-Regular.ttf"
 test -f "$APP/Contents/Resources/NOTICE"
-test ! -d "$APP/Contents/Frameworks" || { echo "error: the app embeds frameworks; Hertz has none" >&2; exit 1; }
+test ! -d "$APP/Contents/Frameworks" || { echo "error: the app embeds frameworks; Hertz has none (the updater is compiled in)" >&2; exit 1; }
 [[ -z "$(info NSAppTransportSecurity)" ]] || { echo "error: App Transport Security exceptions in a release" >&2; exit 1; }
-# No in-app updater (RELEASES.md): nothing in the bundle may name a feed or a
-# release API. strings writes to a file first: piped straight into `grep -q`,
+# The binary's strings, read once into a file: piped straight into `grep -q`,
 # an early match closes the pipe, strings dies of SIGPIPE, and under pipefail
 # the whole test reads as "no match".
 STRINGS="$WORK/strings.txt"
 if ! strings "$APP/Contents/MacOS/${APP_NAME}" > "$STRINGS"; then
     echo "error: could not read the binary's strings" >&2; exit 1
 fi
-if grep -Eq 'api\.github\.com|/updates/hertz/|SUFeedURL' "$STRINGS"; then
-    echo "error: the binary references an update feed; Hertz updates through Homebrew only" >&2; exit 1
+# The standalone repository's self-updater fetched the repository-wide latest
+# GitHub release; nothing may bring that back.
+if grep -Fq 'api.github.com' "$STRINGS"; then
+    echo "error: the binary references the GitHub API; updates come from the signed feed only (RELEASES.md)" >&2; exit 1
 fi
 
 echo "==> Licensing"
@@ -101,6 +109,31 @@ else
     echo "licensing: off (source build: no trial, no license network calls)"
 fi
 
+echo "==> Updater"
+# The shared updater (RELEASES.md, "In-app updater"): an official build pins
+# the feed and the public key in Info.plist and carries nothing of the
+# update-test variant; a source build has no updater at all.
+feed="$(info SUFeedURL)"
+key="$(info SUPublicEDKey)"
+if [[ "$REQUIRE_RELEASE" == 1 || -n "$feed" ]]; then
+    [[ "$feed" == "https://openapps.space/updates/hertz/appcast.xml" ]] || { echo "error: SUFeedURL is '${feed}'" >&2; exit 1; }
+    [[ "$key" =~ ^[A-Za-z0-9+/]{43}=$ ]] || { echo "error: SUPublicEDKey is missing" >&2; exit 1; }
+    if [[ "$REQUIRE_RELEASE" == 1 ]]; then
+        committed="$(head -n 1 release/sparkle-public-key.txt)"
+        [[ "$key" == "$committed" ]] || { echo "error: SUPublicEDKey is not the committed update key" >&2; exit 1; }
+    fi
+    [[ -n "$(info CFBundleURLTypes)" ]] || { echo "error: the hertz:// URL scheme is missing" >&2; exit 1; }
+    if grep -Fq 'HERTZ_UPDATE_TEST_ACTION' "$STRINGS"; then
+        echo "error: the binary contains update-test hooks" >&2; exit 1
+    fi
+    echo "updater: on (feed ${feed}, key pinned; automatic checks on for a fresh install, downloads off)"
+else
+    if grep -Fq '/updates/hertz/' "$STRINGS"; then
+        echo "error: the updater is compiled out but the binary names the feed" >&2; exit 1
+    fi
+    echo "updater: off (source build: no update checks)"
+fi
+
 echo "==> Signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
 # Captured once: piping codesign straight into `grep -q` lets grep close the
@@ -113,7 +146,7 @@ echo "designated requirement: ${requirement:-none}"
 if [[ "$REQUIRE_RELEASE" == 1 ]]; then
     pinned="$(tr -d '\r' < "$PINNED_REQUIREMENT_FILE" | sed -e 's/[[:space:]]*$//' | grep -v '^$' || true)"
     [[ "$pinned" == "identifier \"${BUNDLE_ID}\" and certificate leaf = H\""*'"' ]] \
-        || { echo "error: ${PINNED_REQUIREMENT_FILE} does not hold a requirement for ${BUNDLE_ID} (RELEASING.md, \"Signing certificate\")" >&2; exit 1; }
+        || { echo "error: ${PINNED_REQUIREMENT_FILE} does not hold a requirement for ${BUNDLE_ID} (RELEASING.md, \"Signing certificate and update key\")" >&2; exit 1; }
     ../../scripts/release/verify-designated-requirement.sh "$APP" "$PINNED_REQUIREMENT_FILE"
     grep -q '^Authority=OpenApps HQ Release$' <<< "$signature" || { echo "error: not signed by 'OpenApps HQ Release'" >&2; exit 1; }
 fi
