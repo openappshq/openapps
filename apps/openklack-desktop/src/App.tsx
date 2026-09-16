@@ -21,6 +21,7 @@ import { RESUMABLE_REASONS, resumedBannerText } from "./pauseBanner";
 import { useLicense } from "./useLicense";
 import { licensePill } from "./licenseState";
 import {
+  KEYBOARD_ACCESS_STEP,
   offersSetupGuide,
   setupGuideStep,
   withSetupGuideCompleted,
@@ -117,13 +118,29 @@ export default function App() {
     setPage("general");
     setLicenseRequests((count) => count + 1);
   }
+  // Open System Settings: the pane, macOS's own prompt, and the floating drag-to-grant helper
+  // for when OpenKlack is missing from the list (the helper is skipped once the permission is
+  // there). Both are fire-and-forget on the native side.
+  function requestPermission() {
+    void desktop.perform(async () => {
+      await invoke("request_input_permission");
+      await invoke("show_permission_helper");
+    });
+  }
+  // The helper belongs to the Keyboard access step: it goes away with the step, whichever way
+  // the step is left. A close from the panel itself, or the permission arriving, hides it too.
+  function hideHelper() {
+    void invoke("hide_permission_helper").catch(() => {});
+  }
   // The step is remembered only while the guide is unfinished: that is when a relaunch (macOS
   // asks for one after Input Monitoring is granted) has to come back to it. Shown again from
   // Settings, the guide always starts at Welcome.
   function moveGuide(step: number) {
+    if (step !== KEYBOARD_ACCESS_STEP) hideHelper();
     if (!prefs?.onboardingCompleted) void desktop.save((p) => withSetupGuideStep(p, step));
   }
   function finishGuide() {
+    hideHelper();
     setGuide(false);
     if (!prefs?.onboardingCompleted) void desktop.save(withSetupGuideCompleted);
   }
@@ -152,9 +169,11 @@ export default function App() {
           license={license.view}
           openAtLogin={openAtLogin}
           inputPermission={snapshot.runtime.inputPermission}
+          helperVisible={snapshot.runtime.permissionHelper.visible}
           busy={busy}
           initialStep={setupGuideStep(prefs)}
-          onRequestPermission={() => void desktop.perform(() => invoke("request_input_permission"))}
+          onRequestPermission={requestPermission}
+          onShowHelper={() => void desktop.perform(() => invoke("show_permission_helper"))}
           onStep={moveGuide}
           onDone={finishGuide}
         />
@@ -244,11 +263,7 @@ export default function App() {
                   never saved.
                 </p>
               </div>
-              <Button
-                variant="primary"
-                isDisabled={busy}
-                onPress={() => void desktop.perform(() => invoke("request_input_permission"))}
-              >
+              <Button variant="primary" isDisabled={busy} onPress={requestPermission}>
                 Enable Input Monitoring
               </Button>
             </section>

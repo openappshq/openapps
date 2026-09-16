@@ -3,6 +3,8 @@ import fixture from "../fixtures/preferences-v1.json";
 import {
   guideLicenseLine,
   guideLoginLine,
+  guidePermissionNote,
+  offersPermissionHelper,
   offersSetupGuide,
   SETUP_GUIDE_STEPS,
   setupGuideStep,
@@ -107,6 +109,21 @@ test("the guide only claims the trial state the license view reports", () => {
   );
   expect(guideLicenseLine(view({ ready: false }))).toBeNull();
   expect(guideLicenseLine(undefined)).toBeNull();
+});
+
+test("the permission note points at the list and the floating helper until the grant", () => {
+  expect(guidePermissionNote(false)).toBe(
+    "In System Settings, turn on OpenKlack in the list. Not in the list? Drag the icon from the floating window into it.",
+  );
+  expect(guidePermissionNote(true)).toContain("quit and reopen OpenKlack");
+  expect(guidePermissionNote(true)).not.toContain("floating window");
+});
+
+test("the helper is offered again only while it is away and there is something to grant", () => {
+  expect(offersPermissionHelper(false, false)).toBe(true);
+  expect(offersPermissionHelper(false, true)).toBe(false);
+  expect(offersPermissionHelper(true, false)).toBe(false);
+  expect(offersPermissionHelper(true, true)).toBe(false);
 });
 
 test("the guide describes Open at login as it really is", () => {

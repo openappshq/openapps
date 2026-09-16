@@ -36,6 +36,8 @@ export type Snapshot = {
   preferences: Preferences;
   runtime: {
     inputPermission: boolean;
+    /** The floating drag-to-grant helper beside System Settings, as the native panel reports it. */
+    permissionHelper: { visible: boolean };
     microphone: number;
     /** Where the Mac's default output plays; the microphone only pauses through the speakers. */
     outputRoute: "speakers" | "other";

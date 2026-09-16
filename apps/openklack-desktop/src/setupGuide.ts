@@ -4,6 +4,8 @@ import type { Preferences, Snapshot } from "./useDesktop";
 
 /** The guide's steps, in order. A saved step is only ever one of these. */
 export const SETUP_GUIDE_STEPS = ["Welcome", "Keyboard access", "Tips"] as const;
+/** The step the floating drag-to-grant helper belongs to; it is taken down when this step is left. */
+export const KEYBOARD_ACCESS_STEP = SETUP_GUIDE_STEPS.indexOf("Keyboard access");
 
 /**
  * Official builds show the guide once, on first launch, until it is finished or skipped. A
@@ -66,6 +68,25 @@ export function guideLicenseLine(view: LicenseView | undefined): string | null {
     default:
       return "Official builds include a free 3-day trial. Settings → License shows where it stands.";
   }
+}
+
+/**
+ * The Keyboard access step's note under the permission line. Before the grant it points at the
+ * list in System Settings and at the floating helper for when OpenKlack is missing from it;
+ * after, at the relaunch macOS sometimes wants.
+ */
+export function guidePermissionNote(inputPermission: boolean): string {
+  if (inputPermission)
+    return "If the sounds don’t start right away, quit and reopen OpenKlack: macOS sometimes asks for that after the permission changes.";
+  return "In System Settings, turn on OpenKlack in the list. Not in the list? Drag the icon from the floating window into it.";
+}
+
+/**
+ * Whether the step offers to bring the floating helper back: only while there is something
+ * to grant and the helper is not already on screen.
+ */
+export function offersPermissionHelper(inputPermission: boolean, helperVisible: boolean): boolean {
+  return !inputPermission && !helperVisible;
 }
 
 /** What the guide says about Open at login: the real setting, or a pointer when it is unknown. */

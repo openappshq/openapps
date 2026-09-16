@@ -4,7 +4,13 @@ import { Button } from "@heroui/react";
 import { KeyRound, Menu, Power, ShieldCheck, Volume2 } from "lucide-react";
 import klackMark from "../../../design/assets/openklack/symbol-paper.svg";
 import type { LicenseView } from "./licenseState";
-import { guideLicenseLine, guideLoginLine, SETUP_GUIDE_STEPS as STEPS } from "./setupGuide";
+import {
+  guideLicenseLine,
+  guideLoginLine,
+  guidePermissionNote,
+  offersPermissionHelper,
+  SETUP_GUIDE_STEPS as STEPS,
+} from "./setupGuide";
 
 const step = {
   initial: { opacity: 0, transform: "translateY(8px)" },
@@ -17,14 +23,18 @@ const step = {
  * never in the way of the menu bar. Input Monitoring is read live from the snapshot, which the
  * native bridge refreshes every second while the app runs. The step is the caller's to remember,
  * so the relaunch macOS asks for after the permission is granted comes back to the same step.
+ * Open System Settings also brings up the floating drag-to-grant helper; the step offers it
+ * again while it is away, and the caller takes it down when the step is left.
  */
 export function Onboarding({
   license,
   openAtLogin,
   inputPermission,
+  helperVisible,
   busy,
   initialStep,
   onRequestPermission,
+  onShowHelper,
   onStep,
   onDone,
 }: {
@@ -33,10 +43,15 @@ export function Onboarding({
   /** The real "Open at login" setting, or unknown while it is being read. */
   openAtLogin: boolean | undefined;
   inputPermission: boolean;
+  /** Whether the floating helper is on screen, as the native panel reports it. */
+  helperVisible: boolean;
   busy: boolean;
   /** Where to start: the step saved on an earlier launch, already clamped by the caller. */
   initialStep: number;
+  /** Open System Settings: asks macOS, opens the pane and shows the floating helper. */
   onRequestPermission: () => void;
+  /** Brings the floating helper back after it was closed. */
+  onShowHelper: () => void;
   /** The user moved to another step; the caller remembers it. */
   onStep: (step: number) => void;
   /** Finished or skipped; the caller remembers it. */
@@ -108,9 +123,15 @@ export function Onboarding({
                   )}
                 </div>
                 <p className="onboarding-note">
-                  {inputPermission
-                    ? "If the sounds don’t start right away, quit and reopen OpenKlack: macOS sometimes asks for that after the permission changes."
-                    : "In System Settings, turn on OpenKlack under Privacy & Security → Input Monitoring. macOS may ask you to quit and reopen OpenKlack afterwards."}
+                  {guidePermissionNote(inputPermission)}
+                  {offersPermissionHelper(inputPermission, helperVisible) && (
+                    <>
+                      {" "}
+                      <Button variant="ghost" className="onboarding-link" onPress={onShowHelper}>
+                        Show the helper again
+                      </Button>
+                    </>
+                  )}
                 </p>
               </>
             )}
