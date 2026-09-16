@@ -59,7 +59,11 @@ public final class RecordingApplier: DesktopApplier, @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [Call] = []
     public var failure: (any Error)?
+    /// Displays whose every apply fails, for partial-failure tests.
+    public var failingDisplays: Set<DisplayID> = []
     public var refusesHEIC = false
+    /// Seconds each apply takes, so a test can catch an apply in flight.
+    public var delay: TimeInterval = 0
     /// What `currentImageURL` answers: the last applied by default.
     public var currentOverride: [DisplayID: URL?] = [:]
 
@@ -69,7 +73,9 @@ public final class RecordingApplier: DesktopApplier, @unchecked Sendable {
 
     public func apply(imageAt url: URL, to display: DisplayID) throws {
         if let failure { throw failure }
+        if failingDisplays.contains(display) { throw failure ?? RefusedHEIC() }
         if refusesHEIC, url.pathExtension == "heic" { throw RefusedHEIC() }
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
         lock.withLock { recorded.append(Call(url: url, display: display)) }
     }
 
@@ -189,8 +195,14 @@ public struct WallpaperApplier: Sendable {
     }
 
     /// Re-applies a file that was applied before (the pin): no render, the
-    /// same URL handed over again.
+    /// same URL handed over again — only while it is still one of the
+    /// applier's own regular files, listed in its manifest for that display.
     public func reapply(_ url: URL, to display: DisplayID) throws {
+        let realDirectory = URL(fileURLWithPath: directory.path).resolvingSymlinksInPath().standardizedFileURL.path
+        let manifest = AppliedManifest.load(in: directory)
+        guard manifest.names(for: display).contains(url.lastPathComponent), Self.isOwnedRegularFile(url, inside: realDirectory) else {
+            throw ApplyError.notOwned
+        }
         try applier.apply(imageAt: url, to: display)
     }
 
@@ -219,16 +231,18 @@ public struct WallpaperApplier: Sendable {
         }
     }
 
-    public enum ApplyError: Error, LocalizedError {
+    public enum ApplyError: Error, LocalizedError, Equatable {
         case encoding
         case directoryIsSymlink
         case noFreeName
+        case notOwned
 
         public var errorDescription: String? {
             switch self {
             case .encoding: "The wallpaper could not be encoded as PNG."
             case .directoryIsSymlink: "The applied folder is a symbolic link; refusing to write through it."
             case .noFreeName: "No free file name in the applied folder."
+            case .notOwned: "The recorded file is not one macPaper wrote; not re-applied."
             }
         }
     }

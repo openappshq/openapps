@@ -314,14 +314,16 @@ final class AppModel {
         return true
     }
 
-    /// `#000000`, every finish off: exact zeros.
+    /// `#000000`, every finish, composition and pair off: exact zeros on
+    /// every pixel of every display, whatever was set before.
     func useTrueBlack() {
         edit {
             $0.generator = .solid(SolidParameters(color: .black))
             $0.darkGenerator = nil
             $0.grain = 0
             $0.finish = Finish()
-            if $0.composition == .pill { $0.composition = .none }
+            $0.composition = .none
+            $0.pair = .still
         }
     }
 
@@ -567,9 +569,9 @@ final class AppModel {
 
     /// A random document, applied at once (this display, or all of them
     /// while "same on all displays" is on), and shown as the draft.
-    func shuffle() {
+    func shuffle(seed: UInt64 = .randomSeed()) {
         guard license.hasAccess() else { return }
-        var generator = SeededGenerator(seed: .randomSeed())
+        var generator = SeededGenerator(seed: seed)
         let targets = preferences.sameOnAllDisplays ? displays : currentDisplay.map { [$0] } ?? displays
         let plan = shufflePlan(for: targets, using: &generator)
         if let mine = currentDisplay.flatMap({ plan[$0] }) ?? plan.values.first { load(mine) }
@@ -587,18 +589,19 @@ final class AppModel {
         run(plan, verb: "Shuffled", perSpace: false)
     }
 
+    /// A plan with nothing never-showed in it; empty when none could be
+    /// found (every favorite blocked, or the random draw kept landing on
+    /// the list), so "never show" is never broken to fill a display.
     private func shufflePlan(for targets: [DisplayInfo], using generator: inout SeededGenerator) -> [DisplayInfo: Wallpaper] {
         let favorites = blocklist.filter(self.favorites.all.map(\.wallpaper))
-        var plan: [DisplayInfo: Wallpaper] = [:]
-        // A random pick that lands on the blocklist is drawn again, a few times.
         for _ in 0..<6 {
-            plan = ShufflePlanner.plan(
+            let plan = ShufflePlanner.plan(
                 displays: targets, current: currentByDisplay, favorites: favorites,
                 favoritesOnly: preferences.favoritesOnly, sameOnAllDisplays: preferences.sameOnAllDisplays, using: &generator
             )
-            if plan.values.allSatisfy({ !blocklist.contains($0) }) { break }
+            if plan.values.allSatisfy({ !blocklist.contains($0) }) { return plan }
         }
-        return plan
+        return [:]
     }
 
     private var currentByDisplay: [DisplayID: Wallpaper] {
@@ -607,7 +610,7 @@ final class AppModel {
 
     private func run(_ plan: [DisplayInfo: Wallpaper], verb: String, perSpace: Bool) {
         guard !plan.isEmpty else {
-            show("No display to apply to.", tone: .error)
+            show(displays.isEmpty ? "No display to apply to." : "Nothing left to shuffle to: every choice is on the never-show list.", tone: .error)
             return
         }
         guard !isApplying else { return }
@@ -655,28 +658,35 @@ final class AppModel {
 
     /// The Mac's appearance changed: displays that took a fallback still
     /// get the other side, and the preview follows when it tracks the Mac.
+    /// A display applied "this Space only" is left alone (the active Space
+    /// may be another one, and macOS gives no Space identity), and so is a
+    /// display that no longer shows macPaper's recorded file.
     func themeChanged() {
         if editingSide == nil { schedulePreview() }
         let side = systemAppearance()
-        let fallbacks = appliedState.fallbackDisplayIDs
+        let state = appliedState
+        let fallbacks = state.fallbackDisplayIDs.subtracting(state.perSpaceDisplayIDs)
         guard !fallbacks.isEmpty, !isApplying else { return }
         var pending: [DisplayInfo: Wallpaper] = [:]
         for display in displays where fallbacks.contains(display.id) {
-            if let document = appliedState.wallpaper(for: display.id), document.pair == .lightDark { pending[display] = document }
+            guard let document = state.wallpaper(for: display.id), document.pair == .lightDark,
+                  let recorded = state.file(for: display.id) else { continue }
+            // Only while the display still shows what macPaper recorded.
+            if let shown = applier.applier.currentImageURL(for: display.id), shown.standardizedFileURL.path != recorded.standardizedFileURL.path { continue }
+            pending[display] = document
         }
         let plan = pending
         guard !plan.isEmpty else { return }
         isApplying = true
         let applier = applier
-        let perSpace = appliedState.perSpaceDisplayIDs
         Task { [weak self] in
             let outcome = await Task.detached(priority: .userInitiated) { () -> [AppliedImage] in
-                (try? applier.apply(plan, side: side)) ?? []
+                do { return try applier.apply(plan, side: side) } catch let failure as WallpaperApplier.Failure { return failure.applied } catch { return [] }
             }.value
             guard let self else { return }
             self.isApplying = false
             for image in outcome {
-                try? self.applied.update { $0.record(image, perSpace: perSpace.contains(image.display)) }
+                try? self.applied.update { $0.record(image, perSpace: false) }
             }
             self.appliedState = self.applied.current
         }

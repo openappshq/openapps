@@ -69,23 +69,35 @@ final class ClockController {
         windows = kept
         fullscreen.watchedDisplays = Array(kept.keys)
         updateVisibility()
-        if timer == nil {
+    }
+
+    /// Whether any face is on screen now; the timer runs only then.
+    private(set) var isTicking = false
+
+    private func updateVisibility() {
+        let shown = ClockVisibility.shown(displays: Array(windows.keys), isFullscreen: fullscreen.isFullscreen(display:))
+        for (id, window) in windows {
+            if shown.contains(id) { window.orderFrontRegardless() } else { window.orderOut(nil) }
+        }
+        setTicking(ClockVisibility.ticks(shown: shown))
+    }
+
+    /// The 1 Hz timer exists only while a face shows; on resume the time
+    /// is refreshed at once so a face never shows the moment it was hidden.
+    private func setTicking(_ on: Bool) {
+        isTicking = on
+        if on {
+            time.now = Date()
+            guard timer == nil else { return }
             let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.time.now = Date() }
             }
             timer.tolerance = 0.1
             RunLoop.main.add(timer, forMode: .common)
             self.timer = timer
-        }
-    }
-
-    private func updateVisibility() {
-        for (id, window) in windows {
-            if fullscreen.isFullscreen(display: id) {
-                window.orderOut(nil)
-            } else {
-                window.orderFrontRegardless()
-            }
+        } else {
+            timer?.invalidate()
+            timer = nil
         }
     }
 
@@ -101,6 +113,17 @@ final class ClockController {
         window.isReleasedWhenClosed = false
         return window
     }
+}
+
+/// Which faces show and whether the clock needs its timer: none while
+/// every display's front app is fullscreen (or there is no display), so a
+/// hidden clock costs no wake-ups.
+nonisolated enum ClockVisibility {
+    static func shown(displays: [DisplayID], isFullscreen: (DisplayID) -> Bool) -> Set<DisplayID> {
+        Set(displays.filter { !isFullscreen($0) })
+    }
+
+    static func ticks(shown: Set<DisplayID>) -> Bool { !shown.isEmpty }
 }
 
 /// The face: analog with hour and minute hands and a stepping second hand,

@@ -342,6 +342,7 @@ struct ShareTests {
 @Suite("Apply, finished")
 struct ApplyFinishedTests {
     static let notched = DisplayInfo(id: 1, name: "Built-in", pointSize: CGSize(width: 32, height: 20), scale: 1, notchWidth: 6, isMain: true, topInset: 2)
+    static let plain = DisplayInfo(id: 2, name: "External", pointSize: CGSize(width: 32, height: 20), scale: 1)
     static let external = DisplayInfo(id: 2, name: "External", pointSize: CGSize(width: 24, height: 16), scale: 1)
 
     @Test("A light/dark document applies as a HEIC pair; a refusing display gets the light still and a fallback mark")
@@ -403,8 +404,30 @@ struct ApplyFinishedTests {
         #expect(PinPolicy.displaysToReapply(recorded: recorded, current: { shown[$0] ?? nil }, excluded: [1], connected: [1, 2, 3]) == [2], "per-Space display skipped")
         #expect(PinPolicy.displaysToReapply(recorded: recorded, current: { shown[$0] ?? nil }, excluded: [], connected: [2]) == [2], "only connected displays")
         #expect(PinPolicy.displaysToReapply(recorded: recorded, current: { _ in nil }, excluded: [], connected: [1, 2]) == [1, 2], "unknown: re-apply")
-        let wallpapers = WallpaperApplier(applier: RecordingApplier(), renderer: WallpaperRenderer(), cache: RenderCache(), directory: directory.url)
-        try wallpapers.reapply(a, to: 1)
+        // The pin hands over only files the applier wrote and listed for
+        // that display: a planted file under the folder, a recorded file for
+        // another display, a path outside, a symlink in — all refused.
+        let recordingApplier = RecordingApplier()
+        let wallpapers = WallpaperApplier(applier: recordingApplier, renderer: WallpaperRenderer(), cache: RenderCache(), directory: directory.url.appendingPathComponent("applied"))
+        let applied = try wallpapers.apply([Self.notched: .trueBlack, Self.plain: .starter])
+        let mine = try #require(applied.first { $0.display == Self.notched.id })
+        let other = try #require(applied.first { $0.display == Self.plain.id })
+        try wallpapers.reapply(mine.url, to: Self.notched.id)
+        #expect(recordingApplier.calls.last == RecordingApplier.Call(url: mine.url, display: Self.notched.id))
+        let before = recordingApplier.calls.count
+        #expect(throws: WallpaperApplier.ApplyError.notOwned) { try wallpapers.reapply(other.url, to: Self.notched.id) }
+        #expect(throws: WallpaperApplier.ApplyError.notOwned) { try wallpapers.reapply(a, to: 1) }
+        let planted = directory.url.appendingPathComponent("applied/planted.png")
+        try Data("p".utf8).write(to: planted)
+        #expect(throws: WallpaperApplier.ApplyError.notOwned) { try wallpapers.reapply(planted, to: Self.notched.id) }
+        let link = directory.url.appendingPathComponent("applied").appendingPathComponent(mine.url.lastPathComponent + ".link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: a)
+        #expect(throws: WallpaperApplier.ApplyError.notOwned) { try wallpapers.reapply(link, to: Self.notched.id) }
+        // Same name, another folder: the manifest's name is not enough.
+        let elsewhere = directory.url.appendingPathComponent(mine.url.lastPathComponent)
+        try Data("e".utf8).write(to: elsewhere)
+        #expect(throws: WallpaperApplier.ApplyError.notOwned) { try wallpapers.reapply(elsewhere, to: Self.notched.id) }
+        #expect(recordingApplier.calls.count == before)
     }
 
     @Test("The applied state records file, per-Space and fallback per display, and reads a version-1 file")

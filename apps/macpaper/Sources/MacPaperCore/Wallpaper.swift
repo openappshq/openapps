@@ -116,9 +116,10 @@ public struct Wallpaper: Codable, Hashable, Sendable {
     /// Every finish off, grain off: the render is the generator's own pixels.
     public var isPlain: Bool { grain == 0 && finish.isEmpty }
 
-    /// `#000000` with nothing on top: exact zeros on every pixel.
+    /// `#000000` with nothing on top — no finish, no grain, no composition,
+    /// a still — so every pixel of every side is exact zeros.
     public var isTrueBlack: Bool {
-        if case .solid(let p) = generator, p.color == .black { return isPlain && composition != .pill }
+        if case .solid(let p) = generator, p.color == .black { return isPlain && composition == .none && pair == .still && (darkGenerator == nil || darkGenerator == generator) }
         return false
     }
 
@@ -441,9 +442,11 @@ public enum Generator: Hashable, Sendable {
 
     /// The dark side derived from the light one: every color's OKLCH
     /// lightness folded down (0 → 0.12, 1 → 0.47), hue and chroma kept
-    /// (chroma capped so a bright color does not glow in the dark).
+    /// (chroma capped so a bright color does not glow in the dark). Pure
+    /// black stays pure black, so true black is exact zeros on both sides.
     public func darkened() -> Generator {
         recolored { color in
+            if color.red == 0, color.green == 0, color.blue == 0 { return color }
             var lch = OKLCH(color)
             lch.l = 0.12 + 0.35 * lch.l
             lch.c = min(lch.c, 0.12)

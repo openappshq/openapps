@@ -33,7 +33,29 @@ final class DesktopKeeper {
         observers.append(DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.check(reason: "unlocked") }
         })
+        // Turning the pin off drops a pending check; an apply landing
+        // re-checks, so a check deferred while applying is not lost.
+        observeChanges({ [preferences] in _ = preferences.keepApplied }, onChange: { [weak self] in
+            guard let self else { return }
+            if !self.preferences.keepApplied { self.cancelPending(reason: "off") } else { self.check(reason: "turned on") }
+        })
+        observeChanges({ [model] in _ = model.isApplying }, onChange: { [weak self] in
+            guard let self, !self.model.isApplying, self.deferredReason != nil else { return }
+            let reason = self.deferredReason ?? "applied"
+            self.deferredReason = nil
+            self.check(reason: reason)
+        })
         check(reason: "launch")
+    }
+
+    /// A check that arrived while an apply was in flight: run after it lands.
+    private var deferredReason: String?
+
+    private func cancelPending(reason: String) {
+        debounce?.cancel()
+        debounce = nil
+        deferredReason = nil
+        lastReport = reason
     }
 
     deinit {
@@ -50,7 +72,7 @@ final class DesktopKeeper {
     /// gives macOS a moment to settle before asking what it shows.
     func check(reason: String) {
         guard preferences.keepApplied else {
-            lastReport = "off"
+            cancelPending(reason: "off")
             return
         }
         debounce?.cancel()
@@ -62,6 +84,18 @@ final class DesktopKeeper {
     }
 
     private func reapplyIfNeeded(reason: String) {
+        // Asked again at execution: the setting may have gone off meanwhile.
+        guard preferences.keepApplied else {
+            lastReport = "off"
+            return
+        }
+        // Never while an apply is landing: the desktop may already show the
+        // new file the model has not recorded yet. Re-run once it has.
+        guard !model.isApplying else {
+            deferredReason = reason
+            lastReport = "\(reason): deferred until the apply lands"
+            return
+        }
         let state = model.appliedState
         let connected = Set(model.displays.map(\.id))
         let displays = PinPolicy.displaysToReapply(
