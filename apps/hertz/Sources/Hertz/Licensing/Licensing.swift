@@ -40,11 +40,18 @@ nonisolated enum LicensingCopy {
     static let privacy = "Official builds include a 3-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, what you type, and how you use Hertz are never sent. Builds from source never contact the license service."
 
     /// What Hertz reads and where it goes: the readings never leave the Mac.
-    /// The licensed build adds the two calls above; a source build makes none.
+    /// The official build adds the two calls above and the update check
+    /// (a plain GET of the signed feed, RELEASES.md); a source build makes
+    /// none.
     static var readings: String {
-        Licensing.isCompiledIn
-            ? "Every reading comes from this Mac’s kernel and stays here. The only network calls are the license check and the trial registry, described under License."
-            : "Every reading comes from this Mac’s kernel and stays here. This build from source makes no network calls at all."
+        switch (Licensing.isCompiledIn, Updating.isCompiledIn) {
+        case (true, true):
+            "Every reading comes from this Mac’s kernel and stays here. The only network calls are the license check and the trial registry, described under License, and the update check, described under Updates."
+        case (true, false):
+            "Every reading comes from this Mac’s kernel and stays here. The only network calls are the license check and the trial registry, described under License."
+        case (false, _):
+            "Every reading comes from this Mac’s kernel and stays here. This build from source makes no network calls at all."
+        }
     }
 }
 

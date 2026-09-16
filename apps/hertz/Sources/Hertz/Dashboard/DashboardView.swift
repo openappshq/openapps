@@ -6,13 +6,14 @@ import SwiftUI
 /// The menu-bar dropdown: a scrolling stack of glass cards, one per reading,
 /// with the health score first and the app's own controls in a fixed footer.
 /// While the license keeps the readings off, the stack is one card saying
-/// why (`LicenseCard`); the footer stays.
+/// why (`LicenseCard`); the footer stays, and with it the update hint.
 struct DashboardView: View {
     static let width: CGFloat = 400
 
     let model: MetricsModel
     let preferences: Preferences
     let license: LicenseStatus
+    let updates: UpdateStatus
     let showSettings: () -> Void
     @State private var cleanup = CleanupModel()
 
@@ -36,7 +37,7 @@ struct DashboardView: View {
                 LicenseCard(restriction: restriction, status: license)
                     .padding(Brand.Space.s12)
                 Divider()
-                FooterBar(showSettings: showSettings)
+                FooterBar(updates: updates, showSettings: showSettings)
             }
             .frame(width: Self.width)
         } else {
@@ -48,7 +49,7 @@ struct DashboardView: View {
                     .padding(Brand.Space.s12)
                 }
                 Divider()
-                FooterBar(showSettings: showSettings)
+                FooterBar(updates: updates, showSettings: showSettings)
             }
             .frame(width: Self.width, height: menuHeight)
         }
@@ -148,7 +149,11 @@ private struct HealthCard: View {
 
 // MARK: - Footer
 
+/// Version, Settings… and Quit; while an update asks for something, its
+/// line and action take the version's place (RELEASES.md, "In-app
+/// updater": "Update available — Install", "Update ready — Restart").
 private struct FooterBar: View {
+    let updates: UpdateStatus
     let showSettings: () -> Void
 
     private var version: String {
@@ -157,12 +162,23 @@ private struct FooterBar: View {
     }
 
     var body: some View {
+        // Asked on every body: the footer follows the updater's phase.
+        let hint = updates.hint()
         HStack(spacing: Brand.Space.s12) {
             Image(nsImage: AppResources.menuBarImage())
                 .renderingMode(.template)
                 .foregroundStyle(Brand.textSecondary)
                 .accessibilityHidden(true)
-            MonoLabel(version)
+            MonoLabel(FooterCopy.line(for: hint, version: version))
+            if let action = FooterCopy.action(for: hint) {
+                Button(action) {
+                    switch hint {
+                    case .ready: updates.restart()
+                    default: updates.install()
+                    }
+                }
+                .buttonStyle(LinkButtonStyle())
+            }
             Spacer()
             Button("Settings…", action: showSettings)
                 .buttonStyle(LinkButtonStyle())
@@ -174,5 +190,27 @@ private struct FooterBar: View {
         .padding(.horizontal, Brand.Space.s16)
         .padding(.vertical, Brand.Space.s8)
         .frame(minHeight: 40)
+    }
+}
+
+/// What the footer prints for each update state, next to nothing else.
+nonisolated enum FooterCopy {
+    /// The line where the version normally is.
+    static func line(for hint: UpdateHint?, version: String) -> String {
+        switch hint {
+        case nil: version
+        case .available(let new): "Hertz \(new) available"
+        case .downloading(let new): "Downloading \(new)…"
+        case .ready: "Update ready"
+        }
+    }
+
+    /// The one action beside it, or nil while nothing is asked.
+    static func action(for hint: UpdateHint?) -> String? {
+        switch hint {
+        case .available: "Install"
+        case .ready: "Restart"
+        case nil, .downloading: nil
+        }
     }
 }

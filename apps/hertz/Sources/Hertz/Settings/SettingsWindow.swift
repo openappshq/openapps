@@ -33,6 +33,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     #if OPENAPPS_LICENSING
     private let license: LicenseController?
     #endif
+    #if OPENAPPS_OFFICIAL
+    /// The updater's wiring (RELEASES.md); nil when the official build has
+    /// no feed or key in its Info.plist. Independent of the license.
+    var updates: Updates?
+    #endif
 
     #if OPENAPPS_LICENSING
     init(model: MetricsModel, preferences: Preferences, loginItem: LoginItem, license: LicenseController?, showGuide: @escaping () -> Void) {
@@ -54,9 +59,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show() {
         if window == nil {
             #if OPENAPPS_LICENSING
-            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, license: license, navigation: navigation, showGuide: showGuide)
+            var root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, license: license, navigation: navigation, showGuide: showGuide)
             #else
-            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, navigation: navigation, showGuide: showGuide)
+            var root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, navigation: navigation, showGuide: showGuide)
+            #endif
+            #if OPENAPPS_OFFICIAL
+            root.updates = updates
             #endif
             let hostingView = NSHostingView(rootView: root)
             let window = NSWindow(
@@ -99,10 +107,12 @@ private struct SettingsView: View {
     #if OPENAPPS_LICENSING
     let license: LicenseController?
     #endif
+    #if OPENAPPS_OFFICIAL
+    var updates: Updates? = nil
+    #endif
     let navigation: SettingsNavigation
     let showGuide: () -> Void
     @State private var copied = false
-    @State private var copiedCommand = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -116,7 +126,7 @@ private struct SettingsView: View {
                 }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: Licensing.isCompiledIn ? 640 : 560)
+        .frame(width: 520, height: Licensing.isCompiledIn ? 700 : 560)
     }
 
     private var form: some View {
@@ -160,33 +170,13 @@ private struct SettingsView: View {
             }
             #endif
 
-            // TODO: adopt packages/openapps-updater (the shared signed-feed
-            // updater with "Check now" and automatic checks on by default)
-            // once Hertz has a feed; until then Homebrew is the update path
-            // (RELEASES.md).
-            Section {
-                LabeledContent("Version") {
-                    Text(Diagnostics.versionString).font(Brand.mono(12)).textSelection(.enabled)
-                }
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: Brand.Space.s4) {
-                        Text("Hertz is installed and updated with Homebrew. It never checks for updates on its own.")
-                            .font(Brand.body(12))
-                            .foregroundStyle(Brand.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(Diagnostics.upgradeCommand)
-                            .font(Brand.mono(12))
-                            .textSelection(.enabled)
-                    }
-                    Spacer()
-                    Button(copiedCommand ? "Copied" : "Copy Command") {
-                        copyToPasteboard(Diagnostics.upgradeCommand)
-                        copiedCommand = true
-                    }
-                }
-            } header: {
-                MonoLabel("Updates")
-            }
+            // The shared updater in official builds (RELEASES.md, "In-app
+            // updater"); a build from source has none and says so.
+            #if OPENAPPS_OFFICIAL
+            UpdatesSection(updates: updates)
+            #else
+            UpdatesSection()
+            #endif
 
             Section {
                 HStack(alignment: .top) {
@@ -255,8 +245,6 @@ struct LoginItemToggle: View {
 
 /// Plain-text state for bug reports. Only shown or copied on request.
 enum Diagnostics {
-    static let upgradeCommand = "brew upgrade --cask hertz"
-
     static var versionString: String {
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "dev"
