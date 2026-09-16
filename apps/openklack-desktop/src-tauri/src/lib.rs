@@ -422,6 +422,11 @@ fn resume_temporarily(state: tauri::State<'_, Arc<Controller>>) -> Snapshot {
     state.resume_temporarily()
 }
 
+#[tauri::command]
+fn end_temporary_resume(state: tauri::State<'_, Arc<Controller>>) -> Snapshot {
+    state.end_temporary_resume()
+}
+
 pub fn show_settings(app: &tauri::AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("settings") {
         window.show()?;
@@ -474,6 +479,14 @@ fn tray_menu(app: &tauri::AppHandle, state: &Snapshot) -> tauri::Result<Menu<tau
             app,
             "resume",
             "Resume temporarily",
+            true,
+            None::<&str>,
+        )?)?;
+    } else if state.resumed_reason.is_some() {
+        menu.append(&MenuItem::with_id(
+            app,
+            "pause-again",
+            "Pause again",
             true,
             None::<&str>,
         )?)?;
@@ -583,6 +596,7 @@ pub fn run() {
             preview_key,
             request_input_permission,
             resume_temporarily,
+            end_temporary_resume,
             import_sounds,
             export_preset,
             refresh_official_packs,
@@ -657,6 +671,10 @@ pub fn run() {
                     let controller = app.state::<Arc<Controller>>().inner().clone();
                     if id == "resume" {
                         controller.resume_temporarily();
+                        return;
+                    }
+                    if id == "pause-again" {
+                        controller.end_temporary_resume();
                         return;
                     }
                     let effective = controller.snapshot().effective_preset_id;

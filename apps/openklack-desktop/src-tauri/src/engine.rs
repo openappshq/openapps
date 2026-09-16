@@ -38,6 +38,8 @@ pub struct Snapshot {
     pub preferences: Preferences,
     pub runtime: Runtime,
     pub pause_reason: Option<String>,
+    /// The pause a temporary resume is overriding, while that resume is what keeps playback on.
+    pub resumed_reason: Option<String>,
     pub effective_preset_id: String,
     pub recovery_notices: Vec<String>,
     /// Whether this build includes licensing; source builds hide the License section.
@@ -215,32 +217,11 @@ impl Controller {
                             let _ = worker.app.emit("keys-reset", ());
                         }
                         Message::Native(kind, value, text, _) => {
-                            {
-                                let mut runtime = worker.runtime.lock().unwrap();
-                                match kind {
-                                    100 => runtime.input_permission = value != 0,
-                                    101 => {
-                                        if runtime.resume_app.is_none() && matches!(value, 0 | 3) {
-                                            runtime.temporary_resume = false;
-                                        }
-                                        runtime.microphone = value;
-                                    }
-                                    102 => runtime.suspended = value != 0,
-                                    104 => {
-                                        if runtime
-                                            .resume_app
-                                            .as_ref()
-                                            .is_some_and(|app| app != &text)
-                                        {
-                                            runtime.temporary_resume = false;
-                                            runtime.resume_app = None;
-                                        }
-                                        runtime.frontmost_app = text;
-                                    }
-                                    105 => runtime.secure_input = value != 0,
-                                    _ => {}
-                                }
-                            }
+                            worker
+                                .runtime
+                                .lock()
+                                .unwrap()
+                                .apply_native(kind, value, text);
                             if matches!(kind, 100 | 102 | 105) {
                                 pressed.clear();
                                 let _ = worker.app.emit("keys-reset", ());
@@ -379,6 +360,7 @@ impl Controller {
             version: self.app.package_info().version.to_string(),
             revision: playback.revision,
             pause_reason: runtime.pause_reason(&playback.prefs).map(str::to_owned),
+            resumed_reason: runtime.resumed_reason(&playback.prefs).map(str::to_owned),
             effective_preset_id: playback.prefs.preset(&runtime.frontmost_app).id.clone(),
             preferences: playback.prefs.clone(),
             runtime,
@@ -541,6 +523,14 @@ impl Controller {
                 runtime.temporary_resume = true;
             }
         }
+        self.publish();
+        self.snapshot()
+    }
+
+    /// "Pause again": ends a temporary resume so the pause it overrode applies again.
+    pub fn end_temporary_resume(&self) -> Snapshot {
+        self.runtime.lock().unwrap().end_temporary_resume();
+        self.cancel();
         self.publish();
         self.snapshot()
     }

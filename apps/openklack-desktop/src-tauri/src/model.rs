@@ -431,12 +431,27 @@ fn percent(value: f32) -> Result<(), String> {
     }
 }
 
+/// Where the Mac's default output plays. The pause for the microphone exists so the people on
+/// a call don't hear the sounds, which only happens through the built-in speakers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputRoute {
+    /// The built-in speakers; assumed until the native bridge reports, so a call is never
+    /// surprised by a clack.
+    #[default]
+    Speakers,
+    /// Headphones, AirPods, Bluetooth, USB, HDMI, DisplayPort, AirPlay, virtual devices, or no
+    /// output at all: nobody else hears the sounds.
+    Other,
+}
+
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Runtime {
     pub input_permission: bool,
     pub secure_input: bool,
     pub microphone: u16,
+    pub output_route: OutputRoute,
     pub suspended: bool,
     pub temporary_resume: bool,
     #[serde(skip)]
@@ -491,12 +506,74 @@ impl Runtime {
             .any(|r| r.bundle_id == self.frontmost_app && r.mute)
         {
             Some("Paused for this app")
-        } else if prefs.pause_on_microphone && self.microphone == 1 {
+        } else if self.microphone_pauses(prefs) && self.microphone == 1 {
             Some("Microphone in use")
-        } else if prefs.pause_on_microphone && self.microphone == 2 {
+        } else if self.microphone_pauses(prefs) && self.microphone == 2 {
             Some("Checking microphone activity")
         } else {
             None
+        }
+    }
+
+    /// The microphone only pauses playback when the sounds would reach the call: through the
+    /// built-in speakers. Headphones and every other output keep playing.
+    fn microphone_pauses(&self, prefs: &Preferences) -> bool {
+        prefs.pause_on_microphone && self.output_route == OutputRoute::Speakers
+    }
+
+    /// The pause a temporary resume is overriding, for the banner. `None` when the resume is
+    /// not what keeps playback going: it is off, a stronger reason pauses anyway, or nothing is
+    /// left to override.
+    pub fn resumed_reason(&self, prefs: &Preferences) -> Option<&'static str> {
+        if !self.temporary_resume || self.pause_reason(prefs).is_some() {
+            return None;
+        }
+        Runtime {
+            temporary_resume: false,
+            ..self.clone()
+        }
+        .pause_reason(prefs)
+    }
+
+    /// Ends a temporary resume: the pause it overrode applies again.
+    pub fn end_temporary_resume(&mut self) {
+        self.temporary_resume = false;
+        self.resume_app = None;
+    }
+
+    /// Applies a state message from the native bridge (the kinds are listed in `macos.m`).
+    /// A temporary resume for the microphone ends once there is nothing to override: the
+    /// microphone goes idle or unwatched, or the output leaves the speakers. One for an app
+    /// ends when another app comes to the front.
+    pub fn apply_native(&mut self, kind: i32, value: u16, text: String) {
+        match kind {
+            100 => self.input_permission = value != 0,
+            101 => {
+                if self.resume_app.is_none() && matches!(value, 0 | 3) {
+                    self.temporary_resume = false;
+                }
+                self.microphone = value;
+            }
+            102 => self.suspended = value != 0,
+            104 => {
+                if self.resume_app.as_ref().is_some_and(|app| app != &text) {
+                    self.end_temporary_resume();
+                }
+                self.frontmost_app = text;
+            }
+            105 => self.secure_input = value != 0,
+            106 => {
+                let route = if value == 1 {
+                    OutputRoute::Speakers
+                } else {
+                    OutputRoute::Other
+                };
+                if self.resume_app.is_none() && route != OutputRoute::Speakers {
+                    self.temporary_resume = false;
+                }
+                self.output_route = route;
+            }
+            _ => {}
         }
     }
 }
@@ -729,5 +806,135 @@ mod tests {
             .pause_reason(&prefs),
             Some("Microphone in use")
         );
+    }
+
+    /// Every combination of the setting, the microphone state, the output route and a
+    /// temporary resume. The microphone pauses playback only through the built-in speakers.
+    #[test]
+    fn the_microphone_pauses_playback_only_through_the_speakers() {
+        let mut prefs = Preferences::default();
+        for setting in [true, false] {
+            prefs.pause_on_microphone = setting;
+            for route in [OutputRoute::Speakers, OutputRoute::Other] {
+                for microphone in 0..=3 {
+                    for temporary_resume in [false, true] {
+                        let runtime = Runtime {
+                            input_permission: true,
+                            audio_ready: true,
+                            microphone,
+                            output_route: route,
+                            temporary_resume,
+                            ..Runtime::default()
+                        };
+                        let expected = match (setting, route, microphone, temporary_resume) {
+                            (true, OutputRoute::Speakers, 1, false) => Some("Microphone in use"),
+                            (true, OutputRoute::Speakers, 2, false) => {
+                                Some("Checking microphone activity")
+                            }
+                            _ => None,
+                        };
+                        assert_eq!(
+                            runtime.pause_reason(&prefs),
+                            expected,
+                            "setting {setting}, {route:?}, microphone {microphone}, resumed {temporary_resume}"
+                        );
+                        assert_eq!(runtime.can_resume(&prefs), expected.is_some());
+                        assert_eq!(
+                            runtime.resumed_reason(&prefs),
+                            Runtime {
+                                temporary_resume: false,
+                                ..runtime.clone()
+                            }
+                            .pause_reason(&prefs)
+                            .filter(|_| temporary_resume),
+                            "the banner names what a resume overrides"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_output_route_moves_the_microphone_pause_with_it() {
+        let prefs = Preferences::default();
+        let mut runtime = Runtime {
+            input_permission: true,
+            audio_ready: true,
+            microphone: 1,
+            ..Runtime::default()
+        };
+        assert_eq!(
+            runtime.output_route,
+            OutputRoute::Speakers,
+            "the speakers are assumed until the bridge reports"
+        );
+        assert_eq!(runtime.pause_reason(&prefs), Some("Microphone in use"));
+        // Headphones go in: the pause lifts.
+        runtime.apply_native(106, 0, String::new());
+        assert_eq!(runtime.output_route, OutputRoute::Other);
+        assert_eq!(runtime.pause_reason(&prefs), None);
+        // Back to the speakers while the microphone is still in use: paused again.
+        runtime.apply_native(106, 1, String::new());
+        assert_eq!(runtime.pause_reason(&prefs), Some("Microphone in use"));
+        // A temporary resume for the microphone ends when the output leaves the speakers, so
+        // returning to them pauses again instead of staying overridden.
+        runtime.temporary_resume = true;
+        assert_eq!(runtime.pause_reason(&prefs), None);
+        assert_eq!(runtime.resumed_reason(&prefs), Some("Microphone in use"));
+        runtime.apply_native(106, 0, String::new());
+        assert!(!runtime.temporary_resume);
+        assert_eq!(runtime.resumed_reason(&prefs), None);
+        runtime.apply_native(106, 1, String::new());
+        assert_eq!(runtime.pause_reason(&prefs), Some("Microphone in use"));
+        // A resume that is for an app survives the route change, as it survives the microphone
+        // going idle.
+        runtime.temporary_resume = true;
+        runtime.resume_app = Some("com.example.app".into());
+        runtime.apply_native(106, 0, String::new());
+        assert!(runtime.temporary_resume);
+        runtime.apply_native(101, 0, String::new());
+        assert!(runtime.temporary_resume);
+        runtime.apply_native(104, 0, "com.example.other".into());
+        assert!(!runtime.temporary_resume);
+        assert_eq!(runtime.resume_app, None);
+    }
+
+    #[test]
+    fn the_resume_banner_names_what_it_overrides_and_pause_again_ends_it() {
+        let mut prefs = Preferences::default();
+        prefs.app_rules.push(AppRule {
+            bundle_id: "com.example.app".into(),
+            name: "Example".into(),
+            preset_id: None,
+            mute: true,
+        });
+        let mut runtime = Runtime {
+            input_permission: true,
+            audio_ready: true,
+            frontmost_app: "com.example.app".into(),
+            microphone: 1,
+            ..Runtime::default()
+        };
+        assert_eq!(runtime.resumed_reason(&prefs), None);
+        runtime.temporary_resume = true;
+        runtime.resume_app = Some("com.example.app".into());
+        assert_eq!(runtime.resumed_reason(&prefs), Some("Paused for this app"));
+        // A stronger pause hides the resume: nothing is playing anyway.
+        prefs.muted = true;
+        assert_eq!(runtime.resumed_reason(&prefs), None);
+        prefs.muted = false;
+        // The rule goes away: the resume now overrides the microphone pause instead.
+        prefs.app_rules.clear();
+        assert_eq!(runtime.pause_reason(&prefs), None);
+        assert_eq!(runtime.resumed_reason(&prefs), Some("Microphone in use"));
+        // Nothing left to override: the resume is idle and the banner has nothing to say.
+        runtime.microphone = 0;
+        assert!(runtime.temporary_resume);
+        assert_eq!(runtime.resumed_reason(&prefs), None);
+        runtime.microphone = 1;
+        runtime.end_temporary_resume();
+        assert!(!runtime.temporary_resume && runtime.resume_app.is_none());
+        assert_eq!(runtime.pause_reason(&prefs), Some("Microphone in use"));
     }
 }

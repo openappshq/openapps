@@ -4,14 +4,26 @@
 #import <CoreAudio/CoreAudio.h>
 #include <stdatomic.h>
 
+// Messages to Rust (`engine.rs` applies them): kind, value, text.
+//   0 key down, 1 key up (key code, logical key name); 2 forget held keys
+//   100 Input Monitoring permission: 1 granted
+//   101 microphone: 0 idle, 1 in use, 2 unknown, 3 detection unavailable
+//   102 Mac resting (sleep, screens off, session inactive): 1 paused
+//   103 default output device changed; reopen the audio output
+//   104 frontmost app changed (bundle identifier in text)
+//   105 secure input: 1 active
+//   106 default output route: 1 built-in speakers, 0 anything else (headphones jack,
+//       Bluetooth, USB, HDMI, DisplayPort, AirPlay, virtual devices, no device)
 typedef void (*OKCallback)(int kind, unsigned short key, const char *value);
 static OKCallback callback;
 static CFMachPortRef keyTap;
 static CFRunLoopSourceRef keySource;
 static char logicalKeys[128][40];
 static NSMutableSet<NSNumber *> *processes;
-static AudioObjectPropertyListenerBlock inputListener;
-static int lastPermission = -1, lastSecure = -1, lastMic = -1;
+static AudioObjectPropertyListenerBlock inputListener, dataSourceListener;
+static AudioObjectID outputDevice = kAudioObjectUnknown;
+static bool dataSourceWatched;
+static int lastPermission = -1, lastSecure = -1, lastMic = -1, lastRoute = -1;
 static dispatch_source_t permissionTimer;
 static unsigned int suspensionReasons;
 
@@ -212,6 +224,50 @@ static void refreshProcesses(void) {
     readMicrophone();
 }
 
+static AudioObjectPropertyAddress outputAddress(AudioObjectPropertySelector selector) {
+    return (AudioObjectPropertyAddress){selector, kAudioObjectPropertyScopeOutput,
+                                       kAudioObjectPropertyElementMain};
+}
+
+// 1 when the default output plays through the built-in speakers: the transport is built-in and
+// the output data source is the internal speaker ('ispk'), or the device does not say. The
+// headphones jack ('hdpn') and every other transport (Bluetooth, USB, HDMI, DisplayPort,
+// AirPlay, virtual devices) are 0, as is having no output device at all.
+static int outputRoute(AudioObjectID device) {
+    if (device == kAudioObjectUnknown) return 0;
+    UInt32 transport = 0, size = sizeof(transport);
+    AudioObjectPropertyAddress transportAddress = address(kAudioDevicePropertyTransportType);
+    if (AudioObjectGetPropertyData(device, &transportAddress, 0, NULL, &size, &transport) != noErr
+        || transport != kAudioDeviceTransportTypeBuiltIn) return 0;
+    UInt32 source = 0;
+    size = sizeof(source);
+    AudioObjectPropertyAddress sourceAddress = outputAddress(kAudioDevicePropertyDataSource);
+    if (!AudioObjectHasProperty(device, &sourceAddress)
+        || AudioObjectGetPropertyData(device, &sourceAddress, 0, NULL, &size, &source) != noErr) return 1;
+    return source == 'ispk';
+}
+
+// Follows the default output device: the data-source listener moves to the new device (the
+// jack on one built-in device flips the source between speakers and headphones), then the
+// route is sent when it differs from the last one.
+static void readOutputRoute(void) {
+    AudioObjectPropertyAddress defaultOutput = address(kAudioHardwarePropertyDefaultOutputDevice);
+    AudioObjectID device = kAudioObjectUnknown;
+    UInt32 size = sizeof(device);
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultOutput, 0, NULL, &size, &device) != noErr)
+        device = kAudioObjectUnknown;
+    AudioObjectPropertyAddress source = outputAddress(kAudioDevicePropertyDataSource);
+    if (device != outputDevice) {
+        if (dataSourceWatched)
+            AudioObjectRemovePropertyListenerBlock(outputDevice, &source, dispatch_get_main_queue(), dataSourceListener);
+        outputDevice = device;
+        dataSourceWatched = device != kAudioObjectUnknown && AudioObjectHasProperty(device, &source)
+            && AudioObjectAddPropertyListenerBlock(device, &source, dispatch_get_main_queue(), dataSourceListener) == noErr;
+    }
+    int route = outputRoute(device);
+    if (route != lastRoute) { lastRoute = route; sendState(106, route); }
+}
+
 void ok_request_permission(void) {
     CGRequestListenEventAccess();
     ensureTap();
@@ -246,7 +302,7 @@ void ok_start(OKCallback receive) {
                 (void)note; suspensionReasons &= ~(1u << index);
                 sendState(102, suspensionReasons != 0);
                 if (!suspensionReasons) sendState(103, 0);
-                ensureTap(); refreshProcesses();
+                ensureTap(); refreshProcesses(); readOutputRoute();
             }];
     }
     [[NSDistributedNotificationCenter defaultCenter]
@@ -259,10 +315,16 @@ void ok_start(OKCallback receive) {
     AudioObjectPropertyAddress list = address(kAudioHardwarePropertyProcessObjectList);
     AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &list, dispatch_get_main_queue(),
         ^(UInt32 count, const AudioObjectPropertyAddress *properties) { (void)count; (void)properties; refreshProcesses(); });
+    dataSourceListener = ^(UInt32 count, const AudioObjectPropertyAddress *properties) {
+        (void)count; (void)properties; readOutputRoute();
+    };
     AudioObjectPropertyAddress output = address(kAudioHardwarePropertyDefaultOutputDevice);
     AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &output, dispatch_get_main_queue(),
-        ^(UInt32 count, const AudioObjectPropertyAddress *properties) { (void)count; (void)properties; sendState(103, 0); });
+        ^(UInt32 count, const AudioObjectPropertyAddress *properties) {
+            (void)count; (void)properties; readOutputRoute(); sendState(103, 0);
+        });
     refreshProcesses();
+    readOutputRoute();
     callback(104, 0, NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier.UTF8String ?: "");
     ensureTap();
     permissionTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
