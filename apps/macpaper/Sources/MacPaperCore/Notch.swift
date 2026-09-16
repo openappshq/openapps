@@ -149,3 +149,88 @@ public enum FullscreenHeuristic {
         }
     }
 }
+
+// MARK: - The clock on the wallpaper layer
+
+public enum ClockStyle: String, Codable, CaseIterable, Hashable, Sendable {
+    case off, analog, digital
+
+    public var title: String {
+        switch self {
+        case .off: "Off"
+        case .analog: "Analog"
+        case .digital: "Digital"
+        }
+    }
+}
+
+public enum ClockPosition: String, Codable, CaseIterable, Hashable, Sendable {
+    case topLeft, topRight, center, bottomLeft, bottomRight
+
+    public var title: String {
+        switch self {
+        case .topLeft: "Top left"
+        case .topRight: "Top right"
+        case .center: "Center"
+        case .bottomLeft: "Bottom left"
+        case .bottomRight: "Bottom right"
+        }
+    }
+}
+
+public enum ClockSize: String, Codable, CaseIterable, Hashable, Sendable {
+    case small, medium, large
+
+    public var title: String {
+        switch self {
+        case .small: "Small"
+        case .medium: "Medium"
+        case .large: "Large"
+        }
+    }
+
+    /// The face's edge in points.
+    public var points: CGFloat {
+        switch self {
+        case .small: 160
+        case .medium: 240
+        case .large: 360
+        }
+    }
+}
+
+/// The clock's colors from the document it sits on: a face that reads over
+/// the document's mean (light or dark) and hands in its most saturated
+/// color, lightened or darkened to contrast with the face.
+public struct ClockPalette: Hashable, Sendable {
+    public let face: RGBAColor
+    public let hands: RGBAColor
+    public let ticks: RGBAColor
+
+    public static func make(for wallpaper: Wallpaper?, side: Side) -> ClockPalette {
+        let colors = wallpaper?.generator(for: side).colors ?? []
+        let mean = colors.isEmpty ? 0.5 : colors.reduce(0) { $0 + $1.luminance } / Double(colors.count)
+        let onDark = mean < 0.35
+        let face = onDark ? RGBAColor(red: 1, green: 1, blue: 1, alpha: 0.85) : RGBAColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 0.85)
+        var accent = OKLCH(colors.max { OKLCH($0).c < OKLCH($1).c } ?? RGBAColor(hex: 0xFF7A2F))
+        if accent.c < 0.04 { accent.c = 0.12 }
+        accent.l = onDark ? 0.78 : 0.42
+        return ClockPalette(face: face, hands: accent.color, ticks: face)
+    }
+
+    /// The clock's frame on a display, in the display's AppKit coordinates,
+    /// with a margin of one twelfth of the face.
+    public static func frame(in screen: CGRect, position: ClockPosition, size: ClockSize, menuBarHeight: CGFloat) -> CGRect {
+        let edge = size.points
+        let margin = edge / 6
+        let x: CGFloat, y: CGFloat
+        switch position {
+        case .topLeft: x = screen.minX + margin; y = screen.maxY - menuBarHeight - margin - edge
+        case .topRight: x = screen.maxX - margin - edge; y = screen.maxY - menuBarHeight - margin - edge
+        case .center: x = screen.midX - edge / 2; y = screen.midY - edge / 2
+        case .bottomLeft: x = screen.minX + margin; y = screen.minY + margin
+        case .bottomRight: x = screen.maxX - margin - edge; y = screen.minY + margin
+        }
+        return CGRect(x: x, y: y, width: edge, height: edge)
+    }
+}

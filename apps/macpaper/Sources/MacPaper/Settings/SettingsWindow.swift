@@ -2,6 +2,35 @@ import AppKit
 import MacPaperCore
 import SwiftUI
 
+/// Installs `macPaper.saver` for the user. The app's copies the bundle
+/// shipped in its Resources into `~/Library/Screen Savers/`; the preview
+/// harness installs nothing.
+protocol ScreenSaverInstaller {
+    /// Whether the app carries the saver at all (a `swift build` does not).
+    var isAvailable: Bool { get }
+    var isInstalled: Bool { get }
+    func install() throws
+}
+
+struct BundledScreenSaverInstaller: ScreenSaverInstaller {
+    static let name = "macPaper.saver"
+    var source: URL? { Bundle.main.url(forResource: "macPaper", withExtension: "saver") }
+    var destination: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Screen Savers/\(Self.name)")
+    }
+
+    var isAvailable: Bool { source != nil }
+    var isInstalled: Bool { FileManager.default.fileExists(atPath: destination.path) }
+
+    func install() throws {
+        guard let source else { throw CocoaError(.fileNoSuchFile) }
+        let folder = destination.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+        try FileManager.default.copyItem(at: source, to: destination)
+    }
+}
+
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let model: AppModel
     private let preferences: Preferences
@@ -9,6 +38,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let hotkeys: HotkeyCenter
     private let diagnostics: () -> String
     private var window: NSWindow?
+    /// Sections other wiring appends before About: the licensing ticket's
+    /// License and Updates. Set before the window first shows.
+    var extraSections: [AnyView] = []
+    var screenSaver: any ScreenSaverInstaller = BundledScreenSaverInstaller()
 
     init(model: AppModel, preferences: Preferences, loginItem: LoginItem, hotkeys: HotkeyCenter, diagnostics: @escaping () -> String) {
         self.model = model
@@ -20,7 +53,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func show() {
         if window == nil {
-            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: diagnostics)
+            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: diagnostics, extraSections: extraSections, screenSaver: screenSaver)
             let hostingView = NSHostingView(rootView: root)
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
@@ -54,7 +87,10 @@ struct SettingsView: View {
     let loginItem: LoginItem
     let hotkeys: HotkeyCenter
     let diagnostics: () -> String
+    var extraSections: [AnyView] = []
+    var screenSaver: any ScreenSaverInstaller = BundledScreenSaverInstaller()
     @State private var copied = false
+    @State private var saverNote: String?
     @Environment(\.previewRendering) private var previewRendering
 
     var body: some View {
@@ -65,6 +101,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: Brand.Space.s16) {
                 card { general }
                 card { wallpapers }
+                card { desktop }
                 card { about }
             }
             .padding(Brand.Space.s24)
@@ -74,13 +111,12 @@ struct SettingsView: View {
             Form {
                 general
                 wallpapers
-                #if OPENAPPS_LICENSING
-                // LicenseSection(license:navigation:) — the licensing ticket.
-                #endif
+                desktop
+                ForEach(Array(extraSections.enumerated()), id: \.offset) { _, section in section }
                 about
             }
             .formStyle(.grouped)
-            .frame(width: 540, height: 760)
+            .frame(width: 540, height: 820)
         }
     }
 
@@ -199,6 +235,12 @@ struct SettingsView: View {
                     note("Off: each display keeps its own, Apply offers this display or all, and Shuffle gives every display a different one.")
                 }
             }
+            Toggle(isOn: $preferences.keepApplied) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep it applied").font(Brand.body(14))
+                    note("Re-applies macPaper’s own file when macOS shows something else: at launch, on wake, on unlock, when the Space or the displays change. Displays applied “this Space only” are left alone.")
+                }
+            }
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Export folder").font(Brand.body(14))
@@ -207,8 +249,69 @@ struct SettingsView: View {
                 Spacer()
                 Button("Choose…") { chooseExportFolder() }
             }
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Never show").font(Brand.body(14))
+                    note(model.blockedCount == 0 ? "Nothing blocked. “Never show this” in the panel keeps a wallpaper out of shuffle." : "\(model.blockedCount) blocked from shuffle.")
+                }
+                Spacer()
+                Button("Clear") { model.clearBlocklist() }
+                    .disabled(model.blockedCount == 0)
+            }
+            note("Spaces: “Every Space” is kept by the pin as each Space becomes active. “This Space only” applies once; macOS gives no public Space identity, so it cannot be followed if System Settings → Desktop & Dock → “Automatically rearrange Spaces” is on.")
         } header: {
             MonoLabel("Wallpapers")
+        }
+    }
+
+    // MARK: - Desktop extras
+
+    private var desktop: some View {
+        Section {
+            Picker(selection: $preferences.clockStyle) {
+                ForEach(ClockStyle.allCases, id: \.self) { style in
+                    Text(style.title).tag(style)
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Clock").font(Brand.body(14))
+                    note("On the wallpaper layer, under the icons; hidden in fullscreen.")
+                }
+            }
+            Picker(selection: $preferences.clockPosition) {
+                ForEach(ClockPosition.allCases, id: \.self) { position in
+                    Text(position.title).tag(position)
+                }
+            } label: {
+                Text("Position").font(Brand.body(14))
+            }
+            .disabled(preferences.clockStyle == .off)
+            Picker(selection: $preferences.clockSize) {
+                ForEach(ClockSize.allCases, id: \.self) { size in
+                    Text(size.title).tag(size)
+                }
+            } label: {
+                Text("Size").font(Brand.body(14))
+            }
+            .disabled(preferences.clockStyle == .off)
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Screen saver").font(Brand.body(14))
+                    note(saverNote ?? (screenSaver.isInstalled ? "Installed in ~/Library/Screen Savers. Choose it in System Settings → Screen Saver." : (screenSaver.isAvailable ? "Shows the applied stills, and crossfades through the favorites. Installs into ~/Library/Screen Savers; you choose it in System Settings → Screen Saver." : "Available in the packaged app.")))
+                }
+                Spacer()
+                Button(screenSaver.isInstalled ? "Reinstall" : "Install screen saver") {
+                    do {
+                        try screenSaver.install()
+                        saverNote = "Installed. Choose macPaper in System Settings → Screen Saver."
+                    } catch {
+                        saverNote = "Couldn’t install: \(error.localizedDescription)"
+                    }
+                }
+                .disabled(!screenSaver.isAvailable)
+            }
+        } header: {
+            MonoLabel("Desktop")
         }
     }
 
@@ -227,6 +330,10 @@ struct SettingsView: View {
     private var about: some View {
         Section {
             Text(LicensingCopy.network)
+                .font(Brand.body(12))
+                .foregroundStyle(Brand.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Lock screen: since macOS Sonoma it shows the current desktop wallpaper, and there is no public way to set a separate one — so the lock screen follows the desktop, a light/dark pair included.")
                 .font(Brand.body(12))
                 .foregroundStyle(Brand.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

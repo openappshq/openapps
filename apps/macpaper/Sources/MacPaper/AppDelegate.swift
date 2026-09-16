@@ -1,5 +1,6 @@
 import AppKit
 import MacPaperCore
+import SwiftUI
 
 /// Owns the long-lived objects: the model, preferences, the login item, the
 /// status item and popover, the notch panels, the hotkey, the shuffle
@@ -15,6 +16,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeys: HotkeyCenter?
     private var shuffle: ShuffleEngine?
     private var settingsWindow: SettingsWindowController?
+    private(set) var keeper: DesktopKeeper?
+    private var theme: ThemeWatcher?
+    private var clock: ClockController?
+    /// Filled by the licensing wiring before the first panel or popover
+    /// shows: the trial pill above the preview.
+    var panelHeader: (() -> AnyView)?
+    /// Filled by the licensing wiring before Settings first shows.
+    var settingsSections: [AnyView] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -37,14 +46,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let statusItem = StatusItemController(model: model, showSettings: { [weak self] in self?.showSettings() }, quit: { NSApp.terminate(nil) })
         self.statusItem = statusItem
+        statusItem.header = { [weak self] in self?.panelHeader?() ?? AnyView(EmptyView()) }
         let notch = NotchHost(
             model: model, preferences: preferences,
             onOpenPopover: { [weak statusItem] in statusItem?.open() },
             showSettings: { [weak self] in self?.showSettings() },
             quit: { NSApp.terminate(nil) }
         )
+        notch.header = { [weak self] in self?.panelHeader?() ?? AnyView(EmptyView()) }
         self.notch = notch
         statusItem.beforeOpen = { [weak notch] in notch?.closeAll() }
+
+        // Apply, finished: the pin, the theme swap, shared links, the clock.
+        keeper = DesktopKeeper(model: model, preferences: preferences, desktop: WorkspaceDesktopApplier())
+        theme = ThemeWatcher { [weak model] in model?.themeChanged() }
+        registerURLHandler()
+        clock = ClockController(model: model, preferences: preferences)
 
         let hotkeys = HotkeyCenter()
         self.hotkeys = hotkeys
@@ -96,9 +113,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys ?? HotkeyCenter(),
             diagnostics: { [weak self] in
                 guard let self, let hotkeys = self.hotkeys else { return "" }
-                return Diagnostics.text(model: self.model, preferences: self.preferences, loginItem: self.loginItem, hotkeys: hotkeys)
+                return Diagnostics.text(model: self.model, preferences: self.preferences, loginItem: self.loginItem, hotkeys: hotkeys, keeper: self.keeper)
             }
         )
+        controller.extraSections = settingsSections
         settingsWindow = controller
         return controller
     }

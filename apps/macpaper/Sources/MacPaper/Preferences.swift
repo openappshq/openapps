@@ -54,6 +54,19 @@ final class Preferences {
     var exportFolder: URL {
         didSet { defaults.set(exportFolder.path, forKey: PreferenceKey.exportFolder) }
     }
+    /// Pin so it stays: re-apply macPaper's file when macOS shows something else.
+    var keepApplied: Bool {
+        didSet { defaults.set(keepApplied, forKey: PreferenceKey.keepApplied) }
+    }
+    var clockStyle: ClockStyle {
+        didSet { defaults.set(clockStyle.rawValue, forKey: PreferenceKey.clockStyle) }
+    }
+    var clockPosition: ClockPosition {
+        didSet { defaults.set(clockPosition.rawValue, forKey: PreferenceKey.clockPosition) }
+    }
+    var clockSize: ClockSize {
+        didSet { defaults.set(clockSize.rawValue, forKey: PreferenceKey.clockSize) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -72,6 +85,10 @@ final class Preferences {
         favoritesOnly = defaults.object(forKey: PreferenceKey.favoritesOnly) as? Bool ?? false
         sameOnAllDisplays = defaults.object(forKey: PreferenceKey.sameOnAllDisplays) as? Bool ?? true
         exportFolder = defaults.string(forKey: PreferenceKey.exportFolder).map { URL(fileURLWithPath: $0, isDirectory: true) } ?? AppPaths.defaultExportFolder
+        keepApplied = defaults.object(forKey: PreferenceKey.keepApplied) as? Bool ?? true
+        clockStyle = defaults.string(forKey: PreferenceKey.clockStyle).flatMap(ClockStyle.init(rawValue:)) ?? .off
+        clockPosition = defaults.string(forKey: PreferenceKey.clockPosition).flatMap(ClockPosition.init(rawValue:)) ?? .bottomRight
+        clockSize = defaults.string(forKey: PreferenceKey.clockSize).flatMap(ClockSize.init(rawValue:)) ?? .medium
     }
 
     /// The panel rules' view of the settings.

@@ -32,7 +32,13 @@ enum Diagnostics {
         )
     }
 
-    static func text(model: AppModel, preferences: Preferences, loginItem: LoginItem, hotkeys: HotkeyCenter) -> String {
-        snapshot(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys).text()
+    static func text(model: AppModel, preferences: Preferences, loginItem: LoginItem, hotkeys: HotkeyCenter, keeper: DesktopKeeper? = nil) -> String {
+        var text = snapshot(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys).text()
+        text += "\nKeep it applied: \(preferences.keepApplied ? "on" : "off") · last check \(keeper?.lastReport ?? "n/a")"
+        text += "\nPer-Space displays: \(model.appliedState.perSpaceDisplayIDs.sorted().map(String.init).joined(separator: ", "))"
+        text += "\nFallback stills: \(model.appliedState.fallbackDisplayIDs.sorted().map(String.init).joined(separator: ", "))"
+        text += "\nClock: \(preferences.clockStyle.rawValue) · \(preferences.clockPosition.rawValue) · \(preferences.clockSize.rawValue)"
+        text += "\nNever show: \(model.blockedCount)"
+        return text
     }
 }

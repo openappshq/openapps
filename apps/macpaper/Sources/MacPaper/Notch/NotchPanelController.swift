@@ -42,8 +42,12 @@ final class NotchPanelController {
 
     var isOpen: Bool { machine.isOpen }
 
-    init(display: DisplayInfo, screen: NSScreen, model: AppModel, preferences: Preferences, onOpenPopover: @escaping () -> Void, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
+    /// The licensing wiring's header (the trial pill); nil draws nothing.
+    let header: (() -> AnyView)?
+
+    init(display: DisplayInfo, screen: NSScreen, model: AppModel, preferences: Preferences, header: (() -> AnyView)? = nil, onOpenPopover: @escaping () -> Void, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.display = display
+        self.header = header
         self.screen = screen
         self.model = model
         self.preferences = preferences
@@ -76,9 +80,10 @@ final class NotchPanelController {
         panel.becomesKeyOnlyIfNeeded = true
         panel.isMovableByWindowBackground = false
         panel.animationBehavior = .none
-        let content = PanelContent(model: model, width: preferences.width.points, showSettings: showSettings, quit: quit)
+        let content = PanelContent(model: model, width: preferences.width.points, header: header?(), showSettings: showSettings, quit: quit)
         hosting = NSHostingView(rootView: content)
         let container = PanelContainerView(hosting: hosting)
+        container.onContentHeightChange = { [weak self] in self?.contentGrew() }
         panel.contentView = container
 
         let zone = HoverZoneView(frame: .zero)
@@ -151,8 +156,21 @@ final class NotchPanelController {
         hoverWindow.setFrame(zone, display: false)
     }
 
+    /// The content changed height (a taller generator, a status line): the
+    /// panel keeps its top against the menu bar and grows or shrinks down.
+    private func contentGrew() {
+        guard machine.isOpen else { return }
+        let size = hosting.fittingSize
+        guard abs(size.height - panel.frame.height) > 0.5 else { return }
+        let frame = NotchGeometry.panelFrame(
+            screenFrame: screen.frame, menuBarHeight: ScreenCatalog.menuBarHeight(of: screen), notch: ScreenCatalog.notch(of: screen),
+            width: preferences.width, contentHeight: size.height
+        )
+        panel.setFrame(frame, display: true)
+    }
+
     private func layoutPanel() {
-        hosting.rootView = PanelContent(model: model, width: preferences.width.points, showSettings: showSettings, quit: quit)
+        hosting.rootView = PanelContent(model: model, width: preferences.width.points, header: header?(), showSettings: showSettings, quit: quit)
         let size = hosting.fittingSize
         let frame = NotchGeometry.panelFrame(
             screenFrame: screen.frame, menuBarHeight: ScreenCatalog.menuBarHeight(of: screen), notch: ScreenCatalog.notch(of: screen),
@@ -240,11 +258,14 @@ final class NotchPanelController {
 struct PanelContent: View {
     let model: AppModel
     let width: CGFloat
+    var header: AnyView? = nil
     let showSettings: () -> Void
     let quit: () -> Void
+    var expandFinishes = false
+    var expandFavorites = false
 
     var body: some View {
-        WallpaperPanelView(model: model, attachedToNotch: true, width: width, showSettings: showSettings, quit: quit)
+        WallpaperPanelView(model: model, attachedToNotch: true, width: width, header: header, showSettings: showSettings, quit: quit, expandFinishes: expandFinishes, expandFavorites: expandFavorites)
             .background(PanelBackdrop())
             .clipShape(NotchPanelShape())
     }
@@ -322,13 +343,17 @@ final class HoverZoneView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-/// Holds the hosting view and reports the pointer entering and leaving.
+/// Holds the hosting view and reports the pointer entering and leaving,
+/// and the content wanting another height.
 final class PanelContainerView: NSView {
     var onEnter: () -> Void = {}
     var onExit: () -> Void = {}
+    var onContentHeightChange: () -> Void = {}
     private var tracking: NSTrackingArea?
+    private let hosting: NSView
 
     init(hosting: NSView) {
+        self.hosting = hosting
         super.init(frame: .zero)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         addSubview(hosting)
@@ -353,4 +378,12 @@ final class PanelContainerView: NSView {
 
     override func mouseEntered(with event: NSEvent) { onEnter() }
     override func mouseExited(with event: NSEvent) { onExit() }
+
+    /// SwiftUI resizes its hosting view's fitting size as the content
+    /// changes; when it no longer matches the window, the controller
+    /// re-frames the panel (which lays out again, and then matches).
+    override func layout() {
+        super.layout()
+        if abs(hosting.fittingSize.height - bounds.height) > 0.5 { onContentHeightChange() }
+    }
 }

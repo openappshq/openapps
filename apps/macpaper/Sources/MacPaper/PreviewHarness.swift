@@ -17,10 +17,15 @@ import SwiftUI
 /// are drawn with `ImageRenderer` (see `write`).
 @MainActor
 final class PreviewHarness {
-    nonisolated static let suite = "space.openapps.macpaper.preview"
+    /// The throwaway suite lives under the temporary directory (a suite
+    /// named by an absolute path is kept at that path), never in
+    /// ~/Library/Preferences, where a removed domain would be written back
+    /// as an empty plist.
+    nonisolated static let suiteDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("space.openapps.macpaper.preview-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    nonisolated static let suite = suiteDirectory.appendingPathComponent("defaults").path
 
     private let outputDirectory: URL
-    private let defaults = UserDefaults(suiteName: PreviewHarness.suite)!
+    private let defaults: UserDefaults
     private let paths: AppPaths
     private let preferences: Preferences
     private let license = LicenseStatus()
@@ -70,7 +75,8 @@ final class PreviewHarness {
 
     init(outputDirectory: URL) {
         self.outputDirectory = outputDirectory
-        defaults.removePersistentDomain(forName: Self.suite)
+        try? FileManager.default.createDirectory(at: Self.suiteDirectory, withIntermediateDirectories: true)
+        defaults = UserDefaults(suiteName: Self.suite)!
         paths = AppPaths(root: FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-preview-\(UUID().uuidString)", isDirectory: true))
         preferences = Preferences(defaults: defaults)
         preferences.sameOnAllDisplays = false
@@ -80,6 +86,8 @@ final class PreviewHarness {
             exporter: NoExport(), imagePicker: NoPicker(), displays: { PreviewHarness.displays }
         )
         model.setExportReveal { print("PREVIEW_REVEAL \($0.path)") }
+        model.accentColor = { RGBAColor(hex: 0x304BFF) }
+        model.copyToPasteboard = { print("PREVIEW_PASTEBOARD \($0.count) characters") }
         AppResources.registerFonts()
     }
 
@@ -87,6 +95,9 @@ final class PreviewHarness {
     func run() async -> Bool {
         defer {
             defaults.removePersistentDomain(forName: Self.suite)
+            defaults.removeSuite(named: Self.suite)
+            defaults.synchronize()
+            try? FileManager.default.removeItem(at: Self.suiteDirectory)
             try? FileManager.default.removeItem(at: paths.root)
         }
         do {
@@ -100,14 +111,15 @@ final class PreviewHarness {
         let source = WallpaperRenderer().render(Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: Palettes.all[1])), seed: 3), size: PixelSize(width: 640, height: 400))
         let sourceReference = try? model.imports.importImage(data: source.pngData() ?? Data())
         // The desktop of the drawn stage.
-        let backdrop = WallpaperRenderer().render(Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 3, colors: Palettes.all[3], jitter: 0.6, softness: 0.6)), seed: 11, grain: 0.05), size: PixelSize(width: 1200, height: 780)).cgImage
+        let backdrop = WallpaperRenderer().render(Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 3, colors: Palettes.all[3], jitter: 0.6, softness: 0.6)), seed: 11, grain: 0.05), size: PixelSize(width: 1200, height: 1100)).cgImage
 
         let documents: [(String, Wallpaper)] = [
             ("gradient", .starter),
-            ("mesh", Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: Palettes.all[1], jitter: 0.6, softness: 0.5)), seed: 42)),
-            ("pattern", Wallpaper(generator: .pattern(PatternParameters(kind: .dots, foreground: RGBAColor(hex: 0xFFB48A), background: RGBAColor(hex: 0x4A2114), scale: 64)), seed: 7, grain: 0.1)),
-            ("solid", Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0x236B48))), seed: 3, grain: 0.3)),
+            ("mesh", Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: Palettes.all[1], jitter: 0.6, softness: 0.5)), seed: 42, pair: .lightDark, composition: .emerge)),
+            ("pattern", Wallpaper(generator: .pattern(PatternParameters(kind: .dots, foreground: RGBAColor(hex: 0xFFB48A), background: RGBAColor(hex: 0x4A2114), scale: 64)), seed: 7, grain: 0.1, composition: .contours)),
+            ("solid", Wallpaper.trueBlack),
             ("pixelize", Wallpaper(generator: .pixelize(PixelizeParameters(source: sourceReference, blockSize: 24, paletteSize: 6, fit: .fill, background: .black)), seed: 5)),
+            ("dither", Wallpaper(generator: .dither(DitherParameters(source: sourceReference, mode: .floydSteinberg, cell: 3, ink: RGBAColor(hex: 0x141414), paper: RGBAColor(hex: 0xFFF1EA))), seed: 5, finish: Finish(duotone: Duotone(shadow: RGBAColor(hex: 0x242B55), highlight: RGBAColor(hex: 0xFFD528))), pair: .timeOfDay(frames: 8))),
         ]
         // The mesh is "on the desktop" of the built-in display.
         try? model.applied.update { $0.set(documents[1].1, for: 1); $0.lastApplied = Date() }
@@ -120,12 +132,21 @@ final class PreviewHarness {
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             let suffix = appearance == .aqua ? "light" : "dark"
             let scheme: ColorScheme = appearance == .aqua ? .light : .dark
+            model.systemAppearance = { appearance == .aqua ? .light : .dark }
+            model.editingSide = nil
             for (name, document) in documents {
                 model.draft = document
                 await waitForPreview()
-                let stage = NotchStage(backdrop: backdrop, content: PanelContent(model: model, width: preferences.width.points, showSettings: {}, quit: {}))
+                let stage = NotchStage(backdrop: backdrop, content: PanelContent(model: model, width: preferences.width.points, showSettings: {}, quit: {}, expandFinishes: name == "dither"))
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "panel-\(name)-\(suffix).png") { failures += 1 }
             }
+            // The dark side of the starter, edited, with the favorites open.
+            model.draft = documents[0].1
+            model.editingSide = .dark
+            await waitForPreview()
+            let darkSide = NotchStage(backdrop: backdrop, content: PanelContent(model: model, width: preferences.width.points, showSettings: {}, quit: {}, expandFavorites: true))
+            if await !write(darkSide, scheme: scheme, appearance: appearance, to: "panel-darkside-\(suffix).png") { failures += 1 }
+            model.editingSide = nil
             model.draft = documents[0].1
             await waitForPreview()
             if await !write(PopoverStage(model: model), scheme: scheme, appearance: appearance, to: "popover-\(suffix).png") { failures += 1 }
@@ -144,11 +165,13 @@ final class PreviewHarness {
     }
 
     /// The model renders previews off the main actor; the stage waits for
-    /// the draft's own.
+    /// the draft's own, on the shown side.
     private func waitForPreview() async {
-        for _ in 0..<200 where model.previewWallpaper != model.draft {
+        for _ in 0..<300 where model.previewWallpaper != model.draft || model.previewSide != model.shownSide {
             try? await Task.sleep(for: .milliseconds(20))
         }
+        // The favorites' thumbnails render on their own tasks.
+        try? await Task.sleep(for: .milliseconds(250))
     }
 
     /// Draws the view with `ImageRenderer`, no window: the shared Mac's
@@ -210,7 +233,7 @@ private struct NotchStage: View {
                 content
             }
         }
-        .frame(width: 900, height: 700, alignment: .top)
+        .frame(width: 900, height: 1000, alignment: .top)
         .clipped()
     }
 }

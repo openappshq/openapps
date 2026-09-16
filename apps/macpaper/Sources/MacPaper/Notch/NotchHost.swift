@@ -1,5 +1,6 @@
 import AppKit
 import MacPaperCore
+import SwiftUI
 
 /// Which displays host a panel, from the settings and the screens, and one
 /// controller per host. Follows display changes (a notched Mac closed, an
@@ -10,6 +11,8 @@ final class NotchHost {
     private let onOpenPopover: () -> Void
     private let showSettings: () -> Void
     private let quit: () -> Void
+    /// The licensing wiring's header (the trial pill); nil draws nothing.
+    var header: (() -> AnyView)?
     private(set) var controllers: [DisplayID: NotchPanelController] = [:]
     private let fullscreen = FullscreenWatcher()
     private var observers: [NSObjectProtocol] = []
@@ -79,7 +82,7 @@ final class NotchHost {
                 existing.update(screen: screen)
             } else {
                 controllers[id] = NotchPanelController(
-                    display: display, screen: screen, model: model, preferences: preferences,
+                    display: display, screen: screen, model: model, preferences: preferences, header: header,
                     onOpenPopover: onOpenPopover, showSettings: showSettings, quit: quit
                 )
                 controllers[id]?.handle(.settingsChanged(preferences.panelSettings))

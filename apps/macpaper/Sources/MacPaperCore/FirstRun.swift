@@ -33,10 +33,15 @@ public enum PreferenceKey {
     public static let favoritesOnly = "shuffle.favoritesOnly"
     public static let sameOnAllDisplays = "apply.sameOnAllDisplays"
     public static let exportFolder = "export.folder"
+    public static let keepApplied = "apply.keepApplied"
+    public static let clockStyle = "clock.style"
+    public static let clockPosition = "clock.position"
+    public static let clockSize = "clock.size"
 
     public static let all: [String] = [
         notchEnabled, hostDisplay, trigger, direction, width, hideInFullscreen, hotkey,
         shuffleInterval, favoritesOnly, sameOnAllDisplays, exportFolder,
+        keepApplied, clockStyle, clockPosition, clockSize,
     ]
 }
 

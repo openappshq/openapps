@@ -12,6 +12,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private var popover: NSPopover?
     /// Closes any open notch panel before the popover shows.
     var beforeOpen: () -> Void = {}
+    /// The licensing wiring's header (the trial pill); nil draws nothing.
+    var header: (() -> AnyView)?
 
     init(model: AppModel, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.model = model
@@ -47,7 +49,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             popover.behavior = .transient
             popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             popover.delegate = self
-            popover.contentViewController = NSHostingController(rootView: PopoverContent(model: model, showSettings: showSettings, quit: quit))
+            popover.contentViewController = NSHostingController(rootView: PopoverContent(model: model, header: header?(), showSettings: showSettings, quit: quit))
             self.popover = popover
         }
         // The popover speaks for the display the menu bar item is on.
@@ -71,10 +73,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
 private struct PopoverContent: View {
     let model: AppModel
+    var header: AnyView? = nil
     let showSettings: () -> Void
     let quit: () -> Void
 
     var body: some View {
-        WallpaperPanelView(model: model, showSettings: showSettings, quit: quit)
+        WallpaperPanelView(model: model, header: header, showSettings: showSettings, quit: quit)
     }
 }
