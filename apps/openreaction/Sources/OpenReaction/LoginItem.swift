@@ -21,7 +21,7 @@ struct MainAppLoginItemService: LoginItemService {
 
 /// "Open at login" through `SMAppService.mainApp`. Official builds turn it
 /// on once, on the first launch of a fresh install (`applyDefaultIfNeeded`,
-/// `LoginItemDefault`); the Settings toggle decides from then on. The
+/// `FreshInstallDefault`); the Settings toggle decides from then on. The
 /// status is always re-read from the system, since the user can remove the
 /// item in System Settings at any time.
 @MainActor
@@ -31,11 +31,11 @@ final class LoginItem {
     private(set) var errorMessage: String?
     @ObservationIgnored private let service: any LoginItemService
     /// Created at launch, before this launch writes any preferences.
-    @ObservationIgnored private let launchDefault: LoginItemDefault
+    @ObservationIgnored private let launchDefault: FreshInstallDefault
 
     init(flags: any FlagStore = UserDefaults.standard, service: any LoginItemService = MainAppLoginItemService()) {
         self.service = service
-        launchDefault = LoginItemDefault(store: flags)
+        launchDefault = .loginItem(store: flags)
         refresh()
     }
 
@@ -67,7 +67,7 @@ final class LoginItem {
     func applyDefaultIfNeeded(storageIsFresh: Bool?) {
         guard isAvailable, storageIsFresh != nil, !launchDefault.isDecided else { return }
         refresh()
-        guard launchDefault.shouldRegister(isRegistered: isOn, storageIsFresh: storageIsFresh) else { return }
+        guard launchDefault.shouldTurnOn(isOn: isOn, storageIsFresh: storageIsFresh) else { return }
         register(true)
     }
 

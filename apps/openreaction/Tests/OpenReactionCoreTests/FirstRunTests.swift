@@ -95,71 +95,140 @@ struct OnboardingLaunchTests {
     }
 }
 
-@Suite("Login item default")
-struct LoginItemDefaultTests {
-    @Test func freshInstallRegistersOnce() {
-        let store = MemoryFlags()
-        let launch = LoginItemDefault(store: store)
-        #expect(launch.shouldRegister(isRegistered: false, storageIsFresh: true))
-        #expect(store.values[LoginItemDefault.Key.applied] == true)
-        // Turned off later (Settings or System Settings): the next launches leave it off.
-        let next = LoginItemDefault(store: store)
-        #expect(!next.shouldRegister(isRegistered: false, storageIsFresh: true))
-        #expect(!next.shouldRegister(isRegistered: false, storageIsFresh: true))
+@Suite("Fresh-install defaults")
+struct FreshInstallDefaultTests {
+    /// Both settings follow one rule under their own flag; the login item
+    /// and the update check are the same decision with a different key, so
+    /// every case runs for each.
+    static let keys = [FreshInstallDefault.Key.loginItemApplied, FreshInstallDefault.Key.updateChecksApplied]
+
+    private func makeDefault(store: MemoryFlags, key: String) -> FreshInstallDefault {
+        FreshInstallDefault(store: store, key: key)
     }
 
-    @Test func storageStillUnknownDecidesNothing() {
+    @Test(arguments: Self.keys) func freshInstallTurnsOnOnce(key: String) {
         let store = MemoryFlags()
-        let launch = LoginItemDefault(store: store)
-        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: nil))
-        #expect(store.values[LoginItemDefault.Key.applied] == nil, "not decided yet")
-        #expect(launch.shouldRegister(isRegistered: false, storageIsFresh: true))
+        let launch = makeDefault(store: store, key: key)
+        #expect(launch.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(store.values[key] == true)
+        // Turned off later (Settings, or System Settings for the login item): the next launches leave it off.
+        let next = makeDefault(store: store, key: key)
+        #expect(next.isDecided)
+        #expect(!next.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(!next.shouldTurnOn(isOn: false, storageIsFresh: true))
     }
 
-    @Test func upgradeWithPreferencesAndLoginOffIsLeftAlone() {
-        // An earlier version showed the guide (and never wrote the flag).
+    @Test(arguments: Self.keys) func storageStillUnknownDecidesNothing(key: String) {
+        let store = MemoryFlags()
+        let launch = makeDefault(store: store, key: key)
+        #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: nil))
+        #expect(store.values[key] == nil, "not decided yet")
+        #expect(!launch.isDecided)
+        #expect(launch.shouldTurnOn(isOn: false, storageIsFresh: true))
+    }
+
+    @Test(arguments: Self.keys) func upgradeWithPreferencesAndTheSettingOffIsLeftAlone(key: String) {
+        // An earlier version showed the guide (and never wrote the flag): the
+        // user could have set the toggle, so the default records itself as
+        // decided without touching it.
         let store = MemoryFlags()
         OnboardingLaunch.markShown(store: store)
-        let launch = LoginItemDefault(store: store)
+        let launch = makeDefault(store: store, key: key)
         #expect(launch.hadPreferences)
-        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: true))
-        #expect(store.values[LoginItemDefault.Key.applied] == true, "decided: never again")
-        #expect(!LoginItemDefault(store: store).shouldRegister(isRegistered: false, storageIsFresh: true))
+        #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(store.values[key] == true, "decided: never again")
+        #expect(!makeDefault(store: store, key: key).shouldTurnOn(isOn: false, storageIsFresh: true))
     }
 
-    @Test func preferencesWrittenByThisLaunchDoNotCount() {
+    @Test(arguments: Self.keys) func preferencesWrittenByThisLaunchDoNotCount(key: String) {
         // The guide opens (and records itself) before storage answers.
         let store = MemoryFlags()
-        let launch = LoginItemDefault(store: store)
+        let launch = makeDefault(store: store, key: key)
         OnboardingLaunch.markShown(store: store)
-        #expect(launch.shouldRegister(isRegistered: false, storageIsFresh: true))
+        #expect(launch.shouldTurnOn(isOn: false, storageIsFresh: true))
     }
 
-    @Test func anExplicitChoiceWhileStorageIsPendingIsNeverUndone() {
-        // Fresh launch, storage slow: the user turns the item on and off in
-        // Settings before storage answers; when it then says "fresh", the
+    @Test(arguments: Self.keys) func anExplicitChoiceWhileStorageIsPendingIsNeverUndone(key: String) {
+        // Fresh launch, storage slow: the user turns the setting on and off
+        // in Settings before storage answers; when it then says "fresh", the
         // default must not turn it back on.
         let store = MemoryFlags()
-        let launch = LoginItemDefault(store: store)
-        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: nil))
+        let launch = makeDefault(store: store, key: key)
+        #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: nil))
         #expect(!launch.isDecided)
         launch.markSuperseded() // on
         launch.markSuperseded() // off again
         #expect(launch.isDecided)
-        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: true))
-        #expect(!LoginItemDefault(store: store).shouldRegister(isRegistered: false, storageIsFresh: true))
+        #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(!makeDefault(store: store, key: key).shouldTurnOn(isOn: false, storageIsFresh: true))
     }
 
-    @Test func aKeptTrialOrLicenseRecordMeansNotFresh() {
+    @Test(arguments: Self.keys) func anExplicitChoiceBeforeLaunchIsNeverUndone(key: String) {
+        // A toggle set in Settings on an earlier launch whose storage never
+        // answered (the flag was recorded then): decided, whatever the value.
         let store = MemoryFlags()
-        let launch = LoginItemDefault(store: store)
-        #expect(!launch.shouldRegister(isRegistered: false, storageIsFresh: false))
-        #expect(store.values[LoginItemDefault.Key.applied] == true)
+        makeDefault(store: store, key: key).markSuperseded()
+        let launch = makeDefault(store: store, key: key)
+        #expect(launch.isDecided)
+        #expect(!launch.hadPreferences)
+        #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(!launch.shouldTurnOn(isOn: true, storageIsFresh: true))
     }
 
-    @Test func anAlreadyRegisteredItemNeedsNothing() {
+    @Test(arguments: Self.keys) func aKeptTrialOrLicenseRecordMeansNotFresh(key: String) {
         let store = MemoryFlags()
-        #expect(!LoginItemDefault(store: store).shouldRegister(isRegistered: true, storageIsFresh: true))
-        #expect(store.values[LoginItemDefault.Key.applied] == true)
+        let launch = makeDefault(store: store, key: key)
+        #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: false))
+        #expect(store.values[key] == true)
+    }
+
+    @Test(arguments: Self.keys) func aSettingAlreadyOnNeedsNothing(key: String) {
+        let store = MemoryFlags()
+        #expect(!makeDefault(store: store, key: key).shouldTurnOn(isOn: true, storageIsFresh: true))
+        #expect(store.values[key] == true)
+    }
+
+    @Test(arguments: Self.keys) func aLaterLaunchOfAFreshInstallNeverRevisits(key: String) {
+        // Decided on the first launch; a second launch finds the flag and
+        // asks nothing, even when storage still reports fresh and the user
+        // has since turned the setting off.
+        let store = MemoryFlags()
+        #expect(makeDefault(store: store, key: key).shouldTurnOn(isOn: false, storageIsFresh: true))
+        OnboardingLaunch.markShown(store: store)
+        let second = makeDefault(store: store, key: key)
+        #expect(second.isDecided)
+        #expect(!second.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(!second.shouldTurnOn(isOn: false, storageIsFresh: nil))
+    }
+}
+
+@Suite("Fresh-install defaults: two settings, two flags")
+struct FreshInstallDefaultKeysTests {
+    @Test func theTwoDefaultsAreDecidedIndependently() {
+        // Deciding one must not decide the other: an upgrade from a version
+        // that had only the login-item default still owes the update-check
+        // decision (and records it as "not fresh").
+        let store = MemoryFlags()
+        let loginItem = FreshInstallDefault.loginItem(store: store)
+        let updateChecks = FreshInstallDefault.updateChecks(store: store)
+        #expect(loginItem.key == FreshInstallDefault.Key.loginItemApplied)
+        #expect(updateChecks.key == FreshInstallDefault.Key.updateChecksApplied)
+        #expect(loginItem.key != updateChecks.key)
+
+        loginItem.markSuperseded()
+        #expect(loginItem.isDecided)
+        #expect(!updateChecks.isDecided)
+        #expect(updateChecks.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(store.values[FreshInstallDefault.Key.updateChecksApplied] == true)
+    }
+
+    @Test func theLoginItemFlagKeepsItsStoredName() {
+        // Installs that decided the login item under an earlier version must
+        // still read as decided.
+        #expect(FreshInstallDefault.Key.loginItemApplied == "loginItem.defaultApplied")
+        let store = MemoryFlags()
+        store.set(true, forKey: "loginItem.defaultApplied")
+        #expect(FreshInstallDefault.loginItem(store: store).isDecided)
+        #expect(!FreshInstallDefault.updateChecks(store: store).isDecided)
     }
 }

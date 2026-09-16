@@ -59,46 +59,64 @@ public enum OnboardingLaunch {
     }
 }
 
-/// "Open at login" defaults to on in official builds, but only on a
-/// demonstrably fresh install: no preferences from an earlier launch (of
-/// any version), and neither a trial nor a license record in the record
-/// store, both positively absent. Anything else — an upgrade, a reinstall
-/// over kept records, a login item the user once turned off — is left alone.
-/// Decided once; the flag makes every later launch leave the item as is.
-public struct LoginItemDefault {
+/// A setting official builds turn on once, on a demonstrably fresh install:
+/// no preferences from an earlier launch (of any version), and neither a
+/// trial nor a license record in the record store, both positively absent.
+/// Anything else — an upgrade, a reinstall over kept records, a setting the
+/// user once turned off — is left alone. Decided once; the flag makes every
+/// later launch leave the setting as is. Two settings follow this rule
+/// (RELEASES.md, "In-app updater"): "Open at login" and "Check for updates
+/// automatically".
+public struct FreshInstallDefault {
     public enum Key {
-        /// The default was applied (or found unnecessary); never again.
-        public static let applied = "loginItem.defaultApplied"
+        /// The login-item default was applied (or found unnecessary); never again.
+        public static let loginItemApplied = "loginItem.defaultApplied"
+        /// The automatic-update-check default was applied (or found unnecessary); never again.
+        public static let updateChecksApplied = "updates.checkDefaultApplied"
+    }
+
+    /// "Open at login".
+    public static func loginItem(store: any FlagStore) -> FreshInstallDefault {
+        FreshInstallDefault(store: store, key: Key.loginItemApplied)
+    }
+
+    /// "Check for updates automatically".
+    public static func updateChecks(store: any FlagStore) -> FreshInstallDefault {
+        FreshInstallDefault(store: store, key: Key.updateChecksApplied)
     }
 
     private let store: any FlagStore
+    /// The flag under which the decision is recorded.
+    public let key: String
     /// An earlier launch left preferences behind. Read when this is created,
     /// at launch, before the current launch writes any.
     public let hadPreferences: Bool
 
-    public init(store: any FlagStore) {
+    public init(store: any FlagStore, key: String) {
         self.store = store
+        self.key = key
         hadPreferences = store.bool(forKey: OnboardingLaunch.Key.shown)
     }
 
     /// The default was applied, found unnecessary, or superseded by the
-    /// user: nothing is left to decide, and the system need not be asked.
-    public var isDecided: Bool { store.bool(forKey: Key.applied) }
+    /// user: nothing is left to decide, and the setting need not be read.
+    public var isDecided: Bool { store.bool(forKey: key) }
 
-    /// The user switched the login item themselves. Recorded before the
-    /// switch takes effect, and also while storage has not answered yet,
-    /// so the default can never undo an explicit choice.
+    /// The user switched the setting themselves. Recorded before the switch
+    /// takes effect, and also while storage has not answered yet, so the
+    /// default can never undo an explicit choice.
     public func markSuperseded() {
-        store.set(true, forKey: Key.applied)
+        store.set(true, forKey: key)
     }
 
-    /// Whether to register now. `storageIsFresh` is whether the license and
-    /// trial records are both positively absent; nil while storage has not
-    /// answered, which decides nothing yet. Once storage has answered, the
-    /// decision is recorded whichever way it went.
-    public func shouldRegister(isRegistered: Bool, storageIsFresh: Bool?) -> Bool {
+    /// Whether to turn the setting on now. `isOn` is its current value;
+    /// `storageIsFresh` is whether the license and trial records are both
+    /// positively absent, nil while storage has not answered, which decides
+    /// nothing yet. Once storage has answered, the decision is recorded
+    /// whichever way it went.
+    public func shouldTurnOn(isOn: Bool, storageIsFresh: Bool?) -> Bool {
         guard let storageIsFresh, !isDecided else { return false }
-        store.set(true, forKey: Key.applied)
-        return storageIsFresh && !hadPreferences && !isRegistered
+        store.set(true, forKey: key)
+        return storageIsFresh && !hadPreferences && !isOn
     }
 }
