@@ -124,4 +124,33 @@ final class LinkDetectionTests: XCTestCase {
         let runs = MarkdownLite.runs(in: text).map { (ns.substring(with: $0.range), $0.style) }
         XCTAssertEqual(runs.first { $0.1.link != nil }?.1.link, "https://openapps.space/opennotes/")
     }
+
+    // MARK: - Cost
+
+    /// A link followed by a wall of `)`: one pass, not one per bracket.
+    @MainActor func testAWallOfClosingBracketsIsTrimmedInLinearTime() {
+        let text = "see https://a.b/c" + String(repeating: ")", count: 64_000) + " end"
+        let started = Date()
+        let links = MarkdownLite.links(in: text)
+        let runs = MarkdownLite.runs(in: text)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertEqual(links.map(\.text), ["https://a.b/c"])
+        XCTAssertTrue(runs.contains { $0.style.link == "https://a.b/c" })
+        XCTAssertLessThan(elapsed, 0.5, "took \(elapsed) s")
+        // Balanced brackets inside the link stay; the unopened tail goes.
+        XCTAssertEqual(MarkdownLite.links(in: "https://a.b/(x)" + String(repeating: ")", count: 10_000)).map(\.text), ["https://a.b/(x)"])
+        XCTAssertEqual(MarkdownLite.links(in: "https://a.b/[x]" + String(repeating: "]", count: 10_000)).map(\.text), ["https://a.b/[x]"])
+    }
+
+    /// Only the styling budget is read: a link past it is not found, and a
+    /// giant text costs the budget, not its length.
+    @MainActor func testLinkDetectionStopsAtTheBudget() {
+        let filler = String(repeating: "x", count: MarkdownLite.styleLimit)
+        XCTAssertEqual(MarkdownLite.links(in: filler + " https://late.example").count, 0)
+        XCTAssertEqual(MarkdownLite.links(in: filler + " https://late.example", limit: Int.max).map(\.display), ["late.example"])
+        XCTAssertEqual(MarkdownLite.links(in: "https://early.example " + filler).map(\.display), ["early.example"])
+        let started = Date()
+        _ = MarkdownLite.links(in: String(repeating: "https://a.b) ", count: 200_000))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+    }
 }

@@ -143,4 +143,21 @@ final class AutomationLinkTests: XCTestCase {
     @MainActor func testBlankQueryIsNil() {
         XCTAssertNil(AutomationLink.note(titled: "   ", in: [note("Groceries", id: "a")]))
     }
+
+    // MARK: - Bounds
+
+    @MainActor func testTextAndTitleAreBoundedAtTheDoor() throws {
+        let longText = String(repeating: "a", count: AutomationLink.textLimit + 1)
+        let fitsText = String(repeating: "a", count: AutomationLink.textLimit)
+        let longTitle = String(repeating: "t", count: AutomationLink.titleLimit + 1)
+        func url(_ string: String) -> URL { URL(string: string)! }
+        XCTAssertNil(AutomationLink.request(from: url("opennotes://new?text=\(longText)")))
+        XCTAssertNotNil(AutomationLink.request(from: url("opennotes://new?text=\(fitsText)")))
+        XCTAssertNil(AutomationLink.request(from: url("opennotes://new?title=\(longTitle)&text=x")))
+        XCTAssertNil(AutomationLink.request(from: url("opennotes://append?title=\(longTitle)&text=x")))
+        XCTAssertNil(AutomationLink.request(from: url("opennotes://append?title=t&text=\(longText)")))
+        XCTAssertNil(AutomationLink.request(from: url("opennotes://open?title=\(longTitle)")))
+        XCTAssertFalse(AutomationLink.isBounded(.text(title: longTitle)))
+        XCTAssertTrue(AutomationLink.isBounded(.new(text: fitsText, title: nil, color: nil)))
+    }
 }

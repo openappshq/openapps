@@ -207,4 +207,49 @@ final class AutomationTests: XCTestCase {
             XCTAssertFalse(FileManager.default.fileExists(atPath: real.path))
         }
     }
+
+    // MARK: - The whole text or nothing; the bound
+
+    @MainActor func testGetNoteTextNeverReturnsASummaryOrAPreview() throws {
+        let model = makeModel()
+        let automation = Automation(model: model)
+        // A body the store could not read back: the note stays, its text is
+        // the summary, and the action refuses rather than hand that out.
+        let big = "Big\n" + String(repeating: "line of text\n", count: 200)
+        try Data(big.utf8).write(to: folder.appendingPathComponent("big.md"))
+        // A budget just large enough for the minimum: the file is evicted
+        // once another note needs the room.
+        let store = NoteStore(folder: folder, bodyBudget: NoteStore.maximumFileSize)
+        let tight = AppModel(preferences: model.preferences, license: LicenseStatus(startsRestricted: false), store: store, watcher: FolderWatcher())
+        tight.store.load(create: false)
+        XCTAssertEqual(try Automation(model: tight).perform(.text(title: "Big")), .text(big))
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("big.md"))
+        // Evict by hand: a rescan forgets the file; a summary-only note would
+        // be the case where the read fails. Simulate through a note whose
+        // file is over the size limit: shown in part, never returned.
+        let oversized = "Huge\n" + String(repeating: "0123456789", count: NoteStore.maximumFileSize / 10 + 1)
+        try Data(oversized.utf8).write(to: folder.appendingPathComponent("huge.md"))
+        model.store.rescan()
+        XCTAssertEqual(model.note(NoteID("huge"))?.truncated, true)
+        XCTAssertThrowsError(try automation.perform(.text(title: "Huge"))) { error in
+            guard case Automation.Failure.storage(let message) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(message.contains("too large"), message)
+        }
+        XCTAssertThrowsError(try automation.perform(.append(title: "Huge", text: "more")))
+    }
+
+    @MainActor func testTextOverTheBoundIsRefusedWithWhy() throws {
+        let model = makeModel()
+        let automation = Automation(model: model)
+        let longText = String(repeating: "a", count: AutomationLink.textLimit + 1)
+        XCTAssertThrowsError(try automation.perform(.new(text: longText, title: nil, color: nil))) { error in
+            XCTAssertEqual(error as? Automation.Failure, .tooLong)
+        }
+        XCTAssertEqual(try files(), [])
+        var refused: [String] = []
+        automation.refuse = { refused.append($0) }
+        automation.openLink(.new(text: longText, title: nil, color: nil))
+        XCTAssertEqual(refused, [], "a link over the bound is dropped, not refused as read-only")
+        XCTAssertEqual(try files(), [])
+    }
 }

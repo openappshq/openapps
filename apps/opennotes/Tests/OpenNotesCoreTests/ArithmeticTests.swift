@@ -292,4 +292,37 @@ final class ArithmeticTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - A label before the expression, and nothing else
+
+    @MainActor func testAMalformedExpressionNeverAnswersFromItsValidTail() {
+        XCTAssertNil(Arithmetic.evaluateTrailing("2 + (3 * 4"), "an unbalanced paren is not a label")
+        XCTAssertNil(Arithmetic.evaluateTrailing("2 * (3 * 4"))
+        XCTAssertNil(Arithmetic.evaluateTrailing("2 ** 3 * 4"))
+        XCTAssertNil(Arithmetic.evaluateTrailing("2 +) 3 * 4"))
+        XCTAssertNil(Arithmetic.evaluateTrailing("(2 3 * 4"))
+        XCTAssertEqual(Arithmetic.answers(in: "2 + (3 * 4 ="), [])
+        XCTAssertEqual(Arithmetic.answers(in: "x: 2 + (3 * 4 ="), [])
+    }
+
+    @MainActor func testOnlyWordsMayStandBeforeTheExpression() {
+        XCTAssertEqual(Arithmetic.evaluateTrailing("Hotel 3 * $95").map { Arithmetic.display($0) }, "$285")
+        XCTAssertEqual(Arithmetic.evaluateTrailing("split: $777 / 2").map { Arithmetic.display($0) }, "$388.50")
+        XCTAssertEqual(Arithmetic.evaluateTrailing("Bob's lunch, tip incl. $12 + $3").map { Arithmetic.display($0) }, "$15")
+        XCTAssertEqual(Arithmetic.evaluateTrailing("total sum * 2", sum: Arithmetic.Value(5)).map { Arithmetic.display($0) }, "10")
+        XCTAssertNil(Arithmetic.evaluateTrailing("3 coffees at 4.50"), "a digit in the prefix is arithmetic that failed")
+    }
+
+    @MainActor func testSumTimesACommaNumberFollowsTheFormat() {
+        // In the point format `1,5` is neither a decimal nor a thousands group: no answer.
+        XCTAssertNil(Arithmetic.evaluate("sum * 1,5", format: .point, sum: Arithmetic.Value(4)))
+        XCTAssertNil(Arithmetic.evaluateTrailing("sum * 1,5", format: .point, sum: Arithmetic.Value(4)))
+        XCTAssertEqual(Arithmetic.answers(in: "2\n2\nsum * 1,5 =", format: .point), [])
+        // In the comma format it is one and a half.
+        XCTAssertEqual(value("sum * 1,5", format: .comma, sum: Arithmetic.Value(4)), "6")
+        XCTAssertEqual(Arithmetic.answers(in: "2\n2\nsum * 1,5 =", format: .comma).map(\.text), ["6"])
+        // And `1,500` groups in the point format, is a decimal in the comma one.
+        XCTAssertEqual(value("sum + 1,500", format: .point, sum: Arithmetic.Value(1)), "1,501")
+        XCTAssertEqual(value("sum + 1,500", format: .comma, sum: Arithmetic.Value(1)), "2,5")
+    }
 }
