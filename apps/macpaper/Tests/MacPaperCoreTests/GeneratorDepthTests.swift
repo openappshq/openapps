@@ -39,6 +39,42 @@ struct PaletteTests {
         let alike = Palette(name: "Alike", group: .vga, tones: [RGBAColor(hex: 0x141414), RGBAColor(hex: 0x161616)])
         #expect(!alike.hasDistinctTones)
     }
+
+    /// Every preset crossed with every pixel-field family: the palette
+    /// rule holds and at least one side reads under the menu bar. Not
+    /// every pair need read on *both* sides (a loud accent-first palette
+    /// can be right for a light-side wallpaper and busy on the dark one),
+    /// so the bar is "one side works", the same bar `Shuffle`'s gate holds
+    /// documents to. Failing pairs are recorded individually rather than
+    /// failing the whole matrix at the first one, so a run says exactly
+    /// which combinations need attention.
+    @Test("Every preset × pixel-field family renders and reads on at least one side")
+    func paletteFieldMatrix() {
+        #expect(Palettes.presets.count >= 50)
+        #expect(Set(Palettes.presets.map(\.name)).count == Palettes.presets.count, "unique names")
+        for group in PaletteGroup.presetGroups {
+            #expect(!Palettes.presets(in: group).isEmpty, Comment(rawValue: group.title))
+        }
+        let renderer = WallpaperRenderer()
+        let context = RenderContext(size: PixelSize(width: 640, height: 400), menuBarStrip: 12)
+        for palette in Palettes.presets {
+            #expect(palette.passesPresetRule, Comment(rawValue: palette.name))
+            for family in FieldFamily.allCases {
+                var p = FieldParameters(family: family, tones: palette.tones)
+                p[.cellSize] = 8
+                let document = Wallpaper(generator: .field(p), seed: 1)
+                var readsSomewhere = false
+                for side in Side.allCases {
+                    let raster = renderer.render(document, side: side, context: context)
+                    let readability = MenuBarReadability.assess(raster, stripHeight: context.menuBarStrip, side: side)
+                    if readability.readsEitherText { readsSomewhere = true }
+                }
+                if !readsSomewhere {
+                    Issue.record("\(palette.name) × \(family.title): neither side reads under the menu bar")
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Pixel fields
