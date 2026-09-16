@@ -1,7 +1,7 @@
 //! Update decisions that never touch the network or the app: the automatic check schedule and
 //! reading a signed feed.
 
-use super::Settings;
+use super::{Settings, SettingsChange};
 use base64::Engine;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -72,8 +72,9 @@ pub enum AutoCheckDefault {
 }
 
 /// Decides once per install, the same way "Open at login" does: `fresh_install` is the login
-/// default's test (no saved preferences, no trial and no license record). A user who turns the
-/// toggle off afterwards is never overridden.
+/// default's test (no saved preferences, no trial and no license record) and, since the
+/// toggles live in their own file, no `updates.json` either. A user who turns the toggle off
+/// afterwards is never overridden.
 pub fn auto_check_default(fresh_install: bool, saved: &Saved) -> AutoCheckDefault {
     if saved.auto_check_defaulted {
         AutoCheckDefault::Leave
@@ -96,11 +97,19 @@ pub fn apply_auto_check_default(saved: &mut Saved, fresh_install: bool) -> bool 
     true
 }
 
-/// The user's explicit choice in Settings. It marks the default as decided, so whichever lands
-/// first, the choice or the default, the choice stands.
-pub fn choose_settings(saved: &mut Saved, settings: Settings) {
-    saved.settings = settings;
-    saved.auto_check_defaulted = true;
+/// The user's explicit choice in Settings, merged onto the saved values so a toggle never
+/// carries a stale copy of the other one. Choosing "Check for updates automatically" marks the
+/// default as decided, so whichever lands first, the choice or the default, the choice stands;
+/// choosing only "Download and install automatically" leaves the default to resolve, since
+/// automatic installs need the checks.
+pub fn choose_settings(saved: &mut Saved, change: SettingsChange) {
+    if let Some(check_automatically) = change.check_automatically {
+        saved.settings.check_automatically = check_automatically;
+        saved.auto_check_defaulted = true;
+    }
+    if let Some(install_automatically) = change.install_automatically {
+        saved.settings.install_automatically = install_automatically;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -381,27 +390,49 @@ mod tests {
 
     #[test]
     fn a_choice_made_before_the_default_resolves_stands() {
-        // The user turns installs on (checks still off) while the records are being read;
-        // the default then resolves as a fresh install and must not turn checks on.
+        let checks = |on| SettingsChange {
+            check_automatically: Some(on),
+            install_automatically: None,
+        };
+        let installs = |on| SettingsChange {
+            check_automatically: None,
+            install_automatically: Some(on),
+        };
+        // The user turns checks on, then off again, while the records are being read; the
+        // default then resolves as a fresh install and must not turn them back on.
         let mut saved = Saved::default();
-        choose_settings(
-            &mut saved,
-            Settings {
-                check_automatically: false,
-                install_automatically: true,
-            },
-        );
+        choose_settings(&mut saved, checks(true));
         assert!(saved.auto_check_defaulted);
+        choose_settings(&mut saved, checks(false));
         assert!(!apply_auto_check_default(&mut saved, true));
         assert!(!saved.settings.check_automatically);
-        assert!(saved.settings.install_automatically);
         // The other order: the default lands first, then the choice replaces it.
         let mut saved = Saved::default();
         assert!(apply_auto_check_default(&mut saved, true));
-        choose_settings(&mut saved, Settings::default());
+        choose_settings(&mut saved, checks(false));
         assert!(!saved.settings.check_automatically);
         assert!(saved.auto_check_defaulted);
         assert!(!apply_auto_check_default(&mut saved, true));
+        // Turning only installs on before the default resolves does not decide the checks:
+        // automatic installs need them, so a fresh install still gets them, and the install
+        // choice is kept.
+        let mut saved = Saved::default();
+        choose_settings(&mut saved, installs(true));
+        assert!(!saved.auto_check_defaulted);
+        assert!(apply_auto_check_default(&mut saved, true));
+        assert_eq!(
+            saved.settings,
+            Settings {
+                check_automatically: true,
+                install_automatically: true,
+            }
+        );
+        // A change merges onto the saved values; it never carries the other toggle.
+        choose_settings(&mut saved, installs(false));
+        assert!(saved.settings.check_automatically);
+        assert!(!saved.settings.install_automatically);
+        choose_settings(&mut saved, SettingsChange::default());
+        assert!(saved.settings.check_automatically);
     }
 
     #[test]

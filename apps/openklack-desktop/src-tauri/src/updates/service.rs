@@ -3,7 +3,7 @@
 //! in when the app quits or restarts.
 
 use super::policy::{self, Offer, Saved, Source, Trigger};
-use super::{Release, Settings, Status, install};
+use super::{Release, SettingsChange, Status, install};
 use semver::Version;
 use std::{
     path::{Path, PathBuf},
@@ -217,9 +217,18 @@ struct Staged {
     automatic: bool,
 }
 
+/// A status change given its revision, not yet sent to the window.
+struct Stamped {
+    status: Status,
+    ready_changed: bool,
+}
+
 pub struct Updates {
     endpoint: Result<Endpoint, String>,
     store: PathBuf,
+    /// No `updates.json` existed when the app started: the updater's half of "a fresh
+    /// install". A file that exists but can't be read still counts as an earlier install.
+    fresh_store: bool,
     /// The installed bundle, when the app runs from one it can replace.
     bundle: Option<PathBuf>,
     location_blocked: bool,
@@ -231,17 +240,21 @@ pub struct Updates {
     wake: Notify,
 }
 
-fn load(store: &Path) -> Saved {
-    std::fs::read(store)
-        .ok()
+/// The saved state and whether the file was there at all, read before anything this launch
+/// could write it.
+fn load(store: &Path) -> (Saved, bool) {
+    let bytes = std::fs::read(store).ok();
+    let fresh = bytes.is_none() && !store.exists();
+    let saved = bytes
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    (saved, fresh)
 }
 
 pub fn init(app: &tauri::AppHandle) {
     let data = app.path().app_data_dir().unwrap_or_default();
     let store = data.join("updates.json");
-    let saved = load(&store);
+    let (saved, fresh_store) = load(&store);
     #[cfg(debug_assertions)]
     let endpoint = Endpoint::development().unwrap_or_else(Endpoint::official);
     #[cfg(not(debug_assertions))]
@@ -288,6 +301,7 @@ pub fn init(app: &tauri::AppHandle) {
     app.manage(Updates {
         endpoint,
         store,
+        fresh_store,
         bundle,
         location_blocked,
         busy: AsyncMutex::new(()),
@@ -303,22 +317,23 @@ pub fn init(app: &tauri::AppHandle) {
 }
 
 /// "Check for updates automatically" is on by default: turned on once, on the first launch of a
-/// fresh install (the same test as "Open at login": no saved preferences, no trial and no
-/// license record), and remembered in `updates.json`. An upgrade only remembers the decision, so
-/// a user who had turned it off stays off. Called by the licensing runtime once it has read the
-/// records, which official builds always do; a choice the user makes in Settings before then is
-/// never overridden, whichever lands first. "Download and install automatically" is never
-/// defaulted. Turning checks on wakes the scheduler, so a fresh install checks right away.
+/// fresh install (the "Open at login" test — no saved preferences, no trial and no license
+/// record — and no `updates.json` from an earlier install either), and remembered in
+/// `updates.json`. An upgrade only remembers the decision, so a user who had turned it off
+/// stays off. Called by the licensing runtime once it has read the records, which official
+/// builds always do; a choice the user makes in Settings before then is never overridden,
+/// whichever lands first. "Download and install automatically" is never defaulted. Turning
+/// checks on wakes the scheduler, so a fresh install checks right away.
 #[cfg_attr(not(feature = "licensing"), allow(dead_code))]
 pub fn apply_auto_check_default(app: &tauri::AppHandle, fresh_install: bool) {
     let Some(updates) = app.try_state::<Updates>() else {
         return;
     };
-    let Some(settings) = updates.default_auto_check(fresh_install) else {
+    let Some(stamped) = updates.default_auto_check(fresh_install) else {
         return;
     };
-    updates.publish(app, |status| status.settings = settings);
-    if settings.check_automatically {
+    let status = updates.emit(app, stamped);
+    if status.settings.check_automatically {
         updates.wake.notify_one();
     }
 }
@@ -350,21 +365,34 @@ impl Updates {
         self.status.lock().unwrap().clone()
     }
 
-    fn publish(&self, app: &tauri::AppHandle, change: impl FnOnce(&mut Status)) -> Status {
-        let (next, ready_changed) = {
-            let mut status = self.status.lock().unwrap();
-            let was_ready = status.phase == "ready";
-            change(&mut status);
-            status.revision += 1;
-            (status.clone(), was_ready != (status.phase == "ready"))
-        };
-        let _ = app.emit("app-update", &next);
-        if ready_changed
+    /// Applies a change to the status and gives it the next revision. The window keeps the
+    /// highest revision it has seen, so stamping under the lock that ordered the change (the
+    /// settings lock, for a settings change) is what orders what the window shows; the event
+    /// itself may arrive in any order.
+    fn stamp(&self, change: impl FnOnce(&mut Status)) -> Stamped {
+        let mut status = self.status.lock().unwrap();
+        let was_ready = status.phase == "ready";
+        change(&mut status);
+        status.revision += 1;
+        Stamped {
+            status: status.clone(),
+            ready_changed: was_ready != (status.phase == "ready"),
+        }
+    }
+
+    fn emit(&self, app: &tauri::AppHandle, stamped: Stamped) -> Status {
+        let _ = app.emit("app-update", &stamped.status);
+        if stamped.ready_changed
             && let Some(controller) = app.try_state::<std::sync::Arc<crate::engine::Controller>>()
         {
             crate::refresh_tray(app, controller.snapshot());
         }
-        next
+        stamped.status
+    }
+
+    fn publish(&self, app: &tauri::AppHandle, change: impl FnOnce(&mut Status)) -> Status {
+        let stamped = self.stamp(change);
+        self.emit(app, stamped)
     }
 
     /// Writes the file while holding the `saved` lock, so two changes can never race each other
@@ -384,31 +412,35 @@ impl Updates {
         let _ = self.write(&saved);
     }
 
-    /// Saves the settings first; they take effect only once saved. The choice marks the
-    /// automatic-check default as decided under the same lock the default takes, so whichever
-    /// lands first, the user's choice stands.
-    fn update_settings(&self, settings: Settings) -> Result<(), String> {
+    /// Saves the user's change, merged onto the saved settings, then stamps the status, all
+    /// under the settings lock: the change takes effect only once saved, a choice of "Check for
+    /// updates automatically" marks the default as decided before the default can look, and the
+    /// window sees settings in the order they were saved.
+    fn update_settings(&self, change: SettingsChange) -> Result<Stamped, String> {
         let mut saved = self.saved.lock().unwrap();
         let mut next = *saved;
-        policy::choose_settings(&mut next, settings);
+        policy::choose_settings(&mut next, change);
         self.write(&next)?;
         *saved = next;
-        Ok(())
+        let settings = next.settings;
+        Ok(self.stamp(|status| status.settings = settings))
     }
 
-    /// The "Check for updates automatically" default, under the settings lock. Returns the
-    /// settings once they changed on disk; a save that fails leaves the decision undecided in
-    /// memory too, so the next launch tries again.
-    fn default_auto_check(&self, fresh_install: bool) -> Option<Settings> {
+    /// The "Check for updates automatically" default, under the settings lock. Saves first and
+    /// commits only once saved, so a save that fails leaves the decision undecided in memory
+    /// too and the next launch tries again. Returns the status stamped while the lock is held,
+    /// only when the settings changed.
+    fn default_auto_check(&self, fresh_install: bool) -> Option<Stamped> {
         let mut saved = self.saved.lock().unwrap();
         let mut next = *saved;
-        if !policy::apply_auto_check_default(&mut next, fresh_install) {
+        if !policy::apply_auto_check_default(&mut next, fresh_install && self.fresh_store) {
             return None;
         }
         self.write(&next).ok()?;
         let changed = next.settings != saved.settings;
         *saved = next;
-        changed.then_some(next.settings)
+        let settings = next.settings;
+        changed.then(|| self.stamp(|status| status.settings = settings))
     }
 
     fn may_install(&self, automatic: bool) -> bool {
@@ -745,9 +777,10 @@ pub async fn download_update(
 pub fn set_update_settings(
     app: tauri::AppHandle,
     state: tauri::State<'_, Updates>,
-    settings: Settings,
+    settings: SettingsChange,
 ) -> Result<Status, String> {
-    state.update_settings(settings)?;
+    let stamped = state.update_settings(settings)?;
+    let settings = stamped.status.settings;
     if state
         .staged
         .lock()
@@ -757,11 +790,11 @@ pub fn set_update_settings(
     {
         state.discard_staged(&app, AUTOMATIC_INSTALL_OFF);
     }
-    let status = state.publish(&app, |status| status.settings = settings);
+    state.emit(&app, stamped);
     if settings.check_automatically {
         state.wake.notify_one();
     }
-    Ok(status)
+    Ok(state.snapshot())
 }
 
 #[tauri::command]
@@ -776,6 +809,7 @@ pub fn restart_to_update(app: tauri::AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::updates::Settings;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -804,10 +838,11 @@ mod tests {
     /// An updater whose `updates.json` lives in `dir`, as `init` builds it, without an app.
     fn updates_in(dir: &Path) -> Updates {
         let store = dir.join("updates.json");
-        let saved = load(&store);
+        let (saved, fresh_store) = load(&store);
         Updates {
             endpoint: Err("no feed in tests".into()),
             store,
+            fresh_store,
             bundle: None,
             location_blocked: true,
             busy: AsyncMutex::new(()),
@@ -832,6 +867,29 @@ mod tests {
             wake: Notify::new(),
         }
     }
+
+    fn checks(on: bool) -> SettingsChange {
+        SettingsChange {
+            check_automatically: Some(on),
+            install_automatically: None,
+        }
+    }
+
+    fn installs(on: bool) -> SettingsChange {
+        SettingsChange {
+            check_automatically: None,
+            install_automatically: Some(on),
+        }
+    }
+
+    fn settings_of(stamped: Option<Stamped>) -> Option<Settings> {
+        stamped.map(|stamped| stamped.status.settings)
+    }
+
+    const ON: Settings = Settings {
+        check_automatically: true,
+        install_automatically: false,
+    };
 
     #[test]
     fn no_feed_request_before_the_default_resolves_and_one_after_it_does() {
@@ -890,25 +948,20 @@ mod tests {
         // A fresh install with no file: the default turns checks on, saves, and reports the
         // new settings once.
         let updates = updates_in(dir.path());
-        assert_eq!(
-            updates.default_auto_check(true),
-            Some(Settings {
-                check_automatically: true,
-                install_automatically: false,
-            })
-        );
-        assert_eq!(updates.default_auto_check(true), None);
-        let on_disk = load(&updates.store);
+        assert!(updates.fresh_store);
+        assert_eq!(settings_of(updates.default_auto_check(true)), Some(ON));
+        assert!(settings_of(updates.default_auto_check(true)).is_none());
+        let (on_disk, _) = load(&updates.store);
         assert!(on_disk.auto_check_defaulted);
-        assert!(on_disk.settings.check_automatically);
-        assert!(!on_disk.settings.install_automatically);
+        assert_eq!(on_disk.settings, ON);
         // The next launch reads the decision back and leaves it alone.
         let relaunched = updates_in(dir.path());
-        assert_eq!(relaunched.default_auto_check(true), None);
+        assert!(!relaunched.fresh_store);
+        assert!(settings_of(relaunched.default_auto_check(true)).is_none());
         // The user turns it off: that stands across launches, fresh or not.
-        relaunched.update_settings(Settings::default()).unwrap();
+        relaunched.update_settings(checks(false)).unwrap();
         let relaunched = updates_in(dir.path());
-        assert_eq!(relaunched.default_auto_check(true), None);
+        assert!(settings_of(relaunched.default_auto_check(true)).is_none());
         assert!(
             !relaunched
                 .saved
@@ -918,35 +971,122 @@ mod tests {
                 .check_automatically
         );
 
-        // An upgrade: a 0.1.2 file with checks off is remembered, never turned on.
+        // A choice of "Check for updates automatically" before the records resolve: the
+        // default, arriving later as a fresh install, does not turn checks back on.
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("updates.json"),
-            r#"{"settings":{"checkAutomatically":false,"installAutomatically":false},"history":{"lastSuccessAt":5,"lastAttemptAt":5,"failures":0}}"#,
-        )
-        .unwrap();
         let updates = updates_in(dir.path());
-        assert_eq!(updates.default_auto_check(false), None);
-        let on_disk = load(&updates.store);
+        updates.update_settings(checks(true)).unwrap();
+        updates.update_settings(checks(false)).unwrap();
+        assert!(settings_of(updates.default_auto_check(true)).is_none());
+        let (on_disk, _) = load(&updates.store);
         assert!(on_disk.auto_check_defaulted);
         assert!(!on_disk.settings.check_automatically);
-        assert_eq!(on_disk.history.last_success_at, Some(5));
-
-        // A choice in Settings before the records resolve: the default, arriving later as a
-        // fresh install, does not turn checks on.
+        // Only installs chosen first: the default still turns checks on and keeps the choice.
         let dir = tempfile::tempdir().unwrap();
         let updates = updates_in(dir.path());
-        updates
-            .update_settings(Settings {
-                check_automatically: false,
+        updates.update_settings(installs(true)).unwrap();
+        assert_eq!(
+            settings_of(updates.default_auto_check(true)),
+            Some(Settings {
+                check_automatically: true,
                 install_automatically: true,
             })
+        );
+    }
+
+    #[test]
+    fn an_updates_file_from_an_earlier_install_makes_an_upgrade() {
+        // The preferences and the records are absent, so the login default would call this a
+        // fresh install; an `updates.json` from before the default says otherwise, and the
+        // old values are kept whatever they are.
+        for (check, install) in [(false, false), (false, true), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = dir.path().join("updates.json");
+            std::fs::write(
+                &store,
+                format!(
+                    r#"{{"settings":{{"checkAutomatically":{check},"installAutomatically":{install}}},"history":{{"lastSuccessAt":5,"lastAttemptAt":5,"failures":0}}}}"#
+                ),
+            )
             .unwrap();
-        assert_eq!(updates.default_auto_check(true), None);
-        let on_disk = load(&updates.store);
+            let updates = updates_in(dir.path());
+            assert!(!updates.fresh_store);
+            assert!(settings_of(updates.default_auto_check(true)).is_none());
+            let (on_disk, _) = load(&store);
+            assert!(on_disk.auto_check_defaulted);
+            assert_eq!(on_disk.settings.check_automatically, check);
+            assert_eq!(on_disk.settings.install_automatically, install);
+            assert_eq!(on_disk.history.last_success_at, Some(5));
+            // Decided now: a relaunch that again looks fresh changes nothing.
+            let relaunched = updates_in(dir.path());
+            assert!(settings_of(relaunched.default_auto_check(true)).is_none());
+            assert_eq!(relaunched.saved.lock().unwrap().settings, on_disk.settings);
+        }
+        // A file that exists but can't be read is still an earlier install: remembered with
+        // the defaults, never turned on.
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("updates.json");
+        std::fs::write(&store, b"not json").unwrap();
+        let updates = updates_in(dir.path());
+        assert!(!updates.fresh_store);
+        assert!(settings_of(updates.default_auto_check(true)).is_none());
+        let (on_disk, _) = load(&store);
+        assert!(on_disk.auto_check_defaulted);
+        assert_eq!(on_disk.settings, Settings::default());
+        // The same upgrade evidence from the preferences or the records (`fresh_install`
+        // false) with no file at all: remembered, not turned on.
+        let dir = tempfile::tempdir().unwrap();
+        let updates = updates_in(dir.path());
+        assert!(updates.fresh_store);
+        assert!(settings_of(updates.default_auto_check(false)).is_none());
+        let (on_disk, _) = load(&updates.store);
         assert!(on_disk.auto_check_defaulted);
         assert!(!on_disk.settings.check_automatically);
-        assert!(on_disk.settings.install_automatically);
+    }
+
+    #[test]
+    fn the_window_sees_settings_in_the_order_they_were_saved() {
+        // What the window does with each status it receives: keep the newest revision.
+        let accept = |shown: &mut Status, next: &Status| {
+            if next.revision > shown.revision {
+                *shown = next.clone();
+            }
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let updates = updates_in(dir.path());
+        // The default saves checks on; before its event is sent, the user turns checks off and
+        // then installs on, each saved and stamped after it. The default's revision is the
+        // lowest, so its late event can't replace the newer choice, and each choice merged
+        // onto what was saved rather than what the window showed.
+        let default = updates.default_auto_check(true).unwrap();
+        let off = updates.update_settings(checks(false)).unwrap();
+        let install = updates.update_settings(installs(true)).unwrap();
+        assert!(default.status.revision < off.status.revision);
+        assert!(off.status.revision < install.status.revision);
+        let expected = Settings {
+            check_automatically: false,
+            install_automatically: true,
+        };
+        assert_eq!(install.status.settings, expected);
+        let mut shown = updates.snapshot();
+        shown.revision = 0;
+        for stamped in [&install, &default, &off] {
+            accept(&mut shown, &stamped.status);
+        }
+        assert_eq!(shown.settings, expected);
+        assert_eq!(shown.revision, install.status.revision);
+        assert_eq!(updates.saved.lock().unwrap().settings, expected);
+        assert_eq!(load(&updates.store).0.settings, expected);
+        // A change sent from a stale window carries only the toggle that was flipped, so it
+        // never brings the other one back.
+        let checks_on = updates.update_settings(checks(true)).unwrap();
+        assert_eq!(
+            checks_on.status.settings,
+            Settings {
+                check_automatically: true,
+                install_automatically: true,
+            }
+        );
     }
 
     #[test]
@@ -956,10 +1096,11 @@ mod tests {
         let blocked = dir.path().join("not-a-folder");
         std::fs::write(&blocked, b"").unwrap();
         let updates = updates_in(&blocked);
-        assert_eq!(updates.default_auto_check(true), None);
+        assert!(settings_of(updates.default_auto_check(true)).is_none());
         let saved = *updates.saved.lock().unwrap();
         assert!(!saved.auto_check_defaulted);
         assert!(!saved.settings.check_automatically);
+        assert_eq!(updates.snapshot().revision, 0);
     }
 
     #[test]

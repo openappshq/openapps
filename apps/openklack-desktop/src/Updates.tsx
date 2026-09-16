@@ -47,8 +47,10 @@ export function Updates({
   const usable = !!status?.supported && status.configured;
   const working = !!status && ["checking", "downloading", "verifying"].includes(status.phase);
   const settings = status?.settings;
+  // Only the toggle that was flipped: the app merges it onto what is saved, so a window that
+  // hasn't caught up with the other toggle yet can't send a stale copy of it back.
   const changeSettings = (change: Partial<UpdateSettings>) =>
-    settings && run("set_update_settings", { settings: { ...settings, ...change } });
+    settings && run("set_update_settings", { settings: change });
 
   return (
     <section className="app-updates" aria-label="App updates">

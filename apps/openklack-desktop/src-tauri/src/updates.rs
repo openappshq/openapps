@@ -31,6 +31,15 @@ pub struct Settings {
     pub install_automatically: bool,
 }
 
+/// One or both toggles, as Settings sends them: only what the user flipped, so the choice is
+/// merged onto the saved values rather than replacing them with what the window last showed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SettingsChange {
+    pub check_automatically: Option<bool>,
+    pub install_automatically: Option<bool>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Release {
@@ -63,7 +72,7 @@ pub struct Status {
 
 #[cfg(not(feature = "updater"))]
 pub mod unavailable {
-    use super::{Settings, Status};
+    use super::{Settings, SettingsChange, Status};
 
     const SOURCE_BUILD: &str = "Builds from source don’t include app updates.";
 
@@ -115,7 +124,7 @@ pub mod unavailable {
     }
 
     #[tauri::command]
-    pub fn set_update_settings(_settings: Settings) -> Result<Status, String> {
+    pub fn set_update_settings(_settings: SettingsChange) -> Result<Status, String> {
         Err(SOURCE_BUILD.into())
     }
 

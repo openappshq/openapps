@@ -142,13 +142,14 @@ async fn startup_state(
 
 /// The defaults a fresh install of an official build gets once, on its first launch (no saved
 /// preferences, no trial and no license record): "Open at login" on, remembered in the
-/// preferences, and "Check for updates automatically" on, remembered in `updates.json`. An
-/// upgrade only remembers each decision, so a user who had turned one off stays off; afterwards
-/// the toggles in Settings (and System Settings → Login Items) are the user's. If registering
-/// the login item fails, it is tried again on the next launch. Called by the licensing runtime
-/// once it has read the records, which official builds always do. Each decision runs under the
-/// same lock as its Settings toggle, so a choice the user makes while the records are still
-/// being read is never overridden, whichever lands first.
+/// preferences, and "Check for updates automatically" on, remembered in `updates.json`, which
+/// must not have existed either (the updater checks that half itself). An upgrade only
+/// remembers each decision, so a user who had turned one off stays off; afterwards the toggles
+/// in Settings (and System Settings → Login Items) are the user's. If registering the login
+/// item fails, it is tried again on the next launch. Called by the licensing runtime once it
+/// has read the records, which official builds always do. Each decision runs under the same
+/// lock as its Settings toggle, so a choice the user makes while the records are still being
+/// read is never overridden, whichever lands first.
 #[cfg(feature = "licensing")]
 pub fn apply_fresh_install_defaults(app: &tauri::AppHandle, fresh_records: bool) {
     let Some(controller) = app.try_state::<Arc<Controller>>() else {
