@@ -9,9 +9,10 @@
   --palette-tangerine-500: #ff7a2f;
   --palette-tangerine-600: #e5551f;
   --palette-tangerine-700: #b8411a;
+  --palette-tangerine-800: #96351a;
   --palette-tangerine-950: #4a2114;
   --color-accent-solid: var(--palette-tangerine-700);
-  --color-accent-hover: var(--palette-tangerine-600);
+  --color-accent-hover: var(--palette-tangerine-800);
   --color-accent-subtle: var(--palette-tangerine-50);
   --color-accent-text: var(--palette-tangerine-700);
   --color-accent-on: var(--palette-white);
