@@ -14,7 +14,7 @@ export type Product = {
    */
   free?: boolean;
   icon: string;
-  accent: "cobalt" | "orchid" | "green";
+  accent: "cobalt" | "orchid" | "green" | "teal";
   /** Whether `/brand/<id>/wordmark-{ink,paper}.svg` exist; otherwise the name is set in type. */
   wordmark?: boolean;
   brandSource: string;
@@ -146,6 +146,47 @@ export const products: Product[] = [
         title: "Thank you · Hertz",
         description: "Your Hertz license key and how to activate it.",
         template: "src/apps/hertz/template.html",
+        noindex: true,
+        checkoutReturn: true,
+      },
+    ],
+  },
+  {
+    id: "macpaper",
+    route: "/macpaper",
+    name: "macPaper",
+    description: "Wallpapers your Mac makes itself, from the notch.",
+    platform: "macOS",
+    price: "$5",
+    icon: "/brand/macpaper/app-icon.svg",
+    accent: "teal",
+    wordmark: false,
+    // Placeholder masters until the app's identity lands in
+    // `apps/macpaper/design/assets`; point this there and delete the folder then.
+    brandSource: "apps/website/src/apps/macpaper/brand",
+    assets: [],
+    pages: [
+      {
+        path: "",
+        entry: "Home",
+        title: "macPaper · Wallpapers your Mac makes itself",
+        description:
+          "Gradients, meshes, patterns and pixel art, made on your Mac and set on every display from a panel that drops out of the notch. macPaper is an open-source Mac app. No permissions, no telemetry.",
+        template: "src/apps/macpaper/template.html",
+      },
+      {
+        path: "download",
+        entry: "Download",
+        title: "Install · macPaper",
+        description: "Install macPaper with Homebrew. Nothing to grant, nothing to set up.",
+        template: "src/apps/macpaper/template.html",
+      },
+      {
+        path: "thanks",
+        entry: "Thanks",
+        title: "Thank you · macPaper",
+        description: "Your macPaper license key and how to activate it.",
+        template: "src/apps/macpaper/template.html",
         noindex: true,
         checkoutReturn: true,
       },

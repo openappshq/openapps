@@ -45,6 +45,10 @@
 .app-row[data-accent="green"] {
   --accent-line: var(--palette-green-300);
 }
+.app-row[data-accent="teal"] {
+  /* macPaper's provisional teal (apps/macpaper/tokens.css), which the home page never loads. */
+  --accent-line: #7fd8df;
+}
 /* The backlight: the app's own colour lighting up along the key's edge. */
 .app-row::before {
   content: "";
