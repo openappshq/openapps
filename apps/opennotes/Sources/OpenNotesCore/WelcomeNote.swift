@@ -31,7 +31,7 @@ nonisolated public enum WelcomeNote {
     - a link, https://openapps.space/opennotes/ — ⌘-click opens it
     - a list line starts with a dash, a star or a number
     1. numbered lines look like this
-    - [ ] a checkbox: click the box to tick it
+    - [ ] a checkbox: click the box to tick it; the tab counts the boxes
     - [x] a ticked one
     - a line that ends in = shows its answer; press Tab on it to keep the answer:
     Hotel 3 * $95 =
@@ -41,7 +41,7 @@ nonisolated public enum WelcomeNote {
 
     ## The deck
     - Press the hotkey anywhere (⌥⌘N, or the one you chose in Settings) for a new note; Escape saves it and slides it back.
-    - Rest the pointer on the screen edge to fan the deck out; click a tab to open a note.
+    - Rest the pointer on the screen edge to fan the deck out; click a tab to open a note. Drop text, a link or files on the deck to make a note of them.
     - Drag a tab up or down the deck to reorder your notes; ⌥⌘↑ and ⌥⌘↓ move the open note from the keyboard.
     - The footer: a colour for the note (thirteen papers, or one of your own), a font (Sans, Serif, Mono or any on your Mac; ⌘⇧M cycles the faces), pin to keep it first (⌘⇧P), archive with ten seconds to undo (⌘⇧A).
     - ⌥⌘L opens All Notes: search, Active and Archived, Export, Reveal in Finder.

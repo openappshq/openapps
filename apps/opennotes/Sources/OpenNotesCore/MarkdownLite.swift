@@ -103,6 +103,35 @@ nonisolated public enum MarkdownLite {
         return result
     }
 
+    /// How far a note's checklist has come (design/products/opennotes.md,
+    /// "The deck"): the boxes done over the boxes there are, from the same
+    /// parse the styler and the click use — nested items count, `[X]` is
+    /// done, a `[ ]` that is not a box (inside a code span, after no list
+    /// marker) is not counted. Read from the text, never kept in the file.
+    public struct ChecklistProgress: Hashable, Sendable {
+        public var done: Int
+        public var total: Int
+
+        public init(done: Int, total: Int) {
+            self.done = done
+            self.total = total
+        }
+
+        /// Every box is ticked.
+        public var isComplete: Bool { total > 0 && done == total }
+        /// 0…1, for the line along the tab.
+        public var fraction: Double { total > 0 ? Double(done) / Double(total) : 0 }
+        /// "3/7", as the tab shows it.
+        public var label: String { "\(done)/\(total)" }
+    }
+
+    /// The text's checklist progress; nil when it has no box at all.
+    public static func checklistProgress(in text: String) -> ChecklistProgress? {
+        let boxes = checkboxes(in: text)
+        guard !boxes.isEmpty else { return nil }
+        return ChecklistProgress(done: boxes.filter(\.checked).count, total: boxes.count)
+    }
+
     /// The edit that toggles the checkbox whose line contains `location`:
     /// the three-character range and its replacement. Nil when the
     /// location is not on a checklist line.

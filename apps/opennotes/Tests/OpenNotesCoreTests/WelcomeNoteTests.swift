@@ -39,7 +39,7 @@ final class WelcomeNoteTests: XCTestCase {
     }
 
     @MainActor func testTheTourNamesTheRealGesturesAndKeys() {
-        for phrase in ["⌥⌘↑", "Drag a tab", "⌥⌘L", "Escape", "⌘-click", "⌘⇧M", "Serif", "thirteen papers", "iCloud Drive", "opennotes://new", "Append to Note"] {
+        for phrase in ["⌥⌘↑", "Drag a tab", "⌥⌘L", "Escape", "⌘-click", "⌘⇧M", "Serif", "thirteen papers", "iCloud Drive", "opennotes://new", "Append to Note", "Drop text", "counts the boxes"] {
             XCTAssertTrue(WelcomeNote.text.contains(phrase), phrase)
         }
     }

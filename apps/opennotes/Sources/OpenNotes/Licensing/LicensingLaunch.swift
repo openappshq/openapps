@@ -63,6 +63,7 @@ extension AppDelegate {
         if !UpdateTesting.isCompiledIn {
             loginItem.applyDefaultIfNeeded(storageIsFresh: true)
         }
+        preferences.applyScreenSharingDefaultIfNeeded(storageIsFresh: true)
         #if OPENAPPS_OFFICIAL
         updates?.applyCheckDefaultIfNeeded(storageIsFresh: true)
         #endif
@@ -74,14 +75,15 @@ extension AppDelegate {
     #if OPENAPPS_LICENSING
     /// The controller published a change: the views re-read the projected
     /// entitlement (the model and the store ask it again at every action
-    /// regardless), and the fresh-install defaults — Open at login and
-    /// automatic update checks — are decided once storage says whether this
-    /// install is fresh (`FreshInstallDefault`).
+    /// regardless), and the fresh-install defaults — Open at login, hiding
+    /// notes from screen sharing and automatic update checks — are decided
+    /// once storage says whether this install is fresh (`FreshInstallDefault`).
     func applyLicense() {
         guard let license = licenseController else { return }
         licenseStatus.publish()
         licenseStatus.setBusy(license.isBusy)
         loginItem.applyDefaultIfNeeded(storageIsFresh: license.freshInstall)
+        preferences.applyScreenSharingDefaultIfNeeded(storageIsFresh: license.freshInstall)
         #if OPENAPPS_OFFICIAL
         updates?.applyCheckDefaultIfNeeded(storageIsFresh: license.freshInstall)
         #endif

@@ -24,6 +24,16 @@ struct DeckContent {
     var dragCancelToken = 0
     /// The preview harness: a tab shown lifted, mid-drag, with no pointer.
     var staticDrag: DeckDrag?
+    /// Text, a link or files are held over the deck and would make a note:
+    /// the pill (or the `+` tab) lights up as the target.
+    var dropTarget = false
+    /// A drop is refused while read-only: the notice, shown under the deck
+    /// in the toast's place while the drag hovers.
+    var dropRefusal: String?
+    /// Each note's checklist for its tab, from the model's cache
+    /// (`AppModel.checklistProgress`): nothing for a note without boxes,
+    /// nothing for one whose whole body is not in memory.
+    var progress: [NoteID: MarkdownLite.ChecklistProgress] = [:]
     /// Asked by the editor at every keystroke, paste and checkbox click:
     /// the license now, not `readOnly` as rendered.
     var mayEdit: () -> Bool = { true }
@@ -92,14 +102,26 @@ struct DeckView: View {
     @State private var hovered: NoteID?
     /// The last pointer position of a scroll drag on the deck's bare axis.
     @State private var scrollDragY: CGFloat?
+    /// The tab whose checklist just completed: its count ticks once.
+    @State private var ticked: NoteID?
 
     private var height: CGFloat { content.layout.panelFrame.height }
     private static let lift = Animation.spring(response: 0.3, dampingFraction: 0.72)
+    private static let tick = Animation.spring(response: 0.28, dampingFraction: 0.45)
     private static let space = "deck"
     private var metrics: DeckMetrics { DeckMetrics() }
 
+    /// Which notes have every box ticked: a note going from not to done
+    /// is the moment the tab ticks. The pill draws no tab, so nothing is
+    /// counted there (and nothing ticks when the fan next opens on a list
+    /// that was already done).
+    private var completion: [NoteID: Bool] {
+        content.state == .pill ? [:] : content.progress.mapValues(\.isComplete)
+    }
+
     var body: some View {
         let placed = placedTabs
+        let progress = content.progress
         ZStack(alignment: .topLeading) {
             Color.clear
             if content.state == .pill {
@@ -109,7 +131,7 @@ struct DeckView: View {
                 ZStack(alignment: .topLeading) {
                     Color.clear
                     ForEach(placed, id: \.id) { placement in
-                        tabView(placement)
+                        tabView(placement, progress: progress[placement.id])
                     }
                 }
                 .frame(width: content.layout.panelFrame.width, height: height, alignment: .topLeading)
@@ -122,7 +144,12 @@ struct DeckView: View {
                     .position(center(noteRect))
                     .transition(.move(edge: content.side == .right ? .trailing : .leading).combined(with: .opacity))
             }
-            if let toastRect = content.layout.toast, let pending = content.pendingUndo {
+            if let toastRect = content.layout.toast, let refusal = content.dropRefusal {
+                dropNotice(refusal)
+                    .frame(width: toastRect.width, height: toastRect.height)
+                    .position(center(toastRect))
+                    .transition(.opacity)
+            } else if let toastRect = content.layout.toast, let pending = content.pendingUndo {
                 toast(pending)
                     .frame(width: toastRect.width, height: toastRect.height)
                     .position(center(toastRect))
@@ -138,6 +165,16 @@ struct DeckView: View {
         .animation(reduceMotion ? nil : Self.lift, value: placed.map(\.slot))
         .animation(reduceMotion ? nil : Self.lift, value: activeDrag?.id)
         .animation(reduceMotion ? nil : .easeOut(duration: Brand.Motion.fast), value: hovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: Brand.Motion.fast), value: content.dropTarget)
+        .animation(reduceMotion ? nil : Self.tick, value: ticked)
+        // The last box of a list ticked: its tab ticks once (a note that
+        // was already done, or arrives done, does nothing). Reduce Motion
+        // shows the new count with no movement.
+        .onChange(of: completion) { before, after in
+            guard !reduceMotion, ticked == nil, let id = after.first(where: { $0.value && before[$0.key] == false })?.key else { return }
+            ticked = id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { ticked = nil }
+        }
         .onChange(of: content.dragCancelToken) {
             guard let current = drag else { return }
             cancelled = current.id
@@ -278,9 +315,11 @@ struct DeckView: View {
         let rect = content.layout.pill
         let dashes = Array(content.notes.prefix(metrics.pillMaxDashes))
         let overflow = content.notes.count - dashes.count
+        // Held over as a drop's target: darker, ringed in coral.
+        let target = content.dropTarget
         return ZStack {
-            edgeShape(radius: 7).fill(Color.black.opacity(0.62))
-            edgeShape(radius: 7).strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+            edgeShape(radius: 7).fill(Color.black.opacity(target ? 0.82 : 0.62))
+            edgeShape(radius: 7).strokeBorder(target ? Brand.coral : Color.white.opacity(0.18), lineWidth: target ? 2 : 1)
             VStack(spacing: 4) {
                 if content.folderMissing {
                     Image(systemName: "exclamationmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Brand.coral)
@@ -298,7 +337,33 @@ struct DeckView: View {
         .frame(width: rect.width, height: rect.height)
         .position(center(rect))
         .accessibilityLabel(content.folderMissing ? "OpenNotes: can’t find the notes folder" : "OpenNotes: \(content.notes.count) notes")
-        .accessibilityHint("Move the pointer to the edge to fan the deck out")
+        .accessibilityHint("Move the pointer to the edge to fan the deck out; drop text, a link or files here for a new note")
+    }
+
+    /// A refused drop, while it hovers: the read-only line with its lock,
+    /// where the archive toast goes.
+    private func dropNotice(_ notice: String) -> some View {
+        HStack(alignment: .top, spacing: Brand.Space.s8) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Brand.coral)
+                .padding(.top, 1)
+            Text(notice)
+                .font(Brand.mono(10))
+                .foregroundStyle(Color.white)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Brand.Space.s12)
+        .padding(.vertical, Brand.Space.s8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.black.opacity(0.78), in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+        .padding(content.side == .right ? .trailing : .leading, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Drop refused: \(notice)")
     }
 
     // MARK: - Tabs
@@ -307,24 +372,26 @@ struct DeckView: View {
     /// `DeckMetrics.dragThreshold` along the deck lifts it — never while
     /// read-only — and the release drops it where the gap is. VoiceOver
     /// gets the same as actions: the note, Move up and Move down.
-    private func tabView(_ placement: Placement) -> some View {
+    private func tabView(_ placement: Placement, progress: MarkdownLite.ChecklistProgress?) -> some View {
         let tab = placement.tab
         let note = content.notes.first { $0.id == tab.id }
         let isOpen = content.state.openNote == tab.id
         let lifted = placement.lifted
         let isHovered = hovered == tab.id && !lifted
+        let isTicked = ticked == tab.id
         let canMove = !content.readOnly && order.count > 1
         // A note iCloud has not downloaded is only its file name: greyed.
         let downloading = note.map { $0.isDownloading && !$0.bodyIsLoaded } ?? false
         // Straight when open or lifted; otherwise the note's own lean.
         let tilt = DeckTilt.tilt(for: tab.id)
         let straight = isOpen || lifted
-        let inward: CGFloat = (straight ? 0 : tilt.inset) + (isHovered ? 3 : 0) + (lifted ? 4 : 0)
+        let inward: CGFloat = (straight ? 0 : tilt.inset) + (isHovered ? 3 : 0) + (lifted ? 4 : 0) + (isTicked ? 3 : 0)
         let towardsScreen: CGFloat = content.side == .right ? -1 : 1
         // The tab is the note's paper in this appearance, its title in the
         // paper's ink and the note's own font.
         let look = note.map { NoteAppearance.resolve($0, defaults: content.defaults) }
-        return TabCard(note: note, look: look, title: note?.title ?? tab.id.rawValue, side: content.side, isOpen: isOpen, lifted: lifted, hovered: isHovered, width: tab.frame.width, height: tab.frame.height)
+        let label = (note.map { ($0.pinned ? "Pinned note: " : "Note: ") + $0.title } ?? tab.id.rawValue) + (downloading ? ", downloading" : "")
+        return TabCard(note: note, look: look, title: note?.title ?? tab.id.rawValue, side: content.side, isOpen: isOpen, lifted: lifted, hovered: isHovered, width: tab.frame.width, height: tab.frame.height, progress: progress, ticked: isTicked)
             .rotationEffect(.degrees(straight ? 0 : tilt.degrees))
             .scaleEffect(lifted ? 1.05 : 1, anchor: content.side == .right ? .trailing : .leading)
             .position(center(placement.frame))
@@ -336,7 +403,7 @@ struct DeckView: View {
             }
             .gesture(tabGesture(for: tab, canMove: canMove))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(note.map { ($0.pinned ? "Pinned note: " : "Note: ") + $0.title + (downloading ? ", downloading" : "") } ?? tab.id.rawValue)
+            .accessibilityLabel(progress.map { "\(label), \($0.done) of \($0.total) done" } ?? label)
             .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
             .accessibilityHint(canMove ? "Drag along the deck to reorder" : "")
             .accessibilityAction { content.onTab(tab.id) }
@@ -403,10 +470,12 @@ struct DeckView: View {
 
     private var plusTab: some View {
         let rect = content.layout.plusTab
+        // With the fan out, the `+` tab is the drop's target.
+        let target = content.dropTarget
         return Button(action: content.onPlus) {
             ZStack {
-                edgeShape(radius: 10).fill(Brand.canvas.opacity(0.92))
-                edgeShape(radius: 10).strokeBorder(Brand.borderSubtle, lineWidth: 1)
+                edgeShape(radius: 10).fill(target ? Brand.accentSubtle : Brand.canvas.opacity(0.92))
+                edgeShape(radius: 10).strokeBorder(target ? Brand.coral : Brand.borderSubtle, lineWidth: target ? 2 : 1)
                 Image(systemName: content.readOnly ? "lock" : "plus")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Brand.textPrimary)
@@ -449,7 +518,10 @@ struct DeckView: View {
 /// One tab as a paper card: the note's paper in this appearance with a hairline edge and a
 /// soft shadow, a bar of the note's colour along its outer edge, the pin
 /// when pinned, and the title along the tab — reading down on the right
-/// edge, up on the left — cut with an ellipsis. Hover lifts it a little,
+/// edge, up on the left — cut with an ellipsis. A note with a checklist
+/// shows its count (`3/7`) at the tab's foot and a thin line of the
+/// note's ink along the inner edge, filled as far as the list has come;
+/// the last box done ticks the count once. Hover lifts the tab a little,
 /// a drag lifts it more.
 private struct TabCard: View {
     let note: Note?
@@ -461,25 +533,32 @@ private struct TabCard: View {
     let hovered: Bool
     let width: CGFloat
     let height: CGFloat
+    var progress: MarkdownLite.ChecklistProgress?
+    var ticked = false
+
+    /// The paper's ink for the appearance: the title, the pin, the count
+    /// and the checklist's line.
+    private var ink: Color { look?.tabInk ?? Brand.textPrimary }
 
     var body: some View {
-        let ink = look?.tabInk ?? Brand.textPrimary
         let shadowOpacity = lifted ? 0.3 : hovered ? 0.2 : 0.14
         let shadowRadius: CGFloat = lifted ? 10 : hovered ? 6 : 4
         ZStack {
             shape.fill(look?.tab ?? Brand.surface)
             // The colour bar, on the edge away from the screen's.
             HStack(spacing: 0) {
-                if side == .right { bar }
+                if side == .right { bar } else { progressLine }
                 Spacer(minLength: 0)
-                if side == .left { bar }
+                if side == .left { bar } else { progressLine }
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 4)
             shape.strokeBorder(Color.black.opacity(isOpen ? 0.45 : 0.16), lineWidth: isOpen ? 1.5 : 1)
             // The label runs the tab's length, laid out along it and then
-            // turned; the pin sits at the top, above it.
-            let labelLength = height - 16 - (note?.pinned == true ? 14 : 0)
+            // turned; the pin sits at the top, above it, the count at the
+            // foot, below it.
+            let countLength: CGFloat = progress == nil ? 0 : 22
+            let labelLength = height - 16 - (note?.pinned == true ? 14 : 0) - countLength
             VStack(spacing: 2) {
                 if note?.pinned == true {
                     Image(systemName: "pin.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(ink.opacity(0.7))
@@ -492,6 +571,16 @@ private struct TabCard: View {
                     .frame(width: labelLength, height: width - 12)
                     .rotationEffect(.degrees(side == .right ? 90 : -90))
                     .frame(width: width - 12, height: labelLength)
+                if let progress {
+                    Text(progress.label)
+                        .font(Brand.mono(9, medium: true))
+                        .foregroundStyle(progress.isComplete ? ink : ink.opacity(0.75))
+                        .lineLimit(1)
+                        .frame(width: countLength, height: width - 12)
+                        .rotationEffect(.degrees(side == .right ? 90 : -90))
+                        .frame(width: width - 12, height: countLength)
+                        .scaleEffect(ticked ? 1.35 : 1)
+                }
             }
             .padding(.top, 8)
             .padding(side == .right ? .leading : .trailing, 4)
@@ -499,6 +588,25 @@ private struct TabCard: View {
         .frame(width: width, height: height)
         .contentShape(shape)
         .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: side == .right ? -1 : 1, y: 2)
+    }
+
+    /// The checklist's line: a faint track the tab's length, the done
+    /// share filled in the note's ink from the top, 2 pt wide. Nothing
+    /// without a checklist.
+    @ViewBuilder private var progressLine: some View {
+        if let progress {
+            GeometryReader { geometry in
+                ZStack(alignment: .top) {
+                    Capsule().fill(ink.opacity(0.12))
+                    Capsule().fill(ink.opacity(progress.isComplete ? 0.9 : 0.7))
+                        .frame(height: max(2, geometry.size.height * progress.fraction))
+                }
+            }
+            .frame(width: 2)
+            .accessibilityHidden(true)
+        } else {
+            Color.clear.frame(width: 2)
+        }
     }
 
     private var shape: UnevenRoundedRectangle {

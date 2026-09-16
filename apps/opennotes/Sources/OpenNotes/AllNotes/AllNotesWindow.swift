@@ -6,33 +6,69 @@ import UniformTypeIdentifiers
 final class AllNotesWindowController: NSObject, NSWindowDelegate {
     private let model: AppModel
     private let openNote: (NoteID) -> Void
-    private var window: NSWindow?
+    /// Made on the first `show()`; replaced when the screen-sharing
+    /// setting turns off (`applyScreenSharing`).
+    private(set) var window: NSWindow?
+    /// The search, the filter and the selection, kept across a replacement.
+    let session = AllNotesSession()
+    /// The window's frame is remembered under this name between launches;
+    /// nil remembers nothing (the tests, which must write no defaults).
+    var frameAutosaveName: NSWindow.FrameAutosaveName? = "AllNotes"
 
     init(model: AppModel, openNote: @escaping (NoteID) -> Void) {
         self.model = model
         self.openNote = openNote
+        super.init()
+        // "Keep notes out of screen sharing": the window shows note text, so
+        // it follows the setting like the deck.
+        observeChanges({ [model] in _ = model.preferences.hideFromScreenSharing }, onChange: { [weak self] in self?.applyScreenSharing() })
     }
 
     func show() {
-        if window == nil {
-            let root = AllNotesView(model: model, openNote: openNote, export: { [weak self] id, format in self?.export(id, as: format) })
-            let hostingView = NSHostingView(rootView: root)
-            let window = NSWindow(
-                contentRect: NSRect(origin: .zero, size: NSSize(width: 800, height: 540)),
-                styleMask: [.titled, .closable, .resizable, .miniaturizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "All Notes"
-            window.minSize = NSSize(width: 640, height: 400)
-            window.isReleasedWhenClosed = false
-            window.contentView = hostingView
-            window.setFrameAutosaveName("AllNotes")
-            window.center()
-            self.window = window
-        }
+        if window == nil { makeWindow() }
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// The window, not yet on screen; `show()` orders it front. Centred
+    /// on the first make (the autosaved frame, if any, then takes over);
+    /// `frame` puts a replacement exactly where the window it replaces was.
+    func makeWindow(frame: CGRect? = nil) {
+        let root = AllNotesView(model: model, openNote: openNote, export: { [weak self] id, format in self?.export(id, as: format) }, session: session)
+        let hostingView = NSHostingView(rootView: root)
+        let window = NSWindow(
+            contentRect: frame ?? NSRect(origin: .zero, size: NSSize(width: 800, height: 540)),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "All Notes"
+        window.minSize = NSSize(width: 640, height: 400)
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        if let frameAutosaveName { window.setFrameAutosaveName(frameAutosaveName) }
+        if let frame {
+            window.setFrame(frame, display: false)
+        } else {
+            window.center()
+        }
+        ScreenSharing.apply(to: window, surface: .allNotes, hidden: model.preferences.hideFromScreenSharing)
+        self.window = window
+    }
+
+    /// The setting changed: the window follows. Turned off, a window once
+    /// hidden cannot be shown again (`ScreenSharing`): one made anew takes
+    /// its place — the same frame, the same search, filter and selection
+    /// (`session`) — on screen if the old one was, without taking the
+    /// focus from Settings.
+    private func applyScreenSharing() {
+        guard let window else { return }
+        guard !ScreenSharing.apply(to: window, surface: .allNotes, hidden: model.preferences.hideFromScreenSharing) else { return }
+        let wasVisible = window.isVisible
+        let frame = window.frame
+        window.orderOut(nil)
+        makeWindow(frame: frame)
+        if wasVisible { self.window?.orderFront(nil) }
     }
 
     /// Export… through the save panel; works while read-only.
@@ -47,6 +83,16 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
     }
 }
 
+/// What the user has set up in All Notes — the search text, Active or
+/// Archived, the selected note — kept apart from the view so it outlives
+/// the window (`AllNotesWindowController.applyScreenSharing`).
+@Observable
+final class AllNotesSession {
+    var query = ""
+    var showsArchived = false
+    var selection: NoteID?
+}
+
 /// The sidebar (search with the count inside, Active / Archived, the list
 /// with drag-to-reorder, the license card while read-only) and the preview
 /// pane: the note's state, its actions as chips, the pill, and the note
@@ -56,9 +102,10 @@ struct AllNotesView: View {
     let model: AppModel
     let openNote: (NoteID) -> Void
     let export: (NoteID, ExportFormat) -> Void
-    @State private var query = ""
-    @State private var showsArchived = false
-    @State private var selection: NoteID?
+    /// The search, the Active / Archived choice and the selection: owned
+    /// by the controller, so a window made anew (the screen-sharing
+    /// setting turning off) shows the same list.
+    @Bindable var session: AllNotesSession
     @State private var hovered: NoteID?
     @Environment(\.previewRendering) private var previewRendering
     @Environment(\.colorScheme) private var colorScheme
@@ -66,14 +113,18 @@ struct AllNotesView: View {
     /// The sidebar's width in the harness and its ideal width in the window.
     static let sidebarWidth: CGFloat = 300
 
-    /// `query` is what the search field starts with (the harness's
-    /// no-results stage); the window starts empty.
-    init(model: AppModel, openNote: @escaping (NoteID) -> Void, export: @escaping (NoteID, ExportFormat) -> Void, query: String = "") {
+    /// `session` is the controller's, or a fresh one whose `query` is what
+    /// the search field starts with (the harness's no-results stage).
+    init(model: AppModel, openNote: @escaping (NoteID) -> Void, export: @escaping (NoteID, ExportFormat) -> Void, session: AllNotesSession = AllNotesSession()) {
         self.model = model
         self.openNote = openNote
         self.export = export
-        _query = State(initialValue: query)
+        self.session = session
     }
+
+    private var query: String { session.query }
+    private var showsArchived: Bool { session.showsArchived }
+    private var selection: NoteID? { session.selection }
 
     private var notes: [Note] {
         model.search(query, archived: showsArchived)
@@ -153,7 +204,7 @@ struct AllNotesView: View {
                     Spacer(minLength: 0)
                 }
             } else {
-                List(selection: $selection) {
+                List(selection: $session.selection) {
                     ForEach(notes) { note in
                         row(note)
                             .tag(note.id)
@@ -199,7 +250,7 @@ struct AllNotesView: View {
                     .lineLimit(1)
                 Spacer(minLength: 0)
             } else {
-                TextField("Search", text: $query)
+                TextField("Search", text: $session.query)
                     .textFieldStyle(.plain)
                     .font(Brand.body(13))
                     .foregroundStyle(Brand.textPrimary)
@@ -223,8 +274,8 @@ struct AllNotesView: View {
     private func scopeChip(_ title: String, archived: Bool) -> some View {
         let selected = showsArchived == archived
         return Button {
-            showsArchived = archived
-            selection = nil
+            session.showsArchived = archived
+            session.selection = nil
         } label: {
             Text(title)
         }

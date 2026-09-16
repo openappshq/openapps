@@ -60,6 +60,25 @@ final class DeckPanelController {
     /// Set when `keep` changed or the fan opened: the next render scrolls
     /// so the kept tab shows, and then leaves the scroll to the user.
     private var revealPending = false
+    /// Something held over the pill or the fan (`DeckDrop`): the pill
+    /// lights up as a target, or the deck says why a drop is refused.
+    private var dropHover: DropHover = .none
+    /// The dropped items' text, handed to `.createNote` when the machine
+    /// answers the `.dropped` event; nil for the hotkey and `+`.
+    private var pendingDropText: String?
+    /// A drop made its note (set while the `.dropped` event is handled).
+    private var dropMadeNote = false
+
+    private enum DropHover: Equatable {
+        case none
+        case target
+        case refused(String)
+
+        var refusal: String? {
+            if case .refused(let notice) = self { return notice }
+            return nil
+        }
+    }
 
     /// The window level: above the status bar, so a full-screen app's
     /// window and the system's edge strips stay under the deck.
@@ -92,6 +111,9 @@ final class DeckPanelController {
         panel.animationBehavior = .none
         panel.acceptsMouseMovedEvents = true
         panel.setAccessibilityLabel("OpenNotes deck")
+        // Asked to be left out of screen captures while the setting says so;
+        // `settingsChanged` follows the setting from then on.
+        ScreenSharing.apply(to: panel, surface: .deck, hidden: preferences.hideFromScreenSharing)
 
         hosting = NSHostingView(rootView: DeckView(content: DeckContent(layout: layout, state: .pill, side: preferences.side, notes: [], openNote: nil, readOnly: false, readOnlyNotice: "", statusLine: "", pendingUndo: nil, folderMissing: false)))
         container = DeckContainerView(hosting: hosting)
@@ -100,6 +122,9 @@ final class DeckPanelController {
         container.onDeckEnter = { [weak self] in self?.handle(.pointerEnteredDeck) }
         container.onDeckExit = { [weak self] in self?.handle(.pointerLeftDeck) }
         container.onScroll = { [weak self] in self?.scroll(by: $0) }
+        container.onDragEntered = { [weak self] in self?.dragEntered($0) ?? [] }
+        container.onDragExited = { [weak self] in self?.dragExited() }
+        container.onDrop = { [weak self] in self?.drop($0) ?? false }
         panel.contentView = container
 
         render()
@@ -118,11 +143,12 @@ final class DeckPanelController {
     // MARK: - Events
 
     func handle(_ event: DeckEvent) {
-        // The hotkey, `+`, a lift, a drop and a keyboard move decide by the
-        // license: asked at the action, never the copy the machine took at
-        // the last settings change (LICENSING.md, read-only).
+        // The hotkey, `+`, a dropped item, a lift, a drop and a keyboard
+        // move decide by the license: asked at the action, never the copy
+        // the machine took at the last settings change (LICENSING.md,
+        // read-only).
         switch event {
-        case .hotkey, .plusClicked, .tabLifted, .tabDropped, .moveRequested:
+        case .hotkey, .plusClicked, .dropped, .tabLifted, .tabDropped, .moveRequested:
             _ = machine.handle(.settingsChanged(DeckSettings(readOnly: model.readOnly)))
         default: break
         }
@@ -177,6 +203,59 @@ final class DeckPanelController {
     func settingsChanged() {
         handle(.settingsChanged(DeckSettings(readOnly: model.readOnly)))
         render()
+    }
+
+    /// "Keep notes out of screen sharing" changed: the panel follows. False
+    /// when it cannot — a panel once hidden is never shown again
+    /// (`ScreenSharing`) — and the host must make this deck anew.
+    func applyScreenSharing() -> Bool {
+        ScreenSharing.apply(to: panel, surface: .deck, hidden: preferences.hideFromScreenSharing)
+    }
+
+    // MARK: - Dropping
+
+    /// Something draggable arrived over the pill or the fan. Items that
+    /// make no note (an image, an empty string) are not a target. The
+    /// license is asked as the drag arrives, like the hotkey at its press:
+    /// read-only, the deck refuses and says why while the drag hovers.
+    private func dragEntered(_ items: [DropPayload.Item]) -> NSDragOperation {
+        guard DropPayload.noteText(for: items) != nil else {
+            dragExited()
+            return []
+        }
+        if model.readOnly {
+            dropHover = .refused(model.readOnlyNotice)
+            render()
+            return []
+        }
+        dropHover = .target
+        render()
+        return DeckDrop.operation(for: items)
+    }
+
+    private func dragExited() {
+        guard dropHover != .none else { return }
+        dropHover = .none
+        render()
+    }
+
+    /// The items were let go: one note with their text, opened with the
+    /// caret at its end — the hotkey's own path (`.dropped` → `.createNote`
+    /// → `.noteCreated`), the text handed over when the store answers.
+    /// The license is asked again at the drop, by the controller and the
+    /// machine both: a drag can hover across a deadline. True when a note
+    /// was made.
+    private func drop(_ items: [DropPayload.Item]) -> Bool {
+        dropHover = .none
+        guard let text = DropPayload.noteText(for: items) else {
+            render()
+            return false
+        }
+        pendingDropText = text
+        dropMadeNote = false
+        handle(.dropped)
+        pendingDropText = nil
+        return dropMadeNote
     }
 
     /// The notes changed anywhere: the order, the open note's text.
@@ -258,6 +337,13 @@ final class DeckPanelController {
             }
         case .createNote:
             if let note = model.createNote() {
+                // A drop's text goes in before the note opens, so the
+                // caret lands after it; the hotkey and `+` carry none.
+                if let text = pendingDropText {
+                    pendingDropText = nil
+                    model.setText(text, for: note.id)
+                    dropMadeNote = true
+                }
                 handle(.noteCreated(note.id))
             }
         case .archive(let id):
@@ -318,7 +404,11 @@ final class DeckPanelController {
         let notes = model.active
         let openNote = state.openNote.flatMap { model.body(of: $0) }
         let pending = model.pendingUndo
-        layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: pending != nil, scroll: scroll)
+        // A refused drop's notice takes the toast's place under the deck.
+        let refusal = dropHover.refusal
+        let toast = pending != nil
+        let notice = refusal != nil
+        layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: toast, notice: notice, scroll: scroll)
         scroll = layout.scroll
         // The open or last-used tab is brought into the fan once, when it
         // changed or the fan opened; the user's own scrolling is kept.
@@ -326,7 +416,7 @@ final class DeckPanelController {
             revealPending = false
             if let keep = keep.map(current), let revealed = DeckGeometry.scroll(revealing: keep, in: layout), revealed != scroll {
                 scroll = revealed
-                layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: pending != nil, scroll: scroll)
+                layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: toast, notice: notice, scroll: scroll)
             }
         }
         var content = DeckContent(
@@ -336,6 +426,9 @@ final class DeckPanelController {
             pendingUndo: pending, folderMissing: model.store.folderIsMissing, focusToken: focusToken,
             license: model.license, defaults: NoteAppearance.Defaults(preferences)
         )
+        content.dropTarget = dropHover == .target
+        content.dropRefusal = refusal
+        content.progress = checklists(for: notes, state: state)
         // Every keystroke, paste and checkbox click asks the license as it
         // happens, not the `readOnly` this render captured — and that the
         // note's whole body is in memory: an editor showing a summary
@@ -426,6 +519,9 @@ final class DeckPanelController {
         container.edgeRect = edgeRect(in: layout)
         container.fanRect = fanHitRect(in: layout)
         container.deckRects = [container.fanRect, layout.plusTab] + [layout.note, layout.toast].compactMap { $0 }
+        // A drop lands on the pill, or on the fan and its `+` tab; the open
+        // note's text takes its own drops (the text view's), the margin none.
+        container.dropRects = state == .pill ? [layout.pill] : [container.fanRect, layout.plusTab]
         moveWindow(to: layout.panelFrame)
     }
 
@@ -464,7 +560,19 @@ final class DeckPanelController {
         content.openNote = note
         content.notes = model.active
         content.statusLine = model.statusLine(for: id)
+        content.progress = checklists(for: content.notes, state: machine.state)
         hosting.rootView = DeckView(content: content)
+    }
+
+    /// The tabs' counts, from the model's cache: one parse per changed
+    /// note, dictionary lookups otherwise. The pill has no tabs to count.
+    private func checklists(for notes: [Note], state: DeckState) -> [NoteID: MarkdownLite.ChecklistProgress] {
+        guard state != .pill else { return [:] }
+        var result: [NoteID: MarkdownLite.ChecklistProgress] = [:]
+        for note in notes {
+            if let progress = model.checklistProgress(for: note.id) { result[note.id] = progress }
+        }
+        return result
     }
 
     /// The strip the pointer reaches at the screen edge: the pill's width
@@ -550,9 +658,21 @@ final class DeckContainerView: NSView {
     /// the deck has the keyboard, scroll the tabs.
     var fanRect: CGRect = .zero
     var onScroll: (CGFloat) -> Void = { _ in }
+    /// Where a drop makes a note: the pill, or the fan and its `+` tab
+    /// (`DeckDrop`). Elsewhere the drag passes as if the deck were not there.
+    var dropRects: [CGRect] = []
+    /// The drag arrived over a drop rect with these items: the operation
+    /// to offer (none refuses it).
+    var onDragEntered: ([DropPayload.Item]) -> NSDragOperation = { _ in [] }
+    /// The drag left the drop rects, or ended.
+    var onDragExited: () -> Void = {}
+    /// The items were let go over a drop rect: true when a note was made.
+    var onDrop: ([DropPayload.Item]) -> Bool = { _ in false }
     private var areas: [NSTrackingArea] = []
     private var insideEdge = false
     private var insideDeck = false
+    private var insideDrop = false
+    private var dragOperation: NSDragOperation = []
     private let hosting: NSView
 
     init(hosting: NSView) {
@@ -566,10 +686,64 @@ final class DeckContainerView: NSView {
             hosting.topAnchor.constraint(equalTo: topAnchor),
             hosting.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        registerForDraggedTypes(DeckDrop.types)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
+
+    // MARK: - Drops
+
+    /// Entering and moving are one rule: over a drop rect the controller
+    /// is asked once (its answer kept while the drag stays), leaving it
+    /// clears the target; nothing is re-asked per pointer move.
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingUpdated(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let inside = overDropRect(sender)
+        if inside != insideDrop {
+            insideDrop = inside
+            if inside {
+                dragOperation = onDragEntered(DeckDrop.items(from: sender.draggingPasteboard))
+            } else {
+                dragOperation = []
+                onDragExited()
+            }
+        }
+        return dragOperation
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        leaveDrop()
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        leaveDrop()
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        overDropRect(sender) && !dragOperation.isEmpty
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        insideDrop = false
+        dragOperation = []
+        return onDrop(DeckDrop.items(from: sender.draggingPasteboard))
+    }
+
+    private func overDropRect(_ sender: NSDraggingInfo) -> Bool {
+        let point = convert(sender.draggingLocation, from: nil)
+        return dropRects.contains { $0.contains(point) }
+    }
+
+    private func leaveDrop() {
+        guard insideDrop || !dragOperation.isEmpty else { return }
+        insideDrop = false
+        dragOperation = []
+        onDragExited()
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

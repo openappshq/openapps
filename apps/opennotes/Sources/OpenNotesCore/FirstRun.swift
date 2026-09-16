@@ -78,9 +78,10 @@ nonisolated public enum OnboardingLaunch {
 /// trial nor a license record in the record store, both positively absent.
 /// Anything else — an upgrade, a reinstall over kept records, a setting the
 /// user once turned off — is left alone. Decided once; the flag makes every
-/// later launch leave the setting as is. Two settings follow this rule
-/// (RELEASES.md, "In-app updater"): "Open at login" and "Check for updates
-/// automatically".
+/// later launch leave the setting as is. Three settings follow this rule:
+/// "Open at login" and "Check for updates automatically" (RELEASES.md,
+/// "In-app updater"), and "Keep notes out of screen sharing"
+/// (design/products/opennotes.md, "Settings").
 nonisolated public struct FreshInstallDefault {
     public enum Key {
         /// The login-item default was applied (or found unnecessary); never again.
@@ -89,6 +90,11 @@ nonisolated public struct FreshInstallDefault {
         public static let updateChecksApplied = "updates.checkDefaultApplied"
         /// The deck's display default ("every display") was applied (or found unnecessary); never again.
         public static let displayApplied = "deck.displayDefaultApplied"
+        /// The screen-sharing default was applied (or found unnecessary); never again.
+        public static let screenSharingApplied = "screenSharing.defaultApplied"
+        /// The setting itself (the app's Preferences.swift): the deck and
+        /// All Notes ask macOS to be left out of screen captures.
+        public static let hideFromScreenSharing = "screenSharing.hideNotes"
 
         /// Every preference the app writes to its standard defaults domain
         /// (the updater's included): any one present at launch, whatever its
@@ -100,9 +106,10 @@ nonisolated public struct FreshInstallDefault {
             // OnboardingLaunch
             OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step,
             // These defaults' own flags: any decided means an earlier launch resolved it.
-            loginItemApplied, updateChecksApplied, displayApplied,
+            loginItemApplied, updateChecksApplied, displayApplied, screenSharingApplied,
             // Preferences (the app's Preferences.swift): the deck, capture and note defaults.
             "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.font", "notes.size", "notes.color", "notes.autoArchiveDays",
+            hideFromScreenSharing,
             // WelcomeNote: the welcome note was written or found unnecessary.
             WelcomeNote.Key.decided,
             // OpenAppsUpdater (Updater.Key): both toggles and the last check.
@@ -128,6 +135,11 @@ nonisolated public struct FreshInstallDefault {
     /// (`markDecided`).
     public static func display(store: any FlagStore) -> FreshInstallDefault {
         FreshInstallDefault(store: store, key: Key.displayApplied)
+    }
+
+    /// "Keep notes out of screen sharing".
+    public static func screenSharing(store: any FlagStore) -> FreshInstallDefault {
+        FreshInstallDefault(store: store, key: Key.screenSharingApplied)
     }
 
     private let store: any FlagStore

@@ -26,6 +26,20 @@ final class DeckHost {
         // The default font or size changed: every note without its own
         // re-renders in it.
         observeChanges({ [preferences] in _ = preferences.face; _ = preferences.font; _ = preferences.size }, onChange: { [weak self] in self?.notesChanged() })
+        // "Keep notes out of screen sharing": every deck's window follows.
+        // Turned off, a deck once hidden cannot be shown again (macOS never
+        // raises a window's sharing type, `ScreenSharing`): that deck is
+        // torn down — its open note saved and slid back — and made anew.
+        observeChanges({ [preferences] in _ = preferences.hideFromScreenSharing }, onChange: { [weak self] in
+            guard let self else { return }
+            var replaced = false
+            for (id, controller) in self.controllers where !controller.applyScreenSharing() {
+                controller.tearDown()
+                self.controllers[id] = nil
+                replaced = true
+            }
+            if replaced { self.rebuild() }
+        })
         observeChanges({ [model] in _ = model.revision }, onChange: { [weak self] in self?.notesChanged() })
         model.onRedirect = { [weak self] from, to in
             guard let self else { return }

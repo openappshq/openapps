@@ -131,6 +131,14 @@ struct SettingsView: View {
     private var general: some View {
         Section {
             LoginItemToggle(loginItem: loginItem)
+            Toggle(isOn: $preferences.hideFromScreenSharing) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep notes out of screen sharing")
+                        .font(Brand.body(14))
+                        .foregroundStyle(Brand.textPrimary)
+                    note("Asks macOS to leave the deck and All Notes out of screen captures while they stay on your screen. Not a guarantee: some capture tools ignore it. Settings and the setup guide are shared as usual.")
+                }
+            }
             Picker(selection: $preferences.side) {
                 ForEach(DeckSide.allCases, id: \.self) { side in
                     Text(side.title).tag(side)
