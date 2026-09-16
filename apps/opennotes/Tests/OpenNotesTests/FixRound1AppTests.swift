@@ -26,7 +26,7 @@ final class AppModelFixRound1Tests: XCTestCase {
     @MainActor private func makeModel() -> AppModel {
         let preferences = Preferences(defaults: temporary.defaults)
         preferences.folder = folder
-        let model = AppModel(preferences: preferences, store: NoteStore(folder: folder) { [self] in clock }, watcher: FolderWatcher()) { [self] in clock }
+        let model = AppModel(preferences: preferences, license: LicenseStatus(startsRestricted: false), store: NoteStore(folder: folder) { [self] in clock }, watcher: FolderWatcher()) { [self] in clock }
         model.store.load(create: false)
         return model
     }

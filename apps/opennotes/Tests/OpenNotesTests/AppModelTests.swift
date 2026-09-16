@@ -24,7 +24,7 @@ final class AppModelTests: XCTestCase {
     @MainActor private func makeModel() -> AppModel {
         let preferences = Preferences(defaults: temporary.defaults)
         preferences.folder = folder
-        let model = AppModel(preferences: preferences, store: NoteStore(folder: folder) { [self] in clock }, watcher: FolderWatcher()) { [self] in clock }
+        let model = AppModel(preferences: preferences, license: LicenseStatus(startsRestricted: false), store: NoteStore(folder: folder) { [self] in clock }, watcher: FolderWatcher()) { [self] in clock }
         model.store.load(create: false)
         return model
     }
@@ -264,7 +264,7 @@ final class WiringTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let preferences = Preferences(defaults: temporary.defaults)
         preferences.folder = folder
-        let model = AppModel(preferences: preferences, store: NoteStore(folder: folder), watcher: FolderWatcher())
+        let model = AppModel(preferences: preferences, license: LicenseStatus(startsRestricted: false), store: NoteStore(folder: folder), watcher: FolderWatcher())
         model.store.load(create: false)
         let text = Diagnostics.text(model: model, preferences: preferences, loginItem: LoginItem(flags: temporary.defaults, service: FakeLoginItemService()), hotkeys: HotkeyCenter(), deck: nil)
         // Under xctest Bundle.main is the test host; only the shape is checked.

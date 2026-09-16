@@ -224,10 +224,21 @@ final class LicenseStatus {
     /// The website has a page to buy on (`LicensingConfig.buyURL`).
     private(set) var canBuy = false
 
-    @ObservationIgnored private var currentAccess: () -> Bool = { !Licensing.isCompiledIn }
-    @ObservationIgnored private var currentState: () -> LicenseState? = { Licensing.isCompiledIn ? .trialUnavailable : nil }
-    @ObservationIgnored private var currentRestriction: () -> LicenseRestriction? = { Licensing.isCompiledIn ? LicenseRestriction.card(for: .trialUnavailable) : nil }
-    @ObservationIgnored private var currentBadge: () -> LicenseBadge.Label? = { Licensing.isCompiledIn ? LicenseBadge.label(for: .trialUnavailable, appName: Licensing.appName) : nil }
+    @ObservationIgnored private var currentAccess: () -> Bool
+    @ObservationIgnored private var currentState: () -> LicenseState?
+    @ObservationIgnored private var currentRestriction: () -> LicenseRestriction?
+    @ObservationIgnored private var currentBadge: () -> LicenseBadge.Label?
+
+    /// `startsRestricted` is the flavour's default: a build with licensing
+    /// answers "starting your free trial…" (no access) until bound; a build
+    /// without answers yes and says nothing. A test that stands in for the
+    /// source flavour passes `false` explicitly.
+    init(startsRestricted: Bool = Licensing.isCompiledIn) {
+        currentAccess = { !startsRestricted }
+        currentState = { startsRestricted ? .trialUnavailable : nil }
+        currentRestriction = { startsRestricted ? LicenseRestriction.card(for: .trialUnavailable) : nil }
+        currentBadge = { startsRestricted ? LicenseBadge.label(for: .trialUnavailable, appName: Licensing.appName) : nil }
+    }
 
     /// Opens the website's OpenNotes page.
     @ObservationIgnored var buy: () -> Void = {}

@@ -33,7 +33,7 @@ final class AppModelFixRound2Tests: XCTestCase {
         let preferences = Preferences(defaults: temporary.defaults)
         preferences.folder = folder
         preferences.autoArchiveDays = 7
-        return AppModel(preferences: preferences, store: NoteStore(folder: folder) { [self] in clock }, watcher: FolderWatcher()) { [self] in clock }
+        return AppModel(preferences: preferences, license: LicenseStatus(startsRestricted: false), store: NoteStore(folder: folder) { [self] in clock }, watcher: FolderWatcher()) { [self] in clock }
     }
 
     @MainActor func testANoteThatFallsDueAfterStartIsRecognisedAsOverdue() throws {
