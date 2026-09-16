@@ -135,19 +135,19 @@ final class PreviewHarness {
             model.systemAppearance = { appearance == .aqua ? .light : .dark }
             model.editingSide = nil
             for (name, document) in documents {
-                model.draft = document
+                model.load(document)
                 await waitForPreview()
                 let stage = NotchStage(backdrop: backdrop, content: PanelContent(model: model, width: preferences.width.points, showSettings: {}, quit: {}, expandFinishes: name == "dither"))
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "panel-\(name)-\(suffix).png") { failures += 1 }
             }
             // The dark side of the starter, edited, with the favorites open.
-            model.draft = documents[0].1
+            model.load(documents[0].1)
             model.editingSide = .dark
             await waitForPreview()
             let darkSide = NotchStage(backdrop: backdrop, content: PanelContent(model: model, width: preferences.width.points, showSettings: {}, quit: {}, expandFavorites: true))
             if await !write(darkSide, scheme: scheme, appearance: appearance, to: "panel-darkside-\(suffix).png") { failures += 1 }
             model.editingSide = nil
-            model.draft = documents[0].1
+            model.load(documents[0].1)
             await waitForPreview()
             if await !write(PopoverStage(model: model), scheme: scheme, appearance: appearance, to: "popover-\(suffix).png") { failures += 1 }
             // Restricted: the license card in the generator's place.

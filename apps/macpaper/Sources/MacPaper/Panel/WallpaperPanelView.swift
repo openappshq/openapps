@@ -177,11 +177,11 @@ private struct SideAndPairRow: View {
             SegmentedControl(title: "Side", selection: Binding(get: { model.shownSide }, set: { model.editingSide = $0 }), choices: Side.allCases.map { ($0, $0.title) })
                 .frame(width: 130)
             Menu {
-                Button("Still") { model.draft.pair = .still }
-                Button("Light / Dark pair") { model.draft.pair = .lightDark }
+                Button("Still") { model.setPair(.still) }
+                Button("Light / Dark pair") { model.setPair(.lightDark) }
                 Menu("Time of day") {
                     ForEach(PairMode.frameCounts, id: \.self) { frames in
-                        Button("\(frames) frames") { model.draft.pair = .timeOfDay(frames: frames) }
+                        Button("\(frames) frames") { model.setPair(.timeOfDay(frames: frames)) }
                     }
                 }
             } label: {
@@ -227,32 +227,32 @@ private struct FinishEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Brand.Space.s8) {
-            LabeledSlider(title: "Grain", value: $model.draft.grain, range: 0...1, format: { "\(Int($0 * 100))%" })
-            LabeledSlider(title: "Top shade", value: $model.draft.finish.topShade, range: 0...1, format: { "\(Int($0 * 100))%" })
-            OptionalFinishRow(title: "Tint", isOn: Binding(get: { model.draft.finish.tint != nil }, set: { on in model.draft.finish.tint = on ? Tint(color: model.draft.generator.colors.first ?? .black, amount: 0.4) : nil })) {
+            LabeledSlider(title: "Grain", value: model.binding(\.grain), range: 0...1, format: { "\(Int($0 * 100))%" })
+            LabeledSlider(title: "Top shade", value: model.binding(\.finish.topShade), range: 0...1, format: { "\(Int($0 * 100))%" })
+            OptionalFinishRow(title: "Tint", isOn: Binding(get: { model.draft.finish.tint != nil }, set: { on in model.setFinish { $0.tint = on ? Tint(color: model.draft.generator.colors.first ?? .black, amount: 0.4) : nil } })) {
                 if let tint = model.draft.finish.tint {
-                    ColorWell(title: "Tint color", color: Binding(get: { tint.color }, set: { model.draft.finish.tint = Tint(color: $0, amount: tint.amount) }))
-                    Slider(value: Binding(get: { tint.amount }, set: { model.draft.finish.tint = Tint(color: tint.color, amount: $0) }), in: 0...1) { Text("Tint amount") }
+                    ColorWell(title: "Tint color", color: Binding(get: { tint.color }, set: { color in model.setFinish { $0.tint = Tint(color: color, amount: tint.amount) } }))
+                    Slider(value: Binding(get: { tint.amount }, set: { amount in model.setFinish { $0.tint = Tint(color: tint.color, amount: amount) } }), in: 0...1) { Text("Tint amount") }
                         .labelsHidden()
                         .tint(Brand.accentSolid)
                     Text("\(Int(tint.amount * 100))%").font(Brand.mono(11)).foregroundStyle(Brand.textSecondary).frame(width: 44, alignment: .trailing)
                 }
             }
-            OptionalFinishRow(title: "Duotone", isOn: Binding(get: { model.draft.finish.duotone != nil }, set: { on in model.draft.finish.duotone = on ? Duotone(shadow: RGBAColor(hex: 0x242B55), highlight: RGBAColor(hex: 0xFFD528)) : nil })) {
+            OptionalFinishRow(title: "Duotone", isOn: Binding(get: { model.draft.finish.duotone != nil }, set: { on in model.setFinish { $0.duotone = on ? Duotone(shadow: RGBAColor(hex: 0x242B55), highlight: RGBAColor(hex: 0xFFD528)) : nil } })) {
                 if let duotone = model.draft.finish.duotone {
                     Text("Shadow").font(Brand.body(12)).foregroundStyle(Brand.textSecondary)
-                    ColorWell(title: "Shadow", color: Binding(get: { duotone.shadow }, set: { model.draft.finish.duotone = Duotone(shadow: $0, highlight: duotone.highlight) }))
+                    ColorWell(title: "Shadow", color: Binding(get: { duotone.shadow }, set: { color in model.setFinish { $0.duotone = Duotone(shadow: color, highlight: duotone.highlight) } }))
                     Text("Highlight").font(Brand.body(12)).foregroundStyle(Brand.textSecondary)
-                    ColorWell(title: "Highlight", color: Binding(get: { duotone.highlight }, set: { model.draft.finish.duotone = Duotone(shadow: duotone.shadow, highlight: $0) }))
+                    ColorWell(title: "Highlight", color: Binding(get: { duotone.highlight }, set: { color in model.setFinish { $0.duotone = Duotone(shadow: duotone.shadow, highlight: color) } }))
                 }
             }
-            OptionalFinishRow(title: "Gradient map", isOn: Binding(get: { model.draft.finish.gradientMap != nil }, set: { on in model.draft.finish.gradientMap = on ? [ColorStop(position: 0, color: RGBAColor(hex: 0x163A29)), ColorStop(position: 1, color: RGBAColor(hex: 0xFFF1EA))] : nil })) {
+            OptionalFinishRow(title: "Gradient map", isOn: Binding(get: { model.draft.finish.gradientMap != nil }, set: { on in model.setFinish { $0.gradientMap = on ? [ColorStop(position: 0, color: RGBAColor(hex: 0x163A29)), ColorStop(position: 1, color: RGBAColor(hex: 0xFFF1EA))] : nil } })) {
                 if let map = model.draft.finish.gradientMap {
                     ColorRow(title: "", colors: Binding(
                         get: { map.map(\.color) },
                         set: { colors in
                             let count = max(colors.count, 1)
-                            model.draft.finish.gradientMap = colors.enumerated().map { i, color in ColorStop(position: count == 1 ? 0 : Double(i) / Double(count - 1), color: color) }
+                            model.setFinish { $0.gradientMap = colors.enumerated().map { i, color in ColorStop(position: count == 1 ? 0 : Double(i) / Double(count - 1), color: color) } }
                         }
                     ), range: GradientParameters.stopRange, labelWidth: 0)
                 }
@@ -289,7 +289,7 @@ private struct CompositionRow: View {
                 .font(Brand.body(12))
                 .foregroundStyle(Brand.textSecondary)
                 .frame(width: 64, alignment: .leading)
-            SegmentedControl(title: "Composition", selection: $model.draft.composition, choices: Composition.allCases.map { ($0, $0.title) })
+            SegmentedControl(title: "Composition", selection: model.binding(\.composition), choices: Composition.allCases.map { ($0, $0.title) })
         }
         .help("How the wallpaper composes around the notch of the display it is applied to")
     }

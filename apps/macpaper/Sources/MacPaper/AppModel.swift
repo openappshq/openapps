@@ -1,6 +1,7 @@
 import AppKit
 import MacPaperCore
 import Observation
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// Writes an export where the user asked, or asks where. The app's writes
@@ -114,14 +115,36 @@ final class AppModel {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    /// The document being edited: shown, and applied on Apply.
-    var draft: Wallpaper {
+    /// The document being edited: shown, and applied on Apply. Every edit
+    /// goes through `edit`, the one gated entry (the license is asked at
+    /// the edit, never remembered), or through `load`, which only shows.
+    private(set) var draft: Wallpaper {
         didSet {
             guard draft != oldValue else { return }
             favoritesRevision &+= 1
             schedulePreview()
             scheduleDraftSave()
         }
+    }
+
+    /// Changes the draft while the license allows generating; refused
+    /// edits are dropped (the panel shows the license card then anyway).
+    func edit(_ change: (inout Wallpaper) -> Void) {
+        guard license.hasAccess() else { return }
+        var copy = draft
+        change(&copy)
+        draft = copy
+    }
+
+    /// A binding into the draft that writes through `edit`.
+    func binding<Value>(_ keyPath: WritableKeyPath<Wallpaper, Value>) -> Binding<Value> {
+        Binding(get: { self.draft[keyPath: keyPath] }, set: { value in self.edit { $0[keyPath: keyPath] = value } })
+    }
+
+    /// Shows a document (a favorite, a shared link, a shuffle's result):
+    /// viewing is never gated.
+    func load(_ wallpaper: Wallpaper) {
+        draft = wallpaper
     }
     /// The side the panel edits and shows: the Mac's appearance until the
     /// user picks one.
@@ -256,11 +279,8 @@ final class AppModel {
     var editedGenerator: Generator {
         get { draft.generator(for: shownSide) }
         set {
-            if shownSide == .dark {
-                draft.darkGenerator = newValue
-            } else {
-                draft.generator = newValue
-            }
+            let side = shownSide
+            edit { if side == .dark { $0.darkGenerator = newValue } else { $0.generator = newValue } }
         }
     }
 
@@ -274,38 +294,48 @@ final class AppModel {
 
     /// Derives the dark side from the light one again (drops the edits).
     func resetDarkSide() {
-        draft.darkGenerator = nil
+        edit { $0.darkGenerator = nil }
     }
 
     /// Makes the derived dark side editable as its own generator.
     func materializeDarkSide() {
-        if draft.darkGenerator == nil { draft.darkGenerator = draft.generator.darkened() }
+        edit { if $0.darkGenerator == nil { $0.darkGenerator = $0.generator.darkened() } }
     }
 
     /// A new seed, same generator and parameters.
     func reseed() {
-        draft = draft.reseeded()
+        edit { $0 = $0.reseeded() }
     }
 
     /// Sets the seed the user typed, if it is one.
     func setSeed(_ text: String) -> Bool {
         guard let seed = UInt64(text.trimmingCharacters(in: .whitespaces)) else { return false }
-        draft = draft.reseeded(seed)
+        edit { $0 = $0.reseeded(seed) }
         return true
     }
 
     /// `#000000`, every finish off: exact zeros.
     func useTrueBlack() {
-        draft.generator = .solid(SolidParameters(color: .black))
-        draft.darkGenerator = nil
-        draft.grain = 0
-        draft.finish = Finish()
-        if draft.composition == .pill { draft.composition = .none }
+        edit {
+            $0.generator = .solid(SolidParameters(color: .black))
+            $0.darkGenerator = nil
+            $0.grain = 0
+            $0.finish = Finish()
+            if $0.composition == .pill { $0.composition = .none }
+        }
     }
 
     /// Shades the top so the menu bar reads: the one-click fix.
     func shadeTheTop() {
-        draft.finish.topShade = 0.7
+        edit { $0.finish.topShade = 0.7 }
+    }
+
+    func setPair(_ pair: PairMode) {
+        edit { $0.pair = pair }
+    }
+
+    func setFinish(_ change: (inout Finish) -> Void) {
+        edit { change(&$0.finish) }
     }
 
     /// The focal point of a framed image, from a drag on the preview.
@@ -466,7 +496,7 @@ final class AppModel {
     }
 
     func load(_ favorite: Favorite) {
-        draft = favorite.wallpaper
+        load(favorite.wallpaper)
     }
 
     /// Never show this: blocked for shuffle, dropped from the favorites,
@@ -477,7 +507,7 @@ final class AppModel {
             try? favorites.remove(draft)
             favoritesRevision &+= 1
             show("Never shown again by shuffle.")
-            draft = draft.reseeded()
+            load(draft.reseeded())
         } catch {
             show("Couldn’t save: \(error.localizedDescription)", tone: .error)
         }
@@ -505,7 +535,7 @@ final class AppModel {
     /// A link opened from anywhere: the document becomes the draft.
     func open(sharedLink url: URL) {
         do {
-            draft = try ShareCode.decode(url: url)
+            load(try ShareCode.decode(url: url))
             let note = draft.generator.source != nil ? " Its photo isn’t on this Mac: import one." : ""
             show("Opened a shared wallpaper.\(note)")
         } catch {
@@ -515,7 +545,7 @@ final class AppModel {
 
     /// Remix: the loaded document with a new seed.
     func remix() {
-        draft = draft.reseeded()
+        edit { $0 = $0.reseeded() }
         show("Remixed.")
     }
 
@@ -542,7 +572,7 @@ final class AppModel {
         var generator = SeededGenerator(seed: .randomSeed())
         let targets = preferences.sameOnAllDisplays ? displays : currentDisplay.map { [$0] } ?? displays
         let plan = shufflePlan(for: targets, using: &generator)
-        if let mine = currentDisplay.flatMap({ plan[$0] }) ?? plan.values.first { draft = mine }
+        if let mine = currentDisplay.flatMap({ plan[$0] }) ?? plan.values.first { load(mine) }
         run(plan, verb: "Shuffled", perSpace: false)
     }
 
@@ -553,7 +583,7 @@ final class AppModel {
         var generator = SeededGenerator(seed: .randomSeed())
         let plan = shufflePlan(for: displays, using: &generator)
         let draftWasApplied = currentApplied == draft
-        if draftWasApplied, let mine = currentDisplay.flatMap({ plan[$0] }) { draft = mine }
+        if draftWasApplied, let mine = currentDisplay.flatMap({ plan[$0] }) { load(mine) }
         run(plan, verb: "Shuffled", perSpace: false)
     }
 
