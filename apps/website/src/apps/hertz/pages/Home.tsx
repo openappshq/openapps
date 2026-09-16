@@ -45,7 +45,7 @@ const readings: [string, string][] = [
 const questions = [
   [
     "What do I need to run it?",
-    "macOS 14 Sonoma or later, and Homebrew to install it. The release is a universal binary signed with our release certificate; per-core detail and temperatures are best on Apple silicon. Building from source stays free and needs no key.",
+    "macOS 14 Sonoma or later; one Terminal line installs it, or Homebrew. The release is a universal binary signed with our release certificate; per-core detail and temperatures are best on Apple silicon. Building from source stays free and needs no key.",
   ],
   [
     "How do licenses and trials work?",

@@ -10,14 +10,18 @@ const SHARE_TEXT = "I just gave my MacBook keyboard a Cherry MX Brown. OpenKlack
 
 export default function DownloadPage({
   // Only when the app's product and cask are configured; the download is a bonus.
+  installCommand = licensingFor("openklack").installCommand,
   brewCommand = licensingFor("openklack").brewCommand,
   downloadUrl = licensingFor("openklack").downloadUrl,
 }: {
+  installCommand?: string | null;
   brewCommand?: string | null;
   downloadUrl?: string | null;
 }) {
   return (
     <Page
+      installCommand={installCommand}
+      installScriptSourceUrl={licensingFor("openklack").installScriptSourceUrl}
       brewCommand={brewCommand}
       downloadUrl={downloadUrl}
       name="OpenKlack"

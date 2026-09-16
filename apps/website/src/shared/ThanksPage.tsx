@@ -143,11 +143,16 @@ export default function ThanksPage({
           <span>01</span>
           <div>
             <h2>Install {appName}</h2>
-            {licensing?.brewCommand ? (
+            {licensing?.installCommand ? (
               <>
                 {/* The buyer may not have the app yet: the install is one line, right here. */}
-                <p>Don’t have it yet? Paste this into Terminal, then open {licensing.name}.</p>
-                <InstallCommand command={licensing.brewCommand} />
+                <p>Don’t have it yet? This installs and opens {licensing.name}.</p>
+                <InstallCommand
+                  command={licensing.installCommand}
+                  name={licensing.name}
+                  sourceUrl={licensing.installScriptSourceUrl}
+                  brewCommand={licensing.brewCommand}
+                />
                 <p>
                   {permissions}
                   {licensing.downloadUrl && (

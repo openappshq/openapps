@@ -13,12 +13,15 @@ import InstallCommand from "./InstallCommand";
 import "./download.css";
 
 /**
- * Where an app's install button lands. The app ships as a Homebrew cask, so the
- * page leads with the command; with a direct installer configured the file
- * starts on its own and everything else is for the person it did not start for,
- * and for the minute after it did.
+ * Where an app's install button lands. The app installs from one Terminal line
+ * (the install script, with Homebrew as the alternative), so the page leads
+ * with the command; with a direct installer configured the file starts on its
+ * own and everything else is for the person it did not start for, and for the
+ * minute after it did.
  */
 export default function DownloadPage({
+  installCommand,
+  installScriptSourceUrl,
   brewCommand,
   downloadUrl: directUrl,
   app,
@@ -31,7 +34,11 @@ export default function DownloadPage({
   header,
   footer,
 }: {
-  /** `brew install --cask …`. Without one, the page says the release is coming soon. */
+  /** `curl … | sh`. Without one, the page says the release is coming soon. */
+  installCommand?: string | null;
+  /** Where the script is read; the note beside the command links to it. */
+  installScriptSourceUrl: string;
+  /** `brew install --cask …`, offered under the command as the alternative. */
   brewCommand?: string | null;
   /** An optional direct installer, offered beside the command; never on its own. */
   downloadUrl?: string | null;
@@ -49,8 +56,8 @@ export default function DownloadPage({
   header: ReactNode;
   footer: ReactNode;
 }) {
-  // The cask is the gate; a file is only ever offered beside it.
-  const available = !!brewCommand;
+  // The script (published with the cask) is the gate; a file is only ever offered beside it.
+  const available = !!installCommand;
   const downloadUrl = available ? directUrl : null;
   const start = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
@@ -97,7 +104,14 @@ export default function DownloadPage({
                       ? `Paste this into Terminal. Your ${TRIAL_DAYS}-day trial begins the first time you open the app.`
                       : `The ${name} Mac release is coming soon. When it lands, it installs from here with a ${TRIAL_DAYS}-day trial, no signup.`}
                 </p>
-                {brewCommand && <InstallCommand command={brewCommand} />}
+                {installCommand && (
+                  <InstallCommand
+                    command={installCommand}
+                    name={name}
+                    sourceUrl={installScriptSourceUrl}
+                    brewCommand={brewCommand}
+                  />
+                )}
                 <div className="hero-actions">
                   {/* Only the configured official installer; never a guess. */}
                   {downloadUrl && (
@@ -137,11 +151,11 @@ export default function DownloadPage({
                   {permission ? "Then say yes once." : "Then nothing to grant."}
                 </h2>
                 <div className="install-figure reveal">
-                  {/* No disk image to rehearse: Homebrew puts the app in place and opens it. */}
+                  {/* No disk image to rehearse: the script puts the app in place and opens it. */}
                   <p>
                     {permission
-                      ? `Homebrew puts ${name} in your Applications folder and opens it. Allow ${permission} when macOS asks. That is the whole setup.`
-                      : `Homebrew puts ${name} in your Applications folder and opens it. It asks for no permissions, so that is the whole setup.`}
+                      ? `The command puts ${name} in your Applications folder and opens it. Allow ${permission} when macOS asks. That is the whole setup.`
+                      : `The command puts ${name} in your Applications folder and opens it. It asks for no permissions, so that is the whole setup.`}
                   </p>
                 </div>
               </>

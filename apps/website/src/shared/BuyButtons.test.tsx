@@ -36,40 +36,46 @@ test("without a configured product and cask, Buy is a coming-soon plate, not a c
     const html = renderToStaticMarkup(<BuyButtons app={product.id} />);
     expect(html, product.id).toContain("Coming soon");
     expect(html, product.id).toContain('aria-disabled="true"');
-    expect(html, product.id).toContain("Install with Homebrew");
+    expect(html, product.id).toContain("Install for Mac");
     expect(html, product.id).not.toContain("Download for Mac");
+    expect(html, product.id).not.toContain("curl ");
     expect(html, product.id).not.toContain("brew install");
     expect(html, product.id).not.toContain("dodopayments.com");
   }
 });
 
-test("with a product and cask, the brew command is shown with a Copy button and Buy is live", () => {
+test("with a product and cask, the install line is shown with a Copy button, Homebrew under it, and Buy is live", () => {
   for (const product of paidProducts) {
     const licensing = licensingFor(product.id, { dodo, casks, downloads: {} });
     const html = renderToStaticMarkup(<BuyButtons app={product.id} licensing={licensing} />);
     expect(html, product.id).toContain(
-      `<code tabindex="-1">brew install --cask ${casks[product.id as keyof typeof casks]}</code>`,
+      `<code tabindex="-1">curl -fsSL https://openapps.space/install/${product.id} | sh</code>`,
     );
     expect(html, product.id).toContain('aria-label="Copy install command"');
-    expect(html, product.id).toContain('href="https://brew.sh"');
-    expect(html, product.id).toContain("Requires");
+    expect(html, product.id).toContain(
+      `Prefer Homebrew? <code>brew install --cask ${casks[product.id as keyof typeof casks]}</code>`,
+    );
+    expect(html, product.id).toContain(
+      `href="https://github.com/openappshq/openapps/blob/main/apps/website/public/install/${product.id}"`,
+    );
     expect(html, product.id).toContain(`href="${licensing.buyUrl!.replace("&", "&amp;")}"`);
     expect(html, product.id).toContain("dodopayments.com");
     expect(html, product.id).not.toContain("Coming soon");
-    // Brew is the only way in: no button points at a page that repeats the command.
+    // The command is the way in: no button points at a page that repeats it.
     expect(html, product.id).not.toContain(`href="${product.route}/download/"`);
     expect(html, product.id).not.toContain("Download for Mac");
   }
 });
 
-test("with a direct download too, the Download button stays beside the brew command", () => {
+test("with a direct download too, the Download button stays beside the install line", () => {
   for (const product of paidProducts) {
     const licensing = licensingFor(product.id, { dodo, casks, downloads });
     const html = renderToStaticMarkup(<BuyButtons app={product.id} licensing={licensing} />);
+    expect(html, product.id).toContain(`https://openapps.space/install/${product.id} | sh`);
     expect(html, product.id).toContain("brew install --cask");
     expect(html, product.id).toContain(`href="${product.route}/download/"`);
     expect(html, product.id).toContain("Download for Mac");
-    expect(html, product.id).not.toContain("Install with Homebrew");
+    expect(html, product.id).not.toContain("Install for Mac");
     expect(html, product.id).not.toContain("Coming soon");
   }
 });
@@ -79,6 +85,7 @@ test("a direct download alone never opens Buy", () => {
     const licensing = licensingFor(product.id, { dodo, casks: {}, downloads });
     const html = renderToStaticMarkup(<BuyButtons app={product.id} licensing={licensing} />);
     expect(html, product.id).toContain("Coming soon");
+    expect(html, product.id).not.toContain("curl ");
     expect(html, product.id).not.toContain("brew install");
     expect(html, product.id).not.toContain("dodopayments.com");
   }

@@ -8,9 +8,10 @@ import { installLabel, licensingFor, TRIAL_DAYS, type AppLicensing } from "./lic
  * one are a single act - but the button stays short and the trial is stated
  * under it, where a long label would only have weakened the call.
  *
- * The install is a Homebrew command, shown in full with a Copy button. A direct
- * download, when one is configured, keeps its button beside it; without one the
- * command is the primary action and nothing points at a page that just repeats it.
+ * The install is one Terminal line, shown in full with a Copy button, Homebrew
+ * under it as the alternative. A direct download, when one is configured, keeps
+ * its button beside it; without one the command is the primary action and
+ * nothing points at a page that just repeats it.
  */
 /** What the apps need unless one says otherwise. */
 export const DEFAULT_REQUIREMENTS = (
@@ -32,15 +33,22 @@ export default function BuyButtons({
   /** Overrides the environment's licensing (tests). */
   licensing?: AppLicensing;
 }) {
-  const { buyUrl, brewCommand, downloadUrl, downloadPageUrl, price } = licensing;
+  const { buyUrl, installCommand, brewCommand, downloadUrl, downloadPageUrl, price } = licensing;
   const size = small ? " small" : "";
-  // Homebrew only: the command is the primary action, so Buy takes the primary plate.
-  const buyStyle = brewCommand && !downloadUrl ? "primary" : "secondary";
+  // The command only: it is the primary action, so Buy takes the primary plate.
+  const buyStyle = installCommand && !downloadUrl ? "primary" : "secondary";
 
   return (
     <div className="buy-buttons">
-      {brewCommand && <InstallCommand command={brewCommand} />}
-      {(downloadUrl || !brewCommand) && (
+      {installCommand && (
+        <InstallCommand
+          command={installCommand}
+          name={licensing.name}
+          sourceUrl={licensing.installScriptSourceUrl}
+          brewCommand={brewCommand}
+        />
+      )}
+      {(downloadUrl || !installCommand) && (
         <a className={`button-link primary${size}`} href={downloadPageUrl}>
           {installLabel(licensing)}{" "}
           {downloadUrl ? (
