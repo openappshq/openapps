@@ -177,7 +177,7 @@ struct SettingsView: View {
 
     private var folderNote: String {
         var text = "One .md file per note. Switching copies the notes to the new folder; files are never moved or removed."
-        if let line = model.storageStatusLine { text = line + " · " + text }
+        if let line = model.storageStatusLine { text = line + " · " + text } else if let problem = model.folderProblem { text = problem + " · " + text }
         if model.readOnly { text += " Changing the folder waits for a license (read-only)." }
         return text
     }

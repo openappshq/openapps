@@ -37,6 +37,11 @@ final class AppModel {
     /// What the last storage switch copied (Settings shows it under the
     /// choice until the next switch).
     private(set) var storageNotice: String?
+    /// The store's last `storageProblem` (a write it could not settle
+    /// cleanly; every version on disk under some name), shown in the
+    /// note's footer, All Notes and Settings until the next write of any
+    /// note goes through without one.
+    private(set) var storageProblem: String?
     /// The pending Undo for the deck's toast.
     private(set) var undo = ArchiveUndo()
     /// The trial ended or a license is needed: the store refuses every
@@ -135,6 +140,8 @@ final class AppModel {
         guard allowed() else { return }
         _ = flush()
         scheduleAutoArchive(runNow: true)
+        // Conflict versions found while read-only are written out now.
+        rescan()
     }
 
     // MARK: - Notes
@@ -206,6 +213,7 @@ final class AppModel {
         saveTimers[id]?.invalidate()
         saveTimers[id] = nil
         do {
+            storageProblem = nil
             let outcome = try store.save(id)
             saveProblem = nil
             revision += 1
@@ -228,6 +236,7 @@ final class AppModel {
     func flush() -> [NoteID: String] {
         for timer in saveTimers.values { timer.invalidate() }
         saveTimers = [:]
+        if !store.unsavedNotes.isEmpty { storageProblem = nil }
         let problems = store.saveAll()
         saveProblem = problems.isEmpty ? nil : "Couldn’t save: \(problems.values.sorted().first ?? "")"
         revision += 1
@@ -284,8 +293,18 @@ final class AppModel {
         _ = revision
         guard store.folderIsUbiquitous else { return nil }
         let place = preferences.storage == .iCloudDrive ? "In iCloud Drive" : "In iCloud"
+        if let storageProblem { return "\(place) · \(storageProblem)" }
+        if let problem = store.conflictProblem { return "\(place) · \(problem)" }
         if let problem = store.downloadProblem { return "\(place) · \(problem)" }
         return "\(place) · \(store.storageStatus.text)"
+    }
+
+    /// A problem the folder has that is not one note's: the store's last
+    /// unsettled write, a conflict version it could not keep. Settings
+    /// shows it whatever the folder.
+    var folderProblem: String? {
+        _ = revision
+        return storageProblem ?? store.conflictProblem
     }
 
     /// The folder the open panel returned: asked again here, since the
@@ -360,8 +379,10 @@ final class AppModel {
         _ = revision
         if readOnly { return readOnlyNotice }
         if let saveProblem { return saveProblem }
+        if let storageProblem { return storageProblem }
         if let lastConflict, lastConflict.id == id { return "“\(lastConflict.original.fileName)” was changed outside; your text continues here, in \(id.fileName)." }
         guard let note = store.note(id) else { return "" }
+        if let refused = store.downloadProblems[id] { return "iCloud Drive refused the download (\(refused)); asked again on the next look." }
         if note.isDownloading, !note.bodyIsLoaded { return "Downloading from iCloud Drive…" }
         if note.isDownloading { return "Waiting for iCloud Drive to bring the file back; your text is kept." }
         if !note.bodyIsLoaded { return "Can’t read this note right now; shown in part." }
@@ -369,7 +390,7 @@ final class AppModel {
         if store.hasUnsavedChanges(id) { return "Editing…" }
         var line = "Saved · \(Age.text(note.modified, now: now()))"
         if store.folderIsUbiquitous {
-            line += store.storageStatus == .upToDate ? " · in iCloud Drive" : " · iCloud Drive: \(store.storageStatus.text)"
+            line += store.storageStatus == .allOnThisMac ? " · in iCloud Drive" : " · iCloud Drive: \(store.storageStatus.text)"
         }
         return line
     }
@@ -475,6 +496,10 @@ final class AppModel {
             // A note that could fall due may have appeared or changed: the
             // next wake follows it (nothing runs now, nothing while off).
             if preferences.autoArchiveDays > 0 { scheduleAutoArchive(runNow: false) }
+        case .storageProblem(let message):
+            // A write the store could not settle cleanly: nothing was
+            // deleted, every version is on disk, and the footer says where.
+            storageProblem = message
         default:
             break
         }
@@ -486,6 +511,7 @@ final class AppModel {
     private func attempt(_ work: () throws -> Void) {
         guard allowed() else { return }
         do {
+            storageProblem = nil
             try work()
             saveProblem = nil
         } catch {

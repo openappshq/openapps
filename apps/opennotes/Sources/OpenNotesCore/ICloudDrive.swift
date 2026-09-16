@@ -3,8 +3,9 @@ import Foundation
 /// Where the notes live: the choice Settings → General and the setup
 /// guide's files step offer (design/products/opennotes.md, "Storage").
 /// Derived from the folder path, never stored on its own: the folder
-/// preference is the one record, so an older install with a chosen
-/// folder reads as "Other folder".
+/// preference is the one record, so a chosen folder that is one of the
+/// two built-in paths reads as that choice and any other as "Other
+/// folder".
 nonisolated public enum StorageChoice: String, CaseIterable, Sendable {
     /// `~/Documents/OpenNotes`.
     case thisMac
@@ -106,9 +107,11 @@ public protocol UbiquityConflictVersion: AnyObject {
     func markResolved()
 }
 
-/// `FileManager` and `NSFileVersion`: the real thing. Both work on any
-/// path under iCloud Drive without the container entitlement (the app is
-/// not sandboxed and ships self-signed).
+/// `FileManager` and `NSFileVersion`: the real thing. Both are called on
+/// plain paths under iCloud Drive from an unsandboxed, self-signed app
+/// with no container entitlement; `isUbiquitousItem` is known to answer
+/// there, the download request and the version query are expected to and
+/// their refusals are surfaced, never assumed away.
 public final class FileManagerUbiquity: Ubiquity {
     private let fileManager: FileManager
 
@@ -157,21 +160,27 @@ public final class FileManagerUbiquity: Ubiquity {
 /// What the footer says about iCloud Drive while it is the folder in use
 /// (design/products/opennotes.md, "Storage").
 nonisolated public enum StorageStatus: Hashable, Sendable {
-    /// Every note's file is on disk and nothing is held.
-    case upToDate
+    /// Every note's file is on this Mac and nothing is held. Only what the
+    /// file system shows: whether iCloud has finished uploading is not
+    /// observed, so nothing is claimed about the other Macs.
+    case allOnThisMac
     /// Files iCloud has not downloaded; `requested` of them were asked for
     /// (a note opened).
     case notDownloaded(count: Int, requested: Int)
     /// A write is held until iCloud brings a file back (a note evicted
     /// while it had unsaved text).
     case waiting
+    /// Conflict versions iCloud kept that wait for a license to be written
+    /// out as conflict copies.
+    case conflictsWaiting(Int)
 
     public var text: String {
         switch self {
-        case .upToDate: "up to date"
+        case .allOnThisMac: "all notes on this Mac"
         case .notDownloaded(let count, let requested):
             requested > 0 ? "downloading \(requested) of \(count)" : "\(count) not downloaded"
         case .waiting: "waiting for iCloud"
+        case .conflictsWaiting(let count): "\(count) conflict \(count == 1 ? "version waits" : "versions wait") for a license"
         }
     }
 }

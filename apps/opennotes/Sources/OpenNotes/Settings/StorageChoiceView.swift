@@ -100,7 +100,7 @@ enum FolderChooser {
 }
 
 /// One line under All Notes' list about iCloud, while the folder is
-/// iCloud's: "In iCloud Drive · up to date". Nothing otherwise.
+/// iCloud's: "In iCloud Drive · all notes on this Mac". Nothing otherwise.
 struct StorageStatusRow: View {
     let line: String
 

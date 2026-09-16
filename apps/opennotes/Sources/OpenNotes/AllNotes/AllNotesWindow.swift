@@ -205,23 +205,30 @@ struct AllNotesView: View {
     }
 
     private func row(_ note: Note) -> some View {
-        HStack(alignment: .top, spacing: Brand.Space.s8) {
+        // A note iCloud has not downloaded is only its file name: greyed,
+        // and said so where the preview line goes.
+        let downloading = note.isDownloading && !note.bodyIsLoaded
+        return HStack(alignment: .top, spacing: Brand.Space.s8) {
             RoundedRectangle(cornerRadius: 2).fill(Brand.tab(note.color)).frame(width: 4, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     if note.pinned { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(Brand.textSecondary) }
-                    Text(note.title).font(Brand.body(13, weight: 600)).foregroundStyle(Brand.textPrimary).lineLimit(1)
+                    Text(note.title).font(Brand.body(13, weight: 600)).foregroundStyle(downloading ? Brand.textSecondary : Brand.textPrimary).lineLimit(1)
                 }
-                Text(note.preview.isEmpty ? " " : note.preview).font(Brand.body(12)).foregroundStyle(Brand.textSecondary).lineLimit(1)
+                Text(downloading ? "Downloading…" : (note.preview.isEmpty ? " " : note.preview)).font(Brand.body(12)).foregroundStyle(Brand.textSecondary).lineLimit(1)
             }
             Spacer(minLength: 4)
-            Text(Age.text(note.modified)).font(Brand.mono(10)).foregroundStyle(Brand.textSecondary)
+            if downloading {
+                Image(systemName: "icloud.and.arrow.down").font(.system(size: 11)).foregroundStyle(Brand.textSecondary)
+            } else {
+                Text(Age.text(note.modified)).font(Brand.mono(10)).foregroundStyle(Brand.textSecondary)
+            }
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { if !note.archived { openNote(note.id) } }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(note.title), \(Age.text(note.modified))")
+        .accessibilityLabel(downloading ? "\(note.title), downloading" : "\(note.title), \(Age.text(note.modified))")
     }
 
     private var preview: some View {
@@ -237,8 +244,11 @@ struct AllNotesView: View {
                             Button("Archive") { model.archive(note.id) }.disabled(model.readOnly)
                         }
                         Spacer()
+                        // Nothing to export while the body is not here (a
+                        // note not downloaded, or unreadable): the store
+                        // refuses too, so the name never goes out as text.
                         if previewRendering {
-                            Button("Export…") {}
+                            Button("Export…") {}.disabled(!note.bodyIsLoaded)
                         } else {
                             Menu("Export…") {
                                 ForEach(ExportFormat.allCases, id: \.self) { format in
@@ -246,13 +256,21 @@ struct AllNotesView: View {
                                 }
                             }
                             .fixedSize()
+                            .disabled(!note.bodyIsLoaded)
                         }
                         Button("Reveal in Finder") { model.revealInFinder(note.id) }
                     }
                     .padding(Brand.Space.s12)
                     Divider()
                     Group {
-                        if previewRendering {
+                        if note.isDownloading, !note.bodyIsLoaded {
+                            // Selecting asked iCloud for the file; the text
+                            // follows once it is here.
+                            Text(model.statusLine(for: note.id))
+                                .font(Brand.body(14))
+                                .foregroundStyle(Brand.noteInkSecondary)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if previewRendering {
                             PreviewText(text: note.text, face: note.face, dark: colorScheme == .dark)
                                 .padding(Brand.Space.s16)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -265,7 +283,7 @@ struct AllNotesView: View {
                     }
                     .background(Brand.face(note.color))
                     Divider()
-                    Text("\(note.id.fileName) · \(note.color.title) · \(note.face.title) · created \(note.created.formatted(date: .abbreviated, time: .shortened))" + (note.bodyIsLoaded ? "" : " · can’t read the file right now; shown in part"))
+                    Text("\(note.id.fileName) · \(note.color.title) · \(note.face.title) · created \(note.created.formatted(date: .abbreviated, time: .shortened))" + (note.bodyIsLoaded ? "" : (note.isDownloading ? " · not downloaded yet" : " · can’t read the file right now; shown in part")))
                         .font(Brand.mono(10))
                         .foregroundStyle(Brand.textSecondary)
                         .lineLimit(1)
