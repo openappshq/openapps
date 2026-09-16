@@ -84,13 +84,23 @@ final class FocusMonitor {
 
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let pid = app.processIdentifier
-        let excluded = isExcluded?(app.bundleIdentifier) ?? false
-        // Decide on the main actor (where the seen-pid set lives); the write
-        // itself runs on the worker with a bounded timeout, once per pid.
-        let enableTree = activation.shouldEnable(pid: pid, excluded: excluded)
+        let bundleIdentifier = app.bundleIdentifier
         let refcon = ObserverRegistry.Refcon(Unmanaged.passUnretained(self).toOpaque())
         let treeEnabler = self.treeEnabler
         queue.async { [weak self] in
+            // Decide at execution, on the main actor where the seen-pid set and
+            // the generation live: a job delayed until focus moved, the app
+            // became excluded, or monitoring stopped must write nothing and not
+            // consume the pid. The AX write itself runs here on the worker with
+            // a bounded timeout, once per pid.
+            let enableTree = DispatchQueue.main.sync {
+                MainActor.assumeIsolated { () -> Bool in
+                    guard let self else { return false }
+                    let fresh = self.generation == current
+                    let excluded = self.isExcluded?(bundleIdentifier) ?? false
+                    return self.activation.shouldEnable(pid: pid, excluded: excluded, fresh: fresh)
+                }
+            }
             if enableTree { treeEnabler.enableTree(pid: pid) }
             let created = ObserverRegistry.register(pid: pid, refcon: refcon)
             DispatchQueue.main.async {

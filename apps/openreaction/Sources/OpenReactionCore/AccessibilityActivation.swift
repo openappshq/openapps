@@ -23,12 +23,18 @@ public struct AccessibilityActivation: Sendable {
 
     public init() {}
 
-    /// Returns true the first time a non-excluded pid is seen, and marks it so
-    /// the tree is enabled only once per pid per launch. An excluded app never
-    /// returns true; if it is later un-excluded and re-activates, the still
-    /// unseen pid enables then.
-    public mutating func shouldEnable(pid: Int32, excluded: Bool) -> Bool {
-        guard !excluded else { return false }
+    /// Returns true — and marks the pid — only the first time a non-excluded
+    /// pid is seen while the activation that queued this check is still current
+    /// (`fresh`). The pid is marked *only when it returns true*, so a stale or
+    /// excluded check writes nothing and does not consume the pid: a later
+    /// current, non-excluded activation still enables it.
+    ///
+    /// `fresh` lets a caret-thread caller carry the generation check across
+    /// queues — the tree write and this decision happen at execution time, by
+    /// which point focus may have moved, the app may have become excluded, or
+    /// monitoring may have stopped.
+    public mutating func shouldEnable(pid: Int32, excluded: Bool, fresh: Bool) -> Bool {
+        guard fresh, !excluded else { return false }
         return enabled.insert(pid).inserted
     }
 }
