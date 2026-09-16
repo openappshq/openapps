@@ -2,35 +2,6 @@ import AppKit
 import MacPaperCore
 import SwiftUI
 
-/// Installs `macPaper.saver` for the user. The app's copies the bundle
-/// shipped in its Resources into `~/Library/Screen Savers/`; the preview
-/// harness installs nothing.
-protocol ScreenSaverInstaller {
-    /// Whether the app carries the saver at all (a `swift build` does not).
-    var isAvailable: Bool { get }
-    var isInstalled: Bool { get }
-    func install() throws
-}
-
-struct BundledScreenSaverInstaller: ScreenSaverInstaller {
-    static let name = "macPaper.saver"
-    var source: URL? { Bundle.main.url(forResource: "macPaper", withExtension: "saver") }
-    var destination: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Screen Savers/\(Self.name)")
-    }
-
-    var isAvailable: Bool { source != nil }
-    var isInstalled: Bool { FileManager.default.fileExists(atPath: destination.path) }
-
-    func install() throws {
-        guard let source else { throw CocoaError(.fileNoSuchFile) }
-        let folder = destination.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
-        try FileManager.default.copyItem(at: source, to: destination)
-    }
-}
-
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let model: AppModel
     private let preferences: Preferences
@@ -41,7 +12,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// Sections other wiring appends before About: the licensing ticket's
     /// License and Updates. Set before the window first shows.
     var extraSections: [AnyView] = []
-    var screenSaver: any ScreenSaverInstaller = BundledScreenSaverInstaller()
+    var screenSaver: any ScreenSaverInstaller = SaverInstaller()
 
     init(model: AppModel, preferences: Preferences, loginItem: LoginItem, hotkeys: HotkeyCenter, diagnostics: @escaping () -> String) {
         self.model = model
@@ -88,7 +59,7 @@ struct SettingsView: View {
     let hotkeys: HotkeyCenter
     let diagnostics: () -> String
     var extraSections: [AnyView] = []
-    var screenSaver: any ScreenSaverInstaller = BundledScreenSaverInstaller()
+    var screenSaver: any ScreenSaverInstaller = SaverInstaller()
     @State private var copied = false
     @State private var saverNote: String?
     @Environment(\.previewRendering) private var previewRendering

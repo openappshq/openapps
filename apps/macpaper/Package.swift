@@ -75,7 +75,7 @@ let package = Package(
         // fresh-install default and diagnostics text. No window is opened.
         .testTarget(
             name: "MacPaperTests",
-            dependencies: ["MacPaper", "MacPaperCore"],
+            dependencies: ["MacPaper", "MacPaperCore", "MacPaperSaver"],
             swiftSettings: flavourDefines
         ),
     ]
