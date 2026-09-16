@@ -84,7 +84,10 @@ cleanup() {
     # stale one would catch `open` by bundle id and break the restart step.
     pkill -f "openreaction-update-e2e\..*/OpenReaction\.app/Contents/MacOS/OpenReaction" 2>/dev/null
     [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null
+    # `defaults delete` leaves the emptied domain behind as an empty plist;
+    # delete that too.
     defaults delete "$BUNDLE_ID" >/dev/null 2>&1
+    rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
     rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/Application Support/$BUNDLE_ID" \
         "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$TMP" build/OpenReaction.app
     echo "==> Cleaned up (${TMP}, defaults, caches)"

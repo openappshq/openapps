@@ -11,12 +11,98 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 work="$(mktemp -d)"
-server_pid=""
+server_pids=()
 cleanup() {
-    if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi
+    for pid in ${server_pids[@]+"${server_pids[@]}"}; do kill "$pid" 2>/dev/null || true; done
     rm -rf "$work"
 }
 trap cleanup EXIT
+
+# Serves a directory on 127.0.0.1: `serve <dir> <log> [media type]` leaves
+# the port in $server_port and the pid in server_pids. python3's http.server
+# first; when python3 is missing, exits, or never answers (the macos-26
+# runner let it sit through the whole wait without a line of output), ruby
+# with its socket library, which every macOS ships and needs no webrick.
+# Either prints `port <n>` first and logs every request as `"GET /path
+# HTTP/1.1"`, the line requests() counts; a media type, when given,
+# replaces the one guessed from the file name. A server counts as up only
+# once a GET on its root is answered, within 30 seconds; the log of one
+# that never gets there is printed before the next runtime is tried, and
+# the runtime that came up once serves every later directory too.
+server_runtime=""
+serve() {
+    dir="$1"; log="$2"; media_type="${3:-}"
+    server_port=""
+    for runtime in ${server_runtime:-python3 ruby}; do
+        command -v "$runtime" >/dev/null || continue
+        : > "$log"
+        case "$runtime" in
+            python3) python3 -u - "$dir" "$media_type" > "$log" 2>&1 <<'PY' &
+import functools, http.server, sys
+directory, media_type = sys.argv[1], sys.argv[2]
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def guess_type(self, path):
+        return media_type or super().guess_type(path)
+with http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=directory)) as httpd:
+    print("port", httpd.server_address[1], flush=True)
+    httpd.serve_forever()
+PY
+            ;;
+            ruby) ruby - "$dir" "$media_type" > "$log" 2>&1 <<'RB' &
+require 'socket'
+directory, media_type = File.expand_path(ARGV[0]), ARGV[1]
+server = TCPServer.new('127.0.0.1', 0)
+$stdout.puts "port #{server.addr[1]}"
+$stdout.flush
+loop do
+  Thread.new(server.accept) do |client|
+    begin
+      request = client.gets.to_s.strip
+      nil while (line = client.gets) && !line.strip.empty?
+      method, target = request.split(' ')
+      path = File.expand_path(target.to_s.sub(/\?.*/, '').sub(%r{\A/+}, ''), directory)
+      status, type, body = '404 Not Found', 'text/plain', ''
+      if method == 'GET' && (path == directory || path.start_with?(directory + '/'))
+        if File.file?(path)
+          status, type, body = '200 OK', (media_type.empty? ? 'application/octet-stream' : media_type), File.binread(path)
+        elsif File.directory?(path)
+          status, type = '200 OK', 'text/html'
+        end
+      end
+      $stderr.puts "127.0.0.1 - - \"#{request}\" #{status.split(' ').first} -"
+      client.write "HTTP/1.0 #{status}\r\nContent-Type: #{type}\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n"
+      client.write body
+    ensure
+      client.close
+    end
+  end
+end
+RB
+            ;;
+        esac
+        pid=$!
+        disown
+        server_pids+=("$pid")
+        why="did not answer within 30s"
+        for _ in $(seq 1 150); do
+            kill -0 "$pid" 2>/dev/null || { why="exited"; break; }
+            if [[ -z "$server_port" ]]; then
+                server_port="$(sed -nE 's/^port ([0-9]+)$/\1/p' "$log" | head -n 1)"
+            fi
+            if [[ -n "$server_port" ]]; then
+                code="$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' "http://127.0.0.1:$server_port/" || true)"
+                [[ "$code" =~ ^[1-5][0-9][0-9]$ ]] && { server_runtime="$runtime"; return 0; }
+            fi
+            sleep 0.2
+        done
+        kill "$pid" 2>/dev/null || true
+        echo "warning: the $runtime test server $why; its log:" >&2
+        cat "$log" >&2
+        server_port=""
+    done
+    echo "error: the test server did not start" >&2
+    exit 1
+}
 
 app=OpenKlack
 version=0.1.0
@@ -83,16 +169,8 @@ chmod +x "$work/bin"/*
 export PATH="$work/bin:$PATH"
 export TMPDIR="$work/tmp"
 
-python3 -u -m http.server --bind 127.0.0.1 --directory "$work/serve" 0 > "$work/server.log" 2>&1 &
-server_pid=$!
-disown
-port=""
-for _ in $(seq 1 50); do
-    port="$(sed -nE 's/.*port ([0-9]+).*/\1/p' "$work/server.log" | head -n 1)"
-    [[ -n "$port" ]] && break
-    sleep 0.1
-done
-[[ -n "$port" ]] || { echo "error: the test server did not start" >&2; cat "$work/server.log" >&2; exit 1; }
+serve "$work/serve" "$work/server.log"
+port="$server_port"
 export OPENAPPS_RELEASE_DOWNLOADS="http://127.0.0.1:$port/"
 
 ./write-install-script.sh openklack "$app" "$version" "$good" "$work/install-good"
@@ -317,33 +395,9 @@ mkdir -p "$work/live-sh" "$work/live-bin" "$work/live-cut"
 cp "$committed" "$work/live-sh/openklack"
 cp "$committed" "$work/live-bin/openklack"
 sed '$d' "$committed" > "$work/live-cut/openklack"
-serve_typed() {
-    python3 -u - "$1" "$2" > "$3" 2>&1 <<'PY' &
-import functools, http.server, sys
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def guess_type(self, path):
-        return sys.argv[2]
-    def log_message(self, *args):
-        pass
-http.server.test(functools.partial(Handler, directory=sys.argv[1]), port=0, bind="127.0.0.1")
-PY
-    echo $!
-}
-port_of() {
-    for _ in $(seq 1 50); do
-        p="$(sed -nE 's/.*port ([0-9]+).*/\1/p' "$1" | head -n 1)"
-        [[ -n "$p" ]] && { echo "$p"; return; }
-        sleep 0.1
-    done
-    echo "error: a test server did not start" >&2; exit 1
-}
-typed_pid="$(serve_typed "$work/live-sh" "text/x-shellscript; charset=utf-8" "$work/live-sh.log")"
-plain_pid="$(serve_typed "$work/live-bin" "application/octet-stream" "$work/live-bin.log")"
-cut_pid="$(serve_typed "$work/live-cut" "text/x-shellscript; charset=utf-8" "$work/live-cut.log")"
-trap 'kill "$typed_pid" "$plain_pid" "$cut_pid" 2>/dev/null || true; cleanup' EXIT
-typed_port="$(port_of "$work/live-sh.log")"
-plain_port="$(port_of "$work/live-bin.log")"
-cut_port="$(port_of "$work/live-cut.log")"
+serve "$work/live-sh" "$work/live-sh.log" "text/x-shellscript; charset=utf-8"; typed_port="$server_port"
+serve "$work/live-bin" "$work/live-bin.log" "application/octet-stream"; plain_port="$server_port"
+serve "$work/live-cut" "$work/live-cut.log" "text/x-shellscript; charset=utf-8"; cut_port="$server_port"
 (cd ../.. && WAIT_SECONDS=0 OPENAPPS_INSTALL_URL_BASE="http://127.0.0.1:$typed_port/" scripts/release/verify-live-install-script.sh openklack "$c_version" "$c_sha") | grep -q "served as text/x-shellscript"
 if (cd ../.. && WAIT_SECONDS=0 OPENAPPS_INSTALL_URL_BASE="http://127.0.0.1:$plain_port/" scripts/release/verify-live-install-script.sh openklack "$c_version" "$c_sha" 2> "$work/verify.err"); then echo "error: the wrong media type passed" >&2; exit 1; fi
 grep -q "served as 'application/octet-stream', not text/x-shellscript" "$work/verify.err"

@@ -318,17 +318,22 @@ apps/openklack-desktop/release/create-update-key.sh ~/openapps-release      # pi
 scripts/release/release-tag-ruleset.sh apply .github/rulesets/openklack-release-tags.json openappshq/openapps
 ```
 
-Then create the GitHub environment `openklack-release` (deployment branches and tags restricted to `main` and `openklack-v*`) with:
+The certificate and the read-only ruleset token are **repository** secrets shared by every app ([RELEASES.md, Signing material](../RELEASES.md#signing-material)), read by name, never copied per app:
 
-| Secret | Value |
+| Repository secret | Value |
 | --- | --- |
 | `RELEASE_SIGNING_P12` | `release-signing.p12.base64` from the certificate folder |
 | `RELEASE_SIGNING_P12_PASSWORD` | `release-signing.p12.password` |
+| `RULESET_READ_TOKEN` | Fine-grained token, this repository only, Administration: read; lets the publish job see the tag ruleset's bypass actors |
+
+Then create the GitHub environment `openklack-release` (deployment branches and tags restricted to `main` and `openklack-v*`) with the app's own update key and the two publishing credentials (the same values every app uses, restored from the offline backup; they stay per environment so only `main` and release tags can publish):
+
+| Secret | Value |
+| --- | --- |
 | `TAURI_SIGNING_PRIVATE_KEY` | `openklack-update.key` (the Tauri updater private key) |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password, if one was set |
-| `RULESET_READ_TOKEN` | Fine-grained token, this repository only, Administration: read; lets the publish job see the tag ruleset's bypass actors |
 | `FEED_COMMIT_TOKEN` | A token that may push to `main` (a fine-grained token with Contents: write that bypasses `main`'s protection, or a GitHub App token); used only to commit `apps/website/public/updates/openklack/latest.json`, `.sig` and `apps/website/public/install/openklack`, which then deploys the website |
-| `HOMEBREW_TAP_DEPLOY_KEY` | Fine-grained token scoped to `openappshq/homebrew-tap` with Contents: write; used only to push the cask bump |
+| `HOMEBREW_TAP_DEPLOY_KEY` | The private half of an SSH deploy key on `openappshq/homebrew-tap` with write access; used only to push the cask bump |
 
 and the licensing variables `OPENKLACK_DODO_PAID_PRODUCT_ID`, `OPENKLACK_BUY_URL` and optional `OPENKLACK_SUPPORT_URL` from [Licensed builds](#licensed-builds).
 The old `APPLE_*`, `KEYCHAIN_PASSWORD` and `TAURI_UPDATER_PUBLIC_KEY` entries and the `openklack-latest` channel release are no longer used.

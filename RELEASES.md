@@ -26,12 +26,31 @@ Hertz's standalone self-updater was removed on import because it fetched the rep
 
 macOS ties Accessibility and Input Monitoring to an app's code-signing identity (its *designated requirement*). An ad-hoc signature's identity is the build's hash (`cdhash`), so every update would count as a different app: OpenReaction would lose Accessibility, OpenKlack would lose Input Monitoring. A self-signed certificate with the same identity for every release keeps a stable designated requirement (`identifier "<bundle id>" and certificate leaf = H"<cert hash>"`), so permissions survive updates.
 
-- **Generation:** a one-time script creates the certificate and private key. It's exported as a password-protected `.p12`, stored as the `RELEASE_SIGNING_P12` and `RELEASE_SIGNING_P12_PASSWORD` secrets of each app's release environment, and backed up offline. Losing it means every installed user re-grants permissions once.
+- **Generation:** a one-time script creates the certificate and private key. It's exported as a password-protected `.p12`, stored once as the `RELEASE_SIGNING_P12` and `RELEASE_SIGNING_P12_PASSWORD` **repository** secrets ([Signing material](#signing-material)), and backed up offline. Losing it means every installed user re-grants permissions once.
 - **Signing:** the release job imports it into a temporary keychain, signs with hardened runtime, then deletes the keychain immediately after the last signing step.
 - **Verification before publishing:** `codesign --verify --deep --strict`, and the designated requirement must equal the pinned one checked in at `apps/<app>/release/designated-requirement.txt`. A mismatch fails the release.
 - **Gatekeeper:** the app isn't notarized, so the cask and the install script clear the quarantine flag after install. A zip downloaded by hand needs right-click → Open once.
 - **If identity ever changes anyway:** users re-grant permissions once, which the user accepts for manual updates. The stable certificate is still kept for the permissions. License and trial records live in an encrypted file the app owns, not in the Keychain (`LICENSING.md`, Record store), so an identity change never prompts for them.
 - **Later:** switching to Apple Developer ID changes the identity once. Plan that as a single migration release that tells users to re-grant permissions.
+
+## Signing material
+
+Two kinds of secret, kept in two places (decided 2026-09-16; before that every app's environment held a copy of everything, and GitHub cannot read a secret back, so a new app meant re-creating material nobody had any more). The split follows what each secret can do: material that only *signs* is shared once at repository level; anything that can *publish* stays behind an environment, whose deployment-branch policy decides which refs may run with it.
+
+| Where | Secret | Used by |
+| --- | --- | --- |
+| **Repository** secrets (Settings → Secrets and variables → Actions), shared by every app | `RELEASE_SIGNING_P12`, `RELEASE_SIGNING_P12_PASSWORD` | The release job, to sign with the stable certificate |
+| | `RULESET_READ_TOKEN` | The publish job, to read the tag ruleset (Administration: read only; it can change nothing) |
+| **Environment** `<app>-release`, one per app, deployment branches `main` and tags `<app>-v*` | The app's update key: `SPARKLE_ED_PRIVATE_KEY` (Swift apps) or `TAURI_SIGNING_PRIVATE_KEY` (OpenKlack) | The release job, to sign the zip and the feed |
+| | `FEED_COMMIT_TOKEN` | The feed job, to commit the feed and the install script to `main` |
+| | `HOMEBREW_TAP_DEPLOY_KEY` | The feed job, to push the cask bump to the tap |
+| | Variables `OPENAPPS_DODO_PAID_PRODUCT_ID`, `OPENAPPS_BUY_URL`, `OPENAPPS_SUPPORT_URL` (OpenKlack: `OPENKLACK_*`) | The release job, compiled into the licensed build |
+
+`${{ secrets.NAME }}` in a job that runs in an environment resolves the environment's secret first and falls back to the repository's, so the workflows name every secret exactly as before. A new app creates its environment with its update key, the two publishing credentials (the same token and deploy key every app uses; copy them from the offline backup) and its variables; the certificate is never copied. The release job checks each secret up front and names the missing one and where it belongs.
+
+Why the two publishing credentials are per environment although every app shares the same values: a repository secret is readable by any workflow run in this repository, from any branch, by anyone who can push one — only pull requests from forks get none. An environment secret is reachable only by a job that runs in that environment, which the deployment-branch policy grants to `main` and the app's release tags alone. So everyone with write access to this repository can *sign* with the certificate (treat granting write access as adding a signer), but *publishing* — committing a feed or install script, moving the cask — still needs a run on `main` or a release tag, and a release still needs the tag ruleset and the publish job's checks.
+
+Do not delete a repository secret to "rotate" it: set the new value in place. The certificate is the identity every installed copy trusts (above); the update keys are per app and losing one strands that app's updater the same way.
 
 ## Homebrew cask
 

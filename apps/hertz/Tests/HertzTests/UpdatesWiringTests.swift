@@ -56,7 +56,8 @@ private final class MemoryFlags: FlagStore, @unchecked Sendable {
 /// the fresh-install default for "Check for updates automatically", decided
 /// once through the same rule as "Open at login", and what the footer makes
 /// of each phase. The updater is never started, so nothing here contacts a
-/// feed; its toggles live in a private defaults suite that is removed again.
+/// feed; its toggles live in a throwaway defaults suite that the cleanup
+/// removes again, file and all.
 @Suite("Updater wiring", .serialized)
 @MainActor
 struct UpdatesWiringTests {
@@ -64,17 +65,16 @@ struct UpdatesWiringTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("hertz-updates-wiring-\(UUID().uuidString)", isDirectory: true)
         let bundle = directory.appendingPathComponent("Hertz.app", isDirectory: true)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
-        let suite = "hertz-updates-wiring.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let suite = try TemporaryDefaults()
         let configuration = UpdaterConfiguration(
             appID: Updating.appID, appName: Updating.appName, bundleURL: bundle,
             currentVersion: UpdateVersion("0.2.0")!, currentBuild: UpdateVersion("0.2.0")!.buildNumber,
             feedURL: URL(string: "https://openapps.space/updates/hertz/appcast.xml")!,
-            publicKey: Data(repeating: 7, count: 32).base64EncodedString(), defaults: defaults
+            publicKey: Data(repeating: 7, count: 32).base64EncodedString(), defaults: suite.defaults
         )
         let updates = Updates(updater: Updater(configuration: configuration), flags: flags)
         return (updates, {
-            defaults.removePersistentDomain(forName: suite)
+            suite.remove()
             try? FileManager.default.removeItem(at: directory)
         })
     }

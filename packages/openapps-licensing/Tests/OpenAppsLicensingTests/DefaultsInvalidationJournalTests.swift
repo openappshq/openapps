@@ -3,18 +3,18 @@ import OpenAppsLicensing
 import OpenAppsLicensingClients
 import Testing
 
-/// The real preferences journal against a throwaway suite.
+/// The real preferences journal against a throwaway suite, one per test,
+/// removed again when the test is done.
 @Suite("Defaults invalidation journal", .serialized)
 struct DefaultsInvalidationJournalTests {
-    static let suite = "space.openapps.openreaction.license.tests"
-
     struct Fixture {
-        let defaults = UserDefaults(suiteName: DefaultsInvalidationJournalTests.suite)!
+        let suite: TemporaryDefaults
+        var defaults: UserDefaults { suite.defaults }
         let journal: DefaultsInvalidationJournal
 
-        init() {
-            defaults.removePersistentDomain(forName: DefaultsInvalidationJournalTests.suite)
-            journal = DefaultsInvalidationJournal(defaults: defaults)
+        init() throws {
+            suite = try TemporaryDefaults()
+            journal = DefaultsInvalidationJournal(defaults: suite.defaults)
         }
 
         /// The hash the journal files an instance under (found through a
@@ -38,7 +38,8 @@ struct DefaultsInvalidationJournalTests {
     }
 
     @Test func recordsClearsAndNeverDowngrades() throws {
-        let fixture = Fixture()
+        let fixture = try Fixture()
+        defer { fixture.suite.remove() }
         let hash = fixture.hash(for: "inst_1")
         #expect(!hash.contains("inst_1") && hash.count == 64)
         #expect(try fixture.journal.entry(instanceID: "inst_1") == nil)
@@ -58,7 +59,8 @@ struct DefaultsInvalidationJournalTests {
     }
 
     @Test func aRevocationTimeFromBeforeVersionsReadsAsLegacyAndIsRewritten() throws {
-        let fixture = Fixture()
+        let fixture = try Fixture()
+        defer { fixture.suite.remove() }
         let hash = fixture.hash(for: "inst_1")
         fixture.defaults.set(1_800_000_000.0, forKey: "revoked.\(hash)")
         #expect(try fixture.journal.entry(instanceID: "inst_1") == .legacy)
@@ -71,7 +73,8 @@ struct DefaultsInvalidationJournalTests {
     }
 
     @Test func anUnreadableEntryIsAnErrorThatNoReadOrClearTouches() throws {
-        let fixture = Fixture()
+        let fixture = try Fixture()
+        defer { fixture.suite.remove() }
         let hash = fixture.hash(for: "inst_1")
         #expect(fixture.journal.record(instanceID: "inst_1", entry: JournalEntry(seq: 2)))
         let corruptKey = "journal.\(hash).2"
@@ -86,7 +89,8 @@ struct DefaultsInvalidationJournalTests {
     }
 
     @Test func replacingAnUnreadableEntryIsAtomic() throws {
-        let fixture = Fixture()
+        let fixture = try Fixture()
+        defer { fixture.suite.remove() }
         let hash = fixture.hash(for: "inst_1")
         fixture.defaults.set("garbage", forKey: "journal.\(hash).1")
         // With a readable entry nothing happens.

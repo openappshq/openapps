@@ -94,7 +94,10 @@ cleanup() {
     # stale one would catch `open` by bundle id and break the restart step.
     pkill -f "hertz-update-e2e\..*/Hertz\.app/Contents/MacOS/Hertz" 2>/dev/null
     [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null
+    # `defaults delete` leaves the emptied domain behind as an empty plist;
+    # delete that too.
     defaults delete "$BUNDLE_ID" >/dev/null 2>&1
+    rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
     rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/Application Support/$BUNDLE_ID" \
         "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$TMP" build/Hertz.app
     echo "==> Cleaned up (${TMP}, defaults, caches)"

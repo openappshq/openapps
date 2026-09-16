@@ -10,14 +10,15 @@ import SwiftUI
 /// only; release binaries contain none of it (scripts/verify-release.sh
 /// checks for the flag).
 ///
-/// Nothing real is touched: a throwaway preferences suite (removed again on
-/// quit); a permission provider that reports nothing granted and permission
-/// actions that neither ask TCC, open System Settings nor run tccutil; a
-/// relauncher that is unavailable, so Relaunch never starts a real copy; a
-/// login item that registers only in memory; and — with licensing — an
-/// in-memory record store, a Dodo client and a trial registry that never answer,
-/// so Activate and Try again go nowhere. The event tap is never installed:
-/// `AppController.start()` is not called.
+/// Nothing real is touched: a throwaway preferences suite kept under the
+/// temporary directory (deleted again on quit); a permission provider that
+/// reports nothing granted and permission actions that neither ask TCC,
+/// open System Settings nor run tccutil; a relauncher that is unavailable,
+/// so Relaunch never starts a real copy; a login item that registers only
+/// in memory; and — with licensing — an in-memory record store, a Dodo
+/// client and a trial registry that never answer, so Activate and Try again
+/// go nowhere. The event tap is never installed: `AppController.start()`
+/// is not called.
 ///
 /// ⌘] and ⌘[ move the guide between steps; ⌘D shows or hides the
 /// drag-to-grant helper on a permission step (it stays without System
@@ -25,7 +26,14 @@ import SwiftUI
 /// window is rendered there in light and dark appearance and the app quits.
 @MainActor
 final class SetupPreviewHarness {
-    nonisolated static let suite = "space.openapps.openreaction.preview-setup"
+    /// The throwaway suite's directory. A suite named like an app id would
+    /// live in ~/Library/Preferences, where cfprefsd writes an emptied
+    /// domain back out as an empty plist even after the file is deleted; a
+    /// suite named by a path lives at that path instead, so the whole
+    /// directory goes on quit and nothing is left in Preferences.
+    nonisolated static let suiteDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("space.openapps.openreaction.preview-setup", isDirectory: true)
+    nonisolated static let suite = suiteDirectory.appendingPathComponent("defaults").path
 
     private let controller: AppController
     private let loginItem = LoginItem(flags: MemoryFlags(), service: PreviewLoginItemService())
@@ -146,10 +154,22 @@ final class SetupPreviewHarness {
     }
     #endif
 
+    /// Clears the throwaway suite and deletes its directory.
+    nonisolated static func removeSuite() {
+        if let defaults = UserDefaults(suiteName: suite) {
+            defaults.removePersistentDomain(forName: suite)
+            defaults.synchronize()
+        }
+        try? FileManager.default.removeItem(at: suiteDirectory)
+    }
+
     init(provider: any SuggestionProvider, dataSourceSummary: String, outputDirectory: String?) {
-        defaults.removePersistentDomain(forName: Self.suite)
+        // Whatever an earlier preview left goes first; the suite then gets
+        // an empty directory to be written into.
+        Self.removeSuite()
+        try? FileManager.default.createDirectory(at: Self.suiteDirectory, withIntermediateDirectories: true)
         quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
-            UserDefaults(suiteName: SetupPreviewHarness.suite)?.removePersistentDomain(forName: SetupPreviewHarness.suite)
+            SetupPreviewHarness.removeSuite()
         }
         // Never started: no tap, no focus monitor, no relaunch.
         controller = AppController(

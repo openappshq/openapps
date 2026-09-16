@@ -24,25 +24,25 @@ final class HangingFeed: URLProtocol, @unchecked Sendable {
 }
 
 @Suite(.serialized) struct UpdaterToggleTests {
-    /// A writable bundle path (so the location is updatable), a private
-    /// defaults suite and the hanging transport.
+    /// A writable bundle path (so the location is updatable), a throwaway
+    /// defaults suite (removed again by the cleanup) and the hanging
+    /// transport.
     @MainActor
     private func makeUpdater() throws -> (Updater, cleanup: () -> Void) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("openapps-updater-toggle-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let bundle = directory.appendingPathComponent("Example.app", isDirectory: true)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
-        let suite = "openapps-updater-tests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let suite = try TemporaryDefaults()
         let configuration = UpdaterConfiguration(
             appID: "example", appName: "Example", bundleURL: bundle,
             currentVersion: UpdateVersion("1.0.0")!, currentBuild: 1,
             feedURL: URL(string: "https://example.invalid/appcast.xml")!,
-            publicKey: Data(repeating: 1, count: 32).base64EncodedString(), defaults: defaults
+            publicKey: Data(repeating: 1, count: 32).base64EncodedString(), defaults: suite.defaults
         )
         let updater = Updater(configuration: configuration, protocolClasses: [HangingFeed.self])
         return (updater, {
-            defaults.removePersistentDomain(forName: suite)
+            suite.remove()
             try? FileManager.default.removeItem(at: directory)
         })
     }
