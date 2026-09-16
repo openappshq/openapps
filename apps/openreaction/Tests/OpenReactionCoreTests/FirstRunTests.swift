@@ -4,9 +4,13 @@ import Testing
 
 private final class MemoryFlags: FlagStore {
     var values: [String: Bool] = [:]
+    /// Keys holding something other than a flag (data, a date), as the
+    /// app's other preferences do.
+    var otherValues: Set<String> = []
     func bool(forKey key: String) -> Bool { values[key] ?? false }
     func set(_ value: Bool, forKey key: String) { values[key] = value }
-    func removeObject(forKey key: String) { values[key] = nil }
+    func removeObject(forKey key: String) { values[key] = nil; otherValues.remove(key) }
+    func hasValue(forKey key: String) -> Bool { values[key] != nil || otherValues.contains(key) }
 }
 
 @Suite("Onboarding launch")
@@ -140,6 +144,45 @@ struct FreshInstallDefaultTests {
         #expect(!makeDefault(store: store, key: key).shouldTurnOn(isOn: false, storageIsFresh: true))
     }
 
+    @Test(arguments: Self.keys) func aStoredFalseToggleIsAnEarlierPreference(key: String) {
+        // Preferences partly kept: the onboarding flag is gone, but the
+        // updater's check toggle is stored as off, and the records are
+        // absent. The stored value is a choice; the default records itself
+        // decided and leaves it.
+        let store = MemoryFlags()
+        store.set(false, forKey: "OpenAppsUpdater.checkAutomatically")
+        let launch = makeDefault(store: store, key: key)
+        #expect(launch.hadPreferences)
+        #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(store.values[key] == true, "decided")
+        #expect(store.values["OpenAppsUpdater.checkAutomatically"] == false, "untouched")
+    }
+
+    @Test(arguments: Self.keys) func anyRetainedAppPreferenceIsAnEarlierLaunch(key: String) {
+        // Each key the app writes counts on its own, whatever it holds.
+        for evidence in FreshInstallDefault.Key.earlierPreferenceEvidence where evidence != key {
+            let store = MemoryFlags()
+            store.otherValues.insert(evidence)
+            let launch = makeDefault(store: store, key: key)
+            #expect(launch.hadPreferences, "\(evidence)")
+            #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: true), "\(evidence)")
+            #expect(store.values[key] == true, "\(evidence): decided")
+        }
+        let empty = MemoryFlags()
+        #expect(!makeDefault(store: empty, key: key).hadPreferences)
+    }
+
+    @Test func theEvidenceListNamesEveryPreferenceTheAppWrites() {
+        // The keys the app and the updater write to the standard domain, by
+        // hand; a new preference belongs here too.
+        #expect(Set(FreshInstallDefault.Key.earlierPreferenceEvidence) == [
+            "onboarding.shown", "onboarding.resumeAfterRelaunch", "onboarding.awaitingPermission",
+            "loginItem.defaultApplied", "updates.checkDefaultApplied",
+            "enabled", "frecency", "exclusions", "permissionFlow",
+            "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
+        ])
+    }
+
     @Test(arguments: Self.keys) func preferencesWrittenByThisLaunchDoNotCount(key: String) {
         // The guide opens (and records itself) before storage answers.
         let store = MemoryFlags()
@@ -170,7 +213,7 @@ struct FreshInstallDefaultTests {
         makeDefault(store: store, key: key).markSuperseded()
         let launch = makeDefault(store: store, key: key)
         #expect(launch.isDecided)
-        #expect(!launch.hadPreferences)
+        #expect(launch.hadPreferences, "the flag itself is an earlier launch's preference")
         #expect(!launch.shouldTurnOn(isOn: false, storageIsFresh: true))
         #expect(!launch.shouldTurnOn(isOn: true, storageIsFresh: true))
     }
@@ -205,9 +248,10 @@ struct FreshInstallDefaultTests {
 @Suite("Fresh-install defaults: two settings, two flags")
 struct FreshInstallDefaultKeysTests {
     @Test func theTwoDefaultsAreDecidedIndependently() {
-        // Deciding one must not decide the other: an upgrade from a version
-        // that had only the login-item default still owes the update-check
-        // decision (and records it as "not fresh").
+        // Deciding one must not decide the other. Both are created at launch,
+        // before either writes: on a fresh install the login item resolving
+        // first (and recording its flag) does not make the update check see
+        // an earlier launch.
         let store = MemoryFlags()
         let loginItem = FreshInstallDefault.loginItem(store: store)
         let updateChecks = FreshInstallDefault.updateChecks(store: store)
@@ -215,11 +259,24 @@ struct FreshInstallDefaultKeysTests {
         #expect(updateChecks.key == FreshInstallDefault.Key.updateChecksApplied)
         #expect(loginItem.key != updateChecks.key)
 
-        loginItem.markSuperseded()
+        #expect(loginItem.shouldTurnOn(isOn: false, storageIsFresh: true))
         #expect(loginItem.isDecided)
         #expect(!updateChecks.isDecided)
         #expect(updateChecks.shouldTurnOn(isOn: false, storageIsFresh: true))
         #expect(store.values[FreshInstallDefault.Key.updateChecksApplied] == true)
+    }
+
+    @Test func anUpgradeThatDecidedOnlyTheLoginItemOwesTheOtherDecision() {
+        // An earlier version had only the login-item default: its flag is an
+        // earlier launch's preference, so the update check is recorded as
+        // decided without turning on.
+        let store = MemoryFlags()
+        store.set(true, forKey: FreshInstallDefault.Key.loginItemApplied)
+        let updateChecks = FreshInstallDefault.updateChecks(store: store)
+        #expect(!updateChecks.isDecided)
+        #expect(updateChecks.hadPreferences)
+        #expect(!updateChecks.shouldTurnOn(isOn: false, storageIsFresh: true))
+        #expect(updateChecks.isDecided)
     }
 
     @Test func theLoginItemFlagKeepsItsStoredName() {

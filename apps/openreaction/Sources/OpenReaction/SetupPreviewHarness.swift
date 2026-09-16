@@ -56,6 +56,7 @@ final class SetupPreviewHarness {
         func bool(forKey key: String) -> Bool { values[key] ?? false }
         func set(_ value: Bool, forKey key: String) { values[key] = value }
         func removeObject(forKey key: String) { values[key] = nil }
+        func hasValue(forKey key: String) -> Bool { values[key] != nil }
     }
 
     /// Nothing granted, nothing asked: the guide sits on its permission steps.

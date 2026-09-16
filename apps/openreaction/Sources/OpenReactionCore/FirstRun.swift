@@ -6,9 +6,14 @@ public protocol FlagStore {
     func bool(forKey key: String) -> Bool
     func set(_ value: Bool, forKey key: String)
     func removeObject(forKey key: String)
+    /// Whether anything at all is stored under `key`, whatever its type or
+    /// value: a stored `false` counts.
+    func hasValue(forKey key: String) -> Bool
 }
 
-extension UserDefaults: FlagStore {}
+extension UserDefaults: FlagStore {
+    public func hasValue(forKey key: String) -> Bool { object(forKey: key) != nil }
+}
 
 /// When the setup window opens on its own: once, on the first launch; after
 /// a relaunch the window itself started; and after macOS quit and reopened
@@ -73,6 +78,25 @@ public struct FreshInstallDefault {
         public static let loginItemApplied = "loginItem.defaultApplied"
         /// The automatic-update-check default was applied (or found unnecessary); never again.
         public static let updateChecksApplied = "updates.checkDefaultApplied"
+
+        /// Every preference the app writes to its standard defaults domain
+        /// (the updater's included): any one present at launch, whatever its
+        /// value, is an earlier launch's preferences, and the install is not
+        /// fresh. A stored `false` toggle is a choice, so presence is what
+        /// counts. The list is by hand; add a key here when the app starts
+        /// writing a new one.
+        public static let earlierPreferenceEvidence: [String] = [
+            // OnboardingLaunch
+            OnboardingLaunch.Key.shown, OnboardingLaunch.Key.resumeAfterRelaunch, OnboardingLaunch.Key.awaitingPermission,
+            // These defaults' own flags: either decided means an earlier launch resolved it.
+            loginItemApplied, updateChecksApplied,
+            // AppController (DefaultsKey): the on/off switch, usage ranking, app exclusions.
+            "enabled", "frecency", "exclusions",
+            // PermissionMonitor: what the permission flow remembers between launches.
+            "permissionFlow",
+            // OpenAppsUpdater (Updater.Key): both toggles and the last check.
+            "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
+        ]
     }
 
     /// "Open at login".
@@ -88,14 +112,15 @@ public struct FreshInstallDefault {
     private let store: any FlagStore
     /// The flag under which the decision is recorded.
     public let key: String
-    /// An earlier launch left preferences behind. Read when this is created,
+    /// An earlier launch left preferences behind: any of
+    /// `Key.earlierPreferenceEvidence` is stored. Read when this is created,
     /// at launch, before the current launch writes any.
     public let hadPreferences: Bool
 
     public init(store: any FlagStore, key: String) {
         self.store = store
         self.key = key
-        hadPreferences = store.bool(forKey: OnboardingLaunch.Key.shown)
+        hadPreferences = Key.earlierPreferenceEvidence.contains { store.hasValue(forKey: $0) }
     }
 
     /// The default was applied, found unnecessary, or superseded by the

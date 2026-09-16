@@ -279,11 +279,13 @@ length, SHA-256 and signature do. **"Check for updates automatically" is on
 by default and "Download and install automatically" off** (RELEASES.md): a
 fresh install looks for updates and says when one is out, but installs
 nothing on its own. Each default is written once, the first time the app
-runs with no earlier preferences and no kept trial or license record, and
-recorded as decided under its own flag (`FreshInstallDefault` in
-`OpenReactionCore/FirstRun.swift`, the rule "Open at login" already follows);
-an upgrade never changes a toggle the user could have set. "Check Now"
-always works, and most users update with `brew upgrade --cask openreaction`.
+runs with no earlier preferences (none of the keys the app writes to its
+defaults domain is present — a stored "off" counts as a preference) and no
+kept trial or license record, and recorded as decided under its own flag
+(`FreshInstallDefault` in `OpenReactionCore/FirstRun.swift`, the rule "Open
+at login" already follows); an upgrade never changes a toggle the user could
+have set. "Check Now" always works, and most users update with
+`brew upgrade --cask openreaction`.
 
 With "Check for updates automatically" on, the app checks on launch, every
 24 hours and on wake when a check is overdue, and retries a failed check
