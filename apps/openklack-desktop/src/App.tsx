@@ -34,6 +34,7 @@ import { SoundLibrary } from "./SoundLibrary";
 import { AppRules } from "./AppRules";
 import { General } from "./General";
 import { Onboarding } from "./Onboarding";
+import { PermissionHelperFlow } from "./permissionHelper";
 
 type Page = "library" | "keyboard" | "rules" | "general";
 
@@ -120,17 +121,19 @@ export default function App() {
   }
   // Open System Settings: the pane, macOS's own prompt, and the floating drag-to-grant helper
   // for when OpenKlack is missing from the list (the helper is skipped once the permission is
-  // there). Both are fire-and-forget on the native side.
+  // there). The helper belongs to the Keyboard access step and goes away with it, whichever way
+  // the step is left; the flow makes sure a hide asked while a show is still queued wins, and
+  // the hide is queued behind that show. A close from the panel itself, or the permission
+  // arriving, hides it too.
+  const helper = useRef(new PermissionHelperFlow(invoke));
   function requestPermission() {
-    void desktop.perform(async () => {
-      await invoke("request_input_permission");
-      await invoke("show_permission_helper");
-    });
+    void desktop.perform(helper.current.request());
   }
-  // The helper belongs to the Keyboard access step: it goes away with the step, whichever way
-  // the step is left. A close from the panel itself, or the permission arriving, hides it too.
+  function showHelper() {
+    void desktop.perform(helper.current.show());
+  }
   function hideHelper() {
-    void invoke("hide_permission_helper").catch(() => {});
+    desktop.enqueue(helper.current.hide());
   }
   // The step is remembered only while the guide is unfinished: that is when a relaunch (macOS
   // asks for one after Input Monitoring is granted) has to come back to it. Shown again from
@@ -173,7 +176,7 @@ export default function App() {
           busy={busy}
           initialStep={setupGuideStep(prefs)}
           onRequestPermission={requestPermission}
-          onShowHelper={() => void desktop.perform(() => invoke("show_permission_helper"))}
+          onShowHelper={showHelper}
           onStep={moveGuide}
           onDone={finishGuide}
         />

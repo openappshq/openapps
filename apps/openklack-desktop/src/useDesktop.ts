@@ -147,6 +147,14 @@ export function useDesktop() {
     operation.current = result.then(() => {});
     return result;
   }
+  /**
+   * Runs `task` after everything already queued, without touching busy, the error or the
+   * notice: for a fire-and-forget call whose order matters, such as hiding the permission helper
+   * behind a show that may still be waiting its turn. The task's own failure is its own.
+   */
+  function enqueue(task: () => Promise<void>) {
+    operation.current = operation.current.then(task).catch(() => {});
+  }
   async function save(change: (preferences: Preferences) => Preferences) {
     return perform(async () => {
       const state = current.current;
@@ -220,6 +228,7 @@ export function useDesktop() {
     busy,
     preview,
     perform,
+    enqueue,
     save,
     changePreset,
     audition,

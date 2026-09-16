@@ -188,10 +188,10 @@ The native bridge (`src-tauri/native/macos.m`, called from `engine.rs`) reports 
 | Command                    | Effect                                                                                        |
 | -------------------------- | --------------------------------------------------------------------------------------------- |
 | `request_input_permission` | Asks macOS for Input Monitoring and opens the pane when it is still missing                   |
-| `show_permission_helper`   | Shows the floating helper (`ok_show_permission_helper`); nothing once the permission is there |
+| `show_permission_helper`   | Shows the floating helper (`ok_show_permission_helper`); nothing once the permission is there, checked again natively right before showing |
 | `hide_permission_helper`   | Hides it (`ok_hide_permission_helper`); also run when the permission arrives and on quit      |
 
-The panel's state (`Runtime.permission_helper.visible`, `model.rs`) follows kind 107 and is published in the snapshot as `runtime.permissionHelper`.
+The panel's state (`Runtime.permission_helper.visible`, `model.rs`) follows kind 107, is never visible while the permission is granted, and is published in the snapshot as `runtime.permissionHelper`. The settings window orders its shows against its hides (`permissionHelper.ts`): a hide asked while a show is still queued cancels that show and runs after it.
 The home screen offers sound selection, starred favorites, one volume slider, and optional per-key customization. Settings contain muted apps, microphone pause, launch at login, appearance, file imports/exports, and local diagnostics. There is no desktop typing test or user-facing preset editor.
 Official builds open a short setup guide once, on first launch (`onboardingCompleted` in `settings.json`; Settings → About & help → Show setup guide reopens it), and turn "Open at login" on once, on that first launch (`loginItemDefaulted`), after which the Settings toggle and System Settings → Login Items are the user's; source builds do neither.
 App updates follow [RELEASES.md](../RELEASES.md): official builds check a signed feed, download in the background and install on the next quit or restart; "Check for updates automatically" is turned on once, on that same first launch of a fresh install (`autoCheckDefaulted` in `updates.json`), "Download and install automatically" stays off until the user turns it on, and `brew upgrade --cask openklack` always works (see [Releases and updates](#releases-and-updates)).

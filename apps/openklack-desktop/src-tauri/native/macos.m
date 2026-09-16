@@ -448,8 +448,11 @@ static NSPanel *makeHelper(void) {
 }
 
 // Shows the panel at the bottom-right of the screen with System Settings, or brings it back
-// there. Ordered front without becoming key: OpenKlack stays in the background.
+// there. Ordered front without becoming key: OpenKlack stays in the background. The grant is
+// checked again here, on the main thread, right before showing: a show queued while the
+// permission was missing does nothing once it has arrived, without waiting for the next poll.
 void ok_show_permission_helper(void) {
+    if (CGPreflightListenEventAccess()) { hideHelper(); return; }
     if (!helperPanel) helperPanel = makeHelper();
     NSRect visible = helperScreen().visibleFrame;
     NSRect frame = helperPanel.frame;

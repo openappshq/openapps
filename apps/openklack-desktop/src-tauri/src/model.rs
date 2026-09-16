@@ -455,9 +455,11 @@ pub struct PermissionHelper {
 }
 
 impl PermissionHelper {
-    /// The bridge reported the panel shown or hidden (kind 107).
-    pub fn reported(&mut self, visible: bool) {
-        self.visible = visible;
+    /// The bridge reported the panel shown or hidden (kind 107). Never visible once the
+    /// permission is granted: the bridge refuses a show then and closes the panel on the next
+    /// poll, so a shown report that crosses the grant is already stale.
+    pub fn reported(&mut self, visible: bool, input_permission: bool) {
+        self.visible = visible && !input_permission;
     }
 
     /// The permission arrived: the panel hides itself, there is nothing left to drag for.
@@ -581,7 +583,9 @@ impl Runtime {
                     self.permission_helper.granted();
                 }
             }
-            107 => self.permission_helper.reported(value != 0),
+            107 => self
+                .permission_helper
+                .reported(value != 0, self.input_permission),
             101 => {
                 if self.resume_app.is_none() && matches!(value, 0 | 3) {
                     self.temporary_resume = false;
@@ -998,9 +1002,12 @@ mod tests {
         assert!(runtime.input_permission);
         assert!(!runtime.permission_helper.visible);
         assert!(!runtime.wants_permission_helper());
-        // The bridge's own report of that hide is consistent, and a later revocation does
-        // not bring the panel back on its own.
+        // The bridge's own report of that hide is consistent. A shown report that crosses the
+        // grant (a show queued before it) is stale and never makes the helper visible.
         runtime.apply_native(107, 0, String::new());
+        runtime.apply_native(107, 1, String::new());
+        assert!(!runtime.permission_helper.visible);
+        // A later revocation does not bring the panel back on its own.
         runtime.apply_native(100, 0, String::new());
         assert!(!runtime.permission_helper.visible);
         assert!(runtime.wants_permission_helper());
