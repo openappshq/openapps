@@ -65,6 +65,9 @@ nonisolated public enum DeckEvent: Hashable, Sendable {
     case archiveRequested
     /// The active notes in deck order changed (created, archived, reordered, removed).
     case notesChanged([NoteID])
+    /// A note's identity moved (its file took its title's name; the user's
+    /// text went to a conflict copy): the open note and the order follow.
+    case noteRenamed(from: NoteID, to: NoteID)
     case settingsChanged(DeckSettings)
     /// The display went away, or the deck is being torn down.
     case hostLost
@@ -236,6 +239,13 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
                 effects.append(.closeNote(id))
                 rest(&effects)
             }
+        case .noteRenamed(let from, let to):
+            if let index = order.firstIndex(of: from) {
+                if order.contains(to) { order.remove(at: index) } else { order[index] = to }
+            }
+            if case .open(let current, let editing) = state, current == from {
+                state = .open(to, editing: editing)
+            }
         case .settingsChanged(let next):
             settings = next
         case .hostLost:
@@ -348,6 +358,9 @@ nonisolated public struct DeckLayout: Hashable, Sendable {
     public var note: CGRect?
     /// The archive toast ("Archived … · Undo"), under the deck, while one shows.
     public var toast: CGRect?
+    /// The shingle step the tabs were laid out with (smaller than
+    /// `tabHeight - tabOverlap` on a short screen).
+    public var tabStep: CGFloat
 }
 
 nonisolated public enum DeckGeometry {
@@ -357,7 +370,14 @@ nonisolated public enum DeckGeometry {
         let shown = Array(notes.prefix(metrics.maxTabs))
         let hidden = max(0, notes.count - shown.count)
         var tabCount = shown.count + (hidden > 0 ? 1 : 0)
-        let step = metrics.tabHeight - metrics.tabOverlap
+        // The shingle step shrinks so the fan, the plus tab and the margins
+        // always fit the screen (a short display, many notes); never below
+        // a third of a tab, so each label keeps a strip of its own.
+        let available = visibleFrame.height - 2 * metrics.margin - metrics.plusTabHeight - metrics.gap - metrics.tabHeight
+        var step = metrics.tabHeight - metrics.tabOverlap
+        if tabCount > 1 {
+            step = min(step, max(metrics.tabHeight / 3, (available / CGFloat(tabCount - 1)).rounded(.down)))
+        }
         let fanHeight = tabCount == 0 ? 0 : metrics.tabHeight + CGFloat(tabCount - 1) * step
         let stackHeight = fanHeight + (tabCount == 0 ? 0 : metrics.gap) + metrics.plusTabHeight
         let pillHeight = max(metrics.pillMinHeight, CGFloat(min(notes.count, metrics.maxTabs + 1)) * metrics.dashSpacing + 2 * metrics.dashSpacing)
@@ -413,6 +433,6 @@ nonisolated public enum DeckGeometry {
         if toast {
             toastRect = CGRect(x: edgeX(width: metrics.toastWidth), y: metrics.margin, width: metrics.toastWidth, height: metrics.toastHeight)
         }
-        return DeckLayout(panelFrame: panelFrame, pill: pill, tabs: tabs, plusTab: plusTab, note: note, toast: toastRect)
+        return DeckLayout(panelFrame: panelFrame, pill: pill, tabs: tabs, plusTab: plusTab, note: note, toast: toastRect, tabStep: step)
     }
 }

@@ -201,7 +201,7 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertNil(store.note(NoteID("a")))
     }
 
-    @MainActor func testAnOutsideEditUnderUnsavedChangesLosesToOursAndIsKeptAsAConflictCopy() throws {
+    @MainActor func testAnOutsideEditUnderUnsavedChangesKeepsTheFileAndMovesOursToAConflictCopy() throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try write("a.md", "A")
         let store = makeStore()
@@ -211,17 +211,22 @@ final class NoteStoreTests: XCTestCase {
         // Theirs is not adopted while ours is unsaved.
         XCTAssertEqual(store.note(NoteID("a"))?.text, "Ours")
         let outcome = try store.save(NoteID("a"))
-        guard case .savedOverConflict(let copy) = outcome else { return XCTFail("\(outcome)") }
-        XCTAssertTrue(copy.lastPathComponent.hasPrefix("a (conflict "), copy.lastPathComponent)
-        XCTAssertEqual(try String(contentsOf: copy, encoding: .utf8), "Theirs, longer")
-        XCTAssertTrue(try read("a.md").hasSuffix("\n\nOurs"))
-        XCTAssertTrue(events.contains(.conflict(NoteID("a"), copy: copy)))
-        // The conflict copy is a note like any other on the next rescan.
+        guard case .keptAsConflictCopy(let copy) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertTrue(copy.rawValue.hasPrefix("a (conflict "), copy.rawValue)
+        // The file keeps theirs; ours is the new note beside it.
+        XCTAssertEqual(try read("a.md"), "Theirs, longer")
+        XCTAssertTrue(try read(copy.fileName).hasSuffix("\n\nOurs"))
+        XCTAssertEqual(store.note(NoteID("a"))?.text, "Theirs, longer")
+        XCTAssertEqual(store.note(copy)?.text, "Ours")
+        XCTAssertFalse(store.hasUnsavedChanges(copy))
+        XCTAssertTrue(events.contains(.renamed(from: NoteID("a"), to: copy)))
+        XCTAssertTrue(events.contains(.conflict(NoteID("a"), copy: store.fileURL(for: copy))))
+        // Both are notes like any other on the next rescan.
         store.rescan()
         XCTAssertEqual(store.notes.count, 2)
-        // Saving again writes no second copy.
-        try store.setText("Ours again", for: NoteID("a"))
-        XCTAssertEqual(try store.save(NoteID("a")), .saved)
+        // Saving the copy again writes no third file.
+        try store.setText("Ours again", for: copy)
+        XCTAssertEqual(try store.save(copy), .saved)
         XCTAssertEqual(try files().count, 2)
     }
 
@@ -321,7 +326,7 @@ final class NoteStoreTests: XCTestCase {
         let other = folder.appendingPathComponent("other", isDirectory: true)
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
         try Data("Elsewhere".utf8).write(to: other.appendingPathComponent("e.md"))
-        store.switchFolder(to: other, create: false)
+        try store.switchFolder(to: other, create: false)
         XCTAssertEqual(store.folder, other)
         XCTAssertEqual(store.active.map(\.id.rawValue), ["e"])
         XCTAssertEqual(try files().filter { $0.hasSuffix(".md") }, [note.id.fileName])

@@ -61,6 +61,13 @@ nonisolated public enum AutoArchive {
         let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
         return notes.filter { !$0.archived && !$0.pinned && $0.modified < cutoff }.map(\.id).sorted()
     }
+
+    /// When the next unpinned active note falls due, so the app can wake
+    /// then instead of on a schedule; nil when nothing can fall due.
+    public static func nextDue(in notes: [Note], days: Int) -> Date? {
+        guard days > 0 else { return nil }
+        return notes.filter { !$0.archived && !$0.pinned }.map { $0.modified.addingTimeInterval(Double(days) * 86_400) }.min()
+    }
 }
 
 /// The 10-second Undo after Archive (design/products/opennotes.md,

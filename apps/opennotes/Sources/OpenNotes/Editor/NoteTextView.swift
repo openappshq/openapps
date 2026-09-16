@@ -184,8 +184,11 @@ struct NoteEditor: NSViewRepresentable {
     let text: String
     let face: NoteFace
     let isEditable: Bool
-    /// Bumped to put the caret in the text.
-    var focusRequest = 0
+    /// A token for "put the caret in the text": a new value focuses, nil
+    /// leaves the focus where it is. Set per open, so a note opened with
+    /// a click never takes the focus and one opened by the hotkey takes
+    /// it on its very first update.
+    var focusToken: Int?
     var onTextChange: (String) -> Void
     var onCommand: (EditorCommand) -> Void
     var onFocus: () -> Void = {}
@@ -203,7 +206,6 @@ struct NoteEditor: NSViewRepresentable {
         textView.onTextChange = onTextChange
         textView.onCommand = onCommand
         textView.onFocus = onFocus
-        context.coordinator.lastFocusRequest = focusRequest
         return scrollView
     }
 
@@ -218,8 +220,8 @@ struct NoteEditor: NSViewRepresentable {
         }
         textView.setText(text)
         textView.isEditable = isEditable
-        if context.coordinator.lastFocusRequest != focusRequest {
-            context.coordinator.lastFocusRequest = focusRequest
+        if let focusToken, context.coordinator.lastFocusToken != focusToken {
+            context.coordinator.lastFocusToken = focusToken
             DispatchQueue.main.async {
                 textView.window?.makeFirstResponder(textView)
                 let end = (textView.string as NSString).length
@@ -231,7 +233,7 @@ struct NoteEditor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
-        var lastFocusRequest = 0
+        var lastFocusToken: Int?
         var appearance: NSAppearance.Name?
     }
 }

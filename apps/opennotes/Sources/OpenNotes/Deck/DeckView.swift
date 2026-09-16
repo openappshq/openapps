@@ -14,8 +14,8 @@ struct DeckContent {
     var statusLine: String
     var pendingUndo: ArchiveUndo.Pending?
     var folderMissing: Bool
-    /// Bumped to put the caret in the open note.
-    var focusRequest = 0
+    /// A new value puts the caret in the open note; nil leaves it.
+    var focusToken: Int?
     var onTab: (NoteID) -> Void = { _ in }
     var onPlus: () -> Void = {}
     var onMore: () -> Void = {}
@@ -129,7 +129,7 @@ struct DeckView: View {
                 // The label lives in the part the next tab never covers
                 // (the top, above the overlap), laid out along the tab and
                 // then turned: it reads down on the right edge, up on the left.
-                let labelLength = tab.frame.height - DeckMetrics().tabOverlap - 12
+                let labelLength = max(24, content.layout.tabStep - 12)
                 VStack(spacing: 3) {
                     if note?.pinned == true {
                         Image(systemName: "pin.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(Color(nsColor: NSColor(hex: 0x141414)).opacity(0.7))
@@ -217,7 +217,7 @@ struct NoteCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 NoteEditor(
-                    text: note.text, face: note.face, isEditable: !content.readOnly, focusRequest: content.focusRequest,
+                    text: note.text, face: note.face, isEditable: !content.readOnly && !note.truncated, focusToken: content.focusToken,
                     onTextChange: content.onTextChange, onCommand: content.onCommand, onFocus: content.onFocus
                 )
             }

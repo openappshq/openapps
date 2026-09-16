@@ -69,11 +69,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Every open note is saved before the process exits; the hotkey's
-    /// Carbon handler goes with the app.
-    func applicationWillTerminate(_ notification: Notification) {
+    /// Quit flushes every open and pending note first. If any cannot be
+    /// written the quit is held: the alert offers Try Again (the flush
+    /// runs again) or Keep Editing (the quit is cancelled; the text stays
+    /// in the app, dirty, retried every few seconds). Nothing is ever
+    /// discarded on the way out.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         deck?.saveAll()
-        model?.store.saveAll()
+        var problems = model.flush()
+        while !problems.isEmpty {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = problems.count == 1 ? "A note couldn’t be saved" : "\(problems.count) notes couldn’t be saved"
+            alert.informativeText = problems.sorted { $0.key < $1.key }.map { "\($0.key.fileName): \($0.value)" }.joined(separator: "\n")
+                + "\n\nThe text is still in OpenNotes. Try again once the folder is back, or keep editing and quit later."
+            alert.addButton(withTitle: "Try Again")
+            alert.addButton(withTitle: "Keep Editing")
+            NSApp.activate()
+            if alert.runModal() == .alertFirstButtonReturn {
+                problems = model.flush()
+            } else {
+                return .terminateCancel
+            }
+        }
+        return .terminateNow
+    }
+
+    /// The hotkey's Carbon handler goes with the app.
+    func applicationWillTerminate(_ notification: Notification) {
         hotkeys?.removeHandler()
     }
 
@@ -92,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func toggleDeck() {
         if let deck {
             deck.saveAll()
+            model.flush()
             self.deck = nil
         } else {
             deck = DeckHost(model: model, preferences: preferences, showAllNotes: { [weak self] in self?.showAllNotes() })

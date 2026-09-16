@@ -3,15 +3,17 @@ import OpenNotesCore
 
 /// Which displays host a deck, from the Display setting and the screens,
 /// and one controller per host. Follows display changes, the settings and
-/// the notes; on "the display with the pointer" the deck moves with the
-/// pointer, checked twice a second (no monitor: `NSEvent.mouseLocation`).
+/// the notes; on "the display with the pointer" the deck moves to the
+/// display whose edge strip the pointer reaches (`EdgeSentinel`: a
+/// transparent strip with a tracking area on every other display, no
+/// timer, no monitor), and never while a note is open.
 final class DeckHost {
     private let model: AppModel
     private let preferences: Preferences
     private let showAllNotes: () -> Void
     private(set) var controllers: [CGDirectDisplayID: DeckPanelController] = [:]
+    private(set) var sentinels: [CGDirectDisplayID: EdgeSentinel] = [:]
     private var observers: [NSObjectProtocol] = []
-    private var pointerTimer: Timer?
 
     init(model: AppModel, preferences: Preferences, showAllNotes: @escaping () -> Void) {
         self.model = model
@@ -22,13 +24,17 @@ final class DeckHost {
         })
         observeChanges({ [preferences] in _ = preferences.side; _ = preferences.display }, onChange: { [weak self] in self?.settingsChanged() })
         observeChanges({ [model] in _ = model.revision; _ = model.readOnly }, onChange: { [weak self] in self?.notesChanged() })
+        model.onRedirect = { [weak self] from, to in
+            guard let self else { return }
+            for controller in self.controllers.values { controller.noteRedirected(from: from, to: to) }
+        }
         rebuild()
     }
 
     deinit {
         MainActor.assumeIsolated {
             for observer in observers { NotificationCenter.default.removeObserver(observer) }
-            pointerTimer?.invalidate()
+            for sentinel in sentinels.values { sentinel.tearDown() }
         }
     }
 
@@ -89,11 +95,33 @@ final class DeckHost {
                 controllers[id] = DeckPanelController(displayID: id, screen: screen, model: model, preferences: preferences, showAllNotes: showAllNotes)
             }
         }
-        pointerTimer?.invalidate()
-        pointerTimer = nil
+        rebuildSentinels(hosts: hosts)
+    }
+
+    /// "The display with the pointer": every display without a deck gets
+    /// a sentinel strip on the deck's edge; the pointer reaching it moves
+    /// the deck there. Nothing on the other settings.
+    private func rebuildSentinels(hosts: [CGDirectDisplayID: NSScreen]) {
+        let wanted: [CGDirectDisplayID: NSScreen]
         if preferences.display == .pointer {
-            pointerTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.followPointer() }
+            wanted = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
+                guard let id = ScreenCatalog.displayID(of: screen), hosts[id] == nil else { return nil }
+                return (id, screen)
+            })
+        } else {
+            wanted = [:]
+        }
+        for (id, sentinel) in sentinels where wanted[id] == nil {
+            sentinel.tearDown()
+            sentinels[id] = nil
+        }
+        for (id, screen) in wanted {
+            if let existing = sentinels[id] {
+                existing.update(screen: screen, side: preferences.side)
+            } else {
+                let sentinel = EdgeSentinel(screen: screen, side: preferences.side)
+                sentinel.onEnter = { [weak self] in self?.pointerReached(id) }
+                sentinels[id] = sentinel
             }
         }
     }
@@ -115,12 +143,20 @@ final class DeckHost {
         return result
     }
 
-    private func followPointer() {
-        let wanted = Self.hosts(for: .pointer, screens: NSScreen.screens)
-        guard Set(wanted.keys) != Set(controllers.keys) else { return }
-        // An open note stays where it is being written.
+    /// The pointer reached another display's edge: the deck moves there,
+    /// unless a note is open (it stays where it is being written).
+    private func pointerReached(_ id: CGDirectDisplayID) {
+        guard preferences.display == .pointer, controllers[id] == nil else { return }
         guard !controllers.values.contains(where: \.isOpen) else { return }
-        rebuild()
+        guard let screen = ScreenCatalog.screen(for: id) else { return }
+        for (old, controller) in controllers {
+            controller.tearDown()
+            controllers[old] = nil
+        }
+        controllers[id] = DeckPanelController(displayID: id, screen: screen, model: model, preferences: preferences, showAllNotes: showAllNotes)
+        rebuildSentinels(hosts: [id: screen])
+        // The pointer is already on the edge: the new deck should know.
+        controllers[id]?.handle(.pointerEnteredEdge)
     }
 
     private func settingsChanged() {
@@ -131,6 +167,64 @@ final class DeckHost {
     private func notesChanged() {
         for controller in controllers.values { controller.notesChanged() }
     }
+}
+
+/// A transparent strip on one display's deck edge, the pill's width, that
+/// only reports the pointer entering it. It takes no clicks, no focus and
+/// no timer; it exists so "the display with the pointer" needs no polling.
+final class EdgeSentinel {
+    private let panel: NSPanel
+    private let zone: SentinelView
+    var onEnter: () -> Void = {} {
+        didSet { zone.onEnter = onEnter }
+    }
+
+    init(screen: NSScreen, side: DeckSide) {
+        panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = DeckPanelController.level
+        panel.collectionBehavior = DeckPanelController.collectionBehavior
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.ignoresMouseEvents = false
+        panel.acceptsMouseMovedEvents = true
+        zone = SentinelView(frame: .zero)
+        panel.contentView = zone
+        update(screen: screen, side: side)
+        panel.orderFrontRegardless()
+    }
+
+    func update(screen: NSScreen, side: DeckSide) {
+        let width = DeckMetrics().pillWidth
+        let frame = screen.visibleFrame
+        let x = side == .right ? frame.maxX - width : frame.minX
+        panel.setFrame(CGRect(x: x, y: frame.minY, width: width, height: frame.height), display: false)
+    }
+
+    func tearDown() {
+        panel.orderOut(nil)
+    }
+}
+
+/// The sentinel's view: a tracking area, nothing else.
+final class SentinelView: NSView {
+    var onEnter: () -> Void = {}
+    private var tracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { onEnter() }
+    override var acceptsFirstResponder: Bool { false }
+    /// Clicks on the strip go to what is under it.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// What `NSScreen` says about the displays.

@@ -77,6 +77,9 @@ nonisolated public struct Note: Hashable, Sendable, Identifiable {
     public var created: Date
     /// The last edit made through the app or seen on disk.
     public var modified: Date
+    /// The file is larger than the store reads: `text` is its beginning,
+    /// and the note is shown but never edited or written. Not persisted.
+    public var truncated = false
 
     public init(id: NoteID, text: String = "", color: NoteColor = .coral, face: NoteFace = .sans, pinned: Bool = false, archived: Bool = false, order: Int = 0, created: Date, modified: Date? = nil) {
         self.id = id
@@ -119,6 +122,15 @@ nonisolated public struct Note: Hashable, Sendable, Identifiable {
             return trimmed.isEmpty ? "Untitled" : trimmed
         }
         return "Untitled"
+    }
+
+    /// Orders outside this range (a hand-written file, an overflow) are
+    /// brought back to its edge on read, so "one below the lowest" is
+    /// always a number.
+    public static let orderRange: ClosedRange<Int> = -1_000_000_000...1_000_000_000
+
+    public static func clampOrder(_ order: Int) -> Int {
+        min(max(order, orderRange.lowerBound), orderRange.upperBound)
     }
 
     /// The deck's order: pinned first, then by `order`, then the newest first,
@@ -281,9 +293,15 @@ nonisolated public enum NoteFileName {
         return candidate
     }
 
-    /// `<name> (conflict 2026-09-16 10-30-05).md`, beside the note.
+    /// `<name> (conflict 2026-09-16 10-30-05.123)`, the stem of the note
+    /// beside the original that holds the user's text; the store adds
+    /// `-2`, `-3`… while the name is taken.
+    public static func conflictStem(for id: NoteID, at date: Date) -> String {
+        "\(id.rawValue) (conflict \(conflictFormatter.string(from: date)))"
+    }
+
     public static func conflictName(for id: NoteID, at date: Date) -> String {
-        "\(id.rawValue) (conflict \(conflictFormatter.string(from: date))).md"
+        conflictStem(for: id, at: date) + ".md"
     }
 
     nonisolated(unsafe) private static let timestampFormatter: DateFormatter = {
@@ -296,7 +314,7 @@ nonisolated public enum NoteFileName {
     nonisolated(unsafe) private static let conflictFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH-mm-ss"
+        formatter.dateFormat = "yyyy-MM-dd HH-mm-ss.SSS"
         return formatter
     }()
 }

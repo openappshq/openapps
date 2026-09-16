@@ -38,13 +38,14 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 ## Notes
 
 - A note is one `.md` file: YAML front matter (`color`, `face`, `pinned`, `archived`, `order`, `created`, `modified`), then the text. The first line is the title (a leading `# ` is not shown as such). While a new note is being written its file has a provisional name (`note-20260916-1030.md`); when the note first closes the file takes the title's name (`groceries.md`, `groceries-2.md`; the provisional one stays when there is no title) and is never renamed afterwards, so iCloud Drive, Obsidian and git see one stable file.
-- Saved 250 ms after typing stops, and on every close. Outside edits are picked up by a folder watcher (FSEvents) and by a rescan when the app becomes active; a file that changed on disk while the user has unsaved edits is saved last-writer-wins, the outside version kept beside it as `<name> (conflict <date>).md`. Nothing is ever silently overwritten, and the app never deletes a file.
+- Saved 250 ms after typing stops, on every close, before sleep, when the app resigns active and at quit. Outside edits are picked up by a folder watcher (FSEvents) and by a rescan when the app becomes active. Every write checks the file right before replacing it: a file that changed outside since it was last read is never overwritten — it keeps the outside version, and the user's text becomes its own note beside it, `<name> (conflict <date-time>).md` (unique; never over an existing file), which the open note switches to so typing continues. A save that fails (the folder gone, the disk full) keeps the text in the app, says so in the footer and retries every few seconds; a folder switch or a quit with unsaved text that cannot be written is held until it can (Try Again / Keep Editing). The app never deletes a file, except a brand-new empty note's own file while it still holds exactly what the app wrote.
+- Budgets: a file over 1 MB is shown from its beginning, read-only, and never written; styling covers the first 64 000 characters of a note, the rest is plain.
 - Paste is plain text. Smart quotes, smart dashes and text replacement are off in every note.
 - Markdown-lite, styled live without changing a character: `#`, `##`, `###` headings, `**bold**`, `_italic_` / `*italic*`, `` `code` ``, `- ` / `* ` / `1. ` lists, `- [ ]` / `- [x]` checklists (a click on the box toggles it, `[ ]` ↔ `[x]` in the file), URLs underlined. Markers stay visible, dimmed. Nothing else is interpreted.
 - Two faces: Sans (Instrument Sans) and Mono (IBM Plex Mono); a default in Settings, and the open note's footer switches its own note.
 - Six colors: coral, yellow, mint, sky, lilac, paper. The default is coral (Settings). Colors follow the appearance: a light face with ink text, a deep face with paper text in Dark Mode; the tab and the pill dash keep the light face in both.
 - Pinned notes come first in the deck and are never auto-archived.
-- Archive, not delete: ⌘⇧A or the footer moves a note out of the deck (`archived: true` in the file); a toast in the deck offers Undo for 10 s. Archived notes stay in the folder, in search, and in All Notes → Archived, where Restore brings one back. Auto-archive (Settings → Notes: off, 7, 30 or 90 days) archives unpinned notes untouched for that long, at launch and hourly. Deleting a file is the Finder's job.
+- Archive, not delete: ⌘⇧A or the footer moves a note out of the deck (`archived: true` in the file); a toast in the deck offers Undo for 10 s. Archived notes stay in the folder, in search, and in All Notes → Archived, where Restore brings one back. Auto-archive (Settings → Notes: off, 7, 30 or 90 days) archives unpinned notes untouched for that long, at launch and then whenever the next note falls due (nothing runs while it is off). Deleting a file is the Finder's job.
 
 ## All Notes
 
@@ -71,7 +72,7 @@ A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes�
 
 | Section | Behavior |
 | --- | --- |
-| General | Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off); Deck side (right / left); Display (the main display, the display with the pointer, every display); Hotkey (the recorder; a taken or refused key says so); Notes folder (the path and Choose…; the deck reloads from the new folder, files are never moved) |
+| General | Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off); Deck side (right / left); Display (the main display; the display with the pointer — the deck moves when the pointer reaches another display's edge, never while a note is open; every display); Hotkey (the recorder; a taken or refused key says so); Notes folder (the path and Choose…; unsaved text is written to the old folder first, and the switch waits if it can't be; files are never moved) |
 | Notes | Face (Sans / Mono) for new notes; Color for new notes; Auto-archive untouched notes (off / 7 / 30 / 90 days) |
 | License (official builds) | The shared section ([LICENSING.md](../../LICENSING.md)): state, Buy a license, paste a key, Remove this Mac; the trial pill in the title bar |
 | Updates (official builds) | The shared section ([RELEASES.md](../../RELEASES.md)) |
@@ -86,7 +87,9 @@ A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes�
 | A file can't be parsed | Front matter that isn't ours is left alone; the whole file is the text and the note takes the defaults. It is saved back only if the user edits it, and then with front matter |
 | A save fails | The note stays open with its text, the footer says "Couldn't save" and why, the next keystroke retries |
 | An outside edit lands while the note is open and unedited | The text updates in place, the caret kept where the text allows |
-| An outside edit lands while the note has unsaved edits | Ours is saved; theirs is kept as the conflict copy; the footer says so once |
+| An outside edit lands while the note has unsaved edits | The file keeps theirs; ours continues as `<name> (conflict <time>).md`, the open note switches to it, the footer says so once |
+| A save fails (folder gone, disk full, the path is now a folder) | The text stays in the app, dirty; the footer says why; retried every 5 s and on the next keystroke; a folder switch or quit waits (Try Again / Keep Editing) |
+| A file over 1 MB | Shown truncated and read-only; never written |
 | Hotkey taken by another app | Settings → General shows "⌥⌘N is taken by another app" under the recorder; the menu-bar item still creates notes |
 | The display hosting the deck goes away | The deck moves to the next host by the Display setting; an open note is saved first |
 | Read-only (trial ended, license needed) | See "The deck": visible, readable, exportable, archivable; not editable, no new notes |

@@ -49,26 +49,41 @@ nonisolated public enum MarkdownLite {
         public var lineRange: NSRange
     }
 
+    /// How much of a text is styled by default: the editor's budget, in
+    /// UTF-16 units. Beyond it the runs are plain (still tiling the text),
+    /// so a giant note costs one plain run instead of a style per unit.
+    public static let styleLimit = 64_000
+
     /// The runs covering the whole text, in order, adjacent runs with the
-    /// same style merged. An empty text has no runs.
-    public static func runs(in text: String) -> [Run] {
+    /// same style merged. An empty text has no runs. Only the first `limit`
+    /// units are styled; the rest is one plain run.
+    public static func runs(in text: String, limit: Int = styleLimit) -> [Run] {
         let string = text as NSString
         let length = string.length
         guard length > 0 else { return [] }
-        var styles = [TextStyle](repeating: .plain, count: length)
+        let styled = min(length, max(0, limit))
+        var styles = [TextStyle](repeating: .plain, count: styled)
         var titleFound = false
         var index = 0
-        while index < length {
+        while index < styled {
             let lineRange = string.lineRange(for: NSRange(location: index, length: 0))
             var contentRange = lineRange
-            // The line without its terminator.
+            // The line without its terminator, and never past the budget.
             let terminator = string.substring(with: lineRange).hasSuffix("\n") ? 1 : 0
-            contentRange.length -= terminator
+            contentRange.length = min(contentRange.length - terminator, styled - contentRange.location)
             styleLine(string, contentRange, &styles, titleFound: &titleFound)
             index = NSMaxRange(lineRange)
             if lineRange.length == 0 { break }
         }
-        return coalesce(styles)
+        var runs = coalesce(styles)
+        if styled < length {
+            if runs.last?.style == .plain, let last = runs.last {
+                runs[runs.count - 1].range.length = length - last.range.location
+            } else {
+                runs.append(Run(range: NSRange(location: styled, length: length - styled), style: .plain))
+            }
+        }
+        return runs
     }
 
     /// Every checkbox in the text, in order.
@@ -107,7 +122,7 @@ nonisolated public enum MarkdownLite {
     /// plain-text conventions already.
     public static func plainText(_ text: String) -> String {
         let string = text as NSString
-        let runs = runs(in: text)
+        let runs = runs(in: text, limit: Int.max)
         var kept = [Bool](repeating: true, count: string.length)
         // Emphasis, code and heading markers go (a heading's marker includes
         // its trailing space); bullets and checkboxes stay.
@@ -205,11 +220,12 @@ nonisolated public enum MarkdownLite {
     private static func styleInline(_ line: NSString, from start: Int, base: TextStyle, offset: Int, _ styles: inout [TextStyle]) {
         let length = line.length
         var i = start
-        // Code first: nothing inside backticks is interpreted.
-        var codeRanges: [NSRange] = []
+        // Code first: nothing inside backticks is interpreted. One flag per
+        // unit of the line, so a line with many spans stays linear.
+        var codeFlags = [Bool](repeating: false, count: length)
         while i < length {
             if line.character(at: i) == 96, let close = find(line, 96, from: i + 1, before: length), close > i + 1 {
-                codeRanges.append(NSRange(location: i, length: close - i + 1))
+                for k in i...close { codeFlags[k] = true }
                 var code = base
                 code.isCode = true
                 fill(&styles, offset, NSRange(location: i + 1, length: close - i - 1), code)
@@ -222,7 +238,7 @@ nonisolated public enum MarkdownLite {
                 i += 1
             }
         }
-        func inCode(_ index: Int) -> Bool { codeRanges.contains { NSLocationInRange(index, $0) } }
+        func inCode(_ index: Int) -> Bool { index < length && codeFlags[index] }
 
         // Bold `**` / `__`, then italic `*` / `_`.
         for (double, single) in [(UInt16(42), UInt16(42)), (UInt16(95), UInt16(95))] {
@@ -333,6 +349,7 @@ nonisolated public enum MarkdownLite {
     }
 
     private static func coalesce(_ styles: [TextStyle]) -> [Run] {
+        guard !styles.isEmpty else { return [] }
         var runs: [Run] = []
         var start = 0
         for i in 1...styles.count {

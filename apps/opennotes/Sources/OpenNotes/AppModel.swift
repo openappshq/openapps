@@ -3,9 +3,9 @@ import Observation
 import OpenNotesCore
 
 /// The app's one model: the store and its watcher, the preferences, the
-/// save debounce, archive's undo, auto-archive, read-only. The deck
-/// controllers, All Notes and Settings all read it; every window change
-/// comes through `onNotesChanged` or observation.
+/// save debounce and its retries, archive's undo, auto-archive, read-only.
+/// The deck controllers, All Notes and Settings all read it; every window
+/// change comes through observation.
 @Observable
 final class AppModel {
     let store: NoteStore
@@ -16,8 +16,8 @@ final class AppModel {
     /// The last save problem, shown in the open note's footer until the
     /// next successful save.
     private(set) var saveProblem: String?
-    /// A conflict copy was just written for this note; the footer says so once.
-    private(set) var lastConflict: (id: NoteID, copy: URL)?
+    /// A note's text went to a conflict copy; the footer says so once.
+    private(set) var lastConflict: (id: NoteID, original: NoteID)?
     /// The pending Undo for the deck's toast.
     private(set) var undo = ArchiveUndo()
     /// The trial ended or a license is needed (the parity ticket drives
@@ -31,15 +31,21 @@ final class AppModel {
     /// What the open note's footer says while read-only; the licensing
     /// wiring supplies the real line.
     var readOnlyNotice = "Read-only: a license is needed to write notes."
+    /// A note's identity moved (its file took its title's name, or the
+    /// user's text went to a conflict copy): the deck follows.
+    @ObservationIgnored var onRedirect: (NoteID, NoteID) -> Void = { _, _ in }
 
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var saveTimers: [NoteID: Timer] = [:]
+    @ObservationIgnored private var retryTimer: Timer?
     @ObservationIgnored private var rescanTimer: Timer?
     @ObservationIgnored private var autoArchiveTimer: Timer?
     @ObservationIgnored private var undoTimer: Timer?
-    @ObservationIgnored private var activationObserver: NSObjectProtocol?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
     /// Typing waits this long before the file is written.
     static let saveDebounce: TimeInterval = 0.25
+    /// A failed write is tried again this often while it keeps failing.
+    static let retryInterval: TimeInterval = 5
 
     init(preferences: Preferences, store: NoteStore? = nil, watcher: FolderWatcher = FolderWatcher(), now: @escaping () -> Date = Date.init) {
         self.preferences = preferences
@@ -53,27 +59,34 @@ final class AppModel {
     deinit {
         MainActor.assumeIsolated {
             for timer in saveTimers.values { timer.invalidate() }
+            retryTimer?.invalidate()
             rescanTimer?.invalidate()
             autoArchiveTimer?.invalidate()
             undoTimer?.invalidate()
-            if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+            for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         }
     }
 
-    /// Reads the folder, starts the watcher, the activation rescan and the
-    /// hourly auto-archive.
+    /// Reads the folder, starts the watcher, the activation rescan, the
+    /// flushes on resign, sleep and quit, and auto-archive when it is on.
     func start() {
         store.load(create: preferences.usesDefaultFolder)
         watcher.watch(store.folder)
-        activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.store.rescan() }
-        }
-        runAutoArchive()
-        autoArchiveTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.runAutoArchive() }
-        }
+        })
+        // Pending text reaches the disk before the Mac sleeps or the user
+        // moves on; a failure keeps it dirty and the retry timer running.
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.flush() }
+        })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.flush() }
+        })
+        scheduleAutoArchive(runNow: true)
         observeChanges({ [preferences] in _ = preferences.folder }, onChange: { [weak self] in self?.folderChanged() })
-        observeChanges({ [preferences] in _ = preferences.autoArchiveDays }, onChange: { [weak self] in self?.runAutoArchive() })
+        observeChanges({ [preferences] in _ = preferences.autoArchiveDays }, onChange: { [weak self] in self?.scheduleAutoArchive(runNow: true) })
     }
 
     // MARK: - Notes
@@ -114,41 +127,67 @@ final class AppModel {
         }
     }
 
-    /// Writes now; the footer shows a failure until the next success.
+    /// Writes now; the footer shows a failure until the next success, and
+    /// the write is retried every few seconds while it fails. Returns the
+    /// id the note has now (its conflict copy's when the file had changed
+    /// outside), or nil when the write failed.
     @discardableResult
-    func save(_ id: NoteID) -> Bool {
+    func save(_ id: NoteID) -> NoteID? {
         saveTimers[id]?.invalidate()
         saveTimers[id] = nil
         do {
-            _ = try store.save(id)
+            let outcome = try store.save(id)
             saveProblem = nil
             revision += 1
-            return true
+            scheduleRetryIfNeeded()
+            if case .keptAsConflictCopy(let copy) = outcome { return copy }
+            return id
         } catch {
             saveProblem = "Couldn’t save: \(error.localizedDescription)"
-            return false
+            revision += 1
+            scheduleRetryIfNeeded()
+            return nil
         }
+    }
+
+    /// Every unsaved note, now: what could not be written, with why. Used
+    /// before a folder switch, sleep, resign and quit.
+    @discardableResult
+    func flush() -> [NoteID: String] {
+        for timer in saveTimers.values { timer.invalidate() }
+        saveTimers = [:]
+        let problems = store.saveAll()
+        saveProblem = problems.isEmpty ? nil : "Couldn’t save: \(problems.values.sorted().first ?? "")"
+        revision += 1
+        scheduleRetryIfNeeded()
+        return problems
     }
 
     /// A note closing: saved, an empty new one dropped, a new one given
     /// its file name. Returns the id it has now (nil when dropped).
     func closeNote(_ id: NoteID) -> NoteID? {
         if store.discardIfEmpty(id) { return nil }
-        guard save(id) else { return id }
-        return (try? store.finishProvisional(id)) ?? id
+        guard let saved = save(id) else { return id }
+        do {
+            return try store.finishProvisional(saved)
+        } catch {
+            saveProblem = "Couldn’t save: \(error.localizedDescription)"
+            return saved
+        }
     }
 
     func setColor(_ color: NoteColor, for id: NoteID) { attempt { try store.setColor(color, for: id) } }
     func setFace(_ face: NoteFace, for id: NoteID) { attempt { try store.setFace(face, for: id) } }
     func setPinned(_ pinned: Bool, for id: NoteID) { attempt { try store.setPinned(pinned, for: id) } }
 
-    /// Out of the deck, with a 10-second Undo.
+    /// Out of the deck, with a 10-second Undo. The id is resolved through
+    /// any redirect a save made meanwhile.
     func archive(_ id: NoteID) {
         guard let note = store.note(id) else { return }
-        _ = save(id)
-        attempt { try store.archive(id) }
-        guard store.note(id)?.archived == true else { return }
-        undo.archived(id, title: note.title, at: now())
+        let current = save(id) ?? id
+        attempt { try store.archive(current) }
+        guard store.note(current)?.archived == true else { return }
+        undo.archived(current, title: note.title, at: now())
         undoTimer?.invalidate()
         undoTimer = Timer.scheduledTimer(withTimeInterval: ArchiveUndo.window + 0.05, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -190,9 +229,10 @@ final class AppModel {
         _ = revision
         if readOnly { return readOnlyNotice }
         if let saveProblem { return saveProblem }
-        if let lastConflict, lastConflict.id == id { return "Saved over an outside edit; theirs is kept as “\(lastConflict.copy.lastPathComponent)”." }
-        if store.hasUnsavedChanges(id) { return "Editing…" }
+        if let lastConflict, lastConflict.id == id { return "“\(lastConflict.original.fileName)” was changed outside; your text continues here, in \(id.fileName)." }
         guard let note = store.note(id) else { return "" }
+        if note.truncated { return "Too large to edit here; shown in part." }
+        if store.hasUnsavedChanges(id) { return "Editing…" }
         return "Saved · \(Age.text(note.modified, now: now()))"
     }
 
@@ -202,10 +242,22 @@ final class AppModel {
 
     // MARK: - Folder
 
+    /// The chosen folder changed: pending text is written to the old one
+    /// first; if any of it cannot be, the setting goes back to the old
+    /// folder and the footer says why (the text stays, dirty, retried).
     private func folderChanged() {
-        for id in saveTimers.keys { save(id) }
-        store.switchFolder(to: preferences.folder, create: preferences.usesDefaultFolder)
-        watcher.watch(store.folder)
+        let old = store.folder
+        guard preferences.folder != old else { return }
+        do {
+            try store.switchFolder(to: preferences.folder, create: preferences.usesDefaultFolder)
+            watcher.watch(store.folder)
+            saveProblem = nil
+        } catch {
+            saveProblem = "Couldn’t switch folders: \(error.localizedDescription)"
+            preferences.folder = old
+            scheduleRetryIfNeeded()
+        }
+        revision += 1
     }
 
     private func scheduleRescan() {
@@ -215,14 +267,46 @@ final class AppModel {
         }
     }
 
-    private func runAutoArchive() {
-        for id in AutoArchive.candidates(in: store.active, days: preferences.autoArchiveDays, now: now()) {
-            attempt { try store.archive(id) }
+    /// While a write keeps failing, try again every few seconds; nothing
+    /// runs once everything is saved.
+    private func scheduleRetryIfNeeded() {
+        retryTimer?.invalidate()
+        retryTimer = nil
+        guard !store.unsavedNotes.isEmpty, saveProblem != nil else { return }
+        retryTimer = Timer.scheduledTimer(withTimeInterval: Self.retryInterval, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.flush() }
+        }
+    }
+
+    /// Auto-archive runs now (when asked) and then once, at the moment the
+    /// next note falls due; nothing is scheduled while it is off or no
+    /// note can fall due.
+    private func scheduleAutoArchive(runNow: Bool) {
+        autoArchiveTimer?.invalidate()
+        autoArchiveTimer = nil
+        let days = preferences.autoArchiveDays
+        guard days > 0 else { return }
+        if runNow {
+            for id in AutoArchive.candidates(in: store.active, days: days, now: now()) {
+                attempt { try store.archive(id) }
+            }
+        }
+        guard let due = AutoArchive.nextDue(in: store.active, days: days) else { return }
+        let delay = max(60, due.timeIntervalSince(now()))
+        autoArchiveTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleAutoArchive(runNow: true) }
         }
     }
 
     private func handle(_ event: StoreEvent) {
-        if case .conflict(let id, let copy) = event { lastConflict = (id, copy) }
+        switch event {
+        case .renamed(let from, let to):
+            onRedirect(from, to)
+        case .conflict(let original, let copy):
+            lastConflict = (NoteID(copy.deletingPathExtension().lastPathComponent), original)
+        default:
+            break
+        }
         revision += 1
     }
 
@@ -234,5 +318,6 @@ final class AppModel {
             saveProblem = error.localizedDescription
             revision += 1
         }
+        scheduleRetryIfNeeded()
     }
 }

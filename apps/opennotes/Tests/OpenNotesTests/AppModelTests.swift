@@ -117,18 +117,21 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.archived.count, 1)
     }
 
-    @MainActor func testTheConflictNoticeShowsOnceAfterASaveOverAnOutsideEdit() throws {
+    @MainActor func testTheConflictNoticeShowsOnceAfterAnOutsideEditDivertedOurs() throws {
         let model = makeModel()
         let url = folder.appendingPathComponent("a.md")
         try Data("A".utf8).write(to: url)
         model.store.load(create: false)
+        var redirects: [(NoteID, NoteID)] = []
+        model.onRedirect = { redirects.append(($0, $1)) }
         model.setText("Ours", for: NoteID("a"))
         try Data("Theirs, longer".utf8).write(to: url)
-        model.store.rescan()
-        XCTAssertTrue(model.save(NoteID("a")))
-        XCTAssertTrue(model.statusLine(for: NoteID("a")).hasPrefix("Saved over an outside edit"))
+        let copy = try XCTUnwrap(model.save(NoteID("a")))
+        XCTAssertNotEqual(copy, NoteID("a"))
+        XCTAssertEqual(redirects.map { $0.1 }, [copy])
+        XCTAssertTrue(model.statusLine(for: copy).contains("was changed outside"), model.statusLine(for: copy))
         model.clearConflictNotice()
-        XCTAssertEqual(model.statusLine(for: NoteID("a")), "Saved · now")
+        XCTAssertEqual(model.statusLine(for: copy), "Saved · now")
         XCTAssertEqual(try files().count, 2)
     }
 
@@ -137,11 +140,11 @@ final class AppModelTests: XCTestCase {
         let note = try XCTUnwrap(model.createNote())
         model.setText("x", for: note.id)
         try FileManager.default.removeItem(at: folder)
-        XCTAssertFalse(model.save(note.id))
+        XCTAssertNil(model.save(note.id))
         XCTAssertTrue(model.statusLine(for: note.id).hasPrefix("Couldn’t save"))
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         model.store.rescan()
-        XCTAssertTrue(model.save(note.id))
+        XCTAssertEqual(model.save(note.id), note.id)
         XCTAssertEqual(model.statusLine(for: note.id), "Saved · now")
     }
 }

@@ -29,7 +29,13 @@ final class DeckPanelController {
     private var timers: [DeckTimer: Timer] = [:]
     private var outsideClickMonitor: Any?
     private var localClickMonitor: Any?
-    private var focusRequest = 0
+    /// The focus token for the current open (nil: opened without focus).
+    private var focusToken: Int?
+    private var focusCounter = 0
+    /// Identities that moved while an effect list was being performed
+    /// (a first-close rename, a conflict copy): later effects in the same
+    /// list follow them.
+    private var redirects: [NoteID: NoteID] = [:]
     private var layout: DeckLayout
 
     /// The window level: above the status bar, so a full-screen app's
@@ -89,7 +95,26 @@ final class DeckPanelController {
     func handle(_ event: DeckEvent) {
         let effects = machine.handle(event)
         for effect in effects { perform(effect) }
+        redirects = [:]
         if !effects.isEmpty || isStateEvent(event) { render() }
+    }
+
+    /// The model moved a note's identity: the machine's state and order
+    /// follow, and so do the effects still being performed.
+    func noteRedirected(from: NoteID, to: NoteID) {
+        redirects[from] = to
+        _ = machine.handle(.noteRenamed(from: from, to: to))
+        render()
+    }
+
+    private func current(_ id: NoteID) -> NoteID {
+        var id = id
+        var hops = 0
+        while let next = redirects[id], hops < 8 {
+            id = next
+            hops += 1
+        }
+        return id
     }
 
     /// The screen was re-read (resolution, arrangement): the deck follows.
@@ -116,7 +141,7 @@ final class DeckPanelController {
 
     private func isStateEvent(_ event: DeckEvent) -> Bool {
         switch event {
-        case .editorFocused, .settingsChanged, .notesChanged: true
+        case .editorFocused, .settingsChanged, .notesChanged, .noteRenamed: true
         default: false
         }
     }
@@ -138,14 +163,15 @@ final class DeckPanelController {
         case .openNote(_, let focus):
             installMonitors()
             if focus {
-                focusRequest += 1
+                focusCounter += 1
+                focusToken = focusCounter
                 panel.makeKey()
+            } else {
+                focusToken = nil
             }
         case .closeNote(let id):
-            if let kept = model.closeNote(id), kept != id {
-                // The file took its title's name: the machine's order follows.
-                _ = machine.handle(.notesChanged(model.deckOrder))
-            } else if model.note(id) == nil {
+            let id = current(id)
+            if model.closeNote(id) == nil {
                 _ = machine.handle(.notesChanged(model.deckOrder))
             }
         case .createNote:
@@ -153,7 +179,7 @@ final class DeckPanelController {
                 handle(.noteCreated(note.id))
             }
         case .archive(let id):
-            model.archive(id)
+            model.archive(current(id))
             _ = machine.handle(.notesChanged(model.deckOrder))
         }
     }
@@ -170,7 +196,7 @@ final class DeckPanelController {
             layout: layout, state: state, side: preferences.side, notes: notes, openNote: openNote,
             readOnly: model.readOnly, readOnlyNotice: model.readOnlyNotice,
             statusLine: openNote.map { model.statusLine(for: $0.id) } ?? "",
-            pendingUndo: pending, folderMissing: model.store.folderIsMissing, focusRequest: focusRequest
+            pendingUndo: pending, folderMissing: model.store.folderIsMissing, focusToken: focusToken
         )
         content.onTab = { [weak self] in self?.handle(.tabClicked($0)) }
         content.onPlus = { [weak self] in self?.handle(.plusClicked) }
