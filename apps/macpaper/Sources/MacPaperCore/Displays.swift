@@ -575,27 +575,30 @@ public struct ShuffleSchedule: Hashable, Sendable {
     }
 }
 
-/// What a shuffle applies: a random document, or one of the favorites, for
-/// every display at once or one per display. Every pick avoids the display's
-/// current document when there is any other choice.
+/// What a shuffle applies: a curated document (Shuffle.next), or one of
+/// the favorites, for every display at once or one per display. Every
+/// pick avoids the display's current document when there is any other
+/// choice. `template` is the document whose pins a random pick keeps
+/// (the draft); a random pick also keeps the pins of the display's own
+/// document when the draft has none.
 public enum ShufflePlanner {
     public static func plan(
         displays: [DisplayInfo], current: [DisplayID: Wallpaper], favorites: [Wallpaper], favoritesOnly: Bool,
-        sameOnAllDisplays: Bool, using generator: inout SeededGenerator
+        sameOnAllDisplays: Bool, template: Wallpaper? = nil, using generator: inout SeededGenerator
     ) -> [DisplayInfo: Wallpaper] {
         var plan: [DisplayInfo: Wallpaper] = [:]
         guard !displays.isEmpty else { return plan }
         let pool = favoritesOnly && !favorites.isEmpty ? favorites : []
         if sameOnAllDisplays {
             let avoid = Set(current.values)
-            let pick = next(pool: pool, avoiding: avoid, using: &generator)
+            let pick = next(pool: pool, avoiding: avoid, template: template ?? current.values.first, using: &generator)
             for display in displays { plan[display] = pick }
         } else {
             var taken: Set<Wallpaper> = []
             for display in displays.sorted(by: { $0.id < $1.id }) {
                 var avoid = taken
                 if let now = current[display.id] { avoid.insert(now) }
-                let pick = next(pool: pool, avoiding: avoid, using: &generator)
+                let pick = next(pool: pool, avoiding: avoid, template: template ?? current[display.id], using: &generator)
                 taken.insert(pick)
                 plan[display] = pick
             }
@@ -603,18 +606,18 @@ public enum ShufflePlanner {
         return plan
     }
 
-    /// From the pool when there is one (the favorites), else a random
+    /// From the pool when there is one (the favorites), else a curated
     /// document. A pool with nothing left to avoid falls back to any entry.
-    static func next(pool: [Wallpaper], avoiding: Set<Wallpaper>, using generator: inout SeededGenerator) -> Wallpaper {
+    static func next(pool: [Wallpaper], avoiding: Set<Wallpaper>, template: Wallpaper?, using generator: inout SeededGenerator) -> Wallpaper {
         if !pool.isEmpty {
             let candidates = pool.filter { !avoiding.contains($0) }
             let source = candidates.isEmpty ? pool : candidates
             return source[Int(generator.next() % UInt64(source.count))]
         }
-        var candidate = Wallpaper.random(using: &generator)
+        var candidate = Shuffle.next(from: template, using: &generator)
         var attempts = 0
-        while avoiding.contains(candidate), attempts < 8 {
-            candidate = Wallpaper.random(using: &generator)
+        while avoiding.contains(candidate), attempts < 2 {
+            candidate = Shuffle.next(from: template, using: &generator)
             attempts += 1
         }
         return candidate

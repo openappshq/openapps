@@ -3,7 +3,7 @@ import Foundation
 /// Where the app keeps its files: `~/Library/Application Support/OpenApps/macpaper/`,
 /// the same root the licensing record store uses for every OpenApps app.
 ///
-/// - `favorites.json`: the favorites
+/// - `favorites.json`: the recipe library (Recipes.swift)
 /// - `applied.json`: the document each display shows
 /// - `imports/<hash>.<ext>`: imported images for Pixelize
 /// - `applied/<display>-<n>.png`: the files handed to `NSWorkspace`
@@ -96,84 +96,6 @@ struct LossyArray<Element: Codable & Sendable>: Codable, Sendable {
     }
 
     private struct Skip: Codable {}
-}
-
-// MARK: - Favorites
-
-public struct Favorite: Codable, Hashable, Identifiable, Sendable {
-    public let id: UUID
-    public var wallpaper: Wallpaper
-    public let addedAt: Date
-
-    public init(id: UUID = UUID(), wallpaper: Wallpaper, addedAt: Date = Date()) {
-        self.id = id
-        self.wallpaper = wallpaper
-        self.addedAt = addedAt
-    }
-}
-
-/// The favorites, newest first, in `favorites.json`. A favorite is the
-/// document, not a render. Membership is by document content: the same
-/// generator, parameters, seed and grain is the same favorite. Every change
-/// is written before it is reported; a write that fails throws and leaves
-/// the list as it was.
-public final class FavoritesStore: @unchecked Sendable {
-    private struct File: Codable, Sendable {
-        var version = 1
-        var favorites: LossyArray<Favorite>
-    }
-
-    private let file: JSONFile<File>
-    private let lock = NSLock()
-    private var favorites: [Favorite]
-
-    public init(fileURL: URL) {
-        file = JSONFile(url: fileURL)
-        favorites = (try? file.load())?.favorites.elements ?? []
-    }
-
-    public var all: [Favorite] {
-        lock.withLock { favorites }
-    }
-
-    public func contains(_ wallpaper: Wallpaper) -> Bool {
-        lock.withLock { favorites.contains { $0.wallpaper == wallpaper } }
-    }
-
-    /// Adds the document unless it is one already; returns the favorite.
-    @discardableResult
-    public func add(_ wallpaper: Wallpaper, at date: Date = Date()) throws -> Favorite {
-        try lock.withLock {
-            if let existing = favorites.first(where: { $0.wallpaper == wallpaper }) { return existing }
-            let favorite = Favorite(wallpaper: wallpaper, addedAt: date)
-            var next = favorites
-            next.insert(favorite, at: 0)
-            try file.save(File(favorites: LossyArray(next)))
-            favorites = next
-            return favorite
-        }
-    }
-
-    public func remove(_ wallpaper: Wallpaper) throws {
-        try lock.withLock {
-            let next = favorites.filter { $0.wallpaper != wallpaper }
-            guard next.count != favorites.count else { return }
-            try file.save(File(favorites: LossyArray(next)))
-            favorites = next
-        }
-    }
-
-    /// Adds when absent, removes when present; returns whether it is a
-    /// favorite afterwards.
-    @discardableResult
-    public func toggle(_ wallpaper: Wallpaper) throws -> Bool {
-        if contains(wallpaper) {
-            try remove(wallpaper)
-            return false
-        }
-        try add(wallpaper)
-        return true
-    }
 }
 
 // MARK: - Applied documents

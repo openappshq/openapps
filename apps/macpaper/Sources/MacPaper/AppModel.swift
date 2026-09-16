@@ -55,6 +55,37 @@ struct PanelImagePicker: ImagePicker {
     }
 }
 
+/// Where a `.macpaper` recipe file is read from or written to. The app's
+/// are an open panel and a save panel; the harness's pick nothing.
+protocol RecipeDialog {
+    func pickRecipeFile() async -> URL?
+    func saveRecipeFile(named name: String) async -> URL?
+}
+
+struct PanelRecipeDialog: RecipeDialog {
+    static let type = UTType(exportedAs: RecipeDocument.typeIdentifier, conformingTo: .json)
+
+    func pickRecipeFile() async -> URL? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [Self.type, .json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a macPaper recipe."
+        NSApp.activate()
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    func saveRecipeFile(named name: String) async -> URL? {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = name
+        panel.allowedContentTypes = [Self.type]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        NSApp.activate()
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+}
+
 /// One line of feedback under the actions: what just happened, or why it
 /// did not. Cleared after a moment unless it is an error.
 struct StatusLine: Equatable {
@@ -104,6 +135,7 @@ final class AppModel {
     @ObservationIgnored let applier: WallpaperApplier
     @ObservationIgnored let exporter: any FileExporter
     @ObservationIgnored let imagePicker: any ImagePicker
+    @ObservationIgnored let recipeDialog: any RecipeDialog
     @ObservationIgnored let previewCache = RenderCache(maxBytes: 48 * 1024 * 1024, maxEntries: 24)
     @ObservationIgnored private let displaySource: @MainActor () -> [DisplayInfo]
     /// The Mac's appearance, for which side the preview shows and the
@@ -190,16 +222,20 @@ final class AppModel {
     @ObservationIgnored private var statusTask: Task<Void, Never>?
     @ObservationIgnored private var exportWorkspace: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
 
+    /// `starterRecipes` fill an absent library (the taste set on a fresh
+    /// install); tests start empty.
     init(
         preferences: Preferences, license: LicenseStatus, paths: AppPaths, desktop: any DesktopApplier,
-        exporter: any FileExporter, imagePicker: any ImagePicker, displays: @escaping @MainActor () -> [DisplayInfo]
+        exporter: any FileExporter, imagePicker: any ImagePicker, recipeDialog: any RecipeDialog = PanelRecipeDialog(),
+        starterRecipes: [Recipe] = [], displays: @escaping @MainActor () -> [DisplayInfo]
     ) {
         self.preferences = preferences
         self.license = license
         self.exporter = exporter
         self.imagePicker = imagePicker
+        self.recipeDialog = recipeDialog
         displaySource = displays
-        favorites = FavoritesStore(fileURL: paths.favorites)
+        favorites = RecipeLibrary(fileURL: paths.favorites, starters: starterRecipes)
         applied = AppliedStore(fileURL: paths.applied)
         imports = ImportStore(directory: paths.imports)
         blocklist = BlocklistStore(fileURL: paths.blocklist)
@@ -305,6 +341,66 @@ final class AppModel {
         }
     }
 
+    /// The pixel-field family of the edited generator (nil for the other
+    /// kinds); setting one switches to a field of that family, shared
+    /// knobs kept.
+    var fieldFamily: FieldFamily? {
+        get { if case .field(let p) = editedGenerator { return p.family } else { return nil } }
+        set {
+            guard let newValue else { return }
+            if case .field(let p) = editedGenerator {
+                guard p.family != newValue else { return }
+                editedGenerator = .field(p.inFamily(newValue))
+            } else if case .field(let p) = Generator.default(.field, colors: editedGenerator.colors) {
+                editedGenerator = .field(p.inFamily(newValue))
+            }
+        }
+    }
+
+    /// One knob of the edited pixel field.
+    func setKnob(_ key: ParameterKey, _ value: Double) {
+        guard case .field(var p) = editedGenerator else { return }
+        p[key] = value
+        editedGenerator = .field(p)
+    }
+
+    /// The base under the texture: a kind from the draft's colors, or
+    /// the base as edited.
+    var baseKind: BaseKind {
+        get { draft.base.kind }
+        set {
+            guard newValue != draft.base.kind else { return }
+            let colors = editedGenerator.colors
+            edit { $0.base = BaseLayer.default(newValue, colors: colors) }
+        }
+    }
+
+    func setBase(_ base: BaseLayer) {
+        edit { $0.base = base }
+    }
+
+    // MARK: - Pins
+
+    /// The parameters Shuffle keeps from the draft.
+    var pinnedKeys: Set<ParameterKey> { draft.pinned }
+
+    func isPinned(_ key: ParameterKey) -> Bool { draft.pinned.contains(key) }
+
+    /// Pinning is not generating: it works in every license state.
+    func pin(_ key: ParameterKey) {
+        guard !draft.pinned.contains(key) else { return }
+        draft.pinned.insert(key)
+    }
+
+    func unpin(_ key: ParameterKey) {
+        guard draft.pinned.contains(key) else { return }
+        draft.pinned.remove(key)
+    }
+
+    func togglePin(_ key: ParameterKey) {
+        if isPinned(key) { unpin(key) } else { pin(key) }
+    }
+
     /// Derives the dark side from the light one again (drops the edits).
     func resetDarkSide() {
         edit { $0.darkGenerator = nil }
@@ -347,6 +443,7 @@ final class AppModel {
             $0.finish = Finish()
             $0.composition = .none
             $0.pair = .still
+            $0.base = .none
         }
     }
 
@@ -422,8 +519,22 @@ final class AppModel {
             p.paper = colors[0]
             p.ink = colors.count > 1 ? colors[colors.count - 1] : p.ink
             editedGenerator = .dither(p)
+        case .field(var p):
+            p.tones = Array(colors.prefix(FieldParameters.toneRange.upperBound))
+            editedGenerator = .field(p)
         }
+        // The base follows the palette's ground, in the base's own kind.
+        let kind = draft.base.kind
+        if kind != .none { edit { $0.base = BaseLayer.default(kind, colors: colors) } }
     }
+
+    /// A preset palette, by name: the generator's tones and the base.
+    func applyPalette(_ palette: Palette) {
+        applyPalette(palette.tones)
+    }
+
+    /// The preset the draft's colors came from, or "Custom".
+    var paletteName: String { Palettes.name(for: draft.generator.colors) }
 
     /// The Mac's accent color expanded into a palette.
     func useAccentPalette() {
@@ -497,16 +608,102 @@ final class AppModel {
         return !imports.hasImage(for: source)
     }
 
-    // MARK: - Favorites and never-show
+    // MARK: - Recipes (the library) and never-show
 
     var isFavorite: Bool {
         _ = favoritesRevision
         return favorites.contains(draft)
     }
 
-    var favoriteList: [Favorite] {
+    var favoriteList: [Recipe] {
         _ = favoritesRevision
         return favorites.all
+    }
+
+    /// The library's recipe for the draft, if it is in it.
+    var currentRecipe: Recipe? {
+        _ = favoritesRevision
+        return favorites.recipe(for: draft)
+    }
+
+    /// The draft's name: the library's, else "<palette> · <generator>".
+    var recipeName: String {
+        currentRecipe?.name ?? Recipe.defaultName(for: draft)
+    }
+
+    /// Saves the draft as a recipe under a name (renames it when it is
+    /// in the library already). Saving is not generating: every license
+    /// state allows it.
+    func saveRecipe(named name: String) {
+        do {
+            let recipe = try favorites.add(draft, named: name)
+            favoritesRevision &+= 1
+            show("Saved “\(recipe.name)”.")
+        } catch {
+            show("Couldn’t save the recipe: \(error.localizedDescription)", tone: .error)
+        }
+    }
+
+    func renameRecipe(_ recipe: Recipe, to name: String) {
+        do {
+            try favorites.rename(recipe.id, to: name)
+            favoritesRevision &+= 1
+        } catch {
+            show("Couldn’t rename: \(error.localizedDescription)", tone: .error)
+        }
+    }
+
+    /// Writes the draft as a `.macpaper` file where the user says.
+    func exportRecipe() async {
+        let document = RecipeDocument(name: recipeName, palette: paletteName, wallpaper: draft)
+        guard let url = await recipeDialog.saveRecipeFile(named: document.fileName) else { return }
+        do {
+            try document.fileData().write(to: url, options: .atomic)
+            show("Exported \(url.lastPathComponent).")
+        } catch {
+            show("Couldn’t export the recipe: \(error.localizedDescription)", tone: .error)
+        }
+    }
+
+    /// Reads a `.macpaper` file the user picks into the library and the draft.
+    func importRecipe() async {
+        guard let url = await recipeDialog.pickRecipeFile() else { return }
+        importRecipe(at: url)
+    }
+
+    /// A recipe file from anywhere (a drop, a double-click, the open
+    /// panel): decoded within the share code's bounds, added to the
+    /// library and shown. Viewing is never gated.
+    func importRecipe(at url: URL) {
+        do {
+            guard let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= ShareCode.maxDocumentBytes else {
+                throw ShareCode.DecodeError.tooLong
+            }
+            let document = try RecipeDocument.decode(try Data(contentsOf: url))
+            let recipe = try favorites.add(document.recipe)
+            favoritesRevision &+= 1
+            load(recipe.wallpaper)
+            let note = recipe.wallpaper.generator.source != nil ? " Its photo isn’t on this Mac: import one." : ""
+            show("Imported “\(recipe.name)”.\(note)")
+        } catch {
+            show(error.localizedDescription, tone: .error)
+        }
+    }
+
+    /// A recipe (the draft by default) as a `.macpaper` file in a
+    /// temporary folder, for dragging out of the panel; nil when it
+    /// cannot be written.
+    func recipeDragURL(for recipe: Recipe? = nil) -> URL? {
+        let document = recipe.map(RecipeDocument.init) ?? RecipeDocument(name: recipeName, palette: paletteName, wallpaper: draft)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-drag-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        let url = folder.appendingPathComponent(document.fileName)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try document.fileData().write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
     }
 
     var blockedCount: Int {
@@ -524,12 +721,12 @@ final class AppModel {
         }
     }
 
-    func removeFavorite(_ favorite: Favorite) {
+    func removeFavorite(_ favorite: Recipe) {
         try? favorites.remove(favorite.wallpaper)
         favoritesRevision &+= 1
     }
 
-    func load(_ favorite: Favorite) {
+    func load(_ favorite: Recipe) {
         load(favorite.wallpaper)
     }
 
@@ -556,10 +753,10 @@ final class AppModel {
 
     // MARK: - Sharing
 
-    /// `macpaper://s/<code>` on the pasteboard.
+    /// `macpaper://s/<code>` on the pasteboard: the recipe, named.
     func shareLink() {
         do {
-            let url = try ShareCode.url(for: draft)
+            let url = try ShareCode.url(for: RecipeDocument(name: recipeName, palette: paletteName, wallpaper: draft))
             copyToPasteboard(url.absoluteString)
             let note = draft.generator.source != nil || draft.darkGenerator?.source != nil ? " The photo is not in it; the receiver sees the background." : ""
             show("Link copied.\(note)")
@@ -568,12 +765,13 @@ final class AppModel {
         }
     }
 
-    /// A link opened from anywhere: the document becomes the draft.
+    /// A link opened from anywhere: the recipe becomes the draft.
     func open(sharedLink url: URL) {
         do {
-            load(try ShareCode.decode(url: url))
+            let document = try ShareCode.decode(url: url)
+            load(document.wallpaper)
             let note = draft.generator.source != nil ? " Its photo isn’t on this Mac: import one." : ""
-            show("Opened a shared wallpaper.\(note)")
+            show("Opened “\(document.name)”.\(note)")
         } catch {
             show(error.localizedDescription, tone: .error)
         }
@@ -641,13 +839,14 @@ final class AppModel {
 
     /// A plan with nothing never-showed in it; empty when none could be
     /// found (every favorite blocked, or the random draw kept landing on
-    /// the list), so "never show" is never broken to fill a display.
+    /// the list), so "never show" is never broken to fill a display. A
+    /// random pick is a curated one that keeps the draft's pins.
     private func shufflePlan(for targets: [DisplayInfo], using generator: inout SeededGenerator) -> [DisplayInfo: Wallpaper] {
         let favorites = blocklist.filter(self.favorites.all.map(\.wallpaper))
         for _ in 0..<6 {
             let plan = ShufflePlanner.plan(
                 displays: targets, current: currentByDisplay, favorites: favorites,
-                favoritesOnly: preferences.favoritesOnly, sameOnAllDisplays: preferences.sameOnAllDisplays, using: &generator
+                favoritesOnly: preferences.favoritesOnly, sameOnAllDisplays: preferences.sameOnAllDisplays, template: draft, using: &generator
             )
             if plan.values.allSatisfy({ !blocklist.contains($0) }) { return plan }
         }

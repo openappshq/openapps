@@ -92,8 +92,9 @@ public struct Raster: Hashable, Sendable {
 
     /// Bilinear resampling to another size, in software: used to bring a
     /// mesh computed at a lower resolution up to the display's, so the
-    /// result stays the same everywhere.
-    public func resampled(to target: PixelSize) -> Raster {
+    /// result stays the same everywhere. `dithered` rounds every byte
+    /// through the ordered dither, so an enlarged smooth field never bands.
+    public func resampled(to target: PixelSize, dithered: Bool = false) -> Raster {
         if target == size { return self }
         var out = Raster(size: target)
         let sx = Double(width) / Double(target.width)
@@ -115,11 +116,55 @@ public struct Raster: Hashable, Sendable {
                         let i00 = (y0 * sw + x0) * 4, i10 = (y0 * sw + x1) * 4
                         let i01 = (y1 * sw + x0) * 4, i11 = (y1 * sw + x1) * 4
                         let o = (y * target.width + x) * 4
+                        let n = dithered ? OrderedDither.threshold(x, y) * 255 : 0
                         for c in 0..<4 {
                             let top = Double(s[i00 + c]) * (1 - wx) + Double(s[i10 + c]) * wx
                             let bottom = Double(s[i01 + c]) * (1 - wx) + Double(s[i11 + c]) * wx
-                            dst[o + c] = UInt8(min(255, max(0, (top * (1 - wy) + bottom * wy).rounded())))
+                            dst[o + c] = UInt8(min(255, max(0, (top * (1 - wy) + bottom * wy + (c < 3 ? n : 0)).rounded())))
                         }
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    /// Area-averaging (box) reduction to a smaller size: every target
+    /// pixel is the mean of the source pixels under it, weighted by
+    /// overlap, so a pixel pattern integrates instead of aliasing. Used
+    /// for previews of the cell-based generators.
+    public func areaResampled(to target: PixelSize) -> Raster {
+        if target == size { return self }
+        guard target.width <= width, target.height <= height else { return resampled(to: target) }
+        var out = Raster(size: target)
+        let sx = Double(width) / Double(target.width), sy = Double(height) / Double(target.height)
+        let sw = width
+        out.pixels.withUnsafeMutableBufferPointer { dst in
+            pixels.withUnsafeBufferPointer { s in
+                for y in 0..<target.height {
+                    let y0 = Double(y) * sy, y1 = Double(y + 1) * sy
+                    let r0 = Int(y0), r1 = min(height - 1, Int((y1 - 1e-9).rounded(.down)))
+                    for x in 0..<target.width {
+                        let x0 = Double(x) * sx, x1 = Double(x + 1) * sx
+                        let c0 = Int(x0), c1 = min(width - 1, Int((x1 - 1e-9).rounded(.down)))
+                        var r = 0.0, g = 0.0, b = 0.0, total = 0.0
+                        for row in r0...max(r0, r1) {
+                            let wy = min(y1, Double(row + 1)) - max(y0, Double(row))
+                            guard wy > 0 else { continue }
+                            for column in c0...max(c0, c1) {
+                                let wx = min(x1, Double(column + 1)) - max(x0, Double(column))
+                                guard wx > 0 else { continue }
+                                let weight = wx * wy
+                                let i = (row * sw + column) * 4
+                                r += Double(s[i]) * weight; g += Double(s[i + 1]) * weight; b += Double(s[i + 2]) * weight
+                                total += weight
+                            }
+                        }
+                        let o = (y * target.width + x) * 4
+                        if total > 0 {
+                            dst[o] = UInt8(min(255, max(0, (r / total).rounded()))); dst[o + 1] = UInt8(min(255, max(0, (g / total).rounded()))); dst[o + 2] = UInt8(min(255, max(0, (b / total).rounded())))
+                        }
+                        dst[o + 3] = 255
                     }
                 }
             }

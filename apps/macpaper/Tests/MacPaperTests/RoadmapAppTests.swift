@@ -129,7 +129,7 @@ struct RoadmapAppTests {
         h.model.editingSide = .dark
         #expect(!h.model.draft.hasCustomDark)
         h.model.editedGenerator = .solid(SolidParameters(color: .black))
-        #expect(h.model.draft.darkGenerator == .solid(SolidParameters(color: .black)) && h.model.draft.generator.kind == .gradient)
+        #expect(h.model.draft.darkGenerator == .solid(SolidParameters(color: .black)) && h.model.draft.generator.kind == .field)
         h.model.resetDarkSide()
         #expect(!h.model.draft.hasCustomDark)
         h.model.editingSide = .light

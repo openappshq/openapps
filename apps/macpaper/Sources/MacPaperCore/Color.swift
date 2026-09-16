@@ -49,6 +49,12 @@ public struct RGBAColor: Hashable, Sendable {
         UInt8((min(max(component, 0), 1) * 255).rounded())
     }
 
+    /// The color as its `#RRGGBB` bytes: what a document stores, so a
+    /// computed color (a mix, a fold) compares equal after a round trip.
+    public var snapped: RGBAColor {
+        RGBAColor(red: Double(Self.byte(red)) / 255, green: Double(Self.byte(green)) / 255, blue: Double(Self.byte(blue)) / 255, alpha: Double(Self.byte(alpha)) / 255)
+    }
+
     /// Linear interpolation in sRGB, `t` clamped to 0…1.
     public func mixed(with other: RGBAColor, amount t: Double) -> RGBAColor {
         let t = min(max(t, 0), 1)
@@ -143,30 +149,6 @@ extension KeyedDecodingContainer {
             throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "\(value) is not a finite number in \(range)")
         }
     }
-}
-
-/// The built-in palettes the random documents draw from. Every palette is
-/// a set of colors that read as one wallpaper; the seed picks a palette and
-/// the order it is used in.
-public enum Palettes {
-    public static let all: [[RGBAColor]] = [
-        // Sunset
-        [RGBAColor(hex: 0xFF7A2F), RGBAColor(hex: 0xFFB48A), RGBAColor(hex: 0xF3A0DC), RGBAColor(hex: 0x4A2114)],
-        // Sea
-        [RGBAColor(hex: 0x0B3D91), RGBAColor(hex: 0x1FA2FF), RGBAColor(hex: 0x12D8FA), RGBAColor(hex: 0xA6FFCB)],
-        // Forest
-        [RGBAColor(hex: 0x163A29), RGBAColor(hex: 0x236B48), RGBAColor(hex: 0x91DCB4), RGBAColor(hex: 0xEDF8F1)],
-        // Dusk
-        [RGBAColor(hex: 0x242B55), RGBAColor(hex: 0x304BFF), RGBAColor(hex: 0xA6B2FF), RGBAColor(hex: 0xEDF0FF)],
-        // Charcoal
-        [RGBAColor(hex: 0x141414), RGBAColor(hex: 0x2C2C2C), RGBAColor(hex: 0x484848), RGBAColor(hex: 0x858585)],
-        // Peach
-        [RGBAColor(hex: 0xFFF1EA), RGBAColor(hex: 0xFFCDB3), RGBAColor(hex: 0xFFD528), RGBAColor(hex: 0xFF7A2F)],
-        // Berry
-        [RGBAColor(hex: 0x4B2028), RGBAColor(hex: 0xAC243C), RGBAColor(hex: 0xFFACB8), RGBAColor(hex: 0xFFF0F2)],
-        // Slate
-        [RGBAColor(hex: 0x1F2933), RGBAColor(hex: 0x3E4C59), RGBAColor(hex: 0x9AA5B1), RGBAColor(hex: 0xE4E7EB)],
-    ]
 }
 
 // MARK: - OKLCH
@@ -297,12 +279,12 @@ public enum AccentPalette {
         var base = OKLCH(accent)
         if base.c < 0.02 { base.c = 0.06 }
         func at(l: Double, c: Double? = nil, hueShift: Double = 0) -> RGBAColor {
-            OKLCH(l: l, c: c ?? base.c, h: base.h + hueShift).color
+            OKLCH(l: l, c: c ?? base.c, h: base.h + hueShift).color.snapped
         }
         return [
             at(l: 0.16, c: base.c * 0.5),           // near-black
             at(l: max(0.3, base.l - 0.22)),         // darker
-            base.color,                             // the accent
+            base.color.snapped,                     // the accent
             at(l: min(0.88, base.l + 0.2)),         // lighter
             at(l: base.l, hueShift: 180),           // the complement
             at(l: 0.96, c: base.c * 0.25),          // near-white

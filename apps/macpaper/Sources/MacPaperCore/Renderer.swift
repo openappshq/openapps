@@ -112,43 +112,153 @@ public struct WallpaperRenderer: Sendable {
         render(generator: wallpaper.generator.atTimeOfDay(t), of: wallpaper, side: t >= 0.25 && t < 0.75 ? .light : .dark, context: context, scale: scale)
     }
 
+    /// The document's structure for the quality gate: the plain render (no
+    /// finish, no grain) at a size where its cells are still pixels — the
+    /// canonical cell grid itself for a pixel field, a cell-based
+    /// generator before its preview integrates, a 512-wide pattern, a
+    /// 256-wide anything else. Texture is measured here, never on a
+    /// thumbnail where a dither has averaged into a gradient.
+    public func structure(_ wallpaper: Wallpaper, side: Side = .light, context: RenderContext) -> Raster {
+        var plain = wallpaper
+        plain.grain = 0
+        plain.finish = Finish()
+        let width = Double(context.size.width)
+        switch plain.generator(for: side) {
+        case .field(let p):
+            let frame = FieldFrame(size: context.size, cell: p.cellSize)
+            let ground = Self.baseRaster(plain.base(for: side), size: PixelSize(width: frame.columns, height: frame.rows), seed: plain.seed)
+            let field = FieldEngine.canonical(p, seed: plain.seed, size: context.size)
+            let colors = FieldEngine.cellColors(p, field: field, base: ground)
+            return CellFill.filled(colors, columns: field.columns, rows: field.rows, cell: 1, size: PixelSize(width: field.columns, height: field.rows))
+        case .dither(let p):
+            let scale = min(1024 / width, Self.workingScale(1024 / width, unit: p.cell, floor: p.mode.isGlyphMode ? 6 : 3))
+            return render(plain, side: side, context: context, scale: scale, integrate: false)
+        case .pixelize(let p):
+            let scale = min(1024 / width, Self.workingScale(1024 / width, unit: p.blockSize, floor: 6))
+            return render(plain, side: side, context: context, scale: scale, integrate: false)
+        case .pattern:
+            return render(plain, side: side, context: context, scale: min(1, 512 / width))
+        default:
+            return render(plain, side: side, context: context, scale: min(1, 256 / width))
+        }
+    }
+
     private func render(generator: Generator, of wallpaper: Wallpaper, side: Side, context: RenderContext, scale: Double) -> Raster {
+        render(generator: generator, of: wallpaper, side: side, context: context, scale: scale, integrate: true)
+    }
+
+    private func render(_ wallpaper: Wallpaper, side: Side, context: RenderContext, scale: Double, integrate: Bool) -> Raster {
+        render(generator: wallpaper.generator(for: side), of: wallpaper, side: side, context: context, scale: scale, integrate: integrate)
+    }
+
+    /// `integrate` false leaves a cell-based preview at its working scale
+    /// instead of averaging it down to the target.
+    private func render(generator: Generator, of wallpaper: Wallpaper, side: Side, context: RenderContext, scale: Double, integrate: Bool) -> Raster {
         let scale = min(max(scale, 0.01), 1)
+        // The display's size: a pixel field is sampled on its canonical
+        // grid and filtered into a preview, never re-gridded.
+        let canonical = context.size
         let context = context.scaled(by: scale)
         let target = context.size
         // Emerge moves radial and conic centers to the notch's bottom center.
         let notch = context.notch ?? .virtual
         let anchor = Point(x: notch.centerX, y: notch.height)
+        let base = wallpaper.base(for: side)
+        let seed = wallpaper.seed
         var raster: Raster
         switch generator {
         case .gradient(var p):
             if wallpaper.composition == .emerge, p.kind != .linear { p.center = anchor }
             raster = Generators.gradient(p, size: target)
         case .mesh(let p):
-            raster = Generators.mesh(p, seed: wallpaper.seed, size: target, emergeAt: wallpaper.composition == .emerge ? anchor : nil)
+            raster = Generators.mesh(p, seed: seed, size: target, emergeAt: wallpaper.composition == .emerge ? anchor : nil)
         case .pattern(var p):
             p.scale = max(2, p.scale * scale)
-            raster = Generators.pattern(p, seed: wallpaper.seed, size: target)
+            raster = Generators.pattern(p, seed: seed, size: target, base: Self.baseRaster(base, size: target, seed: seed))
         case .solid(let p):
             raster = Generators.solid(p, size: target)
         case .pixelize(var p):
-            p.blockSize = max(1, Int((Double(p.blockSize) * scale).rounded()))
-            let source = p.source.flatMap(images.raster(for:))
-            raster = Pixelizer.render(p, source: source, seed: wallpaper.seed, size: target)
+            // A preview keeps at least six pixels per block, then integrates
+            // the blocks down, so it shows the same picture as the final.
+            let working = Self.workingScale(scale, unit: p.blockSize, floor: 6)
+            let size = canonical.scaled(by: working)
+            p.blockSize = max(1, Int((Double(p.blockSize) * working).rounded()))
+            if let source = p.source.flatMap(images.raster(for:)) {
+                raster = Pixelizer.render(p, source: source, seed: seed, size: size)
+            } else if let ground = Self.baseRaster(base, size: Pixelizer.grid(block: p.blockSize, size: size), seed: seed) {
+                // No photo: the base itself, one block per base pixel.
+                p.fit = .stretch
+                raster = Pixelizer.render(p, source: ground, seed: seed, size: size)
+            } else {
+                raster = Pixelizer.render(p, source: nil, seed: seed, size: size)
+            }
+            if integrate { raster = raster.areaResampled(to: target) }
         case .dither(var p):
-            p.cell = max(1, Int((Double(p.cell) * scale).rounded()))
-            let source = p.source.flatMap(images.raster(for:))
-            raster = Ditherer.render(p, source: source, seed: wallpaper.seed, size: target)
+            // Glyphs keep six pixels per cell in a preview, point dithers
+            // three, then the cells integrate down.
+            let working = Self.workingScale(scale, unit: p.cell, floor: p.mode.isGlyphMode ? 6 : 3)
+            let size = canonical.scaled(by: working)
+            p.cell = max(1, Int((Double(p.cell) * working).rounded()))
+            if let source = p.source.flatMap(images.raster(for:)) {
+                raster = Ditherer.render(p, source: source, seed: seed, size: size)
+            } else if let ground = Self.baseRaster(base, size: Ditherer.grid(cell: p.cell, size: size), seed: seed) {
+                // No photo: the base is what gets dithered, sampled once
+                // per cell, never synthesised at full size and averaged back.
+                p.fit = .stretch
+                raster = Ditherer.render(p, source: ground, seed: seed, size: size)
+            } else {
+                raster = Ditherer.render(p, source: nil, seed: seed, size: size)
+            }
+            if integrate { raster = raster.areaResampled(to: target) }
+        case .field(let p):
+            let grid = FieldFrame(size: canonical, cell: p.cellSize)
+            let ground = Self.baseRaster(base, size: PixelSize(width: grid.columns, height: grid.rows), seed: seed)
+            raster = FieldEngine.render(p, seed: seed, size: canonical, target: target, base: ground)
         }
         switch wallpaper.composition {
         case .contours:
-            Generators.drawContours(on: &raster, notch: notch, ink: Generators.contrastingInk(for: generator), spacing: max(6, Double(target.width) / 40))
+            Generators.drawContours(on: &raster, notch: notch, ink: Generators.contrastingInk(for: generator), spacing: max(6, Double(raster.width) / 40))
         case .pill where context.notch == nil:
             Generators.paintPill(on: &raster, notch: notch)
         default:
             break
         }
-        Generators.applyFinish(wallpaper.finish, seed: wallpaper.seed, grain: wallpaper.grain, strip: context.menuBarStrip, side: side, to: &raster)
+        Generators.applyFinish(wallpaper.finish(for: side), seed: seed, grain: wallpaper.grain, strip: context.menuBarStrip, side: side, pixelScale: scale, to: &raster)
         return raster
+    }
+
+    /// The scale a cell-based generator renders at for a preview at
+    /// `scale`: never below `floor` pixels per `unit` (a cell or block at
+    /// native size), never above native.
+    static func workingScale(_ scale: Double, unit: Int, floor: Int) -> Double {
+        guard scale < 1 else { return 1 }
+        return min(1, max(scale, Double(floor) / Double(max(1, unit))))
+    }
+
+    /// The base at a size: nil for none, else its flat, gradient or mesh
+    /// pixels (the mesh from the document's seed).
+    static func baseRaster(_ base: BaseLayer, size: PixelSize, seed: UInt64) -> Raster? {
+        switch base {
+        case .none: nil
+        case .solid(let color): Raster(size: size, fill: color)
+        case .gradient(let p): Generators.gradient(p, size: size)
+        case .mesh(let p): Generators.mesh(p, seed: seed, size: size)
+        }
+    }
+}
+
+extension Pixelizer {
+    /// The block grid over a size.
+    static func grid(block: Int, size: PixelSize) -> PixelSize {
+        let block = max(1, block)
+        return PixelSize(width: (size.width + block - 1) / block, height: (size.height + block - 1) / block)
+    }
+}
+
+extension Ditherer {
+    /// The sample grid over a size, at the cell actually used.
+    static func grid(cell: Int, size: PixelSize) -> PixelSize {
+        let cell = effectiveCell(cell, for: size)
+        return PixelSize(width: (size.width + cell - 1) / cell, height: (size.height + cell - 1) / cell)
     }
 }

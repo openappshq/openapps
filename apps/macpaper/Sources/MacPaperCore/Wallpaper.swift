@@ -5,19 +5,20 @@ import Foundation
 /// renders the same pixels at the same size on every Mac; a favorite is a
 /// document, and renders again for any display.
 ///
-/// JSON, version 2: `{"version":2,"generator":{"type":"gradient",…},"seed":"…",
-/// "grain":0.1,"finish":{…},"pair":{"mode":"still"},"composition":"none"}`.
-/// Version-1 documents (generator, seed, grain) decode with the defaults.
-/// The seed is a decimal string so it survives JSON parsers that round
-/// 64-bit integers.
+/// JSON, version 3: `{"version":3,"generator":{"type":"field",…},"seed":"…",
+/// "grain":0.1,"finish":{…},"pair":{"mode":"still"},"composition":"none",
+/// "base":{"layer":"gradient",…},"pinned":["cellSize"]}`. Version-1 and -2
+/// documents decode with the defaults (no base, nothing pinned). The seed
+/// is a decimal string so it survives JSON parsers that round 64-bit
+/// integers.
 public struct Wallpaper: Codable, Hashable, Sendable {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     public var generator: Generator
     public var seed: UInt64
     /// Film grain, 0…1, a seeded monochrome finish on every generator.
     public var grain: Double
-    /// Tint, duotone, gradient map and the top shade.
+    /// Tint, duotone, gradient map, wash, vignette, fringe and the top shade.
     public var finish: Finish
     /// Still, a light/dark pair, or a time-of-day set.
     public var pair: PairMode
@@ -26,10 +27,16 @@ public struct Wallpaper: Codable, Hashable, Sendable {
     public var darkGenerator: Generator?
     /// How the render composes around the notch.
     public var composition: Composition
+    /// What lies under a texture: a pattern's paper, interference's ground,
+    /// what a dither without a photo dithers, the backdrop of a fitted
+    /// image. `.none` keeps the generator's own colors.
+    public var base: BaseLayer
+    /// The parameters Shuffle keeps from this document.
+    public var pinned: Set<ParameterKey>
 
     public init(
         generator: Generator, seed: UInt64, grain: Double = 0, finish: Finish = Finish(), pair: PairMode = .still,
-        darkGenerator: Generator? = nil, composition: Composition = .none
+        darkGenerator: Generator? = nil, composition: Composition = .none, base: BaseLayer = .none, pinned: Set<ParameterKey> = []
     ) {
         self.generator = generator
         self.seed = seed
@@ -38,10 +45,12 @@ public struct Wallpaper: Codable, Hashable, Sendable {
         self.pair = pair
         self.darkGenerator = darkGenerator
         self.composition = composition
+        self.base = base
+        self.pinned = pinned
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, generator, seed, grain, finish, pair, darkGenerator, composition
+        case version, generator, seed, grain, finish, pair, darkGenerator, composition, base, pinned
     }
 
     public init(from decoder: any Decoder) throws {
@@ -61,6 +70,13 @@ public struct Wallpaper: Codable, Hashable, Sendable {
         pair = try container.decodeIfPresent(PairMode.self, forKey: .pair) ?? .still
         darkGenerator = try container.decodeIfPresent(Generator.self, forKey: .darkGenerator)
         composition = try container.decodeIfPresent(Composition.self, forKey: .composition) ?? .none
+        base = try container.decodeIfPresent(BaseLayer.self, forKey: .base) ?? .none
+        // An unknown key (a newer app's parameter) is dropped, not refused.
+        let keys = try container.decodeIfPresent([String].self, forKey: .pinned) ?? []
+        guard keys.count <= ParameterKey.allCases.count * 2 else {
+            throw DecodingError.dataCorruptedError(forKey: .pinned, in: container, debugDescription: "Too many pins")
+        }
+        pinned = Set(keys.compactMap(ParameterKey.init(rawValue:)))
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -73,6 +89,8 @@ public struct Wallpaper: Codable, Hashable, Sendable {
         try container.encode(pair, forKey: .pair)
         try container.encodeIfPresent(darkGenerator, forKey: .darkGenerator)
         try container.encode(composition, forKey: .composition)
+        if base != .none { try container.encode(base, forKey: .base) }
+        if !pinned.isEmpty { try container.encode(pinned.map(\.rawValue).sorted(), forKey: .pinned) }
     }
 
     // MARK: - JSON
@@ -110,6 +128,24 @@ public struct Wallpaper: Codable, Hashable, Sendable {
         }
     }
 
+    /// The base of a side: the light one, or its colors folded down the way
+    /// the dark generator is derived (a base is never edited per side).
+    public func base(for side: Side) -> BaseLayer {
+        switch side {
+        case .light: base
+        case .dark: base.recolored(Generator.darkenColor)
+        }
+    }
+
+    /// The finish of a side: the wash's colors fold down on the dark side;
+    /// tint, duotone and the gradient map are the user's own on both.
+    public func finish(for side: Side) -> Finish {
+        guard side == .dark, let wash = finish.wash else { return finish }
+        var copy = finish
+        copy.wash = Wash(from: Generator.darkenColor(wash.from), to: Generator.darkenColor(wash.to), angle: wash.angle, amount: wash.amount)
+        return copy
+    }
+
     /// Whether the dark side was edited by hand (nil derives it).
     public var hasCustomDark: Bool { darkGenerator != nil }
 
@@ -117,53 +153,244 @@ public struct Wallpaper: Codable, Hashable, Sendable {
     public var isPlain: Bool { grain == 0 && finish.isEmpty }
 
     /// `#000000` with nothing on top — no finish, no grain, no composition,
-    /// a still — so every pixel of every side is exact zeros.
+    /// no base, a still — so every pixel of every side is exact zeros.
     public var isTrueBlack: Bool {
-        if case .solid(let p) = generator, p.color == .black { return isPlain && composition == .none && pair == .still && (darkGenerator == nil || darkGenerator == generator) }
+        if case .solid(let p) = generator, p.color == .black { return isPlain && composition == .none && pair == .still && base == .none && (darkGenerator == nil || darkGenerator == generator) }
         return false
     }
 
-    /// The document a fresh install starts with: a seeded gradient, never
-    /// applied on its own.
-    public static let starter = Wallpaper(
-        generator: .gradient(GradientParameters(
-            kind: .linear, angle: 135,
-            stops: [ColorStop(position: 0, color: RGBAColor(hex: 0xFF7A2F)), ColorStop(position: 0.55, color: RGBAColor(hex: 0xF3A0DC)), ColorStop(position: 1, color: RGBAColor(hex: 0x304BFF))],
-            interpolation: .oklch
-        )),
-        seed: 20_260_916, grain: 0.08
-    )
+    /// The colors the document is made of: the generator's and the base's,
+    /// for naming its palette and for the quality gate.
+    public var colors: [RGBAColor] {
+        generator.colors + base.colors
+    }
 
-    /// True black: `#000000`, nothing else.
+    /// The document a fresh install starts with: the first recipe of the
+    /// taste set (a mint moiré), never applied on its own.
+    public static let starter = TasteSet.recipes[0].wallpaper
+
+    /// True black: `#000000`, nothing else. Not in the picker any more; a
+    /// document keeps decoding, and it is the ground of choice under a
+    /// texture (`BaseLayer.trueBlack`).
     public static let trueBlack = Wallpaper(generator: .solid(SolidParameters(color: .black)), seed: 0)
 
-    /// A random document for Shuffle: a random generator (never pixelize or
-    /// dither, which need a source image), parameters from the seed,
-    /// gradients interpolated in OKLCH.
+    /// A random document for Shuffle: never uniform noise over the
+    /// parameter space, always a curated recipe family drawn with a preset
+    /// palette and passed through the quality gate (Curation.swift).
     public static func random(using generator: inout SeededGenerator) -> Wallpaper {
-        let seed = generator.next()
-        let kind = GeneratorKind.shuffleable[Int(generator.next() % UInt64(GeneratorKind.shuffleable.count))]
-        let palette = Palettes.all[Int(generator.next() % UInt64(Palettes.all.count))].shuffled(using: &generator)
-        let grain = generator.nextUnit() < 0.5 ? 0 : generator.nextDouble(in: 0.04...0.18)
+        Shuffle.next(from: nil, using: &generator)
+    }
+}
+
+/// What lies under a texture. JSON carries a `layer` discriminator beside
+/// the layer's own parameters: `{"layer":"solid","color":"#000000"}`,
+/// `{"layer":"gradient","kind":"radial",…}`, `{"layer":"mesh",…}`; an
+/// absent base is `.none`.
+public enum BaseLayer: Hashable, Sendable {
+    case none
+    case solid(RGBAColor)
+    case gradient(GradientParameters)
+    case mesh(MeshParameters)
+
+    public static let trueBlack = BaseLayer.solid(.black)
+
+    public var title: String {
+        switch self {
+        case .none: "None"
+        case .solid: "Flat"
+        case .gradient: "Gradient"
+        case .mesh: "Mesh"
+        }
+    }
+
+    /// The base's own colors, in order.
+    public var colors: [RGBAColor] {
+        switch self {
+        case .none: []
+        case .solid(let color): [color]
+        case .gradient(let p): p.stops.map(\.color)
+        case .mesh(let p): p.colors
+        }
+    }
+
+    /// The same base with every color passed through `transform`.
+    public func recolored(_ transform: (RGBAColor) -> RGBAColor) -> BaseLayer {
+        switch self {
+        case .none: return .none
+        case .solid(let color): return .solid(transform(color))
+        case .gradient(var p):
+            p.stops = p.stops.map { ColorStop(position: $0.position, color: transform($0.color)) }
+            return .gradient(p)
+        case .mesh(var p):
+            p.colors = p.colors.map(transform)
+            return .mesh(p)
+        }
+    }
+
+    /// A base of a kind from a palette: a flat ground, a two-stop gradient
+    /// from the ground toward the next tone (smooth), or a mesh of the
+    /// palette's darker half.
+    public static func `default`(_ kind: BaseKind, colors: [RGBAColor]) -> BaseLayer {
+        let palette = colors.isEmpty ? Palettes.all[0] : colors
+        let ground = palette[0]
         switch kind {
+        case .none: return .none
+        case .solid: return .solid(ground)
         case .gradient:
-            let kinds = GradientKind.allCases
-            let gradientKind = kinds[Int(generator.next() % UInt64(kinds.count))]
-            let count = 2 + Int(generator.next() % 3)
-            let stops = (0..<count).map { i in ColorStop(position: Double(i) / Double(count - 1), color: palette[i % palette.count]) }
-            let angle = Double(Int(generator.next() % 8)) * 45
-            return Wallpaper(generator: .gradient(GradientParameters(kind: gradientKind, angle: angle, center: Point(x: generator.nextDouble(in: 0.3...0.7), y: generator.nextDouble(in: 0.3...0.7)), stops: stops, interpolation: .oklch)), seed: seed, grain: grain)
+            let second = (palette.count > 1 ? OKLCH.mix(ground, palette[1], amount: 0.45) : OKLCH.mix(ground, .white, amount: 0.2)).snapped
+            return .gradient(GradientParameters(kind: .linear, angle: 115, stops: [ColorStop(position: 0, color: ground), ColorStop(position: 1, color: second)], interpolation: .oklch))
         case .mesh:
-            return Wallpaper(generator: .mesh(MeshParameters(columns: 2 + Int(generator.next() % 3), rows: 2 + Int(generator.next() % 3), colors: Array(palette.prefix(3 + Int(generator.next() % 2))), jitter: generator.nextDouble(in: 0.2...0.8), softness: generator.nextDouble(in: 0.3...0.8))), seed: seed, grain: grain)
-        case .pattern:
-            let kinds = PatternKind.allCases
-            let patternKind = kinds[Int(generator.next() % UInt64(kinds.count))]
-            return Wallpaper(generator: .pattern(PatternParameters(kind: patternKind, foreground: palette[1], background: palette[0], scale: generator.nextDouble(in: 24...96), angle: Double(Int(generator.next() % 4)) * 45)), seed: seed, grain: grain)
-        case .solid:
-            return Wallpaper(generator: .solid(SolidParameters(color: palette[0])), seed: seed, grain: max(grain, 0.06))
-        case .pixelize, .dither:
-            // Not reachable: `shuffleable` leaves them out.
-            return starter.reseeded(seed)
+            let second = (palette.count > 1 ? OKLCH.mix(ground, palette[1], amount: 0.5) : OKLCH.mix(ground, .white, amount: 0.25)).snapped
+            let third = (palette.count > 2 ? OKLCH.mix(ground, palette[2], amount: 0.35) : OKLCH.mix(ground, .black, amount: 0.3)).snapped
+            return .mesh(MeshParameters(columns: 3, rows: 2, colors: [ground, second, third], jitter: 0.5, softness: 0.7))
+        }
+    }
+
+    public var kind: BaseKind {
+        switch self {
+        case .none: .none
+        case .solid: .solid
+        case .gradient: .gradient
+        case .mesh: .mesh
+        }
+    }
+}
+
+/// The base row's choices.
+public enum BaseKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case none, solid, gradient, mesh
+
+    public var title: String {
+        switch self {
+        case .none: "None"
+        case .solid: "Flat"
+        case .gradient: "Gradient"
+        case .mesh: "Mesh"
+        }
+    }
+}
+
+extension BaseLayer: Codable {
+    private enum CodingKeys: String, CodingKey { case layer, color }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(BaseKind.self, forKey: .layer) {
+        case .none: self = .none
+        case .solid: self = .solid(try container.decode(RGBAColor.self, forKey: .color))
+        case .gradient: self = .gradient(try GradientParameters(from: decoder))
+        case .mesh: self = .mesh(try MeshParameters(from: decoder))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .layer)
+        switch self {
+        case .none: break
+        case .solid(let color): try container.encode(color, forKey: .color)
+        case .gradient(let p): try p.encode(to: encoder)
+        case .mesh(let p): try p.encode(to: encoder)
+        }
+    }
+}
+
+/// A parameter Shuffle can be told to keep, and the key of a pixel-field
+/// knob. Keys name the knobs the panel shows; a key that does not apply
+/// to a document's generator is carried but ignored.
+public enum ParameterKey: String, Codable, CaseIterable, Hashable, Sendable {
+    // The document.
+    case generator, palette, seed, base, composition, pair
+    // Every pixel field.
+    case family, cellSize, toneSteps, dither, oklab, depth, anchorX, anchorY, reach, angle, offset, reflect
+    // Interference.
+    case mode, twist, repeatX, repeatY
+    // Contour relief, islands.
+    case scale, warp, rim, relief, seaLevel, roughness, shore, focal
+    // Resonance plate.
+    case modeM, modeN, balance, nodalWidth, density
+    // Woven circuit.
+    case ribbon, bias, biasScale, loops, gap, accent
+    // Memory sky.
+    case horizon, sunX, sunRadius, haze, ridge, clouds, diffusion
+    // Mesh and pattern, pixelize and dither.
+    case columns, rows, jitter, softness, patternKind, blockSize, ditherMode, cell, paletteSize, framing
+    // Gradient.
+    case gradientKind, center, interpolation
+    // Finishes.
+    case grain, topShade, tint, duotone, gradientMap, wash, vignette, fringe
+
+    public var title: String {
+        switch self {
+        case .generator: "Generator"
+        case .palette: "Palette"
+        case .seed: "Seed"
+        case .base: "Base"
+        case .composition: "Notch"
+        case .pair: "Pair"
+        case .family: "Family"
+        case .cellSize: "Cell size"
+        case .toneSteps: "Tone steps"
+        case .dither: "Dither"
+        case .oklab: "OKLab"
+        case .depth: "Depth"
+        case .anchorX: "Anchor X"
+        case .anchorY: "Anchor Y"
+        case .reach: "Reach"
+        case .angle: "Angle"
+        case .offset: "Offset"
+        case .reflect: "Reflect"
+        case .mode: "Field"
+        case .twist: "Twist"
+        case .repeatX: "Repeat X"
+        case .repeatY: "Repeat Y"
+        case .scale: "Scale"
+        case .warp: "Warp"
+        case .rim: "Rim"
+        case .relief: "Relief"
+        case .seaLevel: "Sea level"
+        case .roughness: "Roughness"
+        case .shore: "Shore"
+        case .focal: "Focus"
+        case .modeM: "Mode M"
+        case .modeN: "Mode N"
+        case .balance: "Balance"
+        case .nodalWidth: "Nodal width"
+        case .density: "Density"
+        case .ribbon: "Ribbon"
+        case .bias: "Bias"
+        case .biasScale: "Bias scale"
+        case .loops: "Loops"
+        case .gap: "Gap"
+        case .accent: "Accent"
+        case .horizon: "Horizon"
+        case .sunX: "Sun X"
+        case .sunRadius: "Sun"
+        case .haze: "Haze"
+        case .ridge: "Ridges"
+        case .clouds: "Clouds"
+        case .diffusion: "Diffusion"
+        case .columns: "Columns"
+        case .rows: "Rows"
+        case .jitter: "Jitter"
+        case .softness: "Softness"
+        case .patternKind: "Pattern"
+        case .blockSize: "Block"
+        case .ditherMode: "Mode"
+        case .cell: "Cell"
+        case .paletteSize: "Colors"
+        case .framing: "Framing"
+        case .gradientKind: "Shape"
+        case .center: "Center"
+        case .interpolation: "Blend"
+        case .grain: "Grain"
+        case .topShade: "Top shade"
+        case .tint: "Tint"
+        case .duotone: "Duotone"
+        case .gradientMap: "Gradient map"
+        case .wash: "Wash"
+        case .vignette: "Vignette"
+        case .fringe: "Fringe"
         }
     }
 }
@@ -282,24 +509,64 @@ public struct Duotone: Codable, Hashable, Sendable {
     }
 }
 
+/// A gradient of two colors laid over the render at an amount: the soft
+/// color drift that keeps a flat texture from looking flat.
+public struct Wash: Codable, Hashable, Sendable {
+    public var from: RGBAColor
+    public var to: RGBAColor
+    /// Degrees, as a linear gradient's.
+    public var angle: Double
+    /// 0…1.
+    public var amount: Double
+
+    public init(from: RGBAColor, to: RGBAColor, angle: Double = 135, amount: Double = 0.25) {
+        self.from = from
+        self.to = to
+        self.angle = angle
+        self.amount = min(max(amount, 0), 1)
+    }
+
+    private enum CodingKeys: String, CodingKey { case from, to, angle, amount }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            from: try container.decode(RGBAColor.self, forKey: .from), to: try container.decode(RGBAColor.self, forKey: .to),
+            angle: try container.decodeFiniteIfPresent(Double.self, forKey: .angle, in: GradientParameters.angleRange, default: 135),
+            amount: try container.decodeFinite(Double.self, forKey: .amount, in: 0...1)
+        )
+    }
+}
+
 /// The finishes after the generator, in the order they apply: tint,
-/// duotone, gradient map, (grain, on the document), top shade.
+/// duotone, gradient map, wash, vignette, fringe, (grain, on the
+/// document), top shade.
 public struct Finish: Codable, Hashable, Sendable {
     public var tint: Tint?
     public var duotone: Duotone?
     /// 2–6 stops over luminance, 0 = darkest.
     public var gradientMap: [ColorStop]?
+    /// A color gradient mixed over the whole render.
+    public var wash: Wash?
+    /// A darkening toward the corners, 0…1.
+    public var vignette: Double
+    /// A chromatic fringe: the red and blue channels pulled apart at every
+    /// edge, 0…1 (a pixel at 0.2, six at 1).
+    public var fringe: Double
     /// A darkening of the menu-bar strip, 0…1, so its text reads.
     public var topShade: Double
 
-    public init(tint: Tint? = nil, duotone: Duotone? = nil, gradientMap: [ColorStop]? = nil, topShade: Double = 0) {
+    public init(tint: Tint? = nil, duotone: Duotone? = nil, gradientMap: [ColorStop]? = nil, wash: Wash? = nil, vignette: Double = 0, fringe: Double = 0, topShade: Double = 0) {
         self.tint = tint
         self.duotone = duotone
         self.gradientMap = gradientMap
+        self.wash = wash
+        self.vignette = min(max(vignette, 0), 1)
+        self.fringe = min(max(fringe, 0), 1)
         self.topShade = min(max(topShade, 0), 1)
     }
 
-    private enum CodingKeys: String, CodingKey { case tint, duotone, gradientMap, topShade }
+    private enum CodingKeys: String, CodingKey { case tint, duotone, gradientMap, wash, vignette, fringe, topShade }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -309,6 +576,9 @@ public struct Finish: Codable, Hashable, Sendable {
         if let map = gradientMap, !GradientParameters.stopRange.contains(map.count) {
             throw DecodingError.dataCorruptedError(forKey: .gradientMap, in: container, debugDescription: "A gradient map has \(GradientParameters.stopRange) stops, not \(map.count)")
         }
+        wash = try container.decodeIfPresent(Wash.self, forKey: .wash)
+        vignette = try container.decodeFiniteIfPresent(Double.self, forKey: .vignette, in: 0...1, default: 0)
+        fringe = try container.decodeFiniteIfPresent(Double.self, forKey: .fringe, in: 0...1, default: 0)
         topShade = try container.decodeFiniteIfPresent(Double.self, forKey: .topShade, in: 0...1, default: 0)
     }
 
@@ -317,17 +587,30 @@ public struct Finish: Codable, Hashable, Sendable {
         try container.encodeIfPresent(tint, forKey: .tint)
         try container.encodeIfPresent(duotone, forKey: .duotone)
         try container.encodeIfPresent(gradientMap, forKey: .gradientMap)
+        try container.encodeIfPresent(wash, forKey: .wash)
+        if vignette > 0 { try container.encode(vignette, forKey: .vignette) }
+        if fringe > 0 { try container.encode(fringe, forKey: .fringe) }
         try container.encode(topShade, forKey: .topShade)
     }
 
-    public var isEmpty: Bool { tint == nil && duotone == nil && gradientMap == nil && topShade == 0 }
+    public var isEmpty: Bool { tint == nil && duotone == nil && gradientMap == nil && wash == nil && vignette == 0 && fringe == 0 && topShade == 0 }
+
+    /// The same finish with every color passed through `transform`.
+    public func recolored(_ transform: (RGBAColor) -> RGBAColor) -> Finish {
+        var copy = self
+        if let tint { copy.tint = Tint(color: transform(tint.color), amount: tint.amount) }
+        if let duotone { copy.duotone = Duotone(shadow: transform(duotone.shadow), highlight: transform(duotone.highlight)) }
+        if let gradientMap { copy.gradientMap = gradientMap.map { ColorStop(position: $0.position, color: transform($0.color)) } }
+        if let wash { copy.wash = Wash(from: transform(wash.from), to: transform(wash.to), angle: wash.angle, amount: wash.amount) }
+        return copy
+    }
 }
 
 // MARK: - Generators
 
-/// Which generator a document uses; the panel's segmented control.
+/// Which generator a document uses; the panel's picker.
 public enum GeneratorKind: String, Codable, CaseIterable, Hashable, Sendable {
-    case gradient, mesh, pattern, solid, pixelize, dither
+    case gradient, mesh, pattern, solid, pixelize, dither, field
 
     public var title: String {
         switch self {
@@ -337,14 +620,24 @@ public enum GeneratorKind: String, Codable, CaseIterable, Hashable, Sendable {
         case .solid: "Solid"
         case .pixelize: "Pixelize"
         case .dither: "Dither"
+        case .field: "Pixel field"
         }
     }
 
-    /// The generators Shuffle can make from nothing.
-    public static let shuffleable: [GeneratorKind] = [.gradient, .mesh, .pattern, .solid]
+    /// The picker's order: the textures first, gradient last as the
+    /// advanced pick. Solid is not offered (a flat color is a base under a
+    /// texture); a solid document still decodes and renders.
+    public static let pickable: [GeneratorKind] = [.field, .dither, .pattern, .mesh, .pixelize, .gradient]
+
+    /// The generators Shuffle can make from nothing: the curated families'
+    /// kinds (Curation.swift). Never a bare gradient, never a solid.
+    public static let shuffleable: [GeneratorKind] = [.field, .dither, .pattern, .mesh]
 
     /// The generators that work on an imported image.
     public var needsSource: Bool { self == .pixelize || self == .dither }
+
+    /// The generators whose ground is the base layer when one is set.
+    public var takesBase: Bool { self == .pattern || self == .field || self == .dither || self == .pixelize }
 }
 
 /// The generator and its parameters. JSON carries a `type` discriminator
@@ -356,6 +649,7 @@ public enum Generator: Hashable, Sendable {
     case solid(SolidParameters)
     case pixelize(PixelizeParameters)
     case dither(DitherParameters)
+    case field(FieldParameters)
 
     public var kind: GeneratorKind {
         switch self {
@@ -365,6 +659,7 @@ public enum Generator: Hashable, Sendable {
         case .solid: .solid
         case .pixelize: .pixelize
         case .dither: .dither
+        case .field: .field
         }
     }
 
@@ -388,6 +683,8 @@ public enum Generator: Hashable, Sendable {
             return .pixelize(PixelizeParameters(source: source, blockSize: 16, paletteSize: nil, fit: .fill, background: palette[0]))
         case .dither:
             return .dither(DitherParameters(source: source, mode: .floydSteinberg, cell: 2, ink: palette.count > 1 ? palette[1] : .white, paper: palette[0]))
+        case .field:
+            return .field(FieldParameters(family: .interference, tones: palette.map(\.snapped)))
         }
     }
 
@@ -400,6 +697,7 @@ public enum Generator: Hashable, Sendable {
         case .solid(let p): [p.color]
         case .pixelize(let p): [p.background]
         case .dither(let p): [p.paper, p.ink]
+        case .field(let p): p.tones
         }
     }
 
@@ -437,6 +735,9 @@ public enum Generator: Hashable, Sendable {
             p.paper = transform(p.paper)
             p.background = transform(p.background)
             return .dither(p)
+        case .field(var p):
+            p.tones = p.tones.map(transform)
+            return .field(p)
         }
     }
 
@@ -445,13 +746,17 @@ public enum Generator: Hashable, Sendable {
     /// (chroma capped so a bright color does not glow in the dark). Pure
     /// black stays pure black, so true black is exact zeros on both sides.
     public func darkened() -> Generator {
-        recolored { color in
-            if color.red == 0, color.green == 0, color.blue == 0 { return color }
-            var lch = OKLCH(color)
-            lch.l = 0.12 + 0.35 * lch.l
-            lch.c = min(lch.c, 0.12)
-            return lch.color
-        }
+        recolored(Self.darkenColor)
+    }
+
+    /// The fold of one color; the base and the wash use the same. Byte
+    /// exact, so a materialised dark side round-trips.
+    public static func darkenColor(_ color: RGBAColor) -> RGBAColor {
+        if color.red == 0, color.green == 0, color.blue == 0 { return color }
+        var lch = OKLCH(color)
+        lch.l = 0.12 + 0.35 * lch.l
+        lch.c = min(lch.c, 0.12)
+        return lch.color.snapped
     }
 
     /// The colors at a moment of the day, 0 = midnight, 0.5 = noon: lightness
@@ -483,6 +788,7 @@ extension Generator: Codable {
         case .solid: self = .solid(try SolidParameters(from: decoder))
         case .pixelize: self = .pixelize(try PixelizeParameters(from: decoder))
         case .dither: self = .dither(try DitherParameters(from: decoder))
+        case .field: self = .field(try FieldParameters(from: decoder))
         }
     }
 
@@ -496,6 +802,7 @@ extension Generator: Codable {
         case .solid(let p): try p.encode(to: encoder)
         case .pixelize(let p): try p.encode(to: encoder)
         case .dither(let p): try p.encode(to: encoder)
+        case .field(let p): try p.encode(to: encoder)
         }
     }
 }

@@ -1,0 +1,430 @@
+import Foundation
+@testable import MacPaperCore
+import Testing
+
+// MARK: - Palettes
+
+@Suite("Preset palettes")
+struct PaletteTests {
+    @Test("Every preset passes the preset rule and has distinct tones")
+    func rule() {
+        #expect(Palettes.presets.count >= 50)
+        for palette in Palettes.presets {
+            #expect(palette.passesPresetRule, Comment(rawValue: palette.name))
+            #expect(palette.hasDistinctTones, Comment(rawValue: palette.name))
+            #expect((2...5).contains(palette.tones.count), Comment(rawValue: palette.name))
+        }
+        #expect(Set(Palettes.presets.map(\.name)).count == Palettes.presets.count, "unique names")
+        for group in PaletteGroup.presetGroups {
+            #expect(!Palettes.presets(in: group).isEmpty, Comment(rawValue: group.title))
+        }
+    }
+
+    @Test("A document's colors name their preset, or Custom")
+    func naming() {
+        let mint = Palettes.preset(named: "Mint Circuit")!
+        #expect(Palettes.name(for: mint.tones) == "Mint Circuit")
+        #expect(Palettes.name(for: mint.tones.reversed()) == "Mint Circuit", "any order")
+        #expect(Palettes.name(for: [RGBAColor(hex: 0x123456)]) == Palettes.customName)
+        #expect(Palettes.name(for: []) == Palettes.customName)
+        #expect(Palette.custom([]).tones.count == 2 && Palette.custom([]).isCustom)
+    }
+
+    @Test("A mid-grey ground fails the rule; a dark or light one passes")
+    func groundRule() {
+        let mud = Palette(name: "Mud", group: .vga, tones: [RGBAColor(hex: 0x808080), RGBAColor(hex: 0xC0C0C0)])
+        #expect(!mud.passesPresetRule)
+        let dark = Palette(name: "Dark", group: .vga, tones: [RGBAColor(hex: 0x141414), RGBAColor(hex: 0xC0C0C0)])
+        #expect(dark.passesPresetRule)
+        let alike = Palette(name: "Alike", group: .vga, tones: [RGBAColor(hex: 0x141414), RGBAColor(hex: 0x161616)])
+        #expect(!alike.hasDistinctTones)
+    }
+}
+
+// MARK: - Pixel fields
+
+@Suite("Pixel fields")
+struct FieldTests {
+    static let size = PixelSize(width: 192, height: 120)
+    static let renderer = WallpaperRenderer()
+
+    static func document(_ family: FieldFamily, seed: UInt64 = 3, cell: Double = 4) -> Wallpaper {
+        var p = FieldParameters(family: family, tones: Palettes.preset(named: "Magma")!.tones)
+        p[.cellSize] = cell
+        return Wallpaper(generator: .field(p), seed: seed, base: .solid(p.tones[0]))
+    }
+
+    @Test("Every family renders the same bytes twice, differs by seed, and fills whole cells")
+    func determinism() {
+        for family in FieldFamily.allCases {
+            let document = Self.document(family)
+            let a = Self.renderer.render(document, size: Self.size)
+            let b = Self.renderer.render(document, size: Self.size)
+            #expect(a == b, Comment(rawValue: family.rawValue))
+            let other = Self.renderer.render(document.reseeded(4), size: Self.size)
+            #expect(a != other, Comment(rawValue: "\(family.rawValue) seed"))
+            // Whole cells: every 4×4 block is one color.
+            for y in stride(from: 0, to: Self.size.height, by: 4) {
+                for x in stride(from: 0, to: Self.size.width, by: 4) {
+                    #expect(a.pixel(x: x, y: y) == a.pixel(x: x + 3, y: y + 3), Comment(rawValue: "\(family.rawValue) cell at \(x),\(y)"))
+                }
+            }
+        }
+    }
+
+    @Test("Golden hashes per family", arguments: FieldFamily.allCases)
+    func goldenHash(family: FieldFamily) {
+        let raster = Self.renderer.render(Self.document(family), size: Self.size)
+        let expected = GoldenHashes.fields[family.rawValue] ?? ""
+        #expect(raster.contentHash == expected, "\(family.rawValue): \(raster.contentHash)")
+    }
+
+    @Test("A preview integrates the canonical cells: it matches the final filtered down")
+    func previewMatchesFinal() {
+        let document = Self.document(.interference, cell: 8)
+        let context = RenderContext(size: PixelSize(width: 640, height: 400))
+        let full = Self.renderer.render(document, side: .light, context: context)
+        let preview = Self.renderer.render(document, side: .light, context: context, scale: 0.25)
+        #expect(preview.size == PixelSize(width: 160, height: 100))
+        let filtered = full.areaResampled(to: preview.size)
+        var difference = 0
+        for i in 0..<preview.pixels.count where i % 4 != 3 { difference += abs(Int(preview.pixels[i]) - Int(filtered.pixels[i])) }
+        let mean = Double(difference) / Double(preview.width * preview.height * 3)
+        #expect(mean < 2, "mean byte difference \(mean)")
+    }
+
+    @Test("Knobs clamp, round, drop what the family does not declare, and refuse out-of-range JSON")
+    func knobs() throws {
+        var p = FieldParameters(family: .interference, tones: [.black, .white])
+        p[.cellSize] = 999
+        #expect(p.cellSize == 64)
+        p[.cellSize] = 7.6
+        #expect(p.cellSize == 8)
+        p[.horizon] = 0.5
+        #expect(p[.horizon] == 0, "not a moiré knob")
+        p[.twist] = 12
+        #expect(p.values[.twist] == nil, "the default is not stored")
+        let sky = p.inFamily(.sky)
+        #expect(sky.cellSize == 8 && sky[.horizon] == 0.58, "shared knobs carry, the rest default")
+        let json = try Wallpaper(generator: .field(p), seed: 1).jsonData()
+        #expect(try Wallpaper.fromJSON(json).generator == .field(p))
+        let unknown = Data("{\"version\":3,\"generator\":{\"type\":\"field\",\"family\":\"plate\",\"tones\":[\"#000000\",\"#FFFFFF\"],\"knobs\":{\"twist\":5,\"modeM\":4,\"nonsense\":1}},\"seed\":\"1\"}".utf8)
+        let decoded = try Wallpaper.fromJSON(unknown)
+        if case .field(let q) = decoded.generator { #expect(q[.modeM] == 4 && q.values[.twist] == nil) } else { Issue.record("not a field") }
+        let outside = Data("{\"version\":3,\"generator\":{\"type\":\"field\",\"family\":\"plate\",\"tones\":[\"#000000\",\"#FFFFFF\"],\"knobs\":{\"modeM\":40}},\"seed\":\"1\"}".utf8)
+        #expect(throws: DecodingError.self) { try Wallpaper.fromJSON(outside) }
+        let tooFew = Data("{\"version\":3,\"generator\":{\"type\":\"field\",\"family\":\"plate\",\"tones\":[\"#000000\"]},\"seed\":\"1\"}".utf8)
+        #expect(throws: DecodingError.self) { try Wallpaper.fromJSON(tooFew) }
+        let nan = Data("{\"version\":3,\"generator\":{\"type\":\"field\",\"family\":\"plate\",\"tones\":[\"#000000\",\"#FFFFFF\"],\"knobs\":{\"balance\":\"NaN\"}},\"seed\":\"1\"}".utf8)
+        #expect(throws: DecodingError.self) { try Wallpaper.fromJSON(nan) }
+    }
+
+    @Test("The tone dither: none rounds, Bayer and blue noise hit the residual on average, diffusion carries no bias")
+    func toneDither() {
+        let columns = 64, rows = 64
+        let values = [Double](repeating: 0.3, count: columns * rows)
+        let none = ToneDither.labels(values, columns: columns, rows: rows, steps: 2, mode: .none, mask: nil)
+        #expect(none.allSatisfy { $0 == 0 })
+        for mode in [ToneDitherMode.bayer, .blueNoise, .diffusion] {
+            let labels = ToneDither.labels(values, columns: columns, rows: rows, steps: 2, mode: mode, mask: nil)
+            let share = Double(labels.filter { $0 == 1 }.count) / Double(labels.count)
+            #expect(abs(share - 0.3) < 0.03, "\(mode.title): \(share)")
+        }
+        // A mask keeps the residual out of the masked cells.
+        var mask = [Bool](repeating: true, count: columns * rows)
+        for i in 0..<(columns * rows / 2) { mask[i] = false }
+        let masked = ToneDither.labels(values, columns: columns, rows: rows, steps: 2, mode: .bayer, mask: mask)
+        #expect(masked[0..<(columns * rows / 2)].allSatisfy { $0 == 0 })
+        #expect(masked[(columns * rows / 2)...].contains(1))
+    }
+
+    @Test("Islands keep no crumbs and the circuit's arcs join across tiles")
+    func topology() {
+        let islands = Self.document(.islands, cell: 4)
+        if case .field(let p) = islands.generator {
+            let field = FieldEngine.canonical(p, seed: islands.seed, size: PixelSize(width: 640, height: 400))
+            // Land before the shore dither: the field's own position.
+            let top = Double(field.steps - 1)
+            let land = field.values.map { $0 >= 0.99 / top }
+            let components = Components.label(land, columns: field.columns, rows: field.rows)
+            #expect(components.sizes.dropFirst().allSatisfy { $0 >= 4 }, "no component under four cells")
+            #expect((field.stats["landShare"] ?? 0) > 0)
+        }
+        let circuit = Self.document(.circuit, cell: 4)
+        if case .field(let p) = circuit.generator {
+            let field = FieldEngine.canonical(p, seed: circuit.seed, size: PixelSize(width: 640, height: 400))
+            #expect((field.stats["longPathShare"] ?? 0) > 0.5)
+            #expect((field.stats["loopShare"] ?? 1) < 0.5)
+        }
+    }
+
+    @Test("A gradient base shows through the ground of a moiré; the dark side folds the base")
+    func base() {
+        var p = FieldParameters(family: .interference, tones: [RGBAColor(hex: 0x101010), RGBAColor(hex: 0xF0F0F0)])
+        p[.cellSize] = 4; p[.reach] = 0.3; p[.anchorX] = 0.1; p[.anchorY] = 0.1
+        let base = BaseLayer.gradient(GradientParameters(kind: .linear, angle: 0, stops: [ColorStop(position: 0, color: RGBAColor(hex: 0x200040)), ColorStop(position: 1, color: RGBAColor(hex: 0x804000))]))
+        let document = Wallpaper(generator: .field(p), seed: 1, base: base)
+        let raster = Self.renderer.render(document, size: Self.size)
+        // The far corner is ground: the base's color there, not the tone.
+        let corner = raster.pixel(x: Self.size.width - 2, y: Self.size.height - 2)
+        #expect(corner.red > 0.4 && corner.blue < 0.1, "the base's right end \(corner.hexString)")
+        #expect(document.base(for: .dark) != base)
+        #expect(OKLCH(document.base(for: .dark).colors[1]).l < OKLCH(base.colors[1]).l)
+    }
+}
+
+// MARK: - Bases and finishes
+
+@Suite("Bases and finishes")
+struct BaseAndFinishTests {
+    static let renderer = WallpaperRenderer()
+
+    @Test("A pattern draws over its base; a dither without a photo dithers the base")
+    func overBase() {
+        let base = BaseLayer.gradient(GradientParameters(kind: .linear, angle: 0, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)]))
+        let pattern = Wallpaper(generator: .pattern(PatternParameters(kind: .checks, foreground: RGBAColor(hex: 0xFF0000), background: .black, scale: 8)), seed: 1, base: base)
+        let raster = Self.renderer.render(pattern, size: PixelSize(width: 64, height: 16))
+        // A paper cell at the right end is near white, not the black background.
+        #expect(raster.pixel(x: 61, y: 2).green > 0.85 || raster.pixel(x: 61, y: 10).green > 0.85)
+        let dither = Wallpaper(generator: .dither(DitherParameters(source: nil, mode: .bayer8, cell: 1, ink: .black, paper: .white, fit: .stretch)), seed: 1, base: base)
+        let dithered = Self.renderer.render(dither, size: PixelSize(width: 128, height: 16))
+        var dark = 0, light = 0
+        for x in 0..<128 { for y in 0..<16 { if dithered.pixel(x: x, y: y) == .black { dark += 1 } else { light += 1 } } }
+        #expect(dark > 300 && light > 300, "both tones, from the base's ramp")
+        let left = (0..<8).map { dithered.pixel(x: $0, y: 8) }.filter { $0 == .black }.count
+        let right = (120..<128).map { dithered.pixel(x: $0, y: 8) }.filter { $0 == .black }.count
+        #expect(left > right, "ink where the base is dark")
+        // Without a base, the background fills as before.
+        let plain = Self.renderer.render(Wallpaper(generator: .dither(DitherParameters(source: nil, mode: .bayer8, cell: 1)), seed: 1), size: PixelSize(width: 8, height: 8))
+        #expect(plain.pixel(x: 3, y: 3) == .black)
+    }
+
+    @Test("Vignette darkens the corners only, the wash mixes toward its colors, the fringe touches edges only, grain fades near black")
+    func finishes() {
+        let flat = Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0x808080))), seed: 1, finish: Finish(vignette: 0.5))
+        let vignetted = Self.renderer.render(flat, size: PixelSize(width: 200, height: 120))
+        #expect(vignetted.pixel(x: 100, y: 60).hexString == "#808080", "the center untouched")
+        #expect(vignetted.pixel(x: 1, y: 1).red < 0.4, "the corner darker")
+        let washed = Self.renderer.render(Wallpaper(generator: .solid(SolidParameters(color: .black)), seed: 1, finish: Finish(wash: Wash(from: RGBAColor(hex: 0xFF0000), to: RGBAColor(hex: 0x0000FF), angle: 0, amount: 0.5))), size: PixelSize(width: 100, height: 4))
+        #expect(washed.pixel(x: 1, y: 1).red > 0.4 && washed.pixel(x: 1, y: 1).blue < 0.1)
+        #expect(washed.pixel(x: 98, y: 1).blue > 0.4 && washed.pixel(x: 98, y: 1).red < 0.1)
+        let edge = Wallpaper(generator: .pattern(PatternParameters(kind: .checks, foreground: .white, background: .black, scale: 16)), seed: 1, finish: Finish(fringe: 1))
+        let fringed = Self.renderer.render(edge, size: PixelSize(width: 64, height: 16))
+        let plain = Self.renderer.render(Wallpaper(generator: edge.generator, seed: 1), size: PixelSize(width: 64, height: 16))
+        #expect(fringed.pixel(x: 8, y: 8) == plain.pixel(x: 8, y: 8), "the middle of a cell untouched")
+        var colored = false
+        for x in 12..<20 { let c = fringed.pixel(x: x, y: 8); if abs(c.red - c.blue) > 0.2 { colored = true } }
+        #expect(colored, "a colored rim at the edge")
+        let grainy = Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0x080808))), seed: 4, grain: 1)
+        let dark = Self.renderer.render(grainy, size: PixelSize(width: 40, height: 40))
+        var biggest = 0.0
+        for y in 0..<40 { for x in 0..<40 { biggest = max(biggest, abs(dark.pixel(x: x, y: y).red - 8 / 255.0)) } }
+        #expect(biggest < 0.12, "a third of the grain near black")
+    }
+
+    @Test("Gradient and mesh bytes go through the ordered dither; an exact stop stays exact")
+    func orderedDither() {
+        let slow = Wallpaper(generator: .gradient(GradientParameters(kind: .linear, angle: 0, stops: [ColorStop(position: 0, color: RGBAColor(hex: 0x101010)), ColorStop(position: 1, color: RGBAColor(hex: 0x181818))])), seed: 1)
+        let raster = Self.renderer.render(slow, size: PixelSize(width: 512, height: 8))
+        // Eight levels over 512 pixels: without the dither, bands of 64; with it, neighbours differ often.
+        var changes = 0
+        for x in 1..<512 where raster.pixel(x: x, y: 3).red != raster.pixel(x: x - 1, y: 3).red { changes += 1 }
+        #expect(changes > 40)
+        let exact = Self.renderer.render(Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0.5, color: RGBAColor(hex: 0x123456))])), seed: 1), size: PixelSize(width: 16, height: 16))
+        #expect((0..<16).allSatisfy { exact.pixel(x: $0, y: $0).hexString == "#123456" })
+    }
+
+    @Test("Base layers encode with a kind, decode, and fold on the dark side")
+    func baseJSON() throws {
+        let bases: [BaseLayer] = [.solid(.white), .gradient(GradientParameters(kind: .radial, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), .mesh(MeshParameters(columns: 2, rows: 3, colors: Palettes.all[2]))]
+        for base in bases {
+            let document = Wallpaper(generator: .pattern(PatternParameters(kind: .dots, foreground: .white, background: .black)), seed: 1, base: base)
+            #expect(try Wallpaper.fromJSON(document.jsonData()).base == base)
+            #expect(BaseLayer.default(base.kind, colors: Palettes.all[0]).kind == base.kind)
+        }
+        #expect(try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\"}".utf8)).base == .none)
+        #expect(throws: DecodingError.self) { try Wallpaper.fromJSON(Data("{\"version\":3,\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\",\"base\":{\"layer\":\"lava\"}}".utf8)) }
+        let white = Wallpaper(generator: .solid(SolidParameters(color: .black)), seed: 1, base: .solid(.white))
+        #expect(OKLCH(white.base(for: .dark).colors[0]).l < 0.5)
+        #expect(!white.isTrueBlack, "a base is something on top")
+    }
+}
+
+// MARK: - Pins and curated shuffle
+
+@Suite("Curated shuffle")
+struct CuratedShuffleTests {
+    static let renderer = WallpaperRenderer()
+    /// A small display keeps the gate's renders quick.
+    static let context = RenderContext(size: PixelSize(width: 640, height: 400), menuBarStrip: 12)
+
+    @Test("Shuffle is deterministic per seed, never bare, always from a preset palette, and passes the gate")
+    func curated() {
+        var a = SeededGenerator(seed: 77), b = SeededGenerator(seed: 77)
+        var previous: Wallpaper? = nil
+        for _ in 0..<6 {
+            let x = Shuffle.next(from: previous, using: &a, renderer: Self.renderer, context: Self.context)
+            let y = Shuffle.next(from: previous, using: &b, renderer: Self.renderer, context: Self.context)
+            #expect(x == y)
+            #expect(x.generator.kind != .gradient && x.generator.kind != .solid)
+            #expect(Palettes.preset(matching: x.generator.colors) != nil || x.generator.colors.allSatisfy { color in Palettes.presets.contains { $0.tones.contains(color) } }, "preset tones only")
+            #expect(!x.finish.isEmpty || x.grain > 0, "a finish stack, never flat")
+            #expect(QualityGate.assess(x, renderer: Self.renderer, context: Self.context, previous: previous).passes, Comment(rawValue: Recipe.defaultName(for: x)))
+            previous = x
+        }
+        var c = SeededGenerator(seed: 5)
+        let first = Wallpaper.random(using: &c)
+        #expect(GeneratorKind.shuffleable.contains(first.generator.kind))
+    }
+
+    @Test("Pinned parameters and the palette survive a shuffle; a pinned generator keeps the family")
+    func pins() {
+        var template = TasteSet.recipes[0].wallpaper
+        template.pinned = [.cellSize, .palette, .generator, .grain, .seed]
+        guard case .field(let p) = template.generator else { Issue.record("not a field"); return }
+        var generator = SeededGenerator(seed: 9)
+        for _ in 0..<3 {
+            let next = Shuffle.next(from: template, using: &generator, renderer: Self.renderer, context: Self.context)
+            guard case .field(let q) = next.generator else { Issue.record("the generator was not kept"); continue }
+            #expect(q.family == p.family)
+            #expect(q.cellSize == p.cellSize)
+            #expect(Set(q.tones.map(\.hexString)).isSubset(of: Set(p.tones.map(\.hexString))), "the palette")
+            #expect(next.grain == template.grain && next.seed == template.seed)
+            #expect(next.pinned == template.pinned, "pins carry")
+            #expect(q[.twist] != p[.twist] || q[.repeatX] != p[.repeatX] || q[.anchorX] != p[.anchorX], "the rest moved")
+        }
+        // Nothing pinned: the palette changes eventually.
+        var free = SeededGenerator(seed: 11)
+        template.pinned = []
+        let drawn = (0..<4).map { _ in Shuffle.next(from: template, using: &free, renderer: Self.renderer, context: Self.context) }
+        #expect(drawn.contains { Set($0.generator.colors) != Set(p.tones) })
+        // The planner keeps the template's pins on a random pick.
+        template.pinned = [.generator, .palette]
+        var planner = SeededGenerator(seed: 3)
+        let display = DisplayInfo(id: 1, name: "A", pointSize: CGSize(width: 320, height: 200), scale: 2)
+        let plan = ShufflePlanner.plan(displays: [display], current: [:], favorites: [], favoritesOnly: false, sameOnAllDisplays: true, template: template, using: &planner)
+        if case .field(let q) = plan[display]?.generator { #expect(q.family == p.family) } else { Issue.record("the plan lost the generator") }
+    }
+
+    @Test("Known-bad documents fail the gate, the taste set passes it")
+    func gate() {
+        let bad: [(String, Wallpaper, GateFailure)] = [
+            ("bare gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1), .bare),
+            ("grainy gradient", Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1, grain: 0.3), .flat),
+            ("flat fill", Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0x304BFF))), seed: 1), .flat),
+            ("plain mesh", Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: Palettes.all[1])), seed: 1, grain: 0.1), .flat),
+            ("mud", Wallpaper(generator: .pattern(PatternParameters(kind: .checks, foreground: RGBAColor(hex: 0x7A7A72), background: RGBAColor(hex: 0x6A6A62), scale: 24)), seed: 1), .mud),
+            ("no range", Wallpaper(generator: .field(FieldParameters(family: .interference, tones: [RGBAColor(hex: 0x202020), RGBAColor(hex: 0x242424)])), seed: 1), .palette),
+        ]
+        for (name, document, failure) in bad {
+            let verdict = QualityGate.assess(document, renderer: Self.renderer, context: Self.context)
+            #expect(!verdict.passes && verdict.failures.contains(failure), "\(name): \(verdict.failures)")
+        }
+        for recipe in TasteSet.recipes {
+            let verdict = QualityGate.assess(recipe.wallpaper, renderer: Self.renderer, context: QualityGate.defaultContext)
+            #expect(verdict.passes, "\(recipe.name): \(verdict.failures) \(verdict.metrics)")
+        }
+        // The same document again is refused for sameness.
+        let first = TasteSet.recipes[0].wallpaper
+        #expect(QualityGate.assess(first, renderer: Self.renderer, context: Self.context, previous: first).failures.contains(.sameAsBefore))
+    }
+
+    @Test("The taste set is at least 30 recipes with stable ids, names and documents")
+    func tasteSet() {
+        #expect(TasteSet.recipes.count >= 30)
+        #expect(Set(TasteSet.recipes.map(\.id)).count == TasteSet.recipes.count)
+        #expect(Set(TasteSet.recipes.map(\.wallpaper)).count == TasteSet.recipes.count)
+        #expect(TasteSet.recipes == TasteSet.entries.map(\.recipe), "built the same twice")
+        #expect(TasteSet.recipes.allSatisfy { !$0.name.isEmpty && $0.wallpaper.generator.kind != .gradient && $0.wallpaper.generator.kind != .solid })
+        #expect(Wallpaper.starter == TasteSet.recipes[0].wallpaper)
+    }
+}
+
+// MARK: - Recipes
+
+@Suite("Recipes")
+struct RecipeTests {
+    @Test("A version-1 favorites file migrates with generated names; the library adds, renames, removes")
+    func library() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        let file = directory.url.appendingPathComponent("favorites.json")
+        let old = Wallpaper(generator: .mesh(MeshParameters(columns: 2, rows: 2, colors: Palettes.preset(named: "Sea")!.tones)), seed: 5)
+        let legacy = "{\"version\":1,\"favorites\":[{\"id\":\"6A2A5B1E-0000-4000-8000-000000000001\",\"addedAt\":\"2026-01-01T00:00:00Z\",\"wallpaper\":\(String(decoding: try old.jsonData(), as: UTF8.self))}]}"
+        try Data(legacy.utf8).write(to: file)
+        let library = RecipeLibrary(fileURL: file, starters: TasteSet.recipes)
+        #expect(library.all.count == 1, "a present file takes no starters")
+        #expect(library.all[0].name == "Sea · Mesh" && library.all[0].wallpaper == old)
+        #expect(library.all[0].id == UUID(uuidString: "6A2A5B1E-0000-4000-8000-000000000001"))
+        let added = try library.add(.starter, named: "  My moiré \n ")
+        #expect(added.name == "My moiré" && library.all.count == 2 && library.all[0] == added)
+        #expect(try library.add(.starter, named: "Renamed").name == "Renamed" && library.all.count == 2)
+        try library.rename(added.id, to: String(repeating: "x", count: 200))
+        #expect(library.recipe(for: .starter)?.name.count == 80)
+        try library.rename(added.id, to: "")
+        #expect(library.recipe(for: .starter)?.name == Recipe.defaultName(for: .starter))
+        let reloaded = RecipeLibrary(fileURL: file)
+        #expect(reloaded.all.map(\.name) == library.all.map(\.name))
+        try library.remove(.starter)
+        #expect(library.all.count == 1 && !library.contains(.starter))
+        #expect(try library.toggle(.starter) && library.contains(.starter))
+        // A fresh install starts with the taste set, not written until a change.
+        let fresh = RecipeLibrary(fileURL: directory.url.appendingPathComponent("new.json"), starters: TasteSet.recipes)
+        #expect(fresh.all.count == TasteSet.recipes.count)
+        #expect(!FileManager.default.fileExists(atPath: directory.url.appendingPathComponent("new.json").path))
+    }
+
+    @Test("A recipe document round-trips as a file and as a share code; a bare document decodes; a newer format is refused")
+    func document() throws {
+        let recipe = Recipe(name: "Mint moiré", wallpaper: .starter)
+        let document = RecipeDocument(recipe)
+        #expect(document.palette == "Mint Circuit")
+        let file = try document.fileData()
+        #expect(String(decoding: file, as: UTF8.self).hasPrefix("{\n  \"kind\" : \"recipe\",\n  \"macpaper\" : 1,"))
+        #expect(try RecipeDocument.decode(file) == document)
+        let code = try ShareCode.encode(document)
+        #expect(try ShareCode.decode(code) == document)
+        #expect(try ShareCode.decode(url: try ShareCode.url(for: document)) == document)
+        // The bare document of an earlier link: the default name.
+        let bare = try ShareCode.decode(try ShareCode.encode(Wallpaper.starter))
+        #expect(bare.wallpaper == .starter && bare.name == Recipe.defaultName(for: .starter))
+        #expect(try RecipeDocument.decode(try Wallpaper.starter.jsonData()).wallpaper == .starter)
+        // Refusals: a newer format, another kind, junk, too long.
+        #expect(throws: ShareCode.DecodeError.corrupt) { try RecipeDocument.decode(Data("{\"macpaper\":2,\"kind\":\"recipe\",\"wallpaper\":{}}".utf8)) }
+        #expect(throws: ShareCode.DecodeError.corrupt) { try RecipeDocument.decode(Data("{\"macpaper\":1,\"kind\":\"theme\",\"wallpaper\":{}}".utf8)) }
+        #expect(throws: ShareCode.DecodeError.corrupt) { try RecipeDocument.decode(Data("nope".utf8)) }
+        #expect(throws: ShareCode.DecodeError.tooLong) { try RecipeDocument.decode(Data(repeating: 0x20, count: ShareCode.maxDocumentBytes + 1)) }
+        // Names are one line, bounded; the file name is safe.
+        let messy = RecipeDocument(name: "  a/b:c\nd" + String(repeating: "e", count: 100), wallpaper: .starter)
+        #expect(!messy.name.contains("\n") && messy.name.count == 80)
+        #expect(messy.fileName.hasSuffix(".macpaper") && !messy.fileName.contains("/") && !messy.fileName.contains(":"))
+        #expect(RecipeDocument(name: "", wallpaper: .starter).name == Recipe.defaultName(for: .starter))
+    }
+}
+
+// MARK: - Budget
+
+@Suite("Render budget")
+struct BudgetTests {
+    @Test("An uncached 5K render of the first three taste recipes stays within a generous bound")
+    func fiveK() {
+        let context = RenderContext(size: PixelSize(width: 5120, height: 2880), menuBarStrip: 48)
+        let renderer = WallpaperRenderer()
+        for recipe in TasteSet.recipes.prefix(3) {
+            let started = Date()
+            let raster = renderer.render(recipe.wallpaper, side: .light, context: context)
+            let elapsed = Date().timeIntervalSince(started)
+            #expect(raster.size == context.size)
+            // The target is about a second in a release build on the
+            // baseline Mac; a debug test run on a shared machine gets
+            // twenty times that before it says anything.
+            #expect(elapsed < 45, "\(recipe.name): \(elapsed)s")
+        }
+    }
+}
+
+/// The golden hashes of the pixel fields (GoldenHashes.swift keeps them
+/// beside the other suites' values).
+enum GoldenHashes {
+    static let fields: [String: String] = [:]
+}

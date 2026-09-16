@@ -1,11 +1,14 @@
 import Compression
 import Foundation
 
-/// `macpaper://s/<code>`: the whole document as a link. The code is the
-/// document's JSON, deflated (zlib) and base64url-encoded — every knob, the
-/// seed, the finishes, the pair and the composition, never an image. A
-/// pixelize or dither document carries its image reference; the receiver
-/// has no such import, so it renders the background and says so.
+/// `macpaper://s/<code>`: the whole recipe as a link. The code is the
+/// recipe document's JSON (RecipeDocument: name, palette, the wallpaper —
+/// the same bytes a `.macpaper` file holds, minus the whitespace),
+/// deflated (zlib) and base64url-encoded — every knob, the seed, the
+/// finishes, the pair and the composition, never an image. A pixelize or
+/// dither document carries its image reference; the receiver has no such
+/// import, so it renders the background and says so. Codes made of a
+/// bare document (earlier versions) still decode, named by default.
 public enum ShareCode {
     public static let scheme = "macpaper"
     public static let host = "s"
@@ -28,30 +31,35 @@ public enum ShareCode {
         }
     }
 
-    public static func encode(_ wallpaper: Wallpaper) throws -> String {
-        let json = try wallpaper.jsonData()
+    public static func encode(_ recipe: RecipeDocument) throws -> String {
+        let json = try recipe.jsonData()
         let deflated = compress(json)
         return base64url(deflated)
     }
 
-    public static func url(for wallpaper: Wallpaper) throws -> URL {
-        let code = try encode(wallpaper)
+    /// A bare document as a recipe with the default name.
+    public static func encode(_ wallpaper: Wallpaper) throws -> String {
+        try encode(RecipeDocument(wallpaper: wallpaper))
+    }
+
+    public static func url(for recipe: RecipeDocument) throws -> URL {
+        let code = try encode(recipe)
         guard let url = URL(string: "\(scheme)://\(host)/\(code)") else { throw DecodeError.corrupt }
         return url
     }
 
-    public static func decode(_ code: String) throws -> Wallpaper {
-        guard code.count <= maxCodeLength, let deflated = fromBase64url(code) else { throw DecodeError.tooLong }
-        guard let json = decompress(deflated, limit: maxDocumentBytes) else { throw DecodeError.corrupt }
-        do {
-            return try Wallpaper.fromJSON(json)
-        } catch {
-            throw DecodeError.corrupt
-        }
+    public static func url(for wallpaper: Wallpaper) throws -> URL {
+        try url(for: RecipeDocument(wallpaper: wallpaper))
     }
 
-    /// The document in a `macpaper://s/<code>` link; other links throw `notALink`.
-    public static func decode(url: URL) throws -> Wallpaper {
+    public static func decode(_ code: String) throws -> RecipeDocument {
+        guard code.count <= maxCodeLength, let deflated = fromBase64url(code) else { throw DecodeError.tooLong }
+        guard let json = decompress(deflated, limit: maxDocumentBytes) else { throw DecodeError.corrupt }
+        return try RecipeDocument.decode(json)
+    }
+
+    /// The recipe in a `macpaper://s/<code>` link; other links throw `notALink`.
+    public static func decode(url: URL) throws -> RecipeDocument {
         guard url.scheme?.lowercased() == scheme, url.host?.lowercased() == host else { throw DecodeError.notALink }
         let code = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !code.isEmpty else { throw DecodeError.notALink }

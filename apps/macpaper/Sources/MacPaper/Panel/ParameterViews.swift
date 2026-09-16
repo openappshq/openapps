@@ -24,6 +24,11 @@ struct ParametersView: View {
                 PixelizeEditor(parameters: binding(p) { .pixelize($0) }, model: model)
             case .dither(let p):
                 DitherEditor(parameters: binding(p) { .dither($0) }, model: model)
+            case .field(let p):
+                FieldEditor(parameters: p, model: model)
+            }
+            if model.editedGenerator.kind.takesBase {
+                BaseRow(model: model)
             }
         }
     }
@@ -109,7 +114,7 @@ struct ColorRow: View {
     }
 }
 
-/// From photo…, From accent color, and the built-in palettes.
+/// From photo…, From accent color, and the preset palettes by group.
 struct PaletteMenu: View {
     let model: AppModel
 
@@ -117,9 +122,11 @@ struct PaletteMenu: View {
         Menu {
             Button("From photo…") { Task { await model.usePhotoPalette() } }
             Button("From accent color") { model.useAccentPalette() }
-            Section("Built-in") {
-                ForEach(Array(Palettes.all.enumerated()), id: \.offset) { index, palette in
-                    Button(Palettes.names[index]) { model.applyPalette(palette) }
+            ForEach(PaletteGroup.presetGroups, id: \.self) { group in
+                Menu(group.title) {
+                    ForEach(Palettes.presets(in: group)) { palette in
+                        Button(palette.name) { model.applyPalette(palette) }
+                    }
                 }
             }
         } label: {
@@ -131,10 +138,6 @@ struct PaletteMenu: View {
         .accessibilityLabel("Palette: from a photo, the accent color, or built-in")
         .help("Palette from a photo, the accent color, or built-in")
     }
-}
-
-extension Palettes {
-    static let names = ["Sunset", "Sea", "Forest", "Dusk", "Charcoal", "Peach", "Berry", "Slate"]
 }
 
 private struct ChoiceRow<Value: Hashable>: View {
@@ -358,5 +361,91 @@ private struct DitherEditor: View {
             PaletteMenu(model: model)
         }
         FramingRow(fit: $parameters.fit, background: $parameters.background, hasSource: parameters.source != nil)
+    }
+}
+
+/// The pixel-field generator: the family, its tones, and every knob the
+/// family declares (a slider, a toggle or a choice), each with a pin that
+/// tells Shuffle to keep it.
+private struct FieldEditor: View {
+    let parameters: FieldParameters
+    let model: AppModel
+
+    var body: some View {
+        ChoiceRow(title: "Family", selection: Binding(get: { parameters.family }, set: { model.fieldFamily = $0 }), choices: FieldFamily.allCases.map { ($0, $0.title) })
+        ColorRow(title: "Tones", colors: Binding(
+            get: { parameters.tones },
+            set: { tones in
+                var p = parameters
+                p.tones = tones
+                model.editedGenerator = .field(p)
+            }
+        ), range: FieldParameters.toneRange, model: model)
+        ForEach(parameters.family.knobs, id: \.key) { knob in
+            KnobRow(knob: knob, value: Binding(get: { parameters[knob.key] }, set: { model.setKnob(knob.key, $0) }), model: model)
+        }
+    }
+}
+
+/// One knob with its pin.
+struct KnobRow: View {
+    let knob: KnobSpec
+    @Binding var value: Double
+    let model: AppModel
+
+    var body: some View {
+        HStack(spacing: Brand.Space.s8) {
+            switch knob.style {
+            case .slider:
+                LabeledSlider(title: knob.title, value: $value, range: knob.range, format: { knob.isWhole ? "\(Int($0.rounded()))" : String(format: "%.2f", $0) })
+            case .toggle:
+                Toggle(isOn: Binding(get: { value >= 0.5 }, set: { value = $0 ? 1 : 0 })) {
+                    Text(knob.title).font(Brand.body(12)).foregroundStyle(Brand.textSecondary)
+                }
+                .toggleStyle(.checkbox)
+                Spacer()
+            case .choice(let titles):
+                ChoiceRow(title: knob.title, selection: Binding(get: { Int(value.rounded()) }, set: { value = Double($0) }), choices: Array(titles.enumerated()).map { ($0.offset, $0.element) })
+            }
+            PinButton(key: knob.key, model: model)
+        }
+    }
+}
+
+/// The pin beside a parameter: filled while Shuffle keeps it.
+struct PinButton: View {
+    let key: ParameterKey
+    let model: AppModel
+
+    var body: some View {
+        Button {
+            model.togglePin(key)
+        } label: {
+            Image(systemName: model.isPinned(key) ? "pin.fill" : "pin")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(model.isPinned(key) ? Brand.accentText : Brand.textSecondary.opacity(0.7))
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.isPinned(key) ? "Unpin \(key.title)" : "Pin \(key.title)")
+        .help(model.isPinned(key) ? "Shuffle keeps \(key.title.lowercased())" : "Keep \(key.title.lowercased()) when shuffling")
+    }
+}
+
+/// What lies under the texture: none, a flat color, a gradient or a mesh
+/// from the palette's ground.
+private struct BaseRow: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        HStack(spacing: Brand.Space.s8) {
+            ChoiceRow(title: "Base", selection: $model.baseKind, choices: BaseKind.allCases.map { ($0, $0.title) })
+            if case .solid(let color) = model.draft.base {
+                ColorWell(title: "Base color", color: Binding(get: { color }, set: { model.setBase(.solid($0)) }))
+            }
+            PinButton(key: .base, model: model)
+        }
+        .help("What lies under the texture: a flat color, a gradient or a soft mesh")
     }
 }

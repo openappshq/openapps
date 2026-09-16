@@ -16,6 +16,13 @@ MainActor.assumeIsolated {
         }
         app.run()
     }
+    // `MacPaper --renders <directory> [sheet…]`: documents and contact
+    // sheets to PNGs, nothing else (RenderHarness.swift).
+    if let index = arguments.firstIndex(of: "--renders"), arguments.count > index + 1 {
+        app.setActivationPolicy(.prohibited)
+        let ok = RenderHarness.run(directory: URL(fileURLWithPath: arguments[index + 1]), sheets: Array(arguments[(index + 2)...]))
+        exit(ok ? 0 : 1)
+    }
     #endif
     let delegate = AppDelegate()
     app.delegate = delegate

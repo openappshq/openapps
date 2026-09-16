@@ -299,7 +299,7 @@ struct DiagnosticsTests {
         #expect(text.hasPrefix("macPaper 0.1.0 (1000)\nGenerated: "))
         #expect(text.contains("Open at login: on\nLicensing: compiled out (source build)\n\nDisplays:\n- Built-in Retina Display (1) · 1512×982 pt @2x · 3024×1964 px · notch 252 pt · main\n"))
         #expect(text.contains("Notch panel: on · host notchDisplay · opens on both · down · regular · hide in fullscreen on\nHotkey: ⌃⌥⌘W\nShuffle: hour1 · favorites only off · same on all displays on\nFavorites: 2\n"))
-        #expect(text.contains("Applied:\n- 1: {\"composition\":\"none\""))
+        #expect(text.contains("Applied:\n- 1: {\"") && text.contains("\"composition\":\"none\""))
         let empty = DiagnosticsSnapshot(appVersion: "dev", loginStatus: "off", licensing: "x", displays: [], panelSettings: PanelSettings(), hostDisplay: .mainDisplay, direction: .down, width: .compact, hotkey: nil, hotkeyProblem: "taken", shuffle: .off, favoritesOnly: true, sameOnAllDisplays: false, favoritesCount: 0, applied: [:], lastApplied: nil).text()
         #expect(empty.contains("Displays:\n- none") && empty.contains("Hotkey: none (taken)") && empty.contains("Last applied: never") && empty.contains("Applied:\n- nothing yet"))
     }

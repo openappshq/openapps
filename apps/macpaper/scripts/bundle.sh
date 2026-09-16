@@ -209,6 +209,51 @@ if [[ "$UPDATE_TEST" != "1" ]]; then
         </dict>
     </array>"
 fi
+# The .macpaper recipe file (MacPaperCore/Recipes.swift): a JSON document
+# the app exports, imports and opens from the Finder. The update-test
+# variant must not claim the type either.
+DOCUMENT_TYPES_PLIST=""
+if [[ "$UPDATE_TEST" != "1" ]]; then
+    DOCUMENT_TYPES_PLIST="<key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>macPaper Recipe</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>space.openapps.macpaper.recipe</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>space.openapps.macpaper.recipe</string>
+            <key>UTTypeDescription</key>
+            <string>macPaper Recipe</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>macpaper</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/json</string>
+                </array>
+            </dict>
+        </dict>
+    </array>"
+fi
 UPDATER_PLIST=""
 if [[ "$OFFICIAL" == "1" ]]; then
     UPDATER_PLIST="<key>SUFeedURL</key>
@@ -311,6 +356,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
         <string>MacOSX</string>
     </array>
     ${URL_TYPES_PLIST}
+    ${DOCUMENT_TYPES_PLIST}
     ${ATS_PLIST}
     ${UPDATER_PLIST}
     <key>LSApplicationCategoryType</key>

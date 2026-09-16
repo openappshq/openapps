@@ -351,7 +351,7 @@ struct ContinuationTests {
         #expect(appliedFiles() == ["1-1.png", "2-1.png"])
         model.export(.png)
         await settle(model)
-        #expect(exporter.exported == ["macPaper-gradient-20260916.png"])
+        #expect(exporter.exported == [WallpaperExport.fileName(for: .starter, format: .png)])
         #expect(model.status?.tone == .info)
     }
 }

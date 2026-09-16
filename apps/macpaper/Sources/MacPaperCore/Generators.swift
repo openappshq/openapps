@@ -33,11 +33,25 @@ private func byte(_ v: Double) -> UInt8 {
     UInt8(min(255, max(0, v * 255 + 0.5)))
 }
 
+/// The 8×8 Bayer matrix as a rounding threshold, −0.5…0.5 of one 8-bit
+/// step: added before a smooth value is rounded to a byte, it turns the
+/// bands of a slow gradient into an ordered dither no eye resolves.
+enum OrderedDither {
+    static let matrix: [Double] = Ditherer.bayer(8).map { (Double($0) + 0.5) / 64 - 0.5 }
+
+    @inline(__always)
+    static func threshold(_ x: Int, _ y: Int) -> Double {
+        matrix[(y & 7) * 8 + (x & 7)] / 255
+    }
+}
+
 /// Per-pixel software renderers. Each writes straight into a raster's bytes
 /// with plain arithmetic, so a seed's pixels are the same on every Mac.
 enum Generators {
     // MARK: - Gradient
 
+    /// Every byte is rounded through the ordered dither: a gradient never
+    /// bands, and an exact color (a single stop) stays exact.
     static func gradient(_ p: GradientParameters, size: PixelSize) -> Raster {
         let table = ColorTable(stops: p.normalizedStops, interpolation: p.interpolation)
         var raster = Raster(size: size)
@@ -72,12 +86,19 @@ enum Generators {
                         t = a / (2 * .pi)
                     }
                     let i = table.index(t)
+                    let n = OrderedDither.threshold(x, y)
                     let o = (y * w + x) * 4
-                    out[o] = byte(table.r[i]); out[o + 1] = byte(table.g[i]); out[o + 2] = byte(table.b[i]); out[o + 3] = 255
+                    out[o] = byte(table.r[i] + n); out[o + 1] = byte(table.g[i] + n); out[o + 2] = byte(table.b[i] + n); out[o + 3] = 255
                 }
             }
         }
         return raster
+    }
+
+    @inline(__always)
+    static func linearChannel(_ byte: UInt8) -> Double {
+        let c = Double(byte) / 255
+        return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
     }
 
     // MARK: - Mesh
@@ -140,19 +161,22 @@ enum Generators {
                         sr += point.r * weight; sg += point.g * weight; sb += point.b * weight; sw += weight
                     }
                     let o = (y * w + x) * 4
-                    out[o] = byte(sr / sw); out[o + 1] = byte(sg / sw); out[o + 2] = byte(sb / sw); out[o + 3] = 255
+                    let n = OrderedDither.threshold(x, y)
+                    out[o] = byte(sr / sw + n); out[o + 1] = byte(sg / sw + n); out[o + 2] = byte(sb / sw + n); out[o + 3] = 255
                 }
             }
         }
-        return raster.resampled(to: size)
+        return raster.resampled(to: size, dithered: true)
     }
 
     // MARK: - Pattern
 
-    static func pattern(_ p: PatternParameters, seed: UInt64, size: PixelSize) -> Raster {
-        var raster = Raster(size: size, fill: p.background)
+    /// The foreground's coverage over the paper: the background color, or
+    /// the base rendered at this size when the document has one.
+    static func pattern(_ p: PatternParameters, seed: UInt64, size: PixelSize, base: Raster? = nil) -> Raster {
+        var raster = base?.size == size ? base! : Raster(size: size, fill: p.background)
         let w = size.width, h = size.height
-        let fg = p.foreground, bg = p.background
+        let fg = p.foreground
         let scale = p.scale.isFinite ? max(2, p.scale) : 48
         let radians = (p.angle.isFinite ? p.angle.truncatingRemainder(dividingBy: 360) : 0) * .pi / 180
         let cosA = cos(radians), sinA = sin(radians)
@@ -184,9 +208,10 @@ enum Generators {
                         coverage = valueNoise(px / scale, py / scale, seed: seed)
                     }
                     let o = (y * w + x) * 4
-                    out[o] = byte(bg.red + (fg.red - bg.red) * coverage)
-                    out[o + 1] = byte(bg.green + (fg.green - bg.green) * coverage)
-                    out[o + 2] = byte(bg.blue + (fg.blue - bg.blue) * coverage)
+                    let br = Double(out[o]) / 255, bg = Double(out[o + 1]) / 255, bb = Double(out[o + 2]) / 255
+                    out[o] = byte(br + (fg.red - br) * coverage)
+                    out[o + 1] = byte(bg + (fg.green - bg) * coverage)
+                    out[o + 2] = byte(bb + (fg.blue - bb) * coverage)
                     out[o + 3] = 255
                 }
             }
@@ -213,8 +238,23 @@ enum Generators {
         return sum / total
     }
 
+    /// Fractal Brownian motion: `octaves` of lattice noise, each `persistence`
+    /// as strong as the last, 0…1.
     @inline(__always)
-    private static func lattice(_ x: Double, _ y: Double, seed: UInt64) -> Double {
+    static func fbm(_ x: Double, _ y: Double, octaves: Int, persistence: Double, seed: UInt64) -> Double {
+        var sum = 0.0, amplitude = 1.0, frequency = 1.0, total = 0.0
+        for octave in 0..<max(1, octaves) {
+            sum += lattice(x * frequency, y * frequency, seed: seed &+ UInt64(octave) &* 977) * amplitude
+            total += amplitude
+            amplitude *= persistence
+            frequency *= 2
+        }
+        return sum / total
+    }
+
+    /// Smoothly interpolated lattice noise, 0…1, one octave.
+    @inline(__always)
+    static func lattice(_ x: Double, _ y: Double, seed: UInt64) -> Double {
         let x0 = x.rounded(.down), y0 = y.rounded(.down)
         let fx = x - x0, fy = y - y0
         let sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy)
@@ -234,8 +274,10 @@ enum Generators {
 
     // MARK: - Grain
 
-    /// Seeded monochrome film grain: ±`amount` × 25 % per pixel, from the
-    /// position hash, so it is the same whichever order the pixels are made in.
+    /// Seeded monochrome film grain: up to ±`amount` × 25 % per pixel from
+    /// the position hash (the same whichever order the pixels are made
+    /// in), weighted by luma the way film is — full in the midtones, a
+    /// third of it near black and white, so nothing clips.
     static func applyGrain(_ amount: Double, seed: UInt64, to raster: inout Raster) {
         guard amount > 0 else { return }
         let strength = amount * 0.25
@@ -244,10 +286,95 @@ enum Generators {
         raster.pixels.withUnsafeMutableBufferPointer { out in
             for y in 0..<h {
                 for x in 0..<w {
-                    let n = (Hash.unit(Int64(x), Int64(y), grainSeed) - 0.5) * 2 * strength
                     let o = (y * w + x) * 4
+                    let l = luma(out, o)
+                    let weight = 0.35 + 0.65 * (1 - abs(2 * l - 1))
+                    let n = (Hash.unit(Int64(x), Int64(y), grainSeed) - 0.5) * 2 * strength * weight
                     for c in 0..<3 {
                         out[o + c] = byte(Double(out[o + c]) / 255 + n)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Wash, vignette, fringe
+
+    /// A two-color gradient mixed over the render in OKLCH along its angle.
+    static func applyWash(_ wash: Wash, to raster: inout Raster) {
+        guard wash.amount > 0 else { return }
+        let table = ColorTable(stops: [ColorStop(position: 0, color: wash.from), ColorStop(position: 1, color: wash.to)], interpolation: .oklch)
+        let w = raster.width, h = raster.height
+        let fw = Double(w), fh = Double(h)
+        let radians = (wash.angle.isFinite ? wash.angle.truncatingRemainder(dividingBy: 360) : 0) * .pi / 180
+        let dx = cos(radians), dy = sin(radians)
+        let extent = max(1e-6, abs(fw * dx) + abs(fh * dy))
+        let mx = fw / 2, my = fh / 2
+        let amount = wash.amount
+        raster.pixels.withUnsafeMutableBufferPointer { out in
+            for y in 0..<h {
+                let py = Double(y) + 0.5
+                for x in 0..<w {
+                    let px = Double(x) + 0.5
+                    let t = 0.5 + ((px - mx) * dx + (py - my) * dy) / extent
+                    let i = table.index(t)
+                    let o = (y * w + x) * 4
+                    out[o] = byte(Double(out[o]) / 255 + (table.r[i] - Double(out[o]) / 255) * amount)
+                    out[o + 1] = byte(Double(out[o + 1]) / 255 + (table.g[i] - Double(out[o + 1]) / 255) * amount)
+                    out[o + 2] = byte(Double(out[o + 2]) / 255 + (table.b[i] - Double(out[o + 2]) / 255) * amount)
+                }
+            }
+        }
+    }
+
+    /// A darkening toward the corners: nothing inside 45 % of the
+    /// half-diagonal, `amount` at the corner, smooth between.
+    static func applyVignette(_ amount: Double, to raster: inout Raster) {
+        guard amount > 0 else { return }
+        let w = raster.width, h = raster.height
+        let fw = Double(w), fh = Double(h)
+        let radius = (fw * fw + fh * fh).squareRoot() / 2
+        raster.pixels.withUnsafeMutableBufferPointer { out in
+            for y in 0..<h {
+                let dy = Double(y) + 0.5 - fh / 2
+                for x in 0..<w {
+                    let dx = Double(x) + 0.5 - fw / 2
+                    let r = (dx * dx + dy * dy).squareRoot() / radius
+                    let fall = smoothstep(0.45, 1.05, r)
+                    guard fall > 0 else { continue }
+                    let keep = 1 - amount * fall
+                    let o = (y * w + x) * 4
+                    out[o] = UInt8(Double(out[o]) * keep + 0.5)
+                    out[o + 1] = UInt8(Double(out[o + 1]) * keep + 0.5)
+                    out[o + 2] = UInt8(Double(out[o + 2]) * keep + 0.5)
+                }
+            }
+        }
+    }
+
+    /// A chromatic fringe at the edges: where the luma steps, red is read
+    /// from `shift` pixels to the left and blue from `shift` to the right,
+    /// so every edge gets a warm and a cool rim; flat areas are untouched.
+    static func applyFringe(_ amount: Double, shift: Int, to raster: inout Raster) {
+        guard amount > 0, shift > 0 else { return }
+        let w = raster.width, h = raster.height
+        guard w > shift * 2 else { return }
+        let source = raster.pixels
+        let threshold = 0.06
+        raster.pixels.withUnsafeMutableBufferPointer { out in
+            source.withUnsafeBufferPointer { s in
+                for y in 0..<h {
+                    for x in 0..<w {
+                        let o = (y * w + x) * 4
+                        let left = (y * w + max(0, x - shift)) * 4, right = (y * w + min(w - 1, x + shift)) * 4
+                        let here = luma(s, o)
+                        let edge = max(abs(here - luma(s, left)), abs(here - luma(s, right)))
+                        guard edge > threshold else { continue }
+                        let f = min(1, (edge - threshold) / 0.25) * amount
+                        let red = Double(s[o]), redLeft = Double(s[left])
+                        let blue = Double(s[o + 2]), blueRight = Double(s[right + 2])
+                        out[o] = UInt8(red + (redLeft - red) * f + 0.5)
+                        out[o + 2] = UInt8(blue + (blueRight - blue) * f + 0.5)
                     }
                 }
             }
@@ -337,13 +464,18 @@ enum Generators {
 
     // MARK: - Finishes
 
-    /// Tint, duotone, gradient map, grain, then the top shade, in that
-    /// order; each only when set, so a plain document's bytes are the
-    /// generator's own.
-    static func applyFinish(_ finish: Finish, seed: UInt64, grain: Double, strip: Int, side: Side, to raster: inout Raster) {
+    /// Tint, duotone, gradient map, wash, vignette, fringe, grain, then
+    /// the top shade, in that order; each only when set, so a plain
+    /// document's bytes are the generator's own. `pixelScale` is the
+    /// render's scale (1 at native size), so the fringe's pixels shrink
+    /// with a preview.
+    static func applyFinish(_ finish: Finish, seed: UInt64, grain: Double, strip: Int, side: Side, pixelScale: Double = 1, to raster: inout Raster) {
         if let tint = finish.tint, tint.amount > 0 { applyTint(tint, to: &raster) }
         if let duotone = finish.duotone { applyDuotone(duotone, to: &raster) }
         if let map = finish.gradientMap, !map.isEmpty { applyGradientMap(map, to: &raster) }
+        if let wash = finish.wash { applyWash(wash, to: &raster) }
+        if finish.vignette > 0 { applyVignette(finish.vignette, to: &raster) }
+        if finish.fringe > 0 { applyFringe(finish.fringe, shift: max(1, Int(((1 + finish.fringe * 5) * pixelScale).rounded())), to: &raster) }
         applyGrain(grain, seed: seed, to: &raster)
         if finish.topShade > 0 { applyTopShade(finish.topShade, strip: strip, side: side, to: &raster) }
     }
@@ -366,6 +498,11 @@ enum Generators {
     @inline(__always)
     private static func luma(_ out: UnsafeMutableBufferPointer<UInt8>, _ o: Int) -> Double {
         (0.299 * Double(out[o]) + 0.587 * Double(out[o + 1]) + 0.114 * Double(out[o + 2])) / 255
+    }
+
+    @inline(__always)
+    private static func luma(_ s: UnsafeBufferPointer<UInt8>, _ o: Int) -> Double {
+        (0.299 * Double(s[o]) + 0.587 * Double(s[o + 1]) + 0.114 * Double(s[o + 2])) / 255
     }
 
     static func applyDuotone(_ duotone: Duotone, to raster: inout Raster) {

@@ -79,7 +79,7 @@ struct DocumentFuzzTests {
             _ = WallpaperExport.svg(document, size: Self.size, renderer: Self.renderer)
             // And the round trip through a share link.
             let link = try ShareCode.url(for: document)
-            #expect(try ShareCode.decode(url: link) == document)
+            #expect(try ShareCode.decode(url: link).wallpaper == document)
         }
         #expect(decoded > 0 && refused > 0, "decoded \(decoded), refused \(refused)")
     }

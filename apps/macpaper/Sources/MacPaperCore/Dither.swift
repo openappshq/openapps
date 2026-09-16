@@ -37,7 +37,7 @@ public enum Ditherer {
             }
         } else {
             let ink = p.ink, paper = p.paper
-            quantised = dither(samples, columns: columns, rows: rows, mode: p.mode, seed: seed) { color, offset in
+            quantised = dither(samples, columns: columns, rows: rows, mode: p.mode, seed: seed, twoTone: (ink, paper)) { color, offset in
                 color.luminanceLinearish + offset < 0.5 ? ink : paper
             }
         }
@@ -48,8 +48,10 @@ public enum Ditherer {
 
     /// Applies the mode over the grid. `quantise` maps a sample plus a
     /// threshold offset (−0.5…0.5, the ordered patterns) to a color; the
-    /// error-diffusing mode passes offset 0 and diffuses what remains.
-    private static func dither(_ samples: [RGBAColor], columns: Int, rows: Int, mode: DitherMode, seed: UInt64, quantise: (RGBAColor, Double) -> RGBAColor) -> [RGBAColor] {
+    /// error-diffusing mode passes offset 0 and diffuses what remains —
+    /// per channel for a palette, on the luma alone for ink on paper
+    /// (`twoTone`), so an ink lighter than its paper still dithers.
+    private static func dither(_ samples: [RGBAColor], columns: Int, rows: Int, mode: DitherMode, seed: UInt64, twoTone: (RGBAColor, RGBAColor)? = nil, quantise: (RGBAColor, Double) -> RGBAColor) -> [RGBAColor] {
         switch mode {
         case .bayer2, .bayer4, .bayer8:
             let n = mode == .bayer2 ? 2 : (mode == .bayer4 ? 4 : 8)
@@ -74,22 +76,52 @@ public enum Ditherer {
             }
             return out
         case .floydSteinberg:
+            // Serpentine: rows alternate direction and the stencil mirrors
+            // with them, so the error never streaks one way.
+            if let (ink, paper) = twoTone {
+                var luma = samples.map(\.luminanceLinearish)
+                var out = samples
+                for row in 0..<rows {
+                    let forward = row % 2 == 0
+                    let ahead = forward ? 1 : -1
+                    for step in 0..<columns {
+                        let column = forward ? step : columns - 1 - step
+                        let i = row * columns + column
+                        let value = min(max(luma[i], 0), 1)
+                        let dark = value < 0.5
+                        out[i] = dark ? ink : paper
+                        let e = value - (dark ? 0 : 1)
+                        func spread(_ dx: Int, _ dy: Int, _ weight: Double) {
+                            let x = column + dx, y = row + dy
+                            guard x >= 0, x < columns, y < rows else { return }
+                            luma[y * columns + x] += e * weight
+                        }
+                        spread(ahead, 0, 7 / 16); spread(-ahead, 1, 3 / 16); spread(0, 1, 5 / 16); spread(ahead, 1, 1 / 16)
+                    }
+                }
+                return out
+            }
             var r = samples.map(\.red), g = samples.map(\.green), b = samples.map(\.blue)
             var out = samples
             for row in 0..<rows {
-                for column in 0..<columns {
+                let forward = row % 2 == 0
+                let ahead = forward ? 1 : -1
+                for step in 0..<columns {
+                    let column = forward ? step : columns - 1 - step
                     let i = row * columns + column
                     let color = RGBAColor(red: min(max(r[i], 0), 1), green: min(max(g[i], 0), 1), blue: min(max(b[i], 0), 1))
                     let chosen = quantise(color, 0)
                     out[i] = chosen
-                    let er = color.red - chosen.red, eg = color.green - chosen.green, eb = color.blue - chosen.blue
+                    // The error is bounded: a palette that cannot reach a
+                    // color must not push its neighbours off the scale.
+                    let er = min(max(color.red - chosen.red, -0.5), 0.5), eg = min(max(color.green - chosen.green, -0.5), 0.5), eb = min(max(color.blue - chosen.blue, -0.5), 0.5)
                     func spread(_ dx: Int, _ dy: Int, _ weight: Double) {
                         let x = column + dx, y = row + dy
                         guard x >= 0, x < columns, y < rows else { return }
                         let j = y * columns + x
                         r[j] += er * weight; g[j] += eg * weight; b[j] += eb * weight
                     }
-                    spread(1, 0, 7 / 16); spread(-1, 1, 3 / 16); spread(0, 1, 5 / 16); spread(1, 1, 1 / 16)
+                    spread(ahead, 0, 7 / 16); spread(-ahead, 1, 3 / 16); spread(0, 1, 5 / 16); spread(ahead, 1, 1 / 16)
                 }
             }
             return out

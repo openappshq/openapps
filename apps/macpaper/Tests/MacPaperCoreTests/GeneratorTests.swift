@@ -54,8 +54,9 @@ struct GeneratorTests {
         #expect(raster.pixel(x: 0, y: 5).red < 0.02)
         #expect(raster.pixel(x: 99, y: 5).red > 0.98)
         #expect(abs(raster.pixel(x: 50, y: 5).red - 0.5) < 0.02)
-        // Rows are the same: the gradient runs along x only.
-        #expect(raster.pixel(x: 30, y: 0) == raster.pixel(x: 30, y: 9))
+        // Rows are the same to within the ordered dither's one step: the
+        // gradient runs along x only.
+        #expect(abs(raster.pixel(x: 30, y: 0).red - raster.pixel(x: 30, y: 9).red) <= 1.01 / 255)
     }
 
     @Test("A radial gradient has the first stop at its center and the last at the far corner")

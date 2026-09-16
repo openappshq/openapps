@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = AppModel(
             preferences: preferences, license: license, paths: .standard(appID: UpdateTesting.isCompiledIn ? "macpaper-updatetest" : "macpaper"),
             desktop: WorkspaceDesktopApplier(),
-            exporter: PanelFileExporter(), imagePicker: PanelImagePicker(), displays: { ScreenCatalog.displays() }
+            exporter: PanelFileExporter(), imagePicker: PanelImagePicker(), starterRecipes: TasteSet.recipes, displays: { ScreenCatalog.displays() }
         )
         self.model = model
         // Official builds: the updater, before this launch writes any
@@ -135,6 +135,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showSettings()
         return false
+    }
+
+    /// `.macpaper` recipe files opened from the Finder (a double-click,
+    /// a drop on the icon): imported into the library and shown in the
+    /// popover.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.isFileURL {
+            model.importRecipe(at: url)
+        }
+        if urls.contains(where: \.isFileURL) { statusItem?.open() }
     }
 }
 

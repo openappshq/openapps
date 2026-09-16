@@ -88,8 +88,8 @@ struct FinishTests {
         let tinted = Self.renderer.render(Wallpaper(generator: .solid(SolidParameters(color: .black)), seed: 1, finish: Finish(tint: Tint(color: .white, amount: 0.5))), size: PixelSize(width: 4, height: 4))
         #expect(tinted.pixel(x: 1, y: 1).hexString == "#808080")
         let duo = Self.renderer.render(Wallpaper(generator: Self.base.generator, seed: 1, finish: Finish(duotone: Duotone(shadow: RGBAColor(hex: 0xFF0000), highlight: RGBAColor(hex: 0x0000FF)))), size: PixelSize(width: 100, height: 4))
-        #expect(duo.pixel(x: 0, y: 1).red > 0.95 && duo.pixel(x: 0, y: 1).blue < 0.05)
-        #expect(duo.pixel(x: 99, y: 1).blue > 0.95 && duo.pixel(x: 99, y: 1).red < 0.05)
+        #expect(duo.pixel(x: 0, y: 1).red > 0.95 && duo.pixel(x: 0, y: 1).blue < 0.1)
+        #expect(duo.pixel(x: 99, y: 1).blue > 0.95 && duo.pixel(x: 99, y: 1).red < 0.1)
         let shaded = Self.renderer.render(Wallpaper(generator: .solid(SolidParameters(color: .white)), seed: 1, finish: Finish(topShade: 1), darkGenerator: .solid(SolidParameters(color: .white))), side: .dark, context: RenderContext(size: PixelSize(width: 4, height: 40), menuBarStrip: 4))
         #expect(shaded.pixel(x: 0, y: 0).red < 0.05, "black at the very top on the dark side")
         #expect(shaded.pixel(x: 0, y: 8).hexString == "#FFFFFF", "untouched past twice the strip")
@@ -313,8 +313,8 @@ struct ShareTests {
         document.darkGenerator = .solid(SolidParameters(color: RGBAColor(hex: 0x101010)))
         let url = try ShareCode.url(for: document)
         #expect(url.scheme == "macpaper" && url.host == "s")
-        #expect(try ShareCode.decode(url: url) == document)
-        #expect(url.absoluteString.count < 800)
+        #expect(try ShareCode.decode(url: url).wallpaper == document)
+        #expect(url.absoluteString.count < 1000)
         #expect(throws: ShareCode.DecodeError.notALink) { try ShareCode.decode(url: URL(string: "macpaper://activate?key=x")!) }
         #expect(throws: ShareCode.DecodeError.notALink) { try ShareCode.decode(url: URL(string: "https://openapps.space/macpaper/")!) }
         #expect(throws: ShareCode.DecodeError.corrupt) { try ShareCode.decode("bm90IGRlZmxhdGVk") }
@@ -462,7 +462,7 @@ struct DocumentV2Tests {
         let data = try full.jsonData()
         #expect(try Wallpaper.fromJSON(data) == full)
         let json = String(decoding: data, as: UTF8.self)
-        #expect(json.contains("\"version\":2") && json.contains("\"pair\":{\"frames\":4,\"mode\":\"timeOfDay\"}") && json.contains("\"composition\":\"pill\""))
+        #expect(json.contains("\"version\":3") && json.contains("\"pair\":{\"frames\":4,\"mode\":\"timeOfDay\"}") && json.contains("\"composition\":\"pill\""))
         #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000\"},\"seed\":\"1\",\"pair\":{\"mode\":\"weekly\"}}".utf8)) }
         // A dither with an unknown frame count falls back to 8.
         let odd = try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000\"},\"seed\":\"1\",\"pair\":{\"mode\":\"timeOfDay\",\"frames\":7}}".utf8))

@@ -38,7 +38,7 @@ struct WallpaperPanelView: View {
                 }
             } else {
                 SideAndPairRow(model: model)
-                SegmentedControl(title: "Generator", selection: $model.generatorKind, choices: GeneratorKind.allCases.map { ($0, $0.title) })
+                GeneratorPickerRow(model: model)
                 ParametersView(model: model)
                 DisclosureRow(title: "Finishes", detail: finishSummary, isExpanded: $showsFinishes) {
                     FinishEditor(model: model)
@@ -63,6 +63,15 @@ struct WallpaperPanelView: View {
         .animation(Motion.standard(reduceMotion: reduceMotion), value: model.status)
         .animation(Motion.standard(reduceMotion: reduceMotion), value: model.generatorKind)
         .background(Brand.canvas.opacity(0.001))
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            // A `.macpaper` file dropped anywhere on the panel is imported.
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.pathExtension.lowercased() == RecipeDocument.fileExtension else { return }
+                Task { @MainActor in model.importRecipe(at: url) }
+            }
+            return true
+        }
         .onAppear {
             if expandFinishes { showsFinishes = true }
             if expandFavorites { showsFavorites = true }
@@ -82,6 +91,57 @@ struct WallpaperPanelView: View {
 
 enum PanelMetrics {
     static let popoverWidth: CGFloat = 420
+}
+
+/// The generator: the pixel-field families first, then the other kinds,
+/// gradient last as the advanced pick; no solid (a flat color is a base).
+private struct GeneratorPickerRow: View {
+    @Bindable var model: AppModel
+
+    private enum Choice: Hashable {
+        case family(FieldFamily)
+        case kind(GeneratorKind)
+    }
+
+    private var selection: Binding<Choice> {
+        Binding(
+            get: { model.fieldFamily.map { .family($0) } ?? .kind(model.generatorKind) },
+            set: { choice in
+                switch choice {
+                case .family(let family): model.fieldFamily = family
+                case .kind(let kind): model.generatorKind = kind
+                }
+            }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: Brand.Space.s8) {
+            Text("Generator").font(Brand.body(12)).foregroundStyle(Brand.textSecondary).frame(width: 64, alignment: .leading)
+            Picker("Generator", selection: selection) {
+                Section("Pixel fields") {
+                    ForEach(FieldFamily.allCases, id: \.self) { family in
+                        Text(family.title).tag(Choice.family(family))
+                    }
+                }
+                Section {
+                    ForEach(GeneratorKind.pickable.filter { $0 != .field }, id: \.self) { kind in
+                        Text(kind == .gradient ? "Gradient (advanced)" : kind.title).tag(Choice.kind(kind))
+                    }
+                }
+            }
+            .labelsHidden()
+            .frame(width: 190)
+            .accessibilityLabel("Generator")
+            PinButton(key: .generator, model: model)
+            Spacer()
+            Text(model.recipeName)
+                .font(Brand.mono(10))
+                .foregroundStyle(Brand.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
 }
 
 // MARK: - Preview
@@ -355,6 +415,10 @@ private struct ActionRow: View {
                     Button("Copy link") { model.shareLink() }
                     Button("Remix (new seed)") { model.remix() }
                 }
+                Section("Recipe") {
+                    Button("Import Recipe…") { Task { await model.importRecipe() } }
+                    Button("Export Recipe…") { Task { await model.exportRecipe() } }
+                }
                 Section {
                     Button("Never show this") { model.neverShowThis() }
                 }
@@ -496,8 +560,13 @@ private struct FavoriteThumbnail: View {
                 .overlay(RoundedRectangle(cornerRadius: Brand.Radius.small + 2, style: .continuous).strokeBorder(favorite.wallpaper == model.draft ? Brand.accentSolid : Brand.borderSubtle.opacity(0.6), lineWidth: favorite.wallpaper == model.draft ? 2 : 1))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Favorite: \(favorite.wallpaper.generator.kind.title), seed \(favorite.wallpaper.seedText)")
-            .help("Load this favorite")
+            .accessibilityLabel("Recipe: \(favorite.name), seed \(favorite.wallpaper.seedText)")
+            .help(favorite.name)
+            .onDrag {
+                // The recipe as a `.macpaper` file.
+                guard let url = model.recipeDragURL(for: favorite) else { return NSItemProvider() }
+                return NSItemProvider(object: url as NSURL)
+            }
             Button {
                 model.removeFavorite(favorite)
             } label: {

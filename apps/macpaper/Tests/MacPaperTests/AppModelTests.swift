@@ -62,7 +62,9 @@ struct AppModelTests {
 
         /// The apply runs on a detached task; wait for it.
         func settle() async {
-            for _ in 0..<200 where model.isApplying || model.isExporting {
+            // A pixel-field document renders slower than a gradient in a
+            // debug build: up to thirty seconds, out as soon as it is done.
+            for _ in 0..<3000 where model.isApplying || model.isExporting {
                 try? await Task.sleep(for: .milliseconds(10))
             }
         }
@@ -223,14 +225,14 @@ struct AppModelTests {
         h.model.export(.png)
         await h.settle()
         #expect(h.exporter.exported.count == 1)
-        #expect(h.exporter.exported[0].0 == "macPaper-gradient-20260916.png")
+        #expect(h.exporter.exported[0].0 == WallpaperExport.fileName(for: .starter, format: .png))
         let decoded = try #require(Raster.decode(h.exporter.exported[0].1))
         #expect(decoded.size == PixelSize(width: 40, height: 20))
         h.model.export(.svg)
         await h.settle()
-        #expect(h.exporter.exported[1].0 == "macPaper-gradient-20260916.svg")
-        #expect(String(decoding: h.exporter.exported[1].1, as: UTF8.self).contains("<linearGradient"))
-        #expect(h.model.status?.text == "Exported macPaper-gradient-20260916.svg.")
+        #expect(h.exporter.exported[1].0 == WallpaperExport.fileName(for: .starter, format: .svg))
+        #expect(String(decoding: h.exporter.exported[1].1, as: UTF8.self).contains("<image "), "a pixel field embeds its render")
+        #expect(h.model.status?.text == "Exported \(WallpaperExport.fileName(for: .starter, format: .svg)).")
         h.exporter.refuse = true
         h.model.export(.png)
         await h.settle()

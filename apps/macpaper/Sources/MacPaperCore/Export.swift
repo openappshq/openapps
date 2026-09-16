@@ -3,7 +3,8 @@ import Foundation
 /// PNG and SVG files of a document. PNG is the render itself; SVG is the
 /// document redrawn as vector where the generator is one (gradients as
 /// gradients, dots, lines and checks as patterns, grain as a turbulence
-/// filter) and an embedded PNG where it is not (noise, pixelize).
+/// filter) and an embedded PNG where it is not (noise, pixelize, dither,
+/// every pixel field, anything over a base or with a color finish).
 public enum WallpaperExport {
     public enum Format: String, CaseIterable, Sendable {
         case png, svg
@@ -48,10 +49,10 @@ struct SVGWriter {
             pattern(p, defs: &defs, body: &body)
         case .solid(let p):
             body.append("<rect width=\"\(w)\" height=\"\(h)\" fill=\"\(p.color.hexString)\"/>")
-        case .pixelize, .dither:
+        case .pixelize, .dither, .field:
             embedRender(body: &body)
         }
-        if wallpaper.composition != .none || !wallpaper.finish.isEmpty {
+        if wallpaper.composition != .none || !wallpaper.finish.isEmpty || (wallpaper.base != .none && wallpaper.generator.kind.takesBase) {
             // Compositions and the color finishes are raster work: the
             // whole render goes in as an image instead.
             defs.removeAll()

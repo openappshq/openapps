@@ -12,6 +12,8 @@ struct WallpaperDocumentTests {
             Wallpaper(generator: .pattern(PatternParameters(kind: .lines, foreground: .white, background: .black, scale: 33, angle: 30)), seed: 0),
             Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0xABCDEF))), seed: 12),
             Wallpaper(generator: .pixelize(PixelizeParameters(source: ImageReference(fileName: "0123456789abcdef01234567.png", contentHash: String(repeating: "c", count: 64)), blockSize: 24, paletteSize: 8, fit: .fit, background: .black)), seed: 77),
+            Wallpaper(generator: .field(FieldParameters(family: .relief, tones: Palettes.all[5], values: [.scale: 2.5, .toneSteps: 7, .cellSize: 8])), seed: 9, grain: 0.03, finish: Finish(wash: Wash(from: .black, to: .white, angle: 45, amount: 0.1), vignette: 0.2, fringe: 0.3), base: .gradient(GradientParameters(kind: .radial, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), pinned: [.palette, .cellSize]),
+            Wallpaper(generator: .dither(DitherParameters(source: nil, mode: .bayer8, cell: 3, ink: .black, paper: .white, fit: .stretch)), seed: 10, base: .mesh(MeshParameters(columns: 2, rows: 2, colors: Palettes.all[1]))),
         ]
         for document in documents {
             let data = try document.jsonData()
@@ -24,16 +26,28 @@ struct WallpaperDocumentTests {
 
     @Test("The JSON shape is the documented one")
     func shape() throws {
-        let json = try String(decoding: Wallpaper.starter.jsonData(), as: UTF8.self)
+        let gradient = Wallpaper(generator: .gradient(GradientParameters(kind: .linear, angle: 135, stops: [ColorStop(position: 0, color: RGBAColor(hex: 0xFF7A2F)), ColorStop(position: 1, color: RGBAColor(hex: 0x304BFF))], interpolation: .oklch)), seed: 20_260_916, grain: 0.08)
+        let json = try String(decoding: gradient.jsonData(), as: UTF8.self)
         #expect(json.hasPrefix("{\"composition\":\"none\",\"finish\":{\"topShade\":0},\"generator\":{\"angle\":135,\"center\":{\"x\":0.5,\"y\":0.5},\"interpolation\":\"oklch\",\"kind\":\"linear\",\"stops\":[{\"color\":\"#FF7A2F\",\"position\":0}"))
         #expect(json.contains("\"type\":\"gradient\""))
         #expect(json.contains("\"seed\":\"20260916\"") && json.contains("\"pair\":{\"mode\":\"still\"}"))
-        #expect(json.hasSuffix("\"version\":2}"))
+        #expect(json.hasSuffix("\"version\":3}"))
+        // No base and nothing pinned: the keys are absent, so a version-2
+        // reader ignores nothing it does not know.
+        #expect(!json.contains("\"base\"") && !json.contains("\"pinned\""))
+        var pinned = gradient
+        pinned.base = .solid(.black)
+        pinned.pinned = [.seed, .cellSize]
+        let more = try String(decoding: pinned.jsonData(), as: UTF8.self)
+        #expect(more.contains("\"base\":{\"color\":\"#000000\",\"layer\":\"solid\"}") && more.contains("\"pinned\":[\"cellSize\",\"seed\"]"))
+        // The field generator's shape.
+        let field = try String(decoding: Wallpaper.starter.jsonData(), as: UTF8.self)
+        #expect(field.contains("\"type\":\"field\"") && field.contains("\"family\":\"interference\"") && field.contains("\"knobs\":{"))
     }
 
     @Test("A newer version, a bad seed and an unknown generator are refused")
     func refusals() {
-        #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"version\":3,\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\"}".utf8)) }
+        #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"version\":4,\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"1\"}".utf8)) }
         #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000000\"},\"seed\":\"x\"}".utf8)) }
         #expect(throws: (any Error).self) { try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"plasma\"},\"seed\":\"1\"}".utf8)) }
         // Grain is optional; out of range is refused, not clamped.
