@@ -11,7 +11,7 @@ struct WallpaperDocumentTests {
             Wallpaper(generator: .mesh(MeshParameters(columns: 4, rows: 2, colors: Palettes.all[3], jitter: 0.3, softness: 0.9)), seed: .max, grain: 0.5),
             Wallpaper(generator: .pattern(PatternParameters(kind: .lines, foreground: .white, background: .black, scale: 33, angle: 30)), seed: 0),
             Wallpaper(generator: .solid(SolidParameters(color: RGBAColor(hex: 0xABCDEF))), seed: 12),
-            Wallpaper(generator: .pixelize(PixelizeParameters(source: ImageReference(fileName: "abc.png", contentHash: "abc"), blockSize: 24, paletteSize: 8, fit: .fit, background: .black)), seed: 77),
+            Wallpaper(generator: .pixelize(PixelizeParameters(source: ImageReference(fileName: "0123456789abcdef01234567.png", contentHash: String(repeating: "c", count: 64)), blockSize: 24, paletteSize: 8, fit: .fit, background: .black)), seed: 77),
         ]
         for document in documents {
             let data = try document.jsonData()

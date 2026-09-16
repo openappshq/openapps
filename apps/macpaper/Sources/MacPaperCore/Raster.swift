@@ -177,13 +177,43 @@ public struct Raster: Hashable, Sendable {
         return data as Data
     }
 
-    /// Decodes a PNG, JPEG, HEIC, TIFF or any other ImageIO format. The
-    /// largest representation is used; orientation metadata is applied.
+    /// Decodes a PNG, JPEG, HEIC, TIFF or any other ImageIO format at its
+    /// own size; orientation metadata is applied. For files of unknown size
+    /// use `decode(at:maxPixelSize:)`, which never allocates the full image.
     public static func decode(_ data: Data) -> Raster? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
         guard let image = CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary) else { return nil }
         return Raster(cgImage: image.oriented(source: source))
+    }
+
+    /// The default bound for imports: the width of a 6K display. A source
+    /// larger than that is scaled down by ImageIO while decoding, so a
+    /// 20,000-pixel photo never becomes a 1.6 GB buffer.
+    public static let importMaxPixelSize = 6016
+
+    /// Decodes a file through ImageIO's bounded thumbnail path: the longer
+    /// edge is at most `maxPixelSize`, orientation is applied by ImageIO,
+    /// and the full-size image is never materialised.
+    public static func decode(at url: URL, maxPixelSize: Int = importMaxPixelSize) -> Raster? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return decode(source: source, maxPixelSize: maxPixelSize)
+    }
+
+    public static func decode(_ data: Data, maxPixelSize: Int) -> Raster? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return decode(source: source, maxPixelSize: maxPixelSize)
+    }
+
+    private static func decode(source: CGImageSource, maxPixelSize: Int) -> Raster? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(1, maxPixelSize),
+            kCGImageSourceShouldCache: false,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return Raster(cgImage: image)
     }
 }
 

@@ -86,8 +86,11 @@ final class AppModel {
         }
     }
     /// The display the panel speaks for: its aspect for the preview, its
-    /// target for "this display". Set by whichever surface opened.
-    var targetDisplay: DisplayID?
+    /// target for "this display". Set by whichever surface opened; a change
+    /// re-renders the preview at that display's aspect.
+    var targetDisplay: DisplayID? {
+        didSet { if targetDisplay != oldValue { schedulePreview() } }
+    }
     private(set) var displays: [DisplayInfo] = []
     private(set) var preview: CGImage?
     private(set) var previewWallpaper: Wallpaper?
@@ -211,12 +214,18 @@ final class AppModel {
     /// Imports an image for Pixelize, switching the generator to it.
     func importImage() async {
         guard let url = await imagePicker.pickImage() else { return }
-        importImage(at: url)
+        await importImage(at: url)
     }
 
-    func importImage(at url: URL) {
-        do {
-            let reference = try imports.importImage(at: url)
+    /// Decodes off the main actor, bounded by the import size (a huge photo
+    /// is scaled down while decoding, never held whole).
+    func importImage(at url: URL) async {
+        let imports = imports
+        let outcome = await Task.detached(priority: .userInitiated) { () -> Result<ImageReference, any Error> in
+            do { return .success(try imports.importImage(at: url)) } catch { return .failure(error) }
+        }.value
+        switch outcome {
+        case .success(let reference):
             if case .pixelize(var p) = draft.generator {
                 p.source = reference
                 draft.generator = .pixelize(p)
@@ -226,9 +235,18 @@ final class AppModel {
                 draft.generator = .pixelize(p)
             }
             show("Imported \(url.lastPathComponent).")
-        } catch {
+        case .failure(let error):
             show(error.localizedDescription, tone: .error)
         }
+    }
+
+    /// Whether the draft references an image that is not in the store any
+    /// more: the panel says so beside Import.
+    var isSourceMissing: Bool {
+        if case .pixelize(let p) = draft.generator, let source = p.source {
+            return !imports.hasImage(for: source)
+        }
+        return false
     }
 
     // MARK: - Favorites

@@ -20,7 +20,20 @@ final class HotkeyCenter {
     init() {}
 
     deinit {
-        MainActor.assumeIsolated { unregister() }
+        MainActor.assumeIsolated {
+            unregister()
+            removeHandler()
+        }
+    }
+
+    /// Removes the Carbon handler (with the hotkey): at quit, or when the
+    /// center is dropped.
+    func removeHandler() {
+        unregister()
+        if let handlerRef {
+            RemoveEventHandler(handlerRef)
+            self.handlerRef = nil
+        }
     }
 
     /// Registers the hotkey (replacing the previous one); nil removes it.
@@ -31,7 +44,7 @@ final class HotkeyCenter {
             return
         }
         guard hotkey.isValid else {
-            problem = "Use at least one of ⌘, ⌥ or ⌃ with a key."
+            problem = hotkey.problem
             return
         }
         installHandlerIfNeeded()

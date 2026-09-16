@@ -71,6 +71,15 @@ public struct AppliedImage: Equatable, Sendable {
 /// so every apply writes a new file, `<display>-<counter>.png`, and prunes
 /// that display's older files down to `keptPerDisplay`. A failure on one
 /// display is thrown after the others were tried, with what did succeed.
+///
+/// Ownership: the applier only ever deletes what it wrote. `manifest.json`
+/// in the directory lists the names it created per display; pruning walks
+/// that list, and removes an entry only while it is still a regular file
+/// (no symlink, no directory) whose real path sits directly inside the
+/// directory's real path. Anything else with a matching name is left
+/// alone. New names are written without overwriting: a foreign file under
+/// the next name bumps the counter. A directory that is itself a symlink
+/// is refused.
 public struct WallpaperApplier: Sendable {
     public struct Failure: Error, LocalizedError, Sendable {
         public let applied: [AppliedImage]
@@ -101,62 +110,137 @@ public struct WallpaperApplier: Sendable {
     public func apply(_ plan: [DisplayInfo: Wallpaper]) throws -> [AppliedImage] {
         var applied: [AppliedImage] = []
         var failures: [(DisplayID, String)] = []
-        let fileManager = FileManager.default
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        try prepareDirectory()
+        var manifest = AppliedManifest.load(in: directory)
         for (display, wallpaper) in plan.sorted(by: { $0.key.id < $1.key.id }) {
             do {
                 let raster = cache.render(RenderCache.Key(wallpaper: wallpaper, size: display.pixelSize)) {
                     renderer.render(wallpaper, size: display.pixelSize)
                 }
                 guard let png = raster.pngData() else { throw ApplyError.encoding }
-                let url = nextURL(for: display.id)
-                try png.write(to: url, options: .atomic)
+                let url = try write(png, for: display.id, extension: "png", manifest: &manifest)
                 try applier.apply(imageAt: url, to: display.id)
                 applied.append(AppliedImage(display: display.id, wallpaper: wallpaper, url: url))
-                prune(display: display.id, keeping: url)
+                prune(display: display.id, manifest: &manifest)
             } catch {
                 failures.append((display.id, error.localizedDescription))
             }
         }
+        manifest.save(in: directory)
         if !failures.isEmpty { throw Failure(applied: applied, failures: failures) }
         return applied
     }
 
     enum ApplyError: Error, LocalizedError {
         case encoding
+        case directoryIsSymlink
+        case noFreeName
 
-        var errorDescription: String? { "The wallpaper could not be encoded as PNG." }
+        var errorDescription: String? {
+            switch self {
+            case .encoding: "The wallpaper could not be encoded as PNG."
+            case .directoryIsSymlink: "The applied folder is a symbolic link; refusing to write through it."
+            case .noFreeName: "No free file name in the applied folder."
+            }
+        }
     }
 
-    /// `applied/<display>-<n>.png`, `n` one past the highest on disk.
-    func nextURL(for display: DisplayID) -> URL {
-        let existing = files(for: display)
-        let next = (existing.map(\.counter).max() ?? 0) + 1
-        return directory.appendingPathComponent("\(display)-\(next).png")
+    /// Creates the directory; refuses one that is a symbolic link.
+    private func prepareDirectory() throws {
+        let fileManager = FileManager.default
+        if let attributes = try? fileManager.attributesOfItem(atPath: directory.path),
+           attributes[.type] as? FileAttributeType == .typeSymbolicLink {
+            throw ApplyError.directoryIsSymlink
+        }
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    private struct AppliedFile {
-        let url: URL
+    /// `<display>-<n>.<ext>`, `n` one past the manifest's highest, skipping
+    /// any name something else already holds; written without overwriting.
+    private func write(_ data: Data, for display: DisplayID, extension ext: String, manifest: inout AppliedManifest) throws -> URL {
+        var counter = manifest.highestCounter(for: display) + 1
+        for _ in 0..<1000 {
+            let name = "\(display)-\(counter).\(ext)"
+            let url = directory.appendingPathComponent(name)
+            do {
+                try data.write(to: url, options: .withoutOverwriting)
+                manifest.record(name, counter: counter, for: display)
+                return url
+            } catch CocoaError.fileWriteFileExists {
+                counter += 1
+            }
+        }
+        throw ApplyError.noFreeName
+    }
+
+    /// Removes the display's oldest manifest entries beyond `keptPerDisplay`,
+    /// each only while it is still a regular file directly inside the
+    /// directory. Entries leave the manifest either way.
+    private func prune(display: DisplayID, manifest: inout AppliedManifest) {
+        let stale = manifest.entriesBeyond(keptPerDisplay, for: display)
+        guard !stale.isEmpty else { return }
+        let realDirectory = URL(fileURLWithPath: directory.path).resolvingSymlinksInPath().standardizedFileURL.path
+        for entry in stale {
+            manifest.remove(entry, for: display)
+            guard entry.name.firstIndex(of: "/") == nil, !entry.name.hasPrefix(".") else { continue }
+            let url = directory.appendingPathComponent(entry.name)
+            guard Self.isOwnedRegularFile(url, inside: realDirectory) else { continue }
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// A regular file (not a symlink, not a directory) whose real parent is
+    /// exactly `realDirectory`.
+    static func isOwnedRegularFile(_ url: URL, inside realDirectory: String) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular else { return false }
+        let real = URL(fileURLWithPath: url.path).resolvingSymlinksInPath().standardizedFileURL
+        return real.deletingLastPathComponent().path == realDirectory
+    }
+}
+
+/// The names the applier wrote, per display, oldest first: `manifest.json`
+/// in the applied directory. Only what is listed here is ever deleted.
+struct AppliedManifest: Codable, Sendable {
+    struct Entry: Codable, Hashable, Sendable {
+        let name: String
         let counter: Int
     }
 
-    private func files(for display: DisplayID) -> [AppliedFile] {
-        let prefix = "\(display)-"
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        return names.compactMap { name in
-            guard name.hasPrefix(prefix), name.hasSuffix(".png"),
-                  let counter = Int(name.dropFirst(prefix.count).dropLast(4)) else { return nil }
-            return AppliedFile(url: directory.appendingPathComponent(name), counter: counter)
-        }
+    static let fileName = "manifest.json"
+    var version = 1
+    var files: [String: [Entry]] = [:]
+
+    static func load(in directory: URL) -> AppliedManifest {
+        (try? JSONFile<AppliedManifest>(url: directory.appendingPathComponent(fileName)).load()) ?? AppliedManifest()
     }
 
-    /// Keeps the newest `keptPerDisplay` files of the display, the current
-    /// one included whatever its counter.
-    private func prune(display: DisplayID, keeping current: URL) {
-        let sorted = files(for: display).sorted { $0.counter > $1.counter }
-        for file in sorted.dropFirst(keptPerDisplay) where file.url != current {
-            try? FileManager.default.removeItem(at: file.url)
-        }
+    func save(in directory: URL) {
+        try? JSONFile<AppliedManifest>(url: directory.appendingPathComponent(Self.fileName)).save(self)
+    }
+
+    func highestCounter(for display: DisplayID) -> Int {
+        files[String(display)]?.map(\.counter).max() ?? 0
+    }
+
+    mutating func record(_ name: String, counter: Int, for display: DisplayID) {
+        files[String(display), default: []].append(Entry(name: name, counter: counter))
+    }
+
+    /// The oldest entries past the newest `kept`.
+    func entriesBeyond(_ kept: Int, for display: DisplayID) -> [Entry] {
+        let entries = files[String(display)] ?? []
+        guard entries.count > kept else { return [] }
+        return Array(entries.prefix(entries.count - kept))
+    }
+
+    mutating func remove(_ entry: Entry, for display: DisplayID) {
+        files[String(display)]?.removeAll { $0 == entry }
+    }
+
+    /// Every name the manifest holds for a display, newest last.
+    func names(for display: DisplayID) -> [String] {
+        (files[String(display)] ?? []).map(\.name)
     }
 }
 

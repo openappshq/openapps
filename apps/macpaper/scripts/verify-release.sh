@@ -78,6 +78,11 @@ fi
 if grep -Fq 'api.github.com' "$STRINGS"; then
     echo "error: the binary references the GitHub API; updates come from the signed feed only (RELEASES.md)" >&2; exit 1
 fi
+# The debug preview harness (PreviewHarness.swift, `--preview`) is compiled
+# only under DEBUG; a release binary that carries its markers was built wrong.
+if grep -Eq 'PREVIEW_(WROTE|RENDERED|DESKTOP_CALLS)|--preview' "$STRINGS"; then
+    echo "error: the binary contains the debug preview harness" >&2; exit 1
+fi
 
 echo "==> Licensing"
 # The compiled-in configuration (LICENSING.md, "Build flavours"): a release

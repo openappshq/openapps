@@ -76,6 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         license.enterKey = { [weak self] in self?.showLicense(keyField: true) }
     }
 
+    /// The hotkey's Carbon handler is removed with the app; the pin has
+    /// nothing to do at quit (the applied files stay).
+    func applicationWillTerminate(_ notification: Notification) {
+        hotkeys?.removeHandler()
+    }
+
     func showSettings() {
         settings().show()
     }

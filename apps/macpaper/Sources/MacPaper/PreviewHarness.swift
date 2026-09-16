@@ -98,7 +98,7 @@ final class PreviewHarness {
         var failures = 0
         // A source for pixelize: a render of the starter, imported.
         let source = WallpaperRenderer().render(Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: Palettes.all[1])), seed: 3), size: PixelSize(width: 640, height: 400))
-        let sourceReference = try? model.imports.importImage(data: source.pngData() ?? Data(), fileExtension: "png")
+        let sourceReference = try? model.imports.importImage(data: source.pngData() ?? Data())
         // The desktop of the drawn stage.
         let backdrop = WallpaperRenderer().render(Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 3, colors: Palettes.all[3], jitter: 0.6, softness: 0.6)), seed: 11, grain: 0.05), size: PixelSize(width: 1200, height: 780)).cgImage
 

@@ -48,9 +48,35 @@ public struct Hotkey: Codable, Hashable, Sendable {
     public static let `default` = Hotkey(keyCode: 13, modifiers: [.control, .option, .command])
 
     /// A hotkey needs at least one of ⌘, ⌥ or ⌃ (⇧ alone would take a
-    /// letter from every app), and a key that is not a modifier.
+    /// letter from every app), a key that is not a modifier, and must not
+    /// be one macOS or every app relies on (`isReserved`).
     public var isValid: Bool {
-        !modifiers.isDisjoint(with: [.command, .option, .control]) && Self.keyName(keyCode) != nil
+        !modifiers.isDisjoint(with: [.command, .option, .control]) && Self.keyName(keyCode) != nil && !isReserved
+    }
+
+    /// Shortcuts a global hotkey must never take: app switching, Spotlight,
+    /// screenshots, Quit, Hide, Force Quit, the lock screen, Escape-based
+    /// combinations and the Emoji picker.
+    public var isReserved: Bool {
+        let m = modifiers
+        switch keyCode {
+        case 48: return m.contains(.command)                                   // ⌘⇥ app switcher
+        case 49: return m.contains(.command) || m.contains(.control)           // ⌘Space, ⌃Space (Spotlight, input sources)
+        case 53: return true                                                    // ⎋ with anything (Force Quit, cancel)
+        case 12: return m == [.command] || m == [.command, .control]            // ⌘Q, ⌃⌘Q lock
+        case 4: return m == [.command] || m == [.command, .option]              // ⌘H, ⌥⌘H
+        case 20, 21, 23: return m.contains(.command) && m.contains(.shift)      // ⌘⇧3/4/5 screenshots
+        case 50: return m.contains(.command)                                   // ⌘` window cycling
+        default: return false
+        }
+    }
+
+    /// Why a hotkey is refused, for the recorder.
+    public var problem: String? {
+        if Self.keyName(keyCode) == nil { return "Not a key macPaper can use." }
+        if modifiers.isDisjoint(with: [.command, .option, .control]) { return "Use at least one of ⌘, ⌥ or ⌃." }
+        if isReserved { return "\(displayString) belongs to macOS." }
+        return nil
     }
 
     public var displayString: String {

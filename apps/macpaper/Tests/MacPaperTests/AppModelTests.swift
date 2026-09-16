@@ -201,7 +201,7 @@ struct AppModelTests {
         #expect(h.model.status?.text == "Imported source.png.")
         let junk = h.directory.appendingPathComponent("junk.png")
         try Data("nope".utf8).write(to: junk)
-        h.model.importImage(at: junk)
+        await h.model.importImage(at: junk)
         #expect(h.model.status?.tone == .error)
         #expect(h.model.draft.generator == .pixelize(p), "kept")
         // Nothing picked: nothing changes.
@@ -259,6 +259,18 @@ struct AppModelTests {
         #expect(h.model.currentDisplay?.id == 1, "unknown: the main display")
         h.model.refreshDisplays()
         #expect(h.model.targetDisplay == nil)
+    }
+
+    @Test("Switching the target display re-renders the preview at that display's aspect")
+    func targetPreview() async {
+        let h = Harness()
+        defer { h.tearDown() }
+        for _ in 0..<200 where h.model.preview == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(h.model.preview?.width == 64 && h.model.preview?.height == 40, "the 32×20@2 display")
+        h.model.targetDisplay = 2
+        for _ in 0..<200 where h.model.preview?.width != 40 { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(h.model.preview?.width == 40 && h.model.preview?.height == 20, "the 40×20@1 display, same document")
+        #expect(h.model.previewWallpaper == h.model.draft)
     }
 
     @Test("Diagnostics text reads the live objects")

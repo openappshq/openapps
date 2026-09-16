@@ -85,18 +85,82 @@ struct ImportTests {
         let store = ImportStore(directory: directory.url.appendingPathComponent("imports"))
         let raster = WallpaperRenderer().render(.starter, size: PixelSize(width: 12, height: 8))
         let png = try #require(raster.pngData())
-        let reference = try store.importImage(data: png, fileExtension: "png")
+        let reference = try store.importImage(data: png)
         #expect(reference.contentHash == raster.contentHash)
         #expect(reference.fileName.hasSuffix(".png"))
+        #expect(ImageReference.isValidFileName(reference.fileName))
         #expect(FileManager.default.fileExists(atPath: directory.url.appendingPathComponent("imports/\(reference.fileName)").path))
         #expect(store.raster(for: reference) == raster)
         // Another store over the same folder decodes it from disk.
         #expect(ImportStore(directory: directory.url.appendingPathComponent("imports")).raster(for: reference) == raster)
         // The same image again is the same reference, no second copy.
-        #expect(try store.importImage(data: png, fileExtension: "png") == reference)
+        #expect(try store.importImage(data: png) == reference)
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.url.appendingPathComponent("imports").path).count == 1)
-        #expect(throws: ImportStore.ImportError.self) { try store.importImage(data: Data("not an image".utf8), fileExtension: "png") }
-        #expect(store.raster(for: ImageReference(fileName: "missing.png", contentHash: "x")) == nil)
+        #expect(throws: ImportStore.ImportError.self) { try store.importImage(data: Data("not an image".utf8)) }
+        #expect(store.raster(for: ImageReference(fileName: "0123456789abcdef.png", contentHash: String(repeating: "0", count: 64))) == nil)
+        #expect(!store.hasImage(for: ImageReference(fileName: "0123456789abcdef.png", contentHash: String(repeating: "0", count: 64))))
+    }
+
+    @Test("A large source is scaled down while decoding, never held whole")
+    func bounded() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        let store = ImportStore(directory: directory.url.appendingPathComponent("imports"))
+        let big = WallpaperRenderer().render(.starter, size: PixelSize(width: 600, height: 200))
+        let reference = try store.importImage(data: try #require(big.pngData()), maxPixelSize: 300)
+        let stored = try #require(store.raster(for: reference))
+        #expect(stored.size == PixelSize(width: 300, height: 100))
+        // The file on disk is the bounded PNG, not the original bytes.
+        let onDisk = try #require(Raster.decode(try Data(contentsOf: directory.url.appendingPathComponent("imports/\(reference.fileName)"))))
+        #expect(onDisk.size == PixelSize(width: 300, height: 100))
+        #expect(Raster.decode(at: directory.url.appendingPathComponent("nothing.png"), maxPixelSize: 10) == nil)
+    }
+
+    @Test("The decoded cache is bounded by bytes, least recently used first")
+    func cacheBound() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        // Three 8×8 rasters are 256 bytes each; room for two.
+        let store = ImportStore(directory: directory.url.appendingPathComponent("imports"), maxCacheBytes: 600)
+        var references: [ImageReference] = []
+        for seed in 1...3 {
+            let raster = WallpaperRenderer().render(.starter.reseeded(UInt64(seed)), size: PixelSize(width: 8, height: 8))
+            references.append(try store.importImage(data: try #require(raster.pngData())))
+        }
+        #expect(store.cachedCount == 2 && store.cachedBytes == 512)
+        // The evicted one still resolves from disk.
+        #expect(store.raster(for: references[0]) != nil)
+        #expect(store.cachedCount == 2)
+    }
+
+    @Test("References that leave the folder, symlinks and wrong hashes resolve to nothing")
+    func containment() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        let imports = directory.url.appendingPathComponent("imports")
+        let store = ImportStore(directory: imports)
+        let raster = WallpaperRenderer().render(.starter, size: PixelSize(width: 8, height: 8))
+        let png = try #require(raster.pngData())
+        let reference = try store.importImage(data: png)
+        // A decodable image outside the folder, reached by a traversal name: refused at decoding.
+        let outside = directory.url.appendingPathComponent("outside.png")
+        try png.write(to: outside)
+        let traversal = "{\"fileName\":\"../outside.png\",\"contentHash\":\"\(raster.contentHash)\"}"
+        #expect(throws: (any Error).self) { try JSONDecoder().decode(ImageReference.self, from: Data(traversal.utf8)) }
+        for bad in ["/etc/passwd", "..", ".hidden.png", "a.b.png", "UPPER0123456789.png", "0123456789abcdef.png.", "0123456789abcdef"] {
+            #expect(!ImageReference.isValidFileName(bad), Comment(rawValue: bad))
+        }
+        #expect(!ImageReference.isValidHash("x"))
+        // A symlink inside the folder pointing outside is refused.
+        let link = imports.appendingPathComponent("0123456789abcdef01234567.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        #expect(store.raster(for: ImageReference(fileName: "0123456789abcdef01234567.png", contentHash: raster.contentHash)) == nil)
+        // The right file under a wrong hash is refused too.
+        #expect(store.raster(for: ImageReference(fileName: reference.fileName, contentHash: String(repeating: "a", count: 64))) == nil)
+        // A directory under a valid name is refused.
+        let dir = imports.appendingPathComponent("abcdef0123456789abcdef01.png")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        #expect(store.raster(for: ImageReference(fileName: "abcdef0123456789abcdef01.png", contentHash: raster.contentHash)) == nil)
     }
 }
 
@@ -163,7 +227,77 @@ struct ApplyTests {
         let third = try wallpapers.apply([Self.a: .starter.reseeded(3)])
         #expect(third[0].url.lastPathComponent == "1-3.png")
         let names = try FileManager.default.contentsOfDirectory(atPath: directory.url.appendingPathComponent("applied").path).sorted()
-        #expect(names == ["1-2.png", "1-3.png", "2-1.png"], "two kept per display")
+        #expect(names == ["1-2.png", "1-3.png", "2-1.png", "manifest.json"], "two kept per display")
+    }
+
+    @Test("Pruning deletes only what the applier wrote: foreign files, directories and symlinks with matching names stay")
+    func ownership() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        let applied = directory.url.appendingPathComponent("applied", isDirectory: true)
+        let fm = FileManager.default
+        try fm.createDirectory(at: applied, withIntermediateDirectories: true)
+        // A directory named like an applied file, holding something valuable.
+        let planted = applied.appendingPathComponent("1-0.png", isDirectory: true)
+        try fm.createDirectory(at: planted, withIntermediateDirectories: true)
+        try Data("valuable".utf8).write(to: planted.appendingPathComponent("keep.txt"))
+        // A foreign regular file under the very next name, and a symlink under the one after.
+        let foreign = applied.appendingPathComponent("1-1.png")
+        try Data("foreign".utf8).write(to: foreign)
+        let outside = directory.url.appendingPathComponent("outside.png")
+        try Data("outside".utf8).write(to: outside)
+        let link = applied.appendingPathComponent("1-2.png")
+        try fm.createSymbolicLink(at: link, withDestinationURL: outside)
+
+        let wallpapers = WallpaperApplier(applier: RecordingApplier(), renderer: WallpaperRenderer(), cache: RenderCache(), directory: applied, keptPerDisplay: 2)
+        var names: [String] = []
+        for seed in 1...4 {
+            let images = try wallpapers.apply([Self.a: .starter.reseeded(UInt64(seed))])
+            names.append(images[0].url.lastPathComponent)
+        }
+        #expect(names == ["1-3.png", "1-4.png", "1-5.png", "1-6.png"], "the taken names were skipped, never overwritten")
+        let remaining = try fm.contentsOfDirectory(atPath: applied.path).sorted()
+        #expect(remaining == ["1-0.png", "1-1.png", "1-2.png", "1-5.png", "1-6.png", "manifest.json"])
+        #expect(try Data(contentsOf: planted.appendingPathComponent("keep.txt")) == Data("valuable".utf8))
+        #expect(try Data(contentsOf: foreign) == Data("foreign".utf8))
+        #expect(try Data(contentsOf: outside) == Data("outside".utf8))
+        #expect((try? fm.destinationOfSymbolicLink(atPath: link.path)) != nil)
+    }
+
+    @Test("A manifest entry that stopped being the applier's regular file is left alone")
+    func swappedEntry() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        let applied = directory.url.appendingPathComponent("applied", isDirectory: true)
+        let wallpapers = WallpaperApplier(applier: RecordingApplier(), renderer: WallpaperRenderer(), cache: RenderCache(), directory: applied, keptPerDisplay: 1)
+        let first = try wallpapers.apply([Self.a: .starter])[0].url
+        // Someone replaced the applied file with a directory, then a symlink.
+        try FileManager.default.removeItem(at: first)
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: first.appendingPathComponent("inside"))
+        _ = try wallpapers.apply([Self.a: .starter.reseeded(2)])
+        #expect(FileManager.default.fileExists(atPath: first.appendingPathComponent("inside").path), "the directory under the old name survived pruning")
+        let realDirectory = applied.resolvingSymlinksInPath().standardizedFileURL.path
+        #expect(!WallpaperApplier.isOwnedRegularFile(first, inside: realDirectory))
+        let elsewhere = directory.url.appendingPathComponent("elsewhere.png")
+        try Data("e".utf8).write(to: elsewhere)
+        let link = applied.appendingPathComponent("1-9.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: elsewhere)
+        #expect(!WallpaperApplier.isOwnedRegularFile(link, inside: realDirectory), "a symlink is not owned")
+        #expect(!WallpaperApplier.isOwnedRegularFile(elsewhere, inside: realDirectory), "outside the directory")
+    }
+
+    @Test("An applied directory that is a symbolic link is refused")
+    func redirectedDirectory() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        let target = directory.url.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let link = directory.url.appendingPathComponent("applied")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let wallpapers = WallpaperApplier(applier: RecordingApplier(), renderer: WallpaperRenderer(), cache: RenderCache(), directory: link)
+        #expect(throws: WallpaperApplier.ApplyError.self) { try wallpapers.apply([Self.a: .starter]) }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
     }
 
     @Test("A failing display is reported after the others were applied")

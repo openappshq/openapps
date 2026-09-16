@@ -204,6 +204,16 @@ struct HotkeyTests {
         #expect(Hotkey(keyCode: 0, modifiers: .shift).isValid == false)
         #expect(Hotkey(keyCode: 0, modifiers: .option).isValid)
         #expect(Hotkey(keyCode: 55, modifiers: .command).isValid == false, "a modifier key code")
+        // Reserved: the app switcher, Spotlight, screenshots, Quit, Hide, Escape.
+        for reserved in [Hotkey(keyCode: 48, modifiers: .command), Hotkey(keyCode: 49, modifiers: .command), Hotkey(keyCode: 49, modifiers: [.command, .option]),
+                         Hotkey(keyCode: 20, modifiers: [.command, .shift]), Hotkey(keyCode: 12, modifiers: .command), Hotkey(keyCode: 4, modifiers: .command),
+                         Hotkey(keyCode: 53, modifiers: [.command, .option]), Hotkey(keyCode: 12, modifiers: [.command, .control])] {
+            #expect(reserved.isReserved && !reserved.isValid, Comment(rawValue: reserved.displayString))
+            #expect(reserved.problem?.contains("belongs to macOS") == true)
+        }
+        #expect(!Hotkey(keyCode: 12, modifiers: [.command, .option]).isReserved, "⌥⌘Q is free")
+        #expect(Hotkey.default.problem == nil)
+        #expect(Hotkey(keyCode: 0, modifiers: .shift).problem == "Use at least one of ⌘, ⌥ or ⌃.")
         #expect(Hotkey.Modifiers([.command, .shift, .option, .control]).carbonFlags == (1 << 8) | (1 << 9) | (1 << 11) | (1 << 12))
         let data = try JSONEncoder().encode(Hotkey.default)
         #expect(try JSONDecoder().decode(Hotkey.self, from: data) == .default)

@@ -192,13 +192,19 @@ private struct PixelizeEditor: View {
     @Binding var parameters: PixelizeParameters
     let model: AppModel
 
+    private var sourceNote: String {
+        guard let source = parameters.source else { return "No image yet: the background color shows." }
+        if model.isSourceMissing { return "Image missing — import it again." }
+        return "\(source.contentHash.prefix(8))…"
+    }
+
     var body: some View {
         HStack(spacing: Brand.Space.s8) {
             Button("Import Image…") { Task { await model.importImage() } }
                 .secondaryAction()
-            Text(parameters.source.map { "\($0.contentHash.prefix(8))…" } ?? "No image yet: the background color shows.")
+            Text(sourceNote)
                 .font(Brand.mono(11))
-                .foregroundStyle(Brand.textSecondary)
+                .foregroundStyle(model.isSourceMissing ? Brand.dangerSolid : Brand.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }

@@ -1,73 +1,111 @@
 import AppKit
 import MacPaperCore
 
-/// Runs the scheduled shuffle: a timer to the next due moment from the
-/// last apply, re-armed after every apply, a settings change and a wake
-/// (a shuffle missed while asleep happens once, on wake). Nothing runs
-/// while the interval is off.
+/// One-shot timers the engine arms, so tests can drive it without waiting.
+protocol OneShotScheduler {
+    /// Schedules `fire` at `date`; the returned token cancels it.
+    func schedule(at date: Date, _ fire: @escaping @MainActor () -> Void) -> any ScheduledToken
+}
+
+protocol ScheduledToken {
+    func cancel()
+}
+
+/// `Timer` on the main run loop, in common modes, with a 30 s tolerance.
+struct TimerScheduler: OneShotScheduler {
+    private final class Token: ScheduledToken {
+        let timer: Timer
+        init(_ timer: Timer) { self.timer = timer }
+        func cancel() { timer.invalidate() }
+    }
+
+    func schedule(at date: Date, _ fire: @escaping @MainActor () -> Void) -> any ScheduledToken {
+        let timer = Timer(fire: date, interval: 0, repeats: false) { _ in
+            MainActor.assumeIsolated { fire() }
+        }
+        timer.tolerance = 30
+        RunLoop.main.add(timer, forMode: .common)
+        return Token(timer)
+    }
+}
+
+/// Runs the scheduled shuffle: a timer to the next due moment, re-armed
+/// after every apply and every settings change. Nothing ever fires at
+/// launch or on wake: an overdue schedule (the Mac slept, the app was not
+/// running) is anchored at that moment, and the next shuffle is one
+/// interval later. Missed shuffles are not caught up. Nothing runs while
+/// the interval is off.
 final class ShuffleEngine {
     private let model: AppModel
     private let preferences: Preferences
-    private var timer: Timer?
+    private let scheduler: any OneShotScheduler
+    private let now: () -> Date
+    private var token: (any ScheduledToken)?
     private var observers: [NSObjectProtocol] = []
+    /// The moment the schedule was last anchored here (launch, wake, a
+    /// fire): the next shuffle is one interval after the later of this
+    /// and the last apply.
+    private(set) var anchor: Date?
 
-    init(model: AppModel, preferences: Preferences) {
+    init(model: AppModel, preferences: Preferences, scheduler: any OneShotScheduler = TimerScheduler(), now: @escaping () -> Date = Date.init) {
         self.model = model
         self.preferences = preferences
+        self.scheduler = scheduler
+        self.now = now
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.arm() }
+            MainActor.assumeIsolated { self?.resume() }
         })
-        observeChanges({ [preferences] in _ = preferences.shuffleInterval }, onChange: { [weak self] in self?.arm() })
+        observeChanges({ [preferences] in _ = preferences.shuffleInterval }, onChange: { [weak self] in self?.settingsChanged() })
         observeChanges({ [model] in _ = model.appliedState.lastApplied }, onChange: { [weak self] in self?.arm() })
-        arm()
+        resume()
     }
 
     deinit {
         MainActor.assumeIsolated {
-            timer?.invalidate()
+            token?.cancel()
             for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         }
     }
 
-    /// The anchor is the later of the last apply and the last fire (a fire
-    /// that could apply nothing, or shuffle being turned on with nothing
-    /// applied yet): the next shuffle is one interval after it.
     var schedule: ShuffleSchedule {
-        let anchor = [model.appliedState.lastApplied, lastFire].compactMap { $0 }.max()
+        let anchor = [model.appliedState.lastApplied, self.anchor].compactMap { $0 }.max()
         return ShuffleSchedule(interval: preferences.shuffleInterval, anchor: anchor)
     }
 
-    private var lastFire: Date?
-
     /// The next due moment, for Settings.
-    var nextDue: Date? { schedule.nextDue(now: Date()) }
+    var nextDue: Date? { schedule.nextDue(now: now()) }
+
+    /// Launch and wake: whatever was due while away is not fired; the
+    /// clock restarts here.
+    func resume() {
+        anchor = now()
+        arm()
+    }
+
+    /// The interval changed: the next shuffle is one new interval from now
+    /// (a shorter interval never fires at once).
+    private func settingsChanged() {
+        anchor = now()
+        arm()
+    }
 
     func arm() {
-        timer?.invalidate()
-        timer = nil
-        guard preferences.shuffleInterval != .off else {
-            lastFire = nil
-            return
+        token?.cancel()
+        token = nil
+        guard preferences.shuffleInterval != .off else { return }
+        let current = now()
+        var next = schedule.nextDue(now: current) ?? current
+        if next <= current {
+            // Overdue (the last apply predates the anchor by more than an
+            // interval): one interval from now, never now.
+            anchor = current
+            next = schedule.nextDue(now: current) ?? current
         }
-        if model.appliedState.lastApplied == nil, lastFire == nil { lastFire = Date() }
-        let now = Date()
-        if schedule.isDue(now: now) {
-            fire()
-            return
-        }
-        guard let next = schedule.nextDue(now: now) else { return }
-        let timer = Timer(fire: next, interval: 0, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.fire() }
-        }
-        timer.tolerance = 30
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        token = scheduler.schedule(at: next) { [weak self] in self?.fire() }
     }
 
     private func fire() {
-        // Re-armed from now at once; the apply's own `lastApplied`, a moment
-        // later, re-arms again through observation.
-        lastFire = Date()
+        anchor = now()
         model.scheduledShuffle()
         arm()
     }

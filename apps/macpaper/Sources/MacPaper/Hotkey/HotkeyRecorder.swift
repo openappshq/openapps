@@ -106,6 +106,7 @@ final class RecorderControl: NSControl {
             if event.modifierFlags.contains(.shift) { modifiers.insert(.shift) }
             let candidate = Hotkey(keyCode: event.keyCode, modifiers: modifiers)
             guard candidate.isValid else {
+                // Reserved or modifier-less: refused here, before Carbon.
                 NSSound.beep()
                 return
             }

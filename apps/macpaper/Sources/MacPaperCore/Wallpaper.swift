@@ -344,7 +344,9 @@ public enum ImageFit: String, Codable, CaseIterable, Hashable, Sendable {
 
 /// A document's reference to an imported image: the file name under the
 /// app's `imports/` folder, plus the content hash it was stored under, so
-/// a favorite made on one Mac says what it needs on another.
+/// a favorite made on one Mac says what it needs on another. A name is one
+/// path component of the generated shape (`<hex>.<ext>`); a document that
+/// carries anything else does not decode.
 public struct ImageReference: Codable, Hashable, Sendable {
     public var fileName: String
     public var contentHash: String
@@ -352,6 +354,34 @@ public struct ImageReference: Codable, Hashable, Sendable {
     public init(fileName: String, contentHash: String) {
         self.fileName = fileName
         self.contentHash = contentHash
+    }
+
+    private enum CodingKeys: String, CodingKey { case fileName, contentHash }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let name = try container.decode(String.self, forKey: .fileName)
+        let hash = try container.decode(String.self, forKey: .contentHash)
+        guard Self.isValidFileName(name) else {
+            throw DecodingError.dataCorruptedError(forKey: .fileName, in: container, debugDescription: "Not an import name: \(name)")
+        }
+        guard Self.isValidHash(hash) else {
+            throw DecodingError.dataCorruptedError(forKey: .contentHash, in: container, debugDescription: "Not a content hash")
+        }
+        fileName = name
+        contentHash = hash
+    }
+
+    /// `<up to 64 hex>.<letters>`: no separators, no dot components, nothing hidden.
+    public static func isValidFileName(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2, (8...64).contains(parts[0].count), (1...5).contains(parts[1].count) else { return false }
+        return parts[0].allSatisfy { $0.isHexDigit && ($0.isNumber || $0.isLowercase) } && parts[1].allSatisfy { $0.isLetter && $0.isLowercase }
+    }
+
+    /// SHA-256 as 64 lowercase hex characters.
+    public static func isValidHash(_ hash: String) -> Bool {
+        hash.count == 64 && hash.allSatisfy { $0.isHexDigit && ($0.isNumber || $0.isLowercase) }
     }
 }
 

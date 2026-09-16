@@ -198,46 +198,109 @@ public final class AppliedStore: @unchecked Sendable {
 
 // MARK: - Imported images
 
-/// Imported images for Pixelize, copied into `imports/` under their content
-/// hash so a favorite keeps working after the original moves. Decoded on
-/// demand and kept in memory by reference while the app runs.
+/// Imported images for Pixelize and Dither, decoded through ImageIO's
+/// bounded path (the longer edge at most `Raster.importMaxPixelSize`) and
+/// kept in `imports/` as PNG under their content hash, so a favorite keeps
+/// working after the original moves and no import is larger than a 6K
+/// display. Decoded rasters are cached by reference within a byte limit,
+/// least recently used first.
+///
+/// A reference is only ever resolved to a regular file directly inside the
+/// directory (no path components, no symlink), and the decoded raster must
+/// hash to the reference's content hash; anything else is "no image".
 public final class ImportStore: ImageSource, @unchecked Sendable {
-    private let directory: URL
+    public let directory: URL
+    public let maxCacheBytes: Int
     private let lock = NSLock()
     private var cache: [ImageReference: Raster] = [:]
+    /// Most recently used last.
+    private var order: [ImageReference] = []
+    private var bytes = 0
 
-    public init(directory: URL) {
+    public init(directory: URL, maxCacheBytes: Int = 96 * 1024 * 1024) {
         self.directory = directory
+        self.maxCacheBytes = maxCacheBytes
     }
 
-    /// Copies the file in (a PNG, JPEG, HEIC, TIFF… anything ImageIO reads)
-    /// and returns the reference a document stores. Throws when the image
-    /// cannot be decoded; nothing is copied then.
-    public func importImage(at url: URL) throws -> ImageReference {
-        let data = try Data(contentsOf: url)
-        return try importImage(data: data, fileExtension: url.pathExtension.isEmpty ? "img" : url.pathExtension.lowercased())
+    public var cachedBytes: Int { lock.withLock { bytes } }
+    public var cachedCount: Int { lock.withLock { cache.count } }
+
+    /// Decodes the file (a PNG, JPEG, HEIC, TIFF… anything ImageIO reads),
+    /// scaled down to the import bound, and stores it as PNG under its
+    /// content hash. Throws when the image cannot be decoded; nothing is
+    /// written then. Safe to call off the main actor.
+    public func importImage(at url: URL, maxPixelSize: Int = Raster.importMaxPixelSize) throws -> ImageReference {
+        guard let raster = Raster.decode(at: url, maxPixelSize: maxPixelSize) else { throw ImportError.undecodable }
+        return try store(raster)
     }
 
-    public func importImage(data: Data, fileExtension: String) throws -> ImageReference {
-        guard let raster = Raster.decode(data) else { throw ImportError.undecodable }
+    public func importImage(data: Data, maxPixelSize: Int = Raster.importMaxPixelSize) throws -> ImageReference {
+        guard let raster = Raster.decode(data, maxPixelSize: maxPixelSize) else { throw ImportError.undecodable }
+        return try store(raster)
+    }
+
+    private func store(_ raster: Raster) throws -> ImageReference {
         let hash = raster.contentHash
-        let fileName = "\(hash.prefix(24)).\(fileExtension)"
+        let fileName = "\(hash.prefix(24)).png"
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appendingPathComponent(fileName)
         if !FileManager.default.fileExists(atPath: destination.path) {
-            try data.write(to: destination, options: .atomic)
+            guard let png = raster.pngData() else { throw ImportError.undecodable }
+            try png.write(to: destination, options: .atomic)
         }
         let reference = ImageReference(fileName: fileName, contentHash: hash)
-        lock.withLock { cache[reference] = raster }
+        remember(raster, for: reference)
         return reference
     }
 
     public func raster(for reference: ImageReference) -> Raster? {
-        if let cached = lock.withLock({ cache[reference] }) { return cached }
-        let url = directory.appendingPathComponent(reference.fileName)
-        guard let data = try? Data(contentsOf: url), let raster = Raster.decode(data) else { return nil }
-        lock.withLock { cache[reference] = raster }
+        if let cached = lock.withLock({ () -> Raster? in
+            guard let raster = cache[reference] else { return nil }
+            order.removeAll { $0 == reference }
+            order.append(reference)
+            return raster
+        }) { return cached }
+        guard let url = containedFile(named: reference.fileName),
+              let raster = Raster.decode(at: url, maxPixelSize: Raster.importMaxPixelSize),
+              raster.contentHash == reference.contentHash else { return nil }
+        remember(raster, for: reference)
         return raster
+    }
+
+    /// Whether the reference resolves to an image on disk; the panel says
+    /// "Image missing" when it does not.
+    public func hasImage(for reference: ImageReference) -> Bool {
+        raster(for: reference) != nil
+    }
+
+    /// `directory/name` only while `name` is a single component and the
+    /// entry is a regular file whose real parent is the directory itself.
+    private func containedFile(named name: String) -> URL? {
+        guard ImageReference.isValidFileName(name) else { return nil }
+        let url = directory.appendingPathComponent(name)
+        let realDirectory = URL(fileURLWithPath: directory.path).resolvingSymlinksInPath().standardizedFileURL.path
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular else { return nil }
+        let real = URL(fileURLWithPath: url.path).resolvingSymlinksInPath().standardizedFileURL
+        guard real.deletingLastPathComponent().path == realDirectory else { return nil }
+        return url
+    }
+
+    private func remember(_ raster: Raster, for reference: ImageReference) {
+        lock.withLock {
+            guard raster.byteCount <= maxCacheBytes else { return }
+            if let existing = cache[reference] {
+                bytes -= existing.byteCount
+                order.removeAll { $0 == reference }
+            }
+            cache[reference] = raster
+            bytes += raster.byteCount
+            order.append(reference)
+            while bytes > maxCacheBytes, let oldest = order.first {
+                order.removeFirst()
+                if let evicted = cache.removeValue(forKey: oldest) { bytes -= evicted.byteCount }
+            }
+        }
     }
 
     public enum ImportError: Error, LocalizedError {
