@@ -314,6 +314,7 @@ final class AppModel {
     @ObservationIgnored private var liveToken: (any ScheduledToken)?
     @ObservationIgnored var liveScheduler: any DelayScheduler = TaskDelayScheduler()
     @ObservationIgnored private var applyChain: Task<Void, Never>?
+    @ObservationIgnored private var exportTask: Task<Void, Never>?
     @ObservationIgnored private var queuedApplies = 0
     /// How many live applies were started; the tests read it.
     @ObservationIgnored private(set) var liveApplyCount = 0
@@ -1188,6 +1189,21 @@ final class AppModel {
         }
     }
 
+    /// Waits until every queued apply and export has landed: the tests'
+    /// settle, without a clock. An apply enqueued while waiting is waited
+    /// for too.
+    func awaitIdle() async {
+        while isApplying || isExporting {
+            if isApplying, let chain = applyChain {
+                await chain.value
+            } else if isExporting, let export = exportTask {
+                await export.value
+            } else {
+                await Task.yield()
+            }
+        }
+    }
+
     private func perform(_ plan: [DisplayInfo: Wallpaper], verb: String?, perSpace: Bool, generation: Int?) async {
         let applier = applier
         let outcome = await Task.detached(priority: .userInitiated) { () -> Result<WallpaperApplier.Prepared, any Error> in
@@ -1355,7 +1371,7 @@ final class AppModel {
         let renderer = renderer
         let folder = preferences.exportFolder
         isExporting = true
-        Task { [weak self] in
+        exportTask = Task { [weak self] in
             let files = await Task.detached(priority: .userInitiated) { () -> [(String, Data)] in
                 switch kind {
                 case .png:

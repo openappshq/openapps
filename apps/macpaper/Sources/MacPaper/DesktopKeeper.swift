@@ -11,15 +11,18 @@ final class DesktopKeeper {
     private let model: AppModel
     private let preferences: Preferences
     private let desktop: any DesktopApplier
+    /// The debounce (a scheduler the tests replace with a manual one).
+    private let scheduler: any DelayScheduler
     private var observers: [NSObjectProtocol] = []
-    private var debounce: Task<Void, Never>?
+    private var debounce: (any ScheduledToken)?
     /// What the last check did, for Copy Diagnostics.
     private(set) var lastReport = "not run yet"
 
-    init(model: AppModel, preferences: Preferences, desktop: any DesktopApplier) {
+    init(model: AppModel, preferences: Preferences, desktop: any DesktopApplier, scheduler: any DelayScheduler = TaskDelayScheduler()) {
         self.model = model
         self.preferences = preferences
         self.desktop = desktop
+        self.scheduler = scheduler
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             observers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -76,10 +79,8 @@ final class DesktopKeeper {
             return
         }
         debounce?.cancel()
-        debounce = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(700))
-            guard !Task.isCancelled, let self else { return }
-            self.reapplyIfNeeded(reason: reason)
+        debounce = scheduler.schedule(after: .milliseconds(700)) { [weak self] in
+            self?.reapplyIfNeeded(reason: reason)
         }
     }
 
