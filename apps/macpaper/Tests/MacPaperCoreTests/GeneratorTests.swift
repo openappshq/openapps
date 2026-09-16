@@ -179,7 +179,17 @@ struct GeneratorTests {
         let first = (0..<20).map { _ in Wallpaper.random(using: &a) }
         let second = (0..<20).map { _ in Wallpaper.random(using: &b) }
         #expect(first == second)
-        #expect(Set(first.map(\.generator.kind)).count > 1)
+        // Fix round 1: lattice, dither and pattern grid dropped out of
+        // default Shuffle (weight 0), and pixelize needs a photo no unit
+        // test has — every remaining curated family is a pixel field, so
+        // the generator *kind* no longer varies; the field *family* still
+        // does.
+        #expect(first.allSatisfy { $0.generator.kind == .field })
+        let families = first.compactMap { wallpaper -> FieldFamily? in
+            guard case .field(let p) = wallpaper.generator else { return nil }
+            return p.family
+        }
+        #expect(Set(families).count > 1, "still a variety of curated field families")
         #expect(!first.contains { $0.generator.kind == .pixelize })
         #expect(Set(first.map(\.seed)).count == 20)
     }

@@ -329,8 +329,12 @@ struct ApplyTests {
 
 @Suite("Shuffle")
 struct ShuffleTests {
-    static let a = DisplayInfo(id: 1, name: "A", pointSize: CGSize(width: 16, height: 10), scale: 2)
-    static let b = DisplayInfo(id: 2, name: "B", pointSize: CGSize(width: 16, height: 10), scale: 2)
+    // Big enough that the quality gate reliably finds a passing candidate
+    // within Shuffle's attempt budget (fix round 1, P0-1: a display with
+    // nothing better is now left out of the plan instead of getting an
+    // unvalidated candidate) — the same size CuratedShuffleTests uses.
+    static let a = DisplayInfo(id: 1, name: "A", pointSize: CGSize(width: 320, height: 200), scale: 2)
+    static let b = DisplayInfo(id: 2, name: "B", pointSize: CGSize(width: 320, height: 200), scale: 2)
 
     @Test("The schedule is due one interval after the anchor, or after being turned on")
     func schedule() {
@@ -349,11 +353,11 @@ struct ShuffleTests {
     }
 
     @Test("Same on all displays picks one document; otherwise each display gets its own, unlike its current")
-    func planning() {
+    func planning() throws {
         var generator = SeededGenerator(seed: 1)
         let same = ShufflePlanner.plan(displays: [Self.a, Self.b], current: [:], favorites: [], favoritesOnly: false, sameOnAllDisplays: true, using: &generator)
         #expect(same[Self.a] == same[Self.b])
-        let current = try! #require(same[Self.a])
+        let current = try #require(same[Self.a], "an unpinned curated draw at this size always finds a passing candidate")
         let perDisplay = ShufflePlanner.plan(displays: [Self.a, Self.b], current: [1: current, 2: current], favorites: [], favoritesOnly: false, sameOnAllDisplays: false, using: &generator)
         #expect(perDisplay[Self.a] != perDisplay[Self.b])
         #expect(perDisplay[Self.a] != current && perDisplay[Self.b] != current)
@@ -361,12 +365,12 @@ struct ShuffleTests {
     }
 
     @Test("Favorites only draws from the favorites, avoiding the current one, and falls back to random with none")
-    func favorites() {
+    func favorites() throws {
         var generator = SeededGenerator(seed: 2)
         let favorites = [Wallpaper.starter, .starter.reseeded(2), .starter.reseeded(3)]
         for _ in 0..<10 {
             let plan = ShufflePlanner.plan(displays: [Self.a], current: [1: .starter], favorites: favorites, favoritesOnly: true, sameOnAllDisplays: true, using: &generator)
-            let pick = try! #require(plan[Self.a])
+            let pick = try #require(plan[Self.a])
             #expect(favorites.contains(pick) && pick != .starter)
         }
         // One favorite, and it is current: it is picked anyway.
@@ -374,8 +378,10 @@ struct ShuffleTests {
         #expect(only[Self.a] == .starter)
         let none = ShufflePlanner.plan(displays: [Self.a], current: [:], favorites: [], favoritesOnly: true, sameOnAllDisplays: true, using: &generator)
         #expect(none[Self.a] != nil)
-        // Favorites off ignores them.
+        // Favorites off ignores them: an unpinned curated draw at this size
+        // always finds a passing candidate.
         let random = ShufflePlanner.plan(displays: [Self.a], current: [:], favorites: favorites, favoritesOnly: false, sameOnAllDisplays: true, using: &generator)
-        #expect(!favorites.contains(random[Self.a]!))
+        let pick = try #require(random[Self.a])
+        #expect(!favorites.contains(pick))
     }
 }

@@ -88,19 +88,26 @@ struct FinishTests {
         #expect(!tinted.isTrueBlack && !tinted.isPlain)
     }
 
-    @Test("Tint mixes toward its color; duotone and the map follow luminance; the top shade darkens the strip only")
+    @Test("Tint mixes toward its color; duotone and the map follow luminance; the top shade reinforces a decisive strip and follows the side only in between")
     func behaviors() {
         let tinted = Self.renderer.render(Wallpaper(generator: .solid(SolidParameters(color: .black)), seed: 1, finish: Finish(tint: Tint(color: .white, amount: 0.5))), size: PixelSize(width: 4, height: 4))
         #expect(tinted.pixel(x: 1, y: 1).hexString == "#808080")
         let duo = Self.renderer.render(Wallpaper(generator: Self.base.generator, seed: 1, finish: Finish(duotone: Duotone(shadow: RGBAColor(hex: 0xFF0000), highlight: RGBAColor(hex: 0x0000FF)))), size: PixelSize(width: 100, height: 4))
         #expect(duo.pixel(x: 0, y: 1).red > 0.95 && duo.pixel(x: 0, y: 1).blue < 0.1)
         #expect(duo.pixel(x: 99, y: 1).blue > 0.95 && duo.pixel(x: 99, y: 1).red < 0.1)
+        // Fix round 1 (P1): a strip's target follows its own decisive
+        // luminance, not blindly the rendered side — a white strip on the
+        // dark side is reinforced toward white (the text macOS actually
+        // draws there is black, whatever "side" the document is), not
+        // flipped to black; a black strip on the light side stays black.
+        // The side only breaks the tie for a genuinely mid-luminance strip
+        // (the grey case below).
         let shaded = Self.renderer.render(Wallpaper(generator: .solid(SolidParameters(color: .white)), seed: 1, finish: Finish(topShade: 1), darkGenerator: .solid(SolidParameters(color: .white))), side: .dark, context: RenderContext(size: PixelSize(width: 4, height: 40), menuBarStrip: 4))
-        #expect(shaded.pixel(x: 0, y: 0).red < 0.05, "black at the very top on the dark side")
+        #expect(shaded.pixel(x: 0, y: 0).hexString == "#FFFFFF", "a decisively light strip stays white, not flipped dark")
         #expect(shaded.pixel(x: 0, y: 8).hexString == "#FFFFFF", "untouched past twice the strip")
         #expect(shaded.pixel(x: 0, y: 39).hexString == "#FFFFFF")
         let lightened = Self.renderer.render(Wallpaper(generator: .solid(SolidParameters(color: .black)), seed: 1, finish: Finish(topShade: 1)), side: .light, context: RenderContext(size: PixelSize(width: 4, height: 40), menuBarStrip: 4))
-        #expect(lightened.pixel(x: 0, y: 0).red > 0.95, "white at the very top on the light side")
+        #expect(lightened.pixel(x: 0, y: 0).hexString == "#000000", "a decisively dark strip stays black, not flipped light")
     }
 
     @Test("The readability check follows the side's text: dark text on the light side, light text on the dark side; a busy strip never reads")
@@ -477,7 +484,11 @@ struct DocumentV2Tests {
         let odd = try Wallpaper.fromJSON(Data("{\"generator\":{\"type\":\"solid\",\"color\":\"#000\"},\"seed\":\"1\",\"pair\":{\"mode\":\"timeOfDay\",\"frames\":7}}".utf8))
         #expect(odd.pair == .timeOfDay(frames: 8))
         #expect(Generator.default(.dither, colors: [.black, .white], source: nil).kind == .dither)
-        #expect(Wallpaper.starter.generator.recolored { _ in .black }.colors.allSatisfy { $0 == .black })
+        // Fix round 1 (P0-2): a field's tones re-validate on every set, so
+        // recoloring every tone to the same black does not collapse the
+        // palette to one color — it becomes a usable ramp around it.
+        let recolored = Wallpaper.starter.generator.recolored { _ in .black }.colors
+        #expect(Set(recolored).count >= 2 && recolored.allSatisfy { OKLCH($0).l < 0.35 }, "a dark ramp around black, not one flat color")
     }
 }
 

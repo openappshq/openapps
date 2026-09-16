@@ -295,13 +295,14 @@ struct CuratedShuffleTests {
     static let context = RenderContext(size: PixelSize(width: 640, height: 400), menuBarStrip: 12)
 
     @Test("Shuffle is deterministic per seed, never bare, always from a preset palette, and passes the gate")
-    func curated() {
+    func curated() throws {
         var a = SeededGenerator(seed: 77), b = SeededGenerator(seed: 77)
         var previous: Wallpaper? = nil
         for _ in 0..<6 {
-            let x = Shuffle.next(from: previous, using: &a, renderer: Self.renderer, context: Self.context)
-            let y = Shuffle.next(from: previous, using: &b, renderer: Self.renderer, context: Self.context)
-            #expect(x == y)
+            let outcomeX = Shuffle.next(from: previous, using: &a, renderer: Self.renderer, context: Self.context)
+            let outcomeY = Shuffle.next(from: previous, using: &b, renderer: Self.renderer, context: Self.context)
+            #expect(outcomeX == outcomeY)
+            let x = try #require(outcomeX.document, "an unpinned draw always finds a passing candidate")
             #expect(x.generator.kind != .gradient && x.generator.kind != .solid)
             #expect(Palettes.preset(matching: x.generator.colors) != nil || x.generator.colors.allSatisfy { color in Palettes.presets.contains { $0.tones.contains(color) } }, "preset tones only")
             #expect(!x.finish.isEmpty || x.grain > 0, "a finish stack, never flat")
@@ -314,13 +315,14 @@ struct CuratedShuffleTests {
     }
 
     @Test("Pinned parameters and the palette survive a shuffle; a pinned generator keeps the family")
-    func pins() {
+    func pins() throws {
         var template = TasteSet.recipes[0].wallpaper
         template.pinned = [.cellSize, .palette, .generator, .grain, .seed]
         guard case .field(let p) = template.generator else { Issue.record("not a field"); return }
         var generator = SeededGenerator(seed: 9)
         for _ in 0..<3 {
-            let next = Shuffle.next(from: template, using: &generator, renderer: Self.renderer, context: Self.context)
+            let outcome = Shuffle.next(from: template, using: &generator, renderer: Self.renderer, context: Self.context)
+            let next = try #require(outcome.document, "a pinned generator always leaves a family to draw from")
             guard case .field(let q) = next.generator else { Issue.record("the generator was not kept"); continue }
             #expect(q.family == p.family)
             #expect(q.cellSize == p.cellSize)
@@ -332,7 +334,7 @@ struct CuratedShuffleTests {
         // Nothing pinned: the palette changes eventually.
         var free = SeededGenerator(seed: 11)
         template.pinned = []
-        let drawn = (0..<4).map { _ in Shuffle.next(from: template, using: &free, renderer: Self.renderer, context: Self.context) }
+        let drawn = try (0..<4).map { _ in try #require(Shuffle.next(from: template, using: &free, renderer: Self.renderer, context: Self.context).document) }
         #expect(drawn.contains { Set($0.generator.colors) != Set(p.tones) })
         // The planner keeps the template's pins on a random pick.
         template.pinned = [.generator, .palette]
@@ -418,8 +420,11 @@ struct CuratedShuffleTests {
         ("Resonance plate", 1, "Neon Night"),
         ("Woven circuit", 1, "Neon Night"),
         ("Memory sky", 1, "Neon Night"),
-        ("Dithered base", 1, "Neon Night"),
-        ("Pattern grid", 1, "Neon Night"),
+        // Seed 1 fails the stricter per-patch menu-bar readability (the P1
+        // fix: every 16th of the strip must read 3:1, not just the mean);
+        // seed 2 happens to clear it for these two families.
+        ("Dithered base", 2, "Neon Night"),
+        ("Pattern grid", 2, "Neon Night"),
     ]
 
     @Test("A known-good document per shuffle family passes the gate at the default context", arguments: knownGoodSeeds.indices)
