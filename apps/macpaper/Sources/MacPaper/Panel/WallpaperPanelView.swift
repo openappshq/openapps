@@ -22,10 +22,29 @@ struct WallpaperPanelView: View {
     var expandFinishes = false
     var expandFavorites = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.previewRendering) private var previewRendering
     @State private var showsFinishes = false
     @State private var showsFavorites = false
 
     var body: some View {
+        // The drop target is AppKit-backed: `ImageRenderer` cannot draw a
+        // view that carries one, so the harness leaves it off.
+        if previewRendering {
+            content
+        } else {
+            content.onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                // A `.macpaper` file dropped anywhere on the panel is imported.
+                guard let provider = providers.first else { return false }
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, url.pathExtension.lowercased() == RecipeDocument.fileExtension else { return }
+                    Task { @MainActor in model.importRecipe(at: url) }
+                }
+                return true
+            }
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: Brand.Space.s12) {
             if let header { header }
             PreviewCard(model: model, width: width - 2 * Brand.Space.s16)
@@ -63,15 +82,6 @@ struct WallpaperPanelView: View {
         .animation(Motion.standard(reduceMotion: reduceMotion), value: model.status)
         .animation(Motion.standard(reduceMotion: reduceMotion), value: model.generatorKind)
         .background(Brand.canvas.opacity(0.001))
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            // A `.macpaper` file dropped anywhere on the panel is imported.
-            guard let provider = providers.first else { return false }
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url, url.pathExtension.lowercased() == RecipeDocument.fileExtension else { return }
-                Task { @MainActor in model.importRecipe(at: url) }
-            }
-            return true
-        }
         .onAppear {
             if expandFinishes { showsFinishes = true }
             if expandFavorites { showsFavorites = true }
@@ -97,6 +107,7 @@ enum PanelMetrics {
 /// gradient last as the advanced pick; no solid (a flat color is a base).
 private struct GeneratorPickerRow: View {
     @Bindable var model: AppModel
+    @Environment(\.previewRendering) private var previewRendering
 
     private enum Choice: Hashable {
         case family(FieldFamily)
@@ -115,24 +126,38 @@ private struct GeneratorPickerRow: View {
         )
     }
 
+    private var currentTitle: String {
+        model.fieldFamily?.title ?? (model.generatorKind == .gradient ? "Gradient (advanced)" : model.generatorKind.title)
+    }
+
     var body: some View {
         HStack(spacing: Brand.Space.s8) {
             Text("Generator").font(Brand.body(12)).foregroundStyle(Brand.textSecondary).frame(width: 64, alignment: .leading)
-            Picker("Generator", selection: selection) {
-                Section("Pixel fields") {
-                    ForEach(FieldFamily.allCases, id: \.self) { family in
-                        Text(family.title).tag(Choice.family(family))
+            if previewRendering {
+                // `ImageRenderer` cannot draw the AppKit pop-up: a flat stand-in.
+                Text(currentTitle)
+                    .font(Brand.body(12))
+                    .foregroundStyle(Brand.textPrimary)
+                    .padding(.horizontal, Brand.Space.s8)
+                    .frame(width: 190, height: 28, alignment: .leading)
+                    .background(Brand.surface, in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
+            } else {
+                Picker("Generator", selection: selection) {
+                    Section("Pixel fields") {
+                        ForEach(FieldFamily.allCases, id: \.self) { family in
+                            Text(family.title).tag(Choice.family(family))
+                        }
+                    }
+                    Section {
+                        ForEach(GeneratorKind.pickable.filter { $0 != .field }, id: \.self) { kind in
+                            Text(kind == .gradient ? "Gradient (advanced)" : kind.title).tag(Choice.kind(kind))
+                        }
                     }
                 }
-                Section {
-                    ForEach(GeneratorKind.pickable.filter { $0 != .field }, id: \.self) { kind in
-                        Text(kind == .gradient ? "Gradient (advanced)" : kind.title).tag(Choice.kind(kind))
-                    }
-                }
+                .labelsHidden()
+                .frame(width: 190)
+                .accessibilityLabel("Generator")
             }
-            .labelsHidden()
-            .frame(width: 190)
-            .accessibilityLabel("Generator")
             PinButton(key: .generator, model: model)
             Spacer()
             Text(model.recipeName)

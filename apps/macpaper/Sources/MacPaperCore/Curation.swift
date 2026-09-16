@@ -210,7 +210,7 @@ public struct RecipeFamily: Sendable {
             p[.reach] = g.nextDouble(in: 0.55...1); p[.balance] = g.nextDouble(in: 0.3...0.7); p[.offset] = g.nextUnit()
             p[.cellSize] = Draw.pick([8, 10, 12, 14, 16, 20, 24], using: &g)
             p[.toneSteps] = Double(min(5, max(3, p.tones.count + Int(g.next() % 2))))
-            p[.dither] = Double(g.nextUnit() < 0.7 ? ToneDitherMode.none.rawValue : ToneDitherMode.bayer.rawValue)
+            p[.dither] = Double(g.nextUnit() < 0.8 ? ToneDitherMode.none.rawValue : ToneDitherMode.bayer.rawValue)
             p[.depth] = g.nextDouble(in: 0.2...0.5)
             return Draw.document(.field(p), palette: palette, base: Draw.base(palette, kinds: [.solid, .gradient, .gradient], using: &g), finish: Draw.finish(palette, fringe: 0.2...0.4, vignette: 0...0, using: &g), grain: g.nextDouble(in: 0.03...0.05), using: &g)
         },
@@ -288,17 +288,18 @@ public struct RecipeFamily: Sendable {
             p[.dither] = Double(ToneDitherMode.diffusion.rawValue)
             return Draw.document(.field(p), palette: palette, base: .none, finish: Draw.finish(palette, fringe: 0...0, vignette: 0...0, using: &g), grain: g.nextDouble(in: 0.03...0.05), using: &g)
         },
-        RecipeFamily(name: "Dithered base", kind: .dither, weight: 3, quiet: 0.0...1) { palette, g in
-            let modes: [DitherMode] = [.bayer8, .bayer8, .blueNoise, .floydSteinberg, .halftone]
+        RecipeFamily(name: "Dithered base", kind: .dither, weight: 2, quiet: 0.0...1) { palette, g in
+            // Cells big enough to read as texture from across the room.
+            let modes: [DitherMode] = [.bayer8, .bayer8, .blueNoise, .floydSteinberg, .halftone, .halftone, .halftone]
             let mode = modes[Int(g.next() % UInt64(modes.count))]
-            let cell = mode == .halftone ? 10 + Int(g.next() % 9) : 2 + Int(g.next() % 5)
+            let cell = mode == .halftone ? 12 + Int(g.next() % 9) : 5 + Int(g.next() % 4)
             let tones = Draw.tones(palette, 2...4, using: &g)
-            let paletteSize: Int? = tones.count >= 3 && mode != .halftone && g.nextUnit() < 0.5 ? 4 + Int(g.next() % 3) : nil
-            // Ink where the base is dark, paper where it is light: the
-            // darker of the ground and the loudest tone is the ink.
+            // Two tones only: a palette dither of a smooth base comes out
+            // smooth. Ink where the base is dark, paper where it is light:
+            // the darker of the ground and the loudest tone is the ink.
             let ground = tones[0], loud = tones[tones.count - 1]
             let dark = OKLCH(ground).l <= OKLCH(loud).l
-            let p = DitherParameters(source: nil, mode: mode, cell: cell, paletteSize: paletteSize, ink: dark ? ground : loud, paper: dark ? loud : ground, fit: .stretch)
+            let p = DitherParameters(source: nil, mode: mode, cell: cell, paletteSize: nil, ink: dark ? ground : loud, paper: dark ? loud : ground, fit: .stretch)
             // The base spans the whole palette: what a dither is of.
             return Draw.document(.dither(p), palette: palette, base: Draw.tonalBase(palette, using: &g), finish: Draw.finish(palette, fringe: mode == .halftone ? 0...0 : 0.1...0.2, vignette: 0...0, using: &g), grain: g.nextDouble(in: 0.02...0.04), using: &g)
         },

@@ -173,12 +173,15 @@ public enum Palettes {
         presets.filter { $0.group == group }
     }
 
-    /// The preset whose tones a document's colors are (as a set, in any
-    /// order, byte-exact), or nil: the name a recipe is called after.
+    /// The preset whose tones a document's colors are — as a set, in any
+    /// order, byte-exact; failing that, the first preset that holds all
+    /// of them (a family may use two of a palette's four tones) — or nil:
+    /// the name a recipe is called after.
     public static func preset(matching colors: [RGBAColor]) -> Palette? {
         let wanted = Set(colors.map(\.hexString))
-        guard !wanted.isEmpty else { return nil }
-        return presets.first { Set($0.tones.map(\.hexString)) == wanted }
+        guard wanted.count >= 2 else { return nil }
+        if let exact = presets.first(where: { Set($0.tones.map(\.hexString)) == wanted }) { return exact }
+        return presets.first { wanted.isSubset(of: Set($0.tones.map(\.hexString))) }
     }
 
     /// The preset name for a document's colors, or "Custom".

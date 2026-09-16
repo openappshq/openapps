@@ -36,6 +36,7 @@ enum RenderHarness {
             case "shuffle": ok = shuffle(into: directory) && ok
             case "bench": ok = bench(into: directory) && ok
             case "dither": ok = dither(into: directory) && ok
+            case "pick": ok = pick(into: directory) && ok
             default: print("RENDERS_UNKNOWN \(sheet)")
             }
             print("RENDERS_SHEET \(sheet) \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
@@ -148,6 +149,36 @@ enum RenderHarness {
             }
         }
         return sheet(tiles, columns: 4, tileWidth: 360, to: directory.appendingPathComponent("dither-sheet.png"))
+    }
+
+    /// Curation: for every taste-set entry, the first eight seeds from its
+    /// own that pass the gate, as tiles, so the seed can be chosen by eye.
+    /// Prints `RENDERS_PICK <family> <palette> <seeds…>`.
+    static func pick(into directory: URL) -> Bool {
+        var ok = true
+        let context = displays[0].1
+        for (index, entry) in TasteSet.entries.enumerated() {
+            guard let family = RecipeFamily.named(entry.family), let palette = Palettes.preset(named: entry.palette) else { continue }
+            var tiles: [Tile] = []
+            var passing: [UInt64] = []
+            var seed = entry.seed
+            var tried = 0
+            while passing.count < 8, tried < 60 {
+                var generator = SeededGenerator(seed: seed)
+                var wallpaper = family.draw(palette, &generator)
+                wallpaper.seed = seed
+                let verdict = QualityGate.assess(wallpaper, renderer: renderer, context: context)
+                if verdict.passes {
+                    passing.append(seed)
+                    tiles.append(Tile(image: render(wallpaper, side: .light, context: context, width: 360), label: "\(entry.palette) · \(entry.family) seed \(seed)"))
+                }
+                seed += 1000
+                tried += 1
+            }
+            print("RENDERS_PICK \(index + 1) \(entry.family) | \(entry.palette) | \(passing.map(String.init).joined(separator: " "))")
+            ok = sheet(tiles, columns: 4, tileWidth: 360, to: directory.appendingPathComponent("pick-\(String(format: "%02d", index + 1)).png")) && ok
+        }
+        return ok
     }
 
     /// One uncached 5K render of the first taste recipe, timed, written.
