@@ -24,6 +24,15 @@ struct AppModelTests {
         func pickImage() async -> URL? { url }
     }
 
+    /// Picks and saves nothing on its own; a test sets `pickURL`/`saveURL`
+    /// to the file it wants `importRecipe()`/`exportRecipe()` to use.
+    final class FakeRecipeDialog: RecipeDialog {
+        var pickURL: URL?
+        var saveURL: URL?
+        func pickRecipeFile() async -> URL? { pickURL }
+        func saveRecipeFile(named name: String) async -> URL? { saveURL }
+    }
+
     @MainActor
     struct Harness {
         let directory: URL
@@ -34,19 +43,23 @@ struct AppModelTests {
         let desktop = RecordingApplier()
         let exporter = MemoryExporter()
         let picker = FixedPicker()
+        let recipeDialog = FakeRecipeDialog()
         let model: AppModel
         static let displays = [
             DisplayInfo(id: 1, name: "Built-in", pointSize: CGSize(width: 32, height: 20), scale: 2, notchWidth: 10, isMain: true),
             DisplayInfo(id: 2, name: "External", pointSize: CGSize(width: 40, height: 20), scale: 1),
         ]
 
-        init() {
-            directory = FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-app-tests-\(UUID().uuidString)", isDirectory: true)
+        /// `directory` lets two Harnesses share the same on-disk stores (to
+        /// test what a second launch sees); `starterRecipes` seeds the
+        /// library the way a fresh install's taste set does.
+        init(directory: URL? = nil, starterRecipes: [Recipe] = []) {
+            self.directory = directory ?? FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-app-tests-\(UUID().uuidString)", isDirectory: true)
             temporaryDefaults = try! TemporaryDefaults()
             preferences = Preferences(defaults: temporaryDefaults.defaults)
             model = AppModel(
-                preferences: preferences, license: license, paths: AppPaths(root: directory), desktop: desktop,
-                exporter: exporter, imagePicker: picker, displays: { Harness.displays }
+                preferences: preferences, license: license, paths: AppPaths(root: self.directory), desktop: desktop,
+                exporter: exporter, imagePicker: picker, recipeDialog: recipeDialog, starterRecipes: starterRecipes, displays: { Harness.displays }
             )
             model.setExportReveal { _ in }
             // Deterministic: the light side, a fixed accent, no pasteboard.
@@ -169,6 +182,109 @@ struct AppModelTests {
         h.model.toggleFavorite()
         #expect(!h.model.isFavorite && h.model.favoriteList.isEmpty)
         #expect(FavoritesStore(fileURL: AppPaths(root: h.directory).favorites).all.isEmpty)
+    }
+
+    @Test("Pin toggling survives edit")
+    func pinning() {
+        let h = Harness()
+        defer { h.tearDown() }
+        #expect(h.model.pinnedKeys.isEmpty)
+        h.model.pin(.seed)
+        h.model.pin(.palette)
+        #expect(h.model.isPinned(.seed) && h.model.isPinned(.palette) && !h.model.isPinned(.family))
+        h.model.togglePin(.seed)
+        #expect(!h.model.isPinned(.seed), "toggle off")
+        h.model.togglePin(.family)
+        #expect(h.model.isPinned(.family), "toggle on")
+        // An edit changes the document but leaves the pins as they are.
+        h.model.reseed()
+        #expect(h.model.pinnedKeys == [.palette, .family])
+        h.model.unpin(.palette)
+        #expect(h.model.pinnedKeys == [.family])
+        // Pinning is not generating: it works while restricted.
+        h.license.bind(access: { false }, restriction: { .trialEndedSample }, canBuy: true)
+        h.model.pin(.seed)
+        #expect(h.model.isPinned(.seed), "pinning bypasses the license gate")
+    }
+
+    @Test("importRecipe(at:) adds to the library and loads it; junk and an oversized file are refused")
+    func importRecipeAt() throws {
+        let h = Harness()
+        defer { h.tearDown() }
+        try FileManager.default.createDirectory(at: h.directory, withIntermediateDirectories: true)
+        let recipe = RecipeDocument(name: "Imported look", wallpaper: TasteSet.recipes[4].wallpaper)
+        let good = h.directory.appendingPathComponent("good.macpaper")
+        try recipe.fileData().write(to: good)
+        h.model.importRecipe(at: good)
+        #expect(h.model.draft == recipe.wallpaper)
+        #expect(h.model.favoriteList.contains { $0.wallpaper == recipe.wallpaper && $0.name == "Imported look" })
+        #expect(h.model.status?.text == "Imported “Imported look”.")
+        // Junk: decodes as neither a bare document nor a recipe.
+        let before = h.model.draft
+        let junk = h.directory.appendingPathComponent("junk.macpaper")
+        try Data("not a recipe".utf8).write(to: junk)
+        h.model.importRecipe(at: junk)
+        #expect(h.model.status?.tone == .error)
+        #expect(h.model.draft == before, "kept")
+        // Oversized: refused by size before it is even parsed.
+        let oversized = h.directory.appendingPathComponent("big.macpaper")
+        try Data(repeating: 0x20, count: ShareCode.maxDocumentBytes + 1).write(to: oversized)
+        h.model.importRecipe(at: oversized)
+        #expect(h.model.status?.tone == .error)
+        #expect(h.model.draft == before, "kept")
+    }
+
+    @Test("exportRecipe() writes the draft through the recipe dialog")
+    func exportRecipeFile() async throws {
+        let h = Harness()
+        defer { h.tearDown() }
+        try FileManager.default.createDirectory(at: h.directory, withIntermediateDirectories: true)
+        let destination = h.directory.appendingPathComponent("chosen-name.macpaper")
+        h.recipeDialog.saveURL = destination
+        h.model.saveRecipe(named: "My export")
+        await h.model.exportRecipe()
+        let written = try RecipeDocument.decode(try Data(contentsOf: destination))
+        #expect(written.wallpaper == h.model.draft)
+        #expect(written.name == "My export")
+        #expect(h.model.status?.text == "Exported chosen-name.macpaper.")
+        // Nothing picked: nothing written, nothing said.
+        h.recipeDialog.saveURL = nil
+        h.model.clearStatus()
+        await h.model.exportRecipe()
+        #expect(h.model.status == nil)
+    }
+
+    @Test("shareLink() copies a macpaper://s/ code that decodes back to the draft, named like the library entry")
+    func shareLinkCode() throws {
+        let h = Harness()
+        defer { h.tearDown() }
+        h.model.saveRecipe(named: "Shared look")
+        var copied: String?
+        h.model.copyToPasteboard = { copied = $0 }
+        h.model.shareLink()
+        let text = try #require(copied)
+        #expect(text.hasPrefix("macpaper://s/"))
+        let document = try ShareCode.decode(url: try #require(URL(string: text)))
+        #expect(document.wallpaper == h.model.draft)
+        #expect(document.name == "Shared look")
+        #expect(h.model.status?.text == "Link copied.")
+    }
+
+    @Test("starterRecipes seeds the library only on an absent favorites file")
+    func starterRecipesSeeding() {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-app-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let starters = [TasteSet.recipes[8], TasteSet.recipes[9]]
+        let fresh = Harness(directory: directory, starterRecipes: starters)
+        #expect(fresh.model.favoriteList.map(\.id) == starters.map(\.id), "an absent file takes the starters")
+        // Nothing is written to disk until the library changes.
+        #expect(!FileManager.default.fileExists(atPath: AppPaths(root: directory).favorites.path))
+        fresh.model.toggleFavorite()
+        fresh.model.toggleFavorite()
+        #expect(FileManager.default.fileExists(atPath: AppPaths(root: directory).favorites.path))
+        // A second launch over the same, now-present file ignores different starters.
+        let relaunched = Harness(directory: directory, starterRecipes: [TasteSet.recipes[0]])
+        #expect(relaunched.model.favoriteList.map(\.id) == starters.map(\.id), "a present file takes no starters")
     }
 
     @Test("Switching generators carries colors; reseed and typed seeds")
