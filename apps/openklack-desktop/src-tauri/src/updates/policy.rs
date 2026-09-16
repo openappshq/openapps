@@ -45,13 +45,62 @@ impl History {
     }
 }
 
-/// `updates.json` in the app's data folder. A missing or unreadable file is the default: every
-/// automatic behaviour off.
+/// `updates.json` in the app's data folder. A missing or unreadable file reads as every
+/// automatic behaviour off and the automatic-check default undecided; a fresh install then turns
+/// automatic checks on once the default resolves. Unknown fields are ignored, so a file written
+/// by a newer build still loads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Saved {
     pub settings: Settings,
     pub history: History,
+    /// "Check for updates automatically" has been defaulted once (turned on for a fresh install,
+    /// left alone for an upgrade) or set by the user. After that the toggle is the user's.
+    pub auto_check_defaulted: bool,
+}
+
+/// What the launch does about "Check for updates automatically" being on by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoCheckDefault {
+    /// A fresh install: turn automatic checks on, then remember it.
+    TurnOn,
+    /// An upgrade (there were preferences, a trial or a license before): remember that the
+    /// default was considered without touching the setting, so an earlier "off" stays off.
+    Remember,
+    /// Already decided, by an earlier launch or by the user: nothing to do.
+    Leave,
+}
+
+/// Decides once per install, the same way "Open at login" does: `fresh_install` is the login
+/// default's test (no saved preferences, no trial and no license record). A user who turns the
+/// toggle off afterwards is never overridden.
+pub fn auto_check_default(fresh_install: bool, saved: &Saved) -> AutoCheckDefault {
+    if saved.auto_check_defaulted {
+        AutoCheckDefault::Leave
+    } else if fresh_install {
+        AutoCheckDefault::TurnOn
+    } else {
+        AutoCheckDefault::Remember
+    }
+}
+
+/// Applies the default to the saved state. Returns whether it changed; the caller saves it, and
+/// a save that fails leaves the decision for the next launch.
+pub fn apply_auto_check_default(saved: &mut Saved, fresh_install: bool) -> bool {
+    match auto_check_default(fresh_install, saved) {
+        AutoCheckDefault::Leave => return false,
+        AutoCheckDefault::TurnOn => saved.settings.check_automatically = true,
+        AutoCheckDefault::Remember => {}
+    }
+    saved.auto_check_defaulted = true;
+    true
+}
+
+/// The user's explicit choice in Settings. It marks the default as decided, so whichever lands
+/// first, the choice or the default, the choice stands.
+pub fn choose_settings(saved: &mut Saved, settings: Settings) {
+    saved.settings = settings;
+    saved.auto_check_defaulted = true;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,8 +109,9 @@ pub enum Trigger {
     Timer,
 }
 
-/// Whether an automatic check should run now. Nothing runs unless the user turned automatic
-/// checks on. Then: at launch, when the last successful check is a day old (the timer also
+/// Whether an automatic check should run now. Nothing runs unless automatic checks are on (the
+/// default on a fresh install once it resolves, or the user's choice). Then: at launch, when
+/// the last successful check is a day old (the timer also
 /// catches up after sleep), and after a failure only once its backoff (an hour, then a day) has
 /// passed. A clock set before the last attempt counts as due, so a wrong clock can't stop checks;
 /// the attempt then moves the reference to the new clock, so it can't loop either.
@@ -256,24 +306,126 @@ mod tests {
                 install_automatically: false,
             },
             history,
+            auto_check_defaulted: true,
         }
     }
 
     #[test]
-    fn a_fresh_install_never_checks_on_its_own() {
-        let fresh: Saved = serde_json::from_str("{}").unwrap();
-        assert_eq!(fresh, Saved::default());
-        assert!(!fresh.settings.check_automatically);
-        assert!(!fresh.settings.install_automatically);
+    fn nothing_checks_before_the_default_resolves_or_once_checks_are_off() {
+        let undecided: Saved = serde_json::from_str("{}").unwrap();
+        assert_eq!(undecided, Saved::default());
+        assert!(!undecided.settings.check_automatically);
+        assert!(!undecided.settings.install_automatically);
+        assert!(!undecided.auto_check_defaulted);
         for now in [0, HOUR, DAY, 400 * DAY] {
             for trigger in [Trigger::Launch, Trigger::Timer] {
-                assert!(!automatic_check_due(&fresh, now, trigger));
+                assert!(!automatic_check_due(&undecided, now, trigger));
             }
         }
         // Turning checks off stops them whatever the history says.
         let mut off = enabled(History::default());
         off.settings.check_automatically = false;
         assert!(!automatic_check_due(&off, 10 * DAY, Trigger::Launch));
+    }
+
+    #[test]
+    fn automatic_checks_default_on_for_a_fresh_install_only() {
+        let on = Settings {
+            check_automatically: true,
+            install_automatically: false,
+        };
+        let install_only = Settings {
+            check_automatically: false,
+            install_automatically: true,
+        };
+        // fresh × decided × existing value: only an undecided fresh install turns checks on,
+        // an undecided upgrade remembers and keeps whatever was saved, and a decided file is
+        // never touched, whatever it says.
+        for settings in [Settings::default(), on, install_only] {
+            for (fresh, decided, expected) in [
+                (true, false, AutoCheckDefault::TurnOn),
+                (false, false, AutoCheckDefault::Remember),
+                (true, true, AutoCheckDefault::Leave),
+                (false, true, AutoCheckDefault::Leave),
+            ] {
+                let mut saved = Saved {
+                    settings,
+                    history: History::default(),
+                    auto_check_defaulted: decided,
+                };
+                assert_eq!(auto_check_default(fresh, &saved), expected);
+                let changed = apply_auto_check_default(&mut saved, fresh);
+                assert_eq!(changed, !decided);
+                assert!(saved.auto_check_defaulted);
+                assert_eq!(
+                    saved.settings.check_automatically,
+                    settings.check_automatically || expected == AutoCheckDefault::TurnOn
+                );
+                // "Download and install automatically" is never part of the default.
+                assert_eq!(
+                    saved.settings.install_automatically,
+                    settings.install_automatically
+                );
+                // Once decided, a later launch (fresh or not) leaves everything alone.
+                let after = saved;
+                assert!(!apply_auto_check_default(&mut saved, true));
+                assert!(!apply_auto_check_default(&mut saved, false));
+                assert_eq!(saved, after);
+            }
+        }
+        // A fresh install that turned on checks by default is due at once.
+        let mut fresh = Saved::default();
+        assert!(apply_auto_check_default(&mut fresh, true));
+        assert!(automatic_check_due(&fresh, 1_000 * DAY, Trigger::Timer));
+    }
+
+    #[test]
+    fn a_choice_made_before_the_default_resolves_stands() {
+        // The user turns installs on (checks still off) while the records are being read;
+        // the default then resolves as a fresh install and must not turn checks on.
+        let mut saved = Saved::default();
+        choose_settings(
+            &mut saved,
+            Settings {
+                check_automatically: false,
+                install_automatically: true,
+            },
+        );
+        assert!(saved.auto_check_defaulted);
+        assert!(!apply_auto_check_default(&mut saved, true));
+        assert!(!saved.settings.check_automatically);
+        assert!(saved.settings.install_automatically);
+        // The other order: the default lands first, then the choice replaces it.
+        let mut saved = Saved::default();
+        assert!(apply_auto_check_default(&mut saved, true));
+        choose_settings(&mut saved, Settings::default());
+        assert!(!saved.settings.check_automatically);
+        assert!(saved.auto_check_defaulted);
+        assert!(!apply_auto_check_default(&mut saved, true));
+    }
+
+    #[test]
+    fn an_updates_file_from_before_the_default_still_loads_and_is_upgraded() {
+        // Written by 0.1.2: no `autoCheckDefaulted`. It reads as undecided with the user's
+        // values intact, so an upgrade only remembers and never turns checks on.
+        let old = r#"{"settings":{"checkAutomatically":false,"installAutomatically":true},"history":{"lastSuccessAt":100,"lastAttemptAt":100,"failures":0}}"#;
+        let mut saved: Saved = serde_json::from_str(old).unwrap();
+        assert!(!saved.auto_check_defaulted);
+        assert!(!saved.settings.check_automatically);
+        assert!(saved.settings.install_automatically);
+        assert_eq!(saved.history.last_success_at, Some(100));
+        assert!(apply_auto_check_default(&mut saved, false));
+        assert!(!saved.settings.check_automatically);
+        let written = serde_json::to_string(&saved).unwrap();
+        assert!(written.contains(r#""autoCheckDefaulted":true"#));
+        let reread: Saved = serde_json::from_str(&written).unwrap();
+        assert_eq!(reread, saved);
+        // A file from a newer build with fields this one doesn't know still loads: an earlier
+        // build ignores `autoCheckDefaulted` the same way, so a downgrade never fails to read.
+        let newer = r#"{"settings":{"checkAutomatically":true},"autoCheckDefaulted":true,"somethingNewer":1}"#;
+        let saved: Saved = serde_json::from_str(newer).unwrap();
+        assert!(saved.auto_check_defaulted);
+        assert!(saved.settings.check_automatically);
     }
 
     #[test]

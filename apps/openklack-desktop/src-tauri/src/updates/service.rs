@@ -302,8 +302,30 @@ pub fn init(app: &tauri::AppHandle) {
     }
 }
 
+/// "Check for updates automatically" is on by default: turned on once, on the first launch of a
+/// fresh install (the same test as "Open at login": no saved preferences, no trial and no
+/// license record), and remembered in `updates.json`. An upgrade only remembers the decision, so
+/// a user who had turned it off stays off. Called by the licensing runtime once it has read the
+/// records, which official builds always do; a choice the user makes in Settings before then is
+/// never overridden, whichever lands first. "Download and install automatically" is never
+/// defaulted. Turning checks on wakes the scheduler, so a fresh install checks right away.
+#[cfg_attr(not(feature = "licensing"), allow(dead_code))]
+pub fn apply_auto_check_default(app: &tauri::AppHandle, fresh_install: bool) {
+    let Some(updates) = app.try_state::<Updates>() else {
+        return;
+    };
+    let Some(settings) = updates.default_auto_check(fresh_install) else {
+        return;
+    };
+    updates.publish(app, |status| status.settings = settings);
+    if settings.check_automatically {
+        updates.wake.notify_one();
+    }
+}
+
 /// Wakes at launch, then every few minutes, and checks only when [`policy::automatic_check_due`]
-/// says so. With automatic checks off (the default) it never makes a request.
+/// says so. With automatic checks off it never makes a request; a fresh install's default turns
+/// them on and wakes it.
 fn schedule(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let updates = app.state::<Updates>();
@@ -362,16 +384,31 @@ impl Updates {
         let _ = self.write(&saved);
     }
 
-    /// Saves the settings first; they take effect only once saved.
+    /// Saves the settings first; they take effect only once saved. The choice marks the
+    /// automatic-check default as decided under the same lock the default takes, so whichever
+    /// lands first, the user's choice stands.
     fn update_settings(&self, settings: Settings) -> Result<(), String> {
         let mut saved = self.saved.lock().unwrap();
-        let next = Saved {
-            settings,
-            history: saved.history,
-        };
+        let mut next = *saved;
+        policy::choose_settings(&mut next, settings);
         self.write(&next)?;
         *saved = next;
         Ok(())
+    }
+
+    /// The "Check for updates automatically" default, under the settings lock. Returns the
+    /// settings once they changed on disk; a save that fails leaves the decision undecided in
+    /// memory too, so the next launch tries again.
+    fn default_auto_check(&self, fresh_install: bool) -> Option<Settings> {
+        let mut saved = self.saved.lock().unwrap();
+        let mut next = *saved;
+        if !policy::apply_auto_check_default(&mut next, fresh_install) {
+            return None;
+        }
+        self.write(&next).ok()?;
+        let changed = next.settings != saved.settings;
+        *saved = next;
+        changed.then_some(next.settings)
     }
 
     fn may_install(&self, automatic: bool) -> bool {
@@ -764,8 +801,40 @@ mod tests {
         (origin, requests)
     }
 
+    /// An updater whose `updates.json` lives in `dir`, as `init` builds it, without an app.
+    fn updates_in(dir: &Path) -> Updates {
+        let store = dir.join("updates.json");
+        let saved = load(&store);
+        Updates {
+            endpoint: Err("no feed in tests".into()),
+            store,
+            bundle: None,
+            location_blocked: true,
+            busy: AsyncMutex::new(()),
+            saved: Mutex::new(saved),
+            pending: Mutex::new(None),
+            staged: Mutex::new(None),
+            status: Mutex::new(Status {
+                revision: 0,
+                supported: true,
+                configured: false,
+                location_blocked: true,
+                backup: None,
+                current_version: "0.1.0".into(),
+                settings: saved.settings,
+                phase: "idle",
+                available: None,
+                received: 0,
+                total: None,
+                error: None,
+                last_checked_at: None,
+            }),
+            wake: Notify::new(),
+        }
+    }
+
     #[test]
-    fn a_fresh_install_makes_no_feed_request() {
+    fn no_feed_request_before_the_default_resolves_and_one_after_it_does() {
         let (origin, requests) = counting_server();
         let endpoint = Endpoint::new(
             &format!("{origin}/updates/openklack/latest.json"),
@@ -774,11 +843,12 @@ mod tests {
         )
         .unwrap();
         let current = Version::new(0, 1, 0);
-        let fresh = Saved::default();
+        // No file yet: the launch of a fresh install, before the records have been read.
+        let undecided = Saved::default();
         tauri::async_runtime::block_on(async {
             for trigger in [Trigger::Launch, Trigger::Timer] {
                 assert!(
-                    automatic_fetch(&fresh, trigger, &endpoint, &current)
+                    automatic_fetch(&undecided, trigger, &endpoint, &current)
                         .await
                         .is_none()
                 );
@@ -787,17 +857,109 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(requests.load(Ordering::SeqCst), 0);
 
-        // Control: with automatic checks on, the same path does reach the server.
-        let mut enabled = fresh;
-        enabled.settings.check_automatically = true;
+        // An upgrade resolves without turning checks on: still no request.
+        let mut upgraded = undecided;
+        assert!(policy::apply_auto_check_default(&mut upgraded, false));
         let result = tauri::async_runtime::block_on(automatic_fetch(
-            &enabled,
-            Trigger::Launch,
+            &upgraded,
+            Trigger::Timer,
+            &endpoint,
+            &current,
+        ));
+        assert!(result.is_none());
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+
+        // A fresh install resolves with checks on: the scheduler's timer pass (the launch pass
+        // ran before the default) reaches the server at once.
+        let mut fresh = undecided;
+        assert!(policy::apply_auto_check_default(&mut fresh, true));
+        let result = tauri::async_runtime::block_on(automatic_fetch(
+            &fresh,
+            Trigger::Timer,
             &endpoint,
             &current,
         ));
         assert_eq!(result, Some(Err(UNREACHABLE.to_string())));
         assert!(requests.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[test]
+    fn the_default_is_saved_once_and_a_choice_made_first_stands() {
+        let dir = tempfile::tempdir().unwrap();
+        // A fresh install with no file: the default turns checks on, saves, and reports the
+        // new settings once.
+        let updates = updates_in(dir.path());
+        assert_eq!(
+            updates.default_auto_check(true),
+            Some(Settings {
+                check_automatically: true,
+                install_automatically: false,
+            })
+        );
+        assert_eq!(updates.default_auto_check(true), None);
+        let on_disk = load(&updates.store);
+        assert!(on_disk.auto_check_defaulted);
+        assert!(on_disk.settings.check_automatically);
+        assert!(!on_disk.settings.install_automatically);
+        // The next launch reads the decision back and leaves it alone.
+        let relaunched = updates_in(dir.path());
+        assert_eq!(relaunched.default_auto_check(true), None);
+        // The user turns it off: that stands across launches, fresh or not.
+        relaunched.update_settings(Settings::default()).unwrap();
+        let relaunched = updates_in(dir.path());
+        assert_eq!(relaunched.default_auto_check(true), None);
+        assert!(
+            !relaunched
+                .saved
+                .lock()
+                .unwrap()
+                .settings
+                .check_automatically
+        );
+
+        // An upgrade: a 0.1.2 file with checks off is remembered, never turned on.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("updates.json"),
+            r#"{"settings":{"checkAutomatically":false,"installAutomatically":false},"history":{"lastSuccessAt":5,"lastAttemptAt":5,"failures":0}}"#,
+        )
+        .unwrap();
+        let updates = updates_in(dir.path());
+        assert_eq!(updates.default_auto_check(false), None);
+        let on_disk = load(&updates.store);
+        assert!(on_disk.auto_check_defaulted);
+        assert!(!on_disk.settings.check_automatically);
+        assert_eq!(on_disk.history.last_success_at, Some(5));
+
+        // A choice in Settings before the records resolve: the default, arriving later as a
+        // fresh install, does not turn checks on.
+        let dir = tempfile::tempdir().unwrap();
+        let updates = updates_in(dir.path());
+        updates
+            .update_settings(Settings {
+                check_automatically: false,
+                install_automatically: true,
+            })
+            .unwrap();
+        assert_eq!(updates.default_auto_check(true), None);
+        let on_disk = load(&updates.store);
+        assert!(on_disk.auto_check_defaulted);
+        assert!(!on_disk.settings.check_automatically);
+        assert!(on_disk.settings.install_automatically);
+    }
+
+    #[test]
+    fn a_default_that_cannot_be_saved_is_tried_again_next_launch() {
+        // The store's parent is a file, so nothing can be written there.
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("not-a-folder");
+        std::fs::write(&blocked, b"").unwrap();
+        let updates = updates_in(&blocked);
+        assert_eq!(updates.default_auto_check(true), None);
+        let saved = *updates.saved.lock().unwrap();
+        assert!(!saved.auto_check_defaulted);
+        assert!(!saved.settings.check_automatically);
     }
 
     #[test]

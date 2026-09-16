@@ -617,7 +617,7 @@ impl Host for TauriHost {
     }
 
     fn records_loaded(&self, fresh_mac: bool) {
-        crate::default_login_item(&self.app, fresh_mac);
+        crate::apply_fresh_install_defaults(&self.app, fresh_mac);
     }
 }
 

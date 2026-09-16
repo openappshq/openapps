@@ -140,20 +140,27 @@ async fn startup_state(
     .map_err(|e| e.to_string())?
 }
 
-/// "Open at login" is on by default: turned on once, on the first launch of a fresh install of
-/// an official build (no saved preferences, no trial and no license record), and remembered in
-/// the preferences. An upgrade only remembers the decision, so a user who had turned it off
-/// stays off; afterwards the toggle in Settings and System Settings → Login Items are the
-/// user's. If registering fails, it is tried again on the next launch. Called by the licensing
-/// runtime once it has read the records, which official builds always do. The decision runs
-/// inside the preferences update, like the Settings toggle, so a choice the user makes while
-/// the records are still being read is never overridden, whichever lands first.
+/// The defaults a fresh install of an official build gets once, on its first launch (no saved
+/// preferences, no trial and no license record): "Open at login" on, remembered in the
+/// preferences, and "Check for updates automatically" on, remembered in `updates.json`. An
+/// upgrade only remembers each decision, so a user who had turned one off stays off; afterwards
+/// the toggles in Settings (and System Settings → Login Items) are the user's. If registering
+/// the login item fails, it is tried again on the next launch. Called by the licensing runtime
+/// once it has read the records, which official builds always do. Each decision runs under the
+/// same lock as its Settings toggle, so a choice the user makes while the records are still
+/// being read is never overridden, whichever lands first.
 #[cfg(feature = "licensing")]
-pub fn default_login_item(app: &tauri::AppHandle, fresh_records: bool) {
+pub fn apply_fresh_install_defaults(app: &tauri::AppHandle, fresh_records: bool) {
     let Some(controller) = app.try_state::<Arc<Controller>>() else {
         return;
     };
     let fresh_install = controller.fresh_preferences && fresh_records;
+    default_login_item(app, &controller, fresh_install);
+    updates::apply_auto_check_default(app, fresh_install);
+}
+
+#[cfg(feature = "licensing")]
+fn default_login_item(app: &tauri::AppHandle, controller: &Arc<Controller>, fresh_install: bool) {
     // Nothing to write on an ordinary launch: only a pending decision takes the lock.
     let pending = model::login_item_default(
         licensing::ENABLED,

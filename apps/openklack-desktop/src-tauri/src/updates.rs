@@ -14,9 +14,16 @@ pub mod service;
 pub use service::{init, install_on_exit, ready, restart};
 #[cfg(not(feature = "updater"))]
 pub use unavailable::{init, install_on_exit, ready, restart};
+// Only official builds (the `licensing` feature reads the records) decide the default.
+#[cfg(all(feature = "updater", feature = "licensing"))]
+pub use service::apply_auto_check_default;
+#[cfg(all(not(feature = "updater"), feature = "licensing"))]
+pub use unavailable::apply_auto_check_default;
 
-/// What the user chose in Settings. Both are off on a fresh install, so the app never contacts the
-/// update feed on its own until the user turns automatic checks on.
+/// What the user chose in Settings. Automatic checks are turned on once, on the first launch of
+/// a fresh install, and only tell the user about a new version; automatic installs are off
+/// until the user turns them on. Before the default resolves both are off, so the app never
+/// contacts the update feed on its own until then.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -61,6 +68,10 @@ pub mod unavailable {
     const SOURCE_BUILD: &str = "Builds from source don’t include app updates.";
 
     pub fn init(_app: &tauri::AppHandle) {}
+
+    /// Nothing to default: a build without the updater has no update settings.
+    #[cfg_attr(not(feature = "licensing"), allow(dead_code))]
+    pub fn apply_auto_check_default(_app: &tauri::AppHandle, _fresh_install: bool) {}
 
     pub fn install_on_exit(_app: &tauri::AppHandle) {}
 
