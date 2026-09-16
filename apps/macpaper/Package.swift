@@ -35,6 +35,9 @@ let package = Package(
     products: [
         .executable(name: "MacPaper", targets: ["MacPaper"]),
         .library(name: "MacPaperCore", targets: ["MacPaperCore"]),
+        // The screen-saver module, assembled into macPaper.saver by
+        // scripts/bundle.sh and installed by the user from Settings.
+        .library(name: "MacPaperSaver", type: .dynamic, targets: ["MacPaperSaver"]),
     ],
     targets: [
         // The wallpaper document and its generators, pixelize, PNG and SVG
@@ -53,6 +56,13 @@ let package = Package(
             dependencies: ["MacPaperCore"],
             resources: [.copy("Resources")],
             swiftSettings: appSettings
+        ),
+        // The `.saver`: a ScreenSaverView over the documents the app keeps,
+        // rendered through the core; no dependency on the app target.
+        .target(
+            name: "MacPaperSaver",
+            dependencies: ["MacPaperCore"],
+            swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         // Golden hashes for deterministic seeds, the exporters, the stores
         // with temporary directories, the planner, the applier with a fake,

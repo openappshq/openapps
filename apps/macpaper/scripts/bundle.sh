@@ -247,6 +247,46 @@ cp LICENSE NOTICE "$APP/Contents/Resources/"
 test -f "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
+# The screen-saver module: the MacPaperSaver dynamic library as a .saver
+# bundle inside the app's Resources; Settings → Desktop → Install screen
+# saver copies it into ~/Library/Screen Savers. Signed with the app.
+echo "==> Assembling ${APP_NAME}.saver"
+swift build -c release --scratch-path "$SCRATCH_PATH" --product MacPaperSaver ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+SAVER="$APP/Contents/Resources/${APP_NAME}.saver"
+mkdir -p "$SAVER/Contents/MacOS" "$SAVER/Contents/Resources"
+cp "$BIN_DIR/libMacPaperSaver.dylib" "$SAVER/Contents/MacOS/${APP_NAME}"
+cat > "$SAVER/Contents/Info.plist" <<SAVERPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>${APP_NAME}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${BUNDLE_ID}.saver</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>${APP_NAME}</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${BUILD_NUMBER}</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSPrincipalClass</key>
+    <string>MacPaperSaverView</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>MIT License. An OpenApps HQ original.</string>
+</dict>
+</plist>
+SAVERPLIST
+plutil -lint "$SAVER/Contents/Info.plist" >/dev/null
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -307,6 +347,8 @@ else
     echo "==> Signing ad-hoc (development build)"
     SIGN=(codesign --force --options runtime --timestamp=none --sign -)
 fi
+# Nested code first: the saver inside Resources, with the same identity.
+"${SIGN[@]}" "$SAVER"
 if [[ -n "$REQUIREMENT" ]]; then
     "${SIGN[@]}" --entitlements "$ENTITLEMENTS" -r="designated => ${REQUIREMENT}" "$APP"
 else

@@ -64,6 +64,11 @@ test -f "$APP/Contents/Resources/AppIcon.icns"
 test -f "$APP/Contents/Resources/MenuBarIcon@2x.png"
 test -f "$APP/Contents/Resources/Fonts/IBMPlexMono-Regular.ttf"
 test -f "$APP/Contents/Resources/NOTICE"
+# The screen-saver module ships inside the app, signed with it.
+SAVER="$APP/Contents/Resources/${APP_NAME}.saver"
+test -f "$SAVER/Contents/MacOS/${APP_NAME}" || { echo "error: ${APP_NAME}.saver is missing from the app's Resources" >&2; exit 1; }
+[[ "$(plutil -extract NSPrincipalClass raw -o - "$SAVER/Contents/Info.plist")" == "MacPaperSaverView" ]] || { echo "error: the saver's principal class is not MacPaperSaverView" >&2; exit 1; }
+codesign --verify --strict "$SAVER" || { echo "error: the saver is not signed" >&2; exit 1; }
 test ! -d "$APP/Contents/Frameworks" || { echo "error: the app embeds frameworks; macPaper has none (the updater is compiled in)" >&2; exit 1; }
 [[ -z "$(info NSAppTransportSecurity)" ]] || { echo "error: App Transport Security exceptions in a release" >&2; exit 1; }
 # The binary's strings, read once into a file: piped straight into `grep -q`,
