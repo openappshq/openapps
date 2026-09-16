@@ -46,41 +46,17 @@ private extension ProcessActionItem {
 }
 
 enum ProcessActions {
-    static func copyDetails(_ target: ProcessActionTarget) {
-        let details = target.items.map { item in
+    /// One line per process: name, pid, path. Copied by
+    /// `MetricsModel.copyProcessDetails`, which gates it on the current
+    /// access and reads the current tree.
+    static func details(_ target: ProcessActionTarget) -> String {
+        target.items.map { item in
             let path = item.path.isEmpty ? "path unavailable" : item.path
             return "\(item.name)\tpid \(item.pid)\t\(path)"
         }.joined(separator: "\n")
-
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(details, forType: .string)
-    }
-
-    static func canReveal(_ target: ProcessActionTarget) -> Bool {
-        revealURL(for: target.root) != nil
-    }
-
-    @discardableResult
-    static func reveal(_ target: ProcessActionTarget) -> Bool {
-        guard let url = revealURL(for: target.root) else { return false }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-        return true
     }
 
     static func openActivityMonitor() {
         PowerAssertionActions.openActivityMonitor()
     }
-
-    private static func revealURL(for item: ProcessActionItem) -> URL? {
-        guard !item.path.isEmpty else { return nil }
-        let path: String
-        if let range = item.path.range(of: ".app/") {
-            path = String(item.path[..<range.lowerBound]) + ".app"
-        } else {
-            path = item.path
-        }
-        return URL(fileURLWithPath: path)
-    }
-
-
 }

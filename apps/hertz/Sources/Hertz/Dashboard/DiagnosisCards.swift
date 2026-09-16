@@ -9,14 +9,17 @@ import SwiftUI
 struct DiagnosisCard: View {
     let insights: [DiagnosticInsight]
     let records: [FlightRecord]
-    let report: String
+    /// Runs at click time and decides then what is copied (the report as
+    /// of now, or the refusal line); the view holds no report text.
+    let copyReport: () -> MetricsModel.Export
     @State private var copied = false
+    @State private var refused = false
 
     var body: some View {
         Card {
             CardHeader("Diagnosis") {
                 Button {
-                    copyToPasteboard(report)
+                    refused = copyReport() == .refused
                     copied = true
                     Task {
                         try? await Task.sleep(for: .seconds(1.5))
@@ -28,6 +31,9 @@ struct DiagnosisCard: View {
                 .buttonStyle(CardActionStyle())
                 .help("Copy a diagnostic snapshot")
                 .accessibilityLabel(copied ? "Copied" : "Copy diagnostic snapshot")
+            }
+            if copied, refused {
+                Note(MetricsModel.exportRefused)
             }
 
             ForEach(insights.prefix(3)) { insight in
@@ -111,6 +117,10 @@ private struct FlightRecordRow: View {
 /// never clears another process's assertion.
 struct SleepBlockersCard: View {
     let snapshot: PowerAssertionsSnapshot
+    /// Gated at click time against the current sample (`MetricsExports.swift`).
+    let copyReport: () -> MetricsModel.Export
+    let copyGroup: (pid_t) -> MetricsModel.Export
+    let revealGroup: (pid_t) -> MetricsModel.Export
     @State private var message: String?
 
     private var visibleGroups: [PowerAssertionGroup] {
@@ -137,8 +147,7 @@ struct SleepBlockersCard: View {
         Card {
             CardHeader("Sleep blockers") {
                 Button {
-                    PowerAssertionActions.copyReport(snapshot)
-                    message = "Copied the sleep blocker report"
+                    message = copyReport().note
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
@@ -168,7 +177,7 @@ struct SleepBlockersCard: View {
             }
 
             ForEach(visibleGroups) { group in
-                SleepBlockerRow(group: group) { message = $0 }
+                SleepBlockerRow(group: group, copyGroup: copyGroup, revealGroup: revealGroup) { message = $0 }
             }
 
             if snapshot.groups.count > visibleGroups.count {
@@ -183,6 +192,8 @@ struct SleepBlockersCard: View {
 
 private struct SleepBlockerRow: View {
     let group: PowerAssertionGroup
+    let copyGroup: (pid_t) -> MetricsModel.Export
+    let revealGroup: (pid_t) -> MetricsModel.Export
     let onMessage: (String) -> Void
 
     private var duration: String {
@@ -230,17 +241,16 @@ private struct SleepBlockerRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .contextMenu {
+            // The row's pid names the blocker; what is copied or revealed is
+            // looked up in the sample held at click time, under access then.
             Button {
-                PowerAssertionActions.copyReport(for: group)
-                onMessage("Copied \(group.displayName)")
+                onMessage(copyGroup(group.pid).note)
             } label: {
                 Label("Copy Blocker Details", systemImage: "doc.on.doc")
             }
-            if PowerAssertionActions.canReveal(group) {
+            if MetricsModel.revealURL(forPath: group.processPath) != nil {
                 Button {
-                    if PowerAssertionActions.reveal(group) {
-                        onMessage("Revealed \(group.displayName) in Finder")
-                    }
+                    onMessage(revealGroup(group.pid).note)
                 } label: {
                     Label("Reveal in Finder", systemImage: "finder")
                 }

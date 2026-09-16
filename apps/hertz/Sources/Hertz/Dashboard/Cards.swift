@@ -246,10 +246,11 @@ final class IconProvider {
     }
 }
 
-/// Copies text and reports it, for the Copy actions in card headers.
+/// Copies text that carries no reading (the upgrade command, Copy
+/// Diagnostics' gated text). Readings leave only through `MetricsModel`'s
+/// export actions.
 func copyToPasteboard(_ text: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
+    ExportSinks.clipboard(text)
 }
 
 let shortEventTime: DateFormatter = {

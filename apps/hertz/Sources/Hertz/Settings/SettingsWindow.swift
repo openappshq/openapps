@@ -203,7 +203,9 @@ private struct SettingsView: View {
                         .foregroundStyle(Brand.textSecondary)
                     Spacer()
                     Button(copied ? "Copied" : "Copy Diagnostics") {
-                        copyToPasteboard(Diagnostics.text(model: model, loginItem: loginItem))
+                        // Formatted inside the action: the readings part is
+                        // the model's gate as of this click.
+                        model.clipboard(Diagnostics.text(model: model, loginItem: loginItem))
                         copied = true
                     }
                 }

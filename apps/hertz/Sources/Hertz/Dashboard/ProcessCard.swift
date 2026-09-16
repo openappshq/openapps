@@ -8,6 +8,9 @@ import SwiftUI
 /// two-second-old snapshot is not a safe target.
 struct ProcessCard: View {
     let roots: [ProcessNode]
+    /// Gated at click time against the current tree (`MetricsExports.swift`).
+    let copyDetails: (pid_t) -> MetricsModel.Export
+    let revealProcess: (pid_t) -> MetricsModel.Export
     @State private var sortByMemory = false
     @State private var expanded: Set<pid_t> = []
     @State private var message: String?
@@ -69,7 +72,8 @@ struct ProcessCard: View {
             ForEach(rows, id: \.node.id) { row in
                 ProcessRow(node: row.node, depth: row.depth,
                            isExpanded: expanded.contains(row.node.id),
-                           sortByMemory: sortByMemory) {
+                           sortByMemory: sortByMemory,
+                           copyDetails: copyDetails, revealProcess: revealProcess) {
                     if expanded.contains(row.node.id) {
                         expanded.remove(row.node.id)
                     } else {
@@ -125,11 +129,12 @@ private struct ProcessRow: View {
     let depth: Int
     let isExpanded: Bool
     let sortByMemory: Bool
+    let copyDetails: (pid_t) -> MetricsModel.Export
+    let revealProcess: (pid_t) -> MetricsModel.Export
     let onToggle: () -> Void
     let onMessage: (String) -> Void
 
     private var hasChildren: Bool { !node.children.isEmpty }
-    private var target: ProcessActionTarget { node.processActionTarget }
 
     var body: some View {
         HStack(spacing: Brand.Space.s8) {
@@ -176,17 +181,16 @@ private struct ProcessRow: View {
         .accessibilityLabel("\(node.sample.name), CPU \(String(format: "%.1f", node.subtreeCPU)) percent, memory \(Format.bytes(node.subtreeMemory))")
         .accessibilityAddTraits(hasChildren ? [.isButton] : [])
         .contextMenu {
+            // The row's pid names the process; what is copied or revealed is
+            // looked up in the tree held at click time, under access then.
             Button {
-                ProcessActions.copyDetails(target)
-                onMessage(target.includesDescendants ? "Copied \(target.items.count) process rows" : "Copied \(target.title)")
+                onMessage(copyDetails(node.id).note)
             } label: {
-                Label(target.includesDescendants ? "Copy Tree PIDs and Paths" : "Copy PID and Path", systemImage: "doc.on.doc")
+                Label(hasChildren ? "Copy Tree PIDs and Paths" : "Copy PID and Path", systemImage: "doc.on.doc")
             }
-            if ProcessActions.canReveal(target) {
+            if MetricsModel.revealURL(forPath: node.sample.path) != nil {
                 Button {
-                    if ProcessActions.reveal(target) {
-                        onMessage("Revealed \(target.title) in Finder")
-                    }
+                    onMessage(revealProcess(node.id).note)
                 } label: {
                     Label("Reveal in Finder", systemImage: "finder")
                 }

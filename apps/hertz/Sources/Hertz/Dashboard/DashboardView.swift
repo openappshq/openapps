@@ -57,12 +57,17 @@ struct DashboardView: View {
     @ViewBuilder private var readings: some View {
         HealthCard(hardware: model.hardware, health: model.health, badge: license.badge(), openLicense: license.openLicense)
         if preferences.showsDiagnosis {
+            // The copy actions are the model's: they decide at click time
+            // (access then, the sample then), never from text captured here.
             DiagnosisCard(insights: model.diagnostics,
                           records: model.flightRecorder,
-                          report: model.diagnosticReport)
+                          copyReport: model.copyDiagnosticReport)
         }
         if preferences.showsSleepBlockers, model.powerAssertions.hasBlockers {
-            SleepBlockersCard(snapshot: model.powerAssertions)
+            SleepBlockersCard(snapshot: model.powerAssertions,
+                              copyReport: model.copySleepBlockersReport,
+                              copyGroup: model.copySleepBlockerDetails(pid:),
+                              revealGroup: model.revealSleepBlocker(pid:))
         }
         CPUCard(cpu: model.cpu, history: model.cpuHistory, sensors: model.sensors)
         MemoryCard(memory: model.memory, history: model.memoryHistory)
@@ -74,7 +79,9 @@ struct DashboardView: View {
             BatteryCard(battery: model.battery, devices: model.deviceBatteries)
         }
         if preferences.showsProcesses {
-            ProcessCard(roots: model.processTree)
+            ProcessCard(roots: model.processTree,
+                        copyDetails: model.copyProcessDetails(pid:),
+                        revealProcess: model.revealProcess(pid:))
         }
         if preferences.showsCleanupScout {
             CleanupCard(model: cleanup)

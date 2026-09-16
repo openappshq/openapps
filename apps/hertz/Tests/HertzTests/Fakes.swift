@@ -1,6 +1,6 @@
 import Foundation
 @testable import Hertz
-import HertzCore
+@testable import HertzCore
 import OpenAppsLicensing
 
 /// In-memory stand-ins for the package's protocols, the shape of the ones
@@ -132,6 +132,17 @@ final class SnapshotBox: @unchecked Sendable {
 final class CountingReaders {
     private(set) var reads = 0
     private(set) var hardwareReads = 0
+    /// A sleep blocker in every sample, for the export actions.
+    var blocker: PowerAssertionGroup? = CountingReaders.someBlocker
+
+    static let someBlocker = PowerAssertionGroup(
+        pid: 20, processName: "Keepr", processPath: "/Applications/Keepr.app/Contents/MacOS/Keepr",
+        assertions: [PowerAssertionRecord(
+            id: "20-1", pid: 20, processName: "Keepr", processPath: "/Applications/Keepr.app/Contents/MacOS/Keepr",
+            assertionName: "Keepr wake", assertionType: "PreventUserIdleSystemSleep", trueType: "", details: "", reason: "",
+            startDate: Date(timeIntervalSince1970: 1_800_000_000), level: 255
+        )]
+    )
 
     var readers: MetricsReaders {
         MetricsReaders(
@@ -144,7 +155,10 @@ final class CountingReaders {
             accessories: { [] },
             sensors: { SensorSnapshot() },
             processes: { [ProcSample(pid: 10, ppid: 1, name: "TestApp", path: "/Applications/TestApp.app", memory: 1 << 30, cpu: 12)] },
-            powerAssertions: { _ in PowerAssertionsSnapshot() }
+            powerAssertions: { _ in
+                let groups = self.blocker.map { [$0] } ?? []
+                return PowerAssertionsSnapshot(groups: groups, totalAssertions: groups.count)
+            }
         )
     }
 }

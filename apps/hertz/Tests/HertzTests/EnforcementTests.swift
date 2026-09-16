@@ -393,3 +393,112 @@ struct LicenseControllerEnforcementTests {
     }
 }
 #endif
+
+/// The dashboard's export actions as the views hold them — closures bound
+/// when the view was built, invoked later at a click — with the clipboard
+/// and the Finder replaced by sinks. What reaches a sink is decided at the
+/// click, from the access and the sample of that moment, never from what
+/// the view captured.
+@Suite("Dashboard export actions")
+@MainActor
+struct ExportActionTests {
+    final class Sinks {
+        var copied: [String] = []
+        var revealed: [URL] = []
+    }
+
+    let readers = CountingReaders()
+    let access = StateBox(.trial(daysLeft: 2))
+    let sinks = Sinks()
+
+    /// The model, and the actions exactly as `DashboardView` builds them.
+    func render() -> (MetricsModel, copyReport: () -> MetricsModel.Export, copyBlockers: () -> MetricsModel.Export,
+                      copyGroup: (pid_t) -> MetricsModel.Export, revealGroup: (pid_t) -> MetricsModel.Export,
+                      copyProcess: (pid_t) -> MetricsModel.Export, revealProcess: (pid_t) -> MetricsModel.Export) {
+        let model = MetricsModel(readers: { readers.readers })
+        model.access = { access.state.isFeatureEnabled }
+        model.clipboard = { sinks.copied.append($0) }
+        model.reveal = { sinks.revealed.append($0) }
+        model.tick()
+        return (model, model.copyDiagnosticReport, model.copySleepBlockersReport,
+                model.copySleepBlockerDetails(pid:), model.revealSleepBlocker(pid:),
+                model.copyProcessDetails(pid:), model.revealProcess(pid:))
+    }
+
+    @Test("While allowed, every action exports the current sample")
+    func allowedActionsExport() {
+        let (model, copyReport, copyBlockers, copyGroup, revealGroup, copyProcess, revealProcess) = render()
+        #expect(model.hasSample)
+        #expect(copyReport() == .done("Copied the diagnostic snapshot"))
+        #expect(sinks.copied.last?.contains("Test M1") == true)
+        #expect(copyBlockers() == .done("Copied the sleep blocker report"))
+        #expect(sinks.copied.last?.contains("Keepr") == true)
+        #expect(copyGroup(20) == .done("Copied Keepr"))
+        #expect(revealGroup(20) == .done("Revealed Keepr in Finder"))
+        #expect(sinks.revealed.last?.path == "/Applications/Keepr.app")
+        #expect(copyProcess(10) == .done("Copied TestApp"))
+        #expect(sinks.copied.last == "TestApp\tpid 10\t/Applications/TestApp.app")
+        #expect(revealProcess(10) == .done("Revealed TestApp in Finder"))
+        #expect(sinks.revealed.last?.path == "/Applications/TestApp.app")
+    }
+
+    @Test("Rendered while allowed, clicked after the lapse with no tick and no rerender: nothing but the refusal reaches the sinks")
+    func lapseBetweenRenderAndClick() {
+        let (model, copyReport, copyBlockers, copyGroup, revealGroup, copyProcess, revealProcess) = render()
+        #expect(model.hasSample) // the old sample is still held: no tick has run
+        access.state = .trialEnded
+        let copiedBefore = sinks.copied.count
+        #expect(copyReport() == .refused)
+        #expect(copyBlockers() == .refused)
+        #expect(copyGroup(20) == .refused)
+        #expect(revealGroup(20) == .refused)
+        #expect(copyProcess(10) == .refused)
+        #expect(revealProcess(10) == .refused)
+        #expect(sinks.copied.count == copiedBefore + 4)
+        #expect(sinks.copied.suffix(4).allSatisfy { $0 == MetricsModel.exportRefused })
+        #expect(sinks.revealed.isEmpty)
+        #expect(model.hasSample, "the actions refuse on access alone; the tick clears the sample")
+        // The card's note names the refusal.
+        #expect(MetricsModel.Export.refused.note == MetricsModel.exportRefused)
+    }
+
+    @Test("A row whose process left the sample copies and reveals nothing, even while allowed")
+    func goneRowsExportNothing() {
+        let (model, _, _, copyGroup, revealGroup, copyProcess, revealProcess) = render()
+        readers.blocker = nil
+        model.tick() // the next sample has no blocker; the old row's pid stays in the view
+        let copiedBefore = sinks.copied.count
+        #expect(copyGroup(20) == .gone)
+        #expect(revealGroup(20) == .gone)
+        #expect(copyProcess(99) == .gone)
+        #expect(revealProcess(99) == .gone)
+        #expect(sinks.copied.count == copiedBefore)
+        #expect(sinks.revealed.isEmpty)
+    }
+
+    @Test("Copy Diagnostics after the lapse sends no reading to the clipboard")
+    func settingsCopyAfterLapse() {
+        let (model, _, _, _, _, _, _) = render()
+        access.state = .revoked
+        model.clipboard(Diagnostics.text(model: model, loginStatus: "on"))
+        let text = sinks.copied.last ?? ""
+        #expect(text.contains("Readings: off (license)"))
+        #expect(text.contains(MetricsModel.readingsUnavailable))
+        #expect(!text.contains("Test M1") && !text.contains("TestApp") && !text.contains("Keepr"))
+    }
+
+    @Test("Through the real manager: a report action captured under the trial refuses once the trial has ended, with no tick")
+    func realDeadlineBetweenRenderAndClick() async {
+        let harness = EnforcementTests()
+        harness.trialStore.record = harness.trialRecord(elapsed: 3 * FakeClock.day - 60)
+        let (_, model) = await harness.attach()
+        model.clipboard = { sinks.copied.append($0) }
+        model.tick()
+        let copyReport = model.copyDiagnosticReport // the view's closure, built while allowed
+        #expect(copyReport() == .done("Copied the diagnostic snapshot"))
+        harness.clock.advance(120) // no manager tick, no model tick, no rerender
+        #expect(copyReport() == .refused)
+        #expect(sinks.copied.last == MetricsModel.exportRefused)
+        #expect(!sinks.copied.last!.contains("Test M1"))
+    }
+}

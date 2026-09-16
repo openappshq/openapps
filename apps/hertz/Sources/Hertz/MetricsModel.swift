@@ -98,6 +98,10 @@ final class MetricsModel {
     @ObservationIgnored var access: () -> Bool = { true }
     /// Reads made, for tests.
     @ObservationIgnored private(set) var readCount = 0
+    /// Where the export actions (`MetricsExports.swift`) send text and
+    /// reveal files; the real pasteboard and Finder unless a test says so.
+    @ObservationIgnored var clipboard: (String) -> Void = { ExportSinks.clipboard($0) }
+    @ObservationIgnored var reveal: (URL) -> Void = { ExportSinks.reveal($0) }
 
     init(readers: @escaping () -> MetricsReaders = { .live }) {
         makeReaders = readers
@@ -111,7 +115,8 @@ final class MetricsModel {
     /// running.
     func start() {
         tick()
-        guard timer == nil else { return }
+        // No timer while access is denied: the app starts again on a grant.
+        guard timer == nil, access() else { return }
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             // The timer fires on the main run loop.
             MainActor.assumeIsolated { self?.tick() }
@@ -202,9 +207,10 @@ final class MetricsModel {
     /// when there are none: the export paths use it instead of a report.
     static let readingsUnavailable = "Readings: not collected (the license doesn’t allow them right now)."
 
-    /// The copyable snapshot: the report plus the recent events — only
-    /// while access allows it now and a sample is held; otherwise one line
-    /// saying why there is none.
+    /// The report plus the recent events — only while access allows it now
+    /// and a sample is held; otherwise one line saying why there is none.
+    /// Copy Diagnostics reads it inside its action; the dashboard's Copy
+    /// snapshot goes through `copyDiagnosticReport()` at click time.
     var diagnosticReport: String {
         guard access(), hasSample else { return Self.readingsUnavailable }
         var report = HertzCore.diagnosticReport(diagnosticContext)

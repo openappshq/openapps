@@ -173,7 +173,8 @@ command and must report `ALL CHECKS PASSED`.
 | `Licensing/LicenseController.swift` | official builds: owns the package's `LicenseManager`; timers, wake, network, the snapshot → state on the main actor |
 | `Licensing/LicensePill.swift`, `LicenseCard.swift`, `LicenseSection.swift` | the trial pill (dashboard header, settings title bar, the guide), the dashboard's restricted card, Settings → License |
 | `Onboarding/OnboardingWindow.swift`, `OnboardingView.swift` | the setup guide shown once after install: welcome, nothing to grant, starts with your Mac, tips |
-| `ProcessActions.swift`, `PowerAssertionActions.swift` | copy / reveal / Activity Monitor actions; nothing that signals a process |
+| `MetricsExports.swift` | every copy and reveal of a reading, as actions on the model: gated on access at the click and read from the current sample, with injectable clipboard and Finder sinks |
+| `ProcessActions.swift`, `PowerAssertionActions.swift` | the copied text's format and Activity Monitor; nothing that signals a process |
 
 ### Dropdown layout
 
