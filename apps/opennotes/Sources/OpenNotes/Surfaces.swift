@@ -29,12 +29,17 @@ struct LinkButtonStyle: ButtonStyle {
 /// Small icon-only action in a note's footer or a list row: quiet until
 /// hovered, with a help tag carrying the name.
 struct FooterActionStyle: ButtonStyle {
+    /// A label wider than an icon (the colour and font menus' swatch and
+    /// chevron) grows past the square.
+    var wide = false
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .semibold))
-            .frame(width: 26, height: 26)
+            .fixedSize()
+            .padding(.horizontal, wide ? 5 : 0)
+            .frame(minWidth: 26, minHeight: 26, maxHeight: 26)
             .background(
                 RoundedRectangle(cornerRadius: Brand.Radius.small + 2, style: .continuous)
                     .fill(configuration.isPressed ? Color.black.opacity(0.12) : Color.clear)

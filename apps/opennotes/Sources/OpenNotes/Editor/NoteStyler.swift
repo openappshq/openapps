@@ -4,21 +4,30 @@ import OpenNotesCore
 /// Fonts and colors for the styler's runs, and the one place attributes
 /// are applied. Attribute-only: the string is never touched, so no edit
 /// path of `NSTextView` is fought (design/products/opennotes.md, "Notes").
+/// The look comes from `NoteAppearance`: the note's font at its size, and
+/// the ink the paper takes in the appearance.
 struct NoteStyler {
-    var face: NoteFace
-    var size: CGFloat = 14
+    var look: NoteAppearance
     var ink: NSColor
     var secondary: NSColor
     var link: NSColor
 
-    init(face: NoteFace, size: CGFloat = 14, appearance: NSAppearance? = nil) {
-        self.face = face
-        self.size = size
+    init(look: NoteAppearance, appearance: NSAppearance? = nil) {
+        self.look = look
         let dark = (appearance ?? NSApp?.effectiveAppearance)?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        ink = NSColor(hex: dark ? 0xF8F8F8 : 0x141414)
-        secondary = NSColor(hex: dark ? 0xBABABA : 0x484848)
-        link = NSColor(hex: dark ? 0xFFC0AB : 0xA53A20)
+        ink = look.inkColor(dark: dark)
+        secondary = look.inkSecondaryColor(dark: dark)
+        // The accent on the paper, in the ink's polarity.
+        let paperInk = look.color.ink(dark: dark) == NotePaper.darkInk
+        link = NSColor(hex: paperInk ? 0xFFC0AB : 0xA53A20)
     }
+
+    /// A face on the default paper, for tests and the harness.
+    init(face: NoteFace, size: CGFloat = CGFloat(NoteTypeface.defaultSize), appearance: NSAppearance? = nil) {
+        self.init(look: NoteAppearance(font: NoteAppearance.Font(.face(face)), size: size), appearance: appearance)
+    }
+
+    var size: CGFloat { look.size }
 
     /// The attributes for plain text: what typing continues in.
     var baseAttributes: [NSAttributedString.Key: Any] {
@@ -40,19 +49,20 @@ struct NoteStyler {
         if style.isBold { weight = max(weight, 600) }
         var font = font(weight: weight, size: fontSize)
         if style.isItalic {
-            // The bundled faces have no italic: a slant stands in.
-            let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+            // A family with no italic member (the bundled faces among
+            // them) gets a slant instead.
+            let italic = look.nsFont(size: fontSize, weight: weight, italic: true)
             if italic.fontDescriptor.symbolicTraits.contains(.italic) { font = italic } else { attributes[.obliqueness] = 0.18 }
         }
         if style.isCode {
-            font = Brand.monoFont(size: fontSize - 1, medium: style.isBold)
+            font = monoFont(size: fontSize - 1, medium: style.isBold)
             attributes[.backgroundColor] = ink.withAlphaComponent(0.08)
         }
         attributes[.font] = font
         if style.isMarker {
             attributes[.foregroundColor] = secondary
             if style.checkbox != nil {
-                attributes[.font] = Brand.monoFont(size: fontSize, medium: true)
+                attributes[.font] = monoFont(size: fontSize, medium: true)
                 attributes[.foregroundColor] = style.checkbox == true ? link : secondary
                 attributes[.cursor] = NSCursor.pointingHand
             }
@@ -84,6 +94,13 @@ struct NoteStyler {
     }
 
     private func font(weight: CGFloat, size: CGFloat) -> NSFont {
-        Brand.noteFont(face, size: size, weight: weight)
+        look.nsFont(size: size, weight: weight)
+    }
+
+    /// Code spans and checkboxes: the note's own font when it is
+    /// monospaced, so they sit on its grid; IBM Plex Mono otherwise.
+    private func monoFont(size: CGFloat, medium: Bool) -> NSFont {
+        if look.isMonospaced { return look.nsFont(size: size, weight: medium ? 600 : 400) }
+        return Brand.monoFont(size: size, medium: medium)
     }
 }

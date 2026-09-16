@@ -72,12 +72,14 @@ enum Brand {
     static let dangerSolid = dynamic(light: 0xAC243C, dark: 0xFFACB8)
     static let dangerSubtle = dynamic(light: 0xFFF0F2, dark: 0x4B2028)
 
-    /// A note's face for the appearance (apps/opennotes/design/tokens.json, `noteFaces`).
+    /// A note's paper for the appearance (apps/opennotes/design/tokens.json,
+    /// `noteFaces`): the open note, its tab and All Notes' colour bar.
     static func face(_ color: NoteColor) -> Color {
         dynamic(light: color.lightFace, dark: color.darkFace)
     }
 
-    /// The tab and the pill dash: the light face in both appearances.
+    /// The pill's dash and the colour swatches: the light face in both
+    /// appearances (`NoteAppearance.swatch`).
     static func tab(_ color: NoteColor) -> Color {
         Color(nsColor: NSColor(hex: color.lightFace))
     }
@@ -151,17 +153,50 @@ enum Brand {
 }
 
 extension Brand {
-    /// The note faces as `NSFont`s for the editor: Instrument Sans and IBM
-    /// Plex Mono, the system fonts when the bundled ones are missing.
-    static func noteFont(_ face: NoteFace, size: CGFloat, weight: CGFloat = 400) -> NSFont {
-        switch face {
+    /// A note's font for the editor: Instrument Sans and IBM Plex Mono for
+    /// the bundled faces (the system fonts when they are missing), the
+    /// system serif for Serif, and any installed family by name through
+    /// the font manager, which picks the member for the weight. Italic is
+    /// the family's own italic member; a face without one is left upright
+    /// here and slanted by the styler.
+    static func noteFont(_ font: NoteAppearance.Font, size: CGFloat, weight: CGFloat = 400, italic: Bool = false) -> NSFont {
+        let base: NSFont
+        switch font {
         case .sans:
             let fallbackWeight: NSFont.Weight = weight >= 700 ? .bold : weight >= 600 ? .semibold : .regular
-            return variableFont(family: "Instrument Sans", size: size, weight: weight) ?? .systemFont(ofSize: size, weight: fallbackWeight)
+            base = variableFont(family: "Instrument Sans", size: size, weight: weight) ?? .systemFont(ofSize: size, weight: fallbackWeight)
+        case .serif:
+            let systemWeight: NSFont.Weight = weight >= 700 ? .bold : weight >= 600 ? .semibold : .regular
+            let system = NSFont.systemFont(ofSize: size, weight: systemWeight)
+            base = system.fontDescriptor.withDesign(.serif).flatMap { NSFont(descriptor: $0, size: size) }
+                ?? NSFont(name: "Georgia", size: size) ?? system
         case .mono:
             let name = weight >= 500 ? "IBMPlexMono-Medium" : "IBMPlexMono-Regular"
-            return NSFont(name: name, size: size) ?? .monospacedSystemFont(ofSize: size, weight: weight >= 500 ? .medium : .regular)
+            base = NSFont(name: name, size: size) ?? .monospacedSystemFont(ofSize: size, weight: weight >= 500 ? .medium : .regular)
+        case .family(let family):
+            base = familyFont(family, size: size, weight: weight) ?? noteFont(.sans, size: size, weight: weight)
         }
+        guard italic else { return base }
+        return NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
+    }
+
+    /// The member of an installed family nearest the weight (the font
+    /// manager's 0–15 scale: 5 regular, 9 bold); nil when the family is
+    /// not installed.
+    static func familyFont(_ family: String, size: CGFloat, weight: CGFloat) -> NSFont? {
+        let managerWeight = weight >= 700 ? 9 : weight >= 600 ? 8 : weight >= 500 ? 6 : 5
+        let traits: NSFontTraitMask = weight >= 600 ? .boldFontMask : []
+        if let font = NSFontManager.shared.font(withFamily: family, traits: traits, weight: managerWeight, size: size), font.familyName == family {
+            return font
+        }
+        guard let font = NSFont(descriptor: NSFontDescriptor(fontAttributes: [.family: family]), size: size), font.familyName == family else { return nil }
+        return weight >= 600 ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) : font
+    }
+
+    /// A family at a size for lists and buttons: the family's regular
+    /// member, or nil when it is not installed.
+    static func familyFont(_ family: String, size: CGFloat) -> Font? {
+        familyFont(family, size: size, weight: 400).map { Font($0) }
     }
 
     static func monoFont(size: CGFloat, medium: Bool = false) -> NSFont {
@@ -171,7 +206,7 @@ extension Brand {
 }
 
 extension NSColor {
-    convenience init(hex: UInt32) {
+    nonisolated convenience init(hex: UInt32) {
         self.init(
             srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
             green: CGFloat((hex >> 8) & 0xFF) / 255,

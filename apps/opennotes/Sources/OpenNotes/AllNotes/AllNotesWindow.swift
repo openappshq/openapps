@@ -198,7 +198,7 @@ struct AllNotesView: View {
 
     private func row(_ note: Note) -> some View {
         HStack(alignment: .top, spacing: Brand.Space.s8) {
-            RoundedRectangle(cornerRadius: 2).fill(Brand.tab(note.color)).frame(width: 4, height: 30)
+            RoundedRectangle(cornerRadius: 2).fill(model.appearance(of: note).tab).frame(width: 4, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     if note.pinned { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(Brand.textSecondary) }
@@ -243,21 +243,22 @@ struct AllNotesView: View {
                     }
                     .padding(Brand.Space.s12)
                     Divider()
+                    let look = model.appearance(of: note)
                     Group {
                         if previewRendering {
-                            PreviewText(text: note.text, face: note.face, dark: colorScheme == .dark)
+                            PreviewText(text: note.text, look: look, dark: colorScheme == .dark)
                                 .padding(Brand.Space.s16)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         } else {
                             ScrollView {
-                                PreviewText(text: note.text, face: note.face, dark: colorScheme == .dark)
+                                PreviewText(text: note.text, look: look, dark: colorScheme == .dark)
                                     .padding(Brand.Space.s16)
                             }
                         }
                     }
-                    .background(Brand.face(note.color))
+                    .background(look.paper)
                     Divider()
-                    Text("\(note.id.fileName) · \(note.color.title) · \(note.face.title) · created \(note.created.formatted(date: .abbreviated, time: .shortened))" + (note.bodyIsLoaded ? "" : " · can’t read the file right now; shown in part"))
+                    Text("\(note.id.fileName) · \(note.color.title)\(note.color.isCustom ? " \(note.color.rawValue)" : "") · \(look.fontTitle) \(Int(look.size)) pt · created \(note.created.formatted(date: .abbreviated, time: .shortened))" + (note.bodyIsLoaded ? "" : " · can’t read the file right now; shown in part") + (look.missingFamily.map { " · “\($0)” isn’t installed here" } ?? ""))
                         .font(Brand.mono(10))
                         .foregroundStyle(Brand.textSecondary)
                         .lineLimit(1)

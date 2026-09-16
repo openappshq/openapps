@@ -23,6 +23,9 @@ final class DeckHost {
             MainActor.assumeIsolated { self?.rebuild() }
         })
         observeChanges({ [preferences] in _ = preferences.side; _ = preferences.display }, onChange: { [weak self] in self?.settingsChanged() })
+        // The default font or size changed: every note without its own
+        // re-renders in it.
+        observeChanges({ [preferences] in _ = preferences.face; _ = preferences.font; _ = preferences.size }, onChange: { [weak self] in self?.notesChanged() })
         observeChanges({ [model] in _ = model.revision }, onChange: { [weak self] in self?.notesChanged() })
         model.onRedirect = { [weak self] from, to in
             guard let self else { return }

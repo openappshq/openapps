@@ -17,11 +17,11 @@ Open source · Mac native · No permissions · No telemetry · 3-day trial, no s
 A thin pill sits on the right edge of the screen (or the left). Push the pointer against it and the deck fans out: one colored tab per note. Click a tab and the note slides out to write in; press Escape and it slides back. The deck stays above every window, full-screen apps and Stage Manager stages included, on every Space.
 
 - **Capture from anywhere** — ⌥⌘N (rebindable) makes a new note and puts the caret in it, whatever app is in front. Escape saves it. An empty note is not kept.
-- **Files, not a database** — each note is one `.md` file in `~/Documents/OpenNotes` (Settings: any folder — iCloud Drive, an Obsidian vault). A short front matter block keeps the color, the face, pinned, archived and the order. Edit a file in another app and the deck picks it up within a second; a file that changed outside is never overwritten — it keeps that version, and your unsaved text continues in a conflict copy beside it. OpenNotes never deletes a file.
-- **Plain text that stays plain** — paste strips rich text; smart quotes and dashes are off. Markdown-lite is styled live without changing a character: `#` headings, `**bold**`, `_italic_`, `` `code` ``, lists, `- [ ]` checklists you tick with a click, URLs. Two faces, Sans and Mono; six colors.
+- **Files, not a database** — each note is one `.md` file in `~/Documents/OpenNotes` (Settings: any folder — iCloud Drive, an Obsidian vault). A short front matter block keeps the color (a preset's name or `"#RRGGBB"`), the font (`face: sans|serif|mono` or `font: "Family"` and `size:`), pinned, archived and the order. Edit a file in another app and the deck picks it up within a second; a file that changed outside is never overwritten — it keeps that version, and your unsaved text continues in a conflict copy beside it. OpenNotes never deletes a file.
+- **Plain text that stays plain** — paste strips rich text; smart quotes and dashes are off. Markdown-lite is styled live without changing a character: `#` headings, `**bold**`, `_italic_`, `` `code` ``, lists, `- [ ]` checklists you tick with a click, URLs. Three faces — Sans, Serif, Mono — or any font installed on the Mac, at 10–24 pt; thirteen paper colors and a custom one from the system picker, each tuned for light and dark.
 - **Archive, not delete** — ⌘⇧A moves a note out of the deck with a 10-second Undo; it stays in the folder, in search and in All Notes → Archived. Auto-archive can retire untouched notes after 7, 30 or 90 days.
 - **All Notes** (⌥⌘L) — search titles and text, Active / Archived, drag to reorder, Open, Pin, Archive, Export as `.md` or `.txt`, Reveal in Finder.
-- **Keyboard** — ⌘W saves and opens the next note, ⌘⇧P pins, ⌘⇧M switches the face, ⌘, opens Settings.
+- **Keyboard** — ⌘W saves and opens the next note, ⌘⇧P pins, ⌘⇧M cycles the face, ⌘, opens Settings.
 
 OpenNotes needs **no permissions**: the hotkey is a Carbon system hotkey, the deck is a window level, the notes are a folder you choose. Nothing leaves the Mac; a source build makes no network calls at all. The official build opens a short setup guide once (welcome, nothing to grant, your notes are files, starts with your Mac, tips; Settings → About → Show setup guide reopens it where you left off), turns "Open at login" and "Check for updates automatically" on once on a fresh install, and installs an update only when you say so ([RELEASES.md](../../RELEASES.md)).
 
@@ -59,7 +59,7 @@ scripts/bundle.sh      # release build → build/OpenNotes.app, ad-hoc signed
 A build from source has licensing compiled out: no License section, no trial, no license network calls, every note editable; Settings → Updates says the build has no updater. The official flavour compiles both in (`OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1`, with `scripts/generate-licensing-config.sh` writing the gitignored `Sources/OpenNotes/Licensing/LicensingConfig.swift` from `OPENAPPS_DODO_ENV` and `OPENAPPS_DODO_PAID_PRODUCT_ID`; a debug build shortens the trial with `OPENNOTES_DEBUG_TRIAL_DAY_SECONDS=60`). The debug binary renders every surface to PNGs without opening a window, touching your notes folder or registering anything:
 
 ```sh
-.build/debug/OpenNotes --preview /tmp/opennotes-preview   # deck states (read-only too), All Notes, the license card, the setup guide, Settings; light and dark
+.build/debug/OpenNotes --preview /tmp/opennotes-preview   # deck states (read-only too), All Notes, the license card, the setup guide, Settings, the paper sheet, a custom colour, three fonts and the two menus; light and dark
 ```
 
 Regenerate the app icon and menu-bar image from the SVG masters in `design/assets` with `scripts/make-icons.sh`.
@@ -68,12 +68,12 @@ Regenerate the app icon and menu-bar image from the SVG masters in `design/asset
 
 | Layer | Where | Notes |
 | --- | --- | --- |
-| Note model and file format | `OpenNotesCore/Note.swift` | `Note`, `NoteColor`, `NoteFace`, the front matter parser and serializer, file names (slug of the title, decided when a new note first closes, never changed) |
+| Note model and file format | `OpenNotesCore/Note.swift` | `Note`, `NoteColor` and `NotePaper` (presets, the custom colour's derived dark paper and ink, the random pick for new notes), `NoteFace` and `NoteTypeface`, the front matter parser and serializer, file names (slug of the title, decided when a new note first closes, never changed) |
 | Markdown-lite | `OpenNotesCore/MarkdownLite.swift` | Styled runs over UTF-16 ranges that always tile the text; checkbox toggles as three-character replacements; plain-text export |
 | Store and watcher | `OpenNotesCore/NoteStore.swift`, `FolderWatcher.swift` | Reads the folder, writes after a 250 ms debounce, reconciles outside edits by size, date and hash, conflict copies, read-only; FSEvents on the folder |
 | Rules | `OpenNotesCore/DeckStateMachine.swift`, `Export.swift` | The deck's states and effects (pure), the deck geometry for both edges, search, export, auto-archive, the 10-second undo |
 | Deck | `OpenNotes/Deck/` | One non-activating `NSPanel` per hosted display; the state machine drives it; `DeckView` draws the pill, the fan, the note and the toast from `DeckLayout` |
-| Editor | `OpenNotes/Editor/` | `NoteTextView` (plain paste, no substitutions, checkbox clicks) and `NoteStyler` (attributes only, never characters) |
+| Editor | `OpenNotes/Editor/` | `NoteTextView` (plain paste, no substitutions, checkbox clicks), `NoteStyler` (attributes only, never characters), `NoteAppearance` (one resolution of a note's paper, ink and font from the file and Settings; `FontCatalog` lists the installed families) and the colour and font menus with the system colour panel |
 | All Notes, Settings | `OpenNotes/AllNotes/`, `OpenNotes/Settings/` | The window, the form; the hotkey recorder; the login item; the license card and the pill; Settings → License and Updates |
 | Licensing | `OpenNotes/Licensing/` | `LicenseStatus` (what every view and the store read: the projected entitlement, asked afresh on every read, never stored), the controller over `packages/openapps-licensing` in official builds, the pill, Settings → License, the `opennotes://activate` link |
 | Updater, guide | `OpenNotes/Updates/`, `OpenNotes/Onboarding/` | The shared updater (`packages/openapps-updater`) in official builds and its Settings section; the setup guide |

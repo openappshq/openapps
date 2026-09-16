@@ -55,6 +55,8 @@ final class SettingsWindowController: NSObject {
             self.window = window
         }
         loginItem.refresh()
+        // The font list is read again each time Settings opens.
+        FontCatalog.shared.refresh()
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
     }
@@ -78,6 +80,8 @@ struct SettingsView: View {
     var navigation = SettingsNavigation()
     var showGuide: () -> Void = {}
     @State private var copied = false
+    @State private var showsFonts = false
+    @State private var showsColors = false
     @Environment(\.previewRendering) private var previewRendering
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -195,22 +199,65 @@ struct SettingsView: View {
 
     private var notes: some View {
         Section {
-            Picker(selection: $preferences.face) {
-                ForEach(NoteFace.allCases, id: \.self) { face in
-                    Text(face.title).tag(face)
-                }
-            } label: {
+            HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Face for new notes").font(Brand.body(14))
-                    note("Sans is Instrument Sans; Mono is IBM Plex Mono. Each note can switch its own (⌘⇧M).")
+                    Text("Default font").font(Brand.body(14))
+                    note("For new notes and any note without a font of its own. Sans is Instrument Sans, Mono is IBM Plex Mono, Serif the system serif; or any font installed on this Mac. Each note can choose its own (⌘⇧M switches the face).")
+                }
+                Spacer()
+                Button {
+                    FontCatalog.shared.refresh()
+                    showsFonts.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(preferences.typeface.title)
+                            .font(Font(Brand.noteFont(NoteAppearance.Font(preferences.typeface), size: 13)))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+                    }
+                    .frame(maxWidth: 180, alignment: .leading)
+                }
+                .accessibilityLabel("Default font: \(preferences.typeface.title)")
+                .popover(isPresented: $showsFonts, arrowEdge: .bottom) {
+                    FontChooser(selection: preferences.typeface, size: preferences.size, onPick: { typeface in
+                        if let typeface { preferences.typeface = typeface }
+                    }, onSize: { size in
+                        if let size { preferences.size = size }
+                    })
                 }
             }
-            Picker(selection: $preferences.color) {
-                ForEach(NoteColor.allCases, id: \.self) { color in
-                    Text(color.title).tag(color)
+            HStack {
+                Text("Size").font(Brand.body(14))
+                Spacer()
+                SizeStepper(size: preferences.size, onSize: { preferences.size = $0 })
+            }
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("New notes").font(Brand.body(14))
+                    note(newNoteColorNote)
                 }
-            } label: {
-                Text("Color for new notes").font(Brand.body(14))
+                Spacer()
+                Button { showsColors.toggle() } label: {
+                    HStack(spacing: 6) {
+                        newNoteSwatch
+                        Text(preferences.newNoteColor.title).font(Brand.body(13)).lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+                    }
+                }
+                .accessibilityLabel("New notes: \(preferences.newNoteColor.title)")
+                .popover(isPresented: $showsColors, arrowEdge: .bottom) {
+                    ColorChooser(
+                        selected: preferences.newNoteColor.fixedColor, offersRandom: true, randomSelected: preferences.newNoteColor == .random,
+                        onPick: { preferences.newNoteColor = .fixed($0) },
+                        onRandom: { preferences.newNoteColor = .random },
+                        onCustom: {
+                            showsColors = false
+                            NoteColorPanel.shared.present(for: "settings", current: preferences.newNoteColor.fixedColor ?? .coral) { color in
+                                preferences.newNoteColor = .fixed(color)
+                            }
+                        }
+                    )
+                }
             }
             Picker(selection: $preferences.autoArchiveDays) {
                 ForEach(AutoArchive.choices, id: \.self) { days in
@@ -224,6 +271,28 @@ struct SettingsView: View {
             }
         } header: {
             MonoLabel("Notes")
+        }
+    }
+
+    private var newNoteColorNote: String {
+        switch preferences.newNoteColor {
+        case .random: "A colour that differs from the note before it and its neighbours in the deck. Each note can change its own."
+        case .fixed(let color): "Every new note is \(color.title.lowercased())\(color.isCustom ? " (\(color.rawValue))" : ""). Each note can change its own."
+        }
+    }
+
+    @ViewBuilder private var newNoteSwatch: some View {
+        switch preferences.newNoteColor {
+        case .random:
+            Circle()
+                .fill(AngularGradient(colors: NoteColor.allCases.prefix(8).map { Color(nsColor: NSColor(hex: $0.lightFace)) } + [Color(nsColor: NSColor(hex: NoteColor.coral.lightFace))], center: .center))
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.2), lineWidth: 1))
+                .frame(width: 14, height: 14)
+        case .fixed(let color):
+            Circle()
+                .fill(Color(nsColor: NSColor(hex: color.lightFace)))
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.2), lineWidth: 1))
+                .frame(width: 14, height: 14)
         }
     }
 

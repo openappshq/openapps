@@ -100,7 +100,7 @@ nonisolated public struct FreshInstallDefault {
             // These defaults' own flags: either decided means an earlier launch resolved it.
             loginItemApplied, updateChecksApplied,
             // Preferences (the app's Preferences.swift): the deck, capture and note defaults.
-            "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.color", "notes.autoArchiveDays",
+            "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.font", "notes.size", "notes.color", "notes.autoArchiveDays",
             // OpenAppsUpdater (Updater.Key): both toggles and the last check.
             "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
         ]
