@@ -2,18 +2,18 @@
 
 The official build is a universal (Apple silicon + Intel) `Hertz.app` with
 licensing compiled in ([LICENSING.md](../../LICENSING.md): the 3-day trial,
-Dodo live mode, the live product ID), signed with the stable OpenApps HQ
-Release certificate and zipped, as [RELEASES.md](../../RELEASES.md)
-specifies. It is installed and updated with Homebrew; Hertz has no in-app
-updater (see "Updates" below).
+Dodo live mode, the live product ID) and the in-app updater compiled in,
+signed with the stable OpenApps HQ Release certificate and zipped, as
+[RELEASES.md](../../RELEASES.md) specifies. It is installed with Homebrew
+and updates itself from a signed feed (see "Updates" below).
 [`.github/workflows/hertz.yml`](../../.github/workflows/hertz.yml) builds it
-on GitHub's `macos-26` runner, publishes it as a GitHub Release, verifies the
-public download and bumps the Homebrew cask. Nothing about a release is
-manual except pushing the tag.
+on GitHub's `macos-26` runner, publishes it as a GitHub Release, commits the
+update feed, verifies both live and bumps the Homebrew cask. Nothing about a
+release is manual except pushing the tag.
 
 ```sh
 brew install --cask openappshq/tap/hertz   # how users install it
-brew upgrade --cask hertz                  # how they update
+brew upgrade --cask hertz                  # how they can update too
 ```
 
 The scripts the workflow runs are the ones you can run locally:
@@ -21,10 +21,16 @@ The scripts the workflow runs are the ones you can run locally:
 | Script | Does |
 | --- | --- |
 | `scripts/generate-licensing-config.sh <out.swift>` | Writes the licensing configuration an official build compiles in (Dodo host and environment, paid product ID, trial registry URL, buy URL) from `OPENAPPS_*` variables; refuses placeholders for a live build. `bundle.sh` runs it; the file is gitignored and never committed |
-| `scripts/bundle.sh` | `swift build -c release` (with `OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1` for the official flavour), assembles and signs `build/Hertz.app` (hardened runtime, no sandbox, `scripts/Hertz.entitlements`, the `hertz://` URL scheme) |
-| `scripts/make-zip.sh` | `ditto -c -k --keepParent` into `dist/Hertz-<version>.zip`, prints its SHA-256 |
-| `scripts/verify-release.sh [--release] <zip>` | Unpacks the zip and runs the checks a user's Mac runs; `--release` requires the pinned designated requirement, the release certificate, licensing compiled in against Dodo's live host with the trial registry, and no placeholder product ID or test host in the binary |
+| `scripts/bundle.sh` | `swift build -c release` (with `OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1` for the official flavour), assembles and signs `build/Hertz.app` (hardened runtime, no sandbox, `scripts/Hertz.entitlements`, the `hertz://` URL scheme); with `OPENAPPS_OFFICIAL=1` compiles the shared updater in and pins the feed and update key |
+| `scripts/make-zip.sh` | `ditto -c -k --keepParent` into `dist/Hertz-<version>.zip`, writes its `.sha256` |
+| `scripts/verify-release.sh [--release] <zip>` | Unpacks the zip and runs the checks a user's Mac and the updater run; `--release` requires the pinned designated requirement, the release certificate, licensing compiled in against Dodo's live host with the trial registry, no placeholder product ID or test host in the binary, and the committed update key pinned |
+| `scripts/make-appcast.sh <zip>` | Signs the zip with the update key and writes the signed `dist/appcast.xml` |
+| `scripts/sign-update.sh <key> [--feed] <file>` | Ed25519 signing, byte-compatible with Sparkle's `sign_update` |
+| `scripts/verify-appcast.sh <appcast> [zip]` | Verifies a feed, and the zip it announces, with the public key only |
+| `scripts/verify-live.sh <version> <sha256>` | Downloads the public zip and the live feed and checks both |
 | `scripts/publish-release.sh [--dry-run]` | Creates the GitHub Release for a tag, only once the tag provably names the built commit |
+| `scripts/create-update-key.sh <dir>` | One-time: creates the Sparkle EdDSA update key |
+| `scripts/update-e2e.sh` | The local end-to-end update test, no secrets, no network beyond 127.0.0.1 |
 | `scripts/make-icons.sh` | Renders `design/assets/*.svg` into the committed `AppIcon.icns` and menu-bar images |
 
 Shared with every app (repository root):
@@ -37,48 +43,51 @@ Shared with every app (repository root):
 | `scripts/release/verify-designated-requirement.sh <app> <pinned file>` | Fails unless an app has exactly the pinned requirement |
 | `scripts/release/release-tag-ruleset.sh check\|apply <definition> [repo]` | Checks for, or creates, the ruleset that makes `hertz-v*` tags immutable |
 | `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>` | Sets the cask's version and digest; the template is `packaging/homebrew/Casks/hertz.rb` |
-
-## Updates
-
-Hertz v1 ships without an in-app updater: `brew upgrade --cask hertz` is the
-update path, and the app never contacts a feed or a release API (Settings →
-Updates says so and offers the command). The standalone repository's
-self-updater was removed on import because it fetched the repository-wide
-latest GitHub release, which in this monorepo is usually another app's.
-When the shared `packages/openapps-updater` lands, adopt it here and add the
-signed feed at `https://openapps.space/updates/hertz/latest.json` per
-RELEASES.md; until then the cask sets `auto_updates false` so Homebrew
-reports and installs upgrades itself.
+| `packages/openapps-licensing` | The licensing every Swift app compiles into official builds (`swift test --package-path packages/openapps-licensing`) |
+| `packages/openapps-updater` | The in-app updater every Swift app compiles into official builds (`swift test --package-path packages/openapps-updater`) |
 
 ## One-time setup
 
-### Signing certificate
+### Signing certificate and update key
 
-The certificate is created on the release owner's own Mac, never in CI, and
-only its public half is committed. The repository ships with a placeholder
-(`release/designated-requirement.txt`, `NOT GENERATED …`); the release job
-fails closed while it is still a placeholder.
+Both are created on the release owner's own Mac, never in CI, and only their
+public halves are committed. A placeholder (`NOT GENERATED …`) in either
+`release/designated-requirement.txt` or `release/sparkle-public-key.txt`
+makes the release job fail closed.
 
-The certificate is shared by every OpenApps HQ app: create it once, or reuse
-the existing one, then derive Hertz's pinned requirement from it:
+1. **The certificate**, shared by every OpenApps HQ app (create it once, or
+   reuse the existing one), then Hertz's pinned requirement derived from it:
 
-```sh
-scripts/release/create-signing-certificate.sh ~/openapps-release-signing   # once, for every app
-scripts/release/designated-requirement.sh com.openappshq.hertz \
-    ~/openapps-release-signing/release-signing.cert.pem \
-    > apps/hertz/release/designated-requirement.txt
-```
+   ```sh
+   scripts/release/create-signing-certificate.sh ~/openapps-release-signing   # once, for every app
+   scripts/release/designated-requirement.sh com.openappshq.hertz \
+       ~/openapps-release-signing/release-signing.cert.pem \
+       > apps/hertz/release/designated-requirement.txt
+   ```
 
-Commit `release/designated-requirement.txt`
-(`identifier "com.openappshq.hertz" and certificate leaf = H"<sha1>"`). Every
-release is signed with exactly this requirement and verified against it.
-Hertz asks macOS for no permissions, so a changed certificate costs its users
-nothing; the stable identity is still kept, because it is the identity
-`brew upgrade` replaces in place and the one every other app depends on.
+   Commit `release/designated-requirement.txt`
+   (`identifier "com.openappshq.hertz" and certificate leaf = H"<sha1>"`).
+   Every release is signed with exactly this requirement and verified
+   against it. Hertz asks macOS for no permissions, so a changed certificate
+   costs its users nothing there; the stable identity is still what every
+   update must satisfy before the updater swaps it in, and what
+   `brew upgrade` replaces in place.
 
-Back the folder up offline, set the secrets below, then delete it from the
-Mac. Never add it to the login keychain; nothing in the release path needs
-that.
+2. **The update key**, one per app:
+
+   ```sh
+   apps/hertz/scripts/create-update-key.sh ~/hertz-update-key
+   ```
+
+   It writes the private key to `~/hertz-update-key/sparkle-ed25519.key` and
+   the public key to `release/sparkle-public-key.txt`; commit the latter.
+   Official builds pin it as `SUPublicEDKey` and require every feed and zip
+   to be signed with it. Losing the key means no installed copy can verify
+   another update.
+
+3. Back both folders up offline, set the secrets below, then delete the
+   folders from the Mac. Never add either to the login keychain; nothing in
+   the release path needs that.
 
 ### GitHub
 
@@ -113,7 +122,7 @@ on the first release and bumps it after every later one.
 **Environment.** Create the environment **`hertz-release`** (Settings →
 Environments) and add, on that environment, the following. Restrict its
 deployment branches and tags to `main` and `hertz-v*` so nothing else can
-reach the signing certificate or publish. The build, publish and cask jobs
+reach the signing certificate or publish. The build, publish and feed jobs
 all run in this environment, so any required reviewers approve each.
 
 **Secrets:**
@@ -122,12 +131,16 @@ all run in this environment, so any required reviewers approve each.
 | --- | --- |
 | `RELEASE_SIGNING_P12` | The certificate and key as a `.p12`, base64-encoded (`release-signing.p12.base64`) |
 | `RELEASE_SIGNING_P12_PASSWORD` | Its password (`release-signing.p12.password`) |
+| `SPARKLE_ED_PRIVATE_KEY` | The update key (`sparkle-ed25519.key`, one base64 line) |
 | `RULESET_READ_TOKEN` | [Fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository only, Administration: Read-only, created by a repository admin; used only to read the tag ruleset before publishing |
+| `FEED_COMMIT_TOKEN` | Fine-grained token for this repository only, Contents: Read and write; used only to push the update feed commit to `main` |
 | `HOMEBREW_TAP_DEPLOY_KEY` | The private half of an SSH deploy key added to `openappshq/homebrew-tap` with write access (`gh repo deploy-key add --allow-write`); it can push only to the tap |
 
-`HOMEBREW_TAP_DEPLOY_KEY` is a deploy key on the tap repository; the
-commits it pushes are authored `openapps-release <release@openapps.space>`.
-Hertz has no feed, so there is no `FEED_COMMIT_TOKEN`.
+`FEED_COMMIT_TOKEN` belongs to a bot account or the release owner, and
+`HOMEBREW_TAP_DEPLOY_KEY` is a deploy key on the tap repository; the commits
+they push are authored `openapps-release <release@openapps.space>`. If
+`main` requires status checks or reviews for pushes, allow that account to
+bypass them for the feed path only.
 
 Environment **variables** (public configuration, not secrets):
 
@@ -142,23 +155,25 @@ Dodo **test** mode with the placeholder `pdt_placeholder_hertz`, and
 `verify-release.sh --release` refuses any binary that contains a placeholder
 ID or the test host.
 
-The release job checks every secret and the committed requirement before it
-touches the certificate, and fails naming what is missing. There is no
-unsigned fallback. The certificate lives in a temporary keychain for exactly
-the build-and-sign step (`with-signing-keychain.sh`), which deletes it before
-the zip, the upload or the publish run.
+The release job checks every secret, the product ID and both committed
+public files before it touches the certificate, and fails naming what is
+missing. There is no unsigned fallback. The certificate lives in a temporary
+keychain for exactly the build-and-sign step (`with-signing-keychain.sh`),
+which deletes it before the zip, the feed, the upload or the publish run.
 
 ## Cutting a release
 
 1. Merge everything the release needs into `main` and make sure the Hertz
    workflow is green there.
-2. Pick the version, `MAJOR.MINOR.PATCH`. It becomes
-   `CFBundleShortVersionString`; `CFBundleVersion` is the commit count on
-   `main`, which only grows. The standalone repository's last release was
-   `v0.1.16`; the first release from this repository should be `0.2.0` or
-   later, since the bundle identifier and the tap both changed (a copy
-   installed from the standalone repository's tap is a separate app to macOS and to
-   Homebrew; uninstall it first).
+2. Pick the version, `MAJOR.MINOR.PATCH` (each part at most 999). It becomes
+   `CFBundleShortVersionString`; `CFBundleVersion` is derived from it
+   (`MAJOR*1000000 + MINOR*1000 + PATCH`), so build order is release order:
+   the updater compares both, and a back-port cut from a later commit never
+   outranks the release it patches. (`hertz-v0.1.0` and `0.1.1` used the
+   commit count, 196 and 237; every derived build is higher, and those
+   releases have no updater anyway.) The standalone repository's last
+   release was `v0.1.16`; a copy installed from its tap is a separate app to
+   macOS and to Homebrew, so uninstall it first.
 3. Tag and push:
 
    ```sh
@@ -169,17 +184,20 @@ the zip, the upload or the publish run.
 
 4. The workflow runs four jobs, following RELEASES.md step by step:
    - `checks`, as on every change: `swift test` in the source flavour and,
-     with a generated test-mode configuration, in the licensed flavour; the
-     licensing package's tests; shellcheck and actionlint; the cask
-     template; and an ad-hoc signed universal development zip of the
-     official flavour against Dodo test mode.
-   - `release` (read-only token): checks the secrets and the product ID
-     variable, imports the certificate into a temporary keychain, generates
-     the live licensing configuration and builds the universal app, signs it
-     with the pinned designated requirement and verifies that, deletes the
-     keychain, zips with `ditto`, verifies the zip as a release (signature,
-     live host, no placeholder), records its SHA-256 as a job output and
-     uploads it as a workflow artifact.
+     with a generated test-mode configuration, in the official flavour
+     (licensing and the updater); the licensing and updater packages' tests;
+     shellcheck and actionlint; the cask template; and an ad-hoc signed
+     universal development zip of the official flavour against Dodo test
+     mode with a throwaway update key.
+   - `release` (read-only token): checks the secrets, the product ID
+     variable and both public pins, imports the certificate into a temporary
+     keychain, generates the live licensing configuration and builds the
+     universal app with the updater, signs it with the pinned designated
+     requirement and verifies that, deletes the keychain, zips with `ditto`,
+     verifies the zip as a release (signature, live host, no placeholder,
+     the committed update key pinned), signs it with the update key and
+     writes the signed `appcast.xml`, records the zip's SHA-256 as a job
+     output and uploads all of it as a workflow artifact.
    - `publish` (the only job that can write releases): downloads that exact
      artifact by id, checks the zip against the SHA-256 the release job
      reported (a checksum file that travelled with the download is never
@@ -187,41 +205,168 @@ the zip, the upload or the publish run.
      confirms `hertz-v0.2.0` names exactly the commit that was built,
      creates a *draft* release, uploads `Hertz-0.2.0.zip` and its `.sha256`,
      confirms the tag once more, and only then publishes.
-   - `cask`: downloads the now-public zip, checks its digest, then bumps
-     `Casks/hertz.rb` in `openappshq/homebrew-tap`. The cask only ever moves
-     forward: a version below the cask's fails the job unless the run set
-     `allow_older`, in which case the back-port is published as a GitHub
-     Release only.
-   Expect 10–20 minutes.
-5. `brew update && brew upgrade --cask hertz` on a Mac with the previous
-   version confirms the upgrade before announcing it.
+   - `feed`: re-verifies the signed feed against the published zip's digest,
+     commits it to `main` as `apps/website/public/updates/hertz/appcast.xml`
+     (the website deploy then serves it at
+     `https://openapps.space/updates/hertz/appcast.xml`), downloads the
+     public zip and polls the live feed until both check out, then bumps
+     `Casks/hertz.rb` in `openappshq/homebrew-tap`. The feed and the cask
+     only ever move forward: a version below the live feed's fails the job
+     unless the run set `allow_older`, in which case the back-port is
+     published as a GitHub Release only and both stay put.
+   Expect 15–30 minutes, most of it the website deploy wait.
+5. Open the release, check the notes, and confirm the upgrade on a Mac with
+   the previous version before announcing it: Settings → Updates → Check Now
+   must offer it (and `brew update && brew upgrade --cask hertz` must work
+   too).
+
+Builds for the same version and publications of any version are serialised
+by GitHub concurrency groups, so two runs never publish at the same time. A
+version lower than the newest published release is refused unless the manual
+run sets `allow_older` (a deliberate back-port).
+
+If `release` fails, fix the cause, but do not move or delete the tag: the
+ruleset forbids it, and a tag that exists is final. Push the fix to `main`
+and tag it as the next patch version. Re-running a failed run is fine as long
+as nothing was published yet (a leftover draft is discarded); once a release
+is published for a tag, the publish step refuses to touch it again. A release
+that turns out to be bad gets a new patch version; to stop it being offered
+as an update meanwhile, restore the previous `appcast.xml` on `main` from git
+history.
 
 A manual run (Actions → Hertz → Run workflow) from `main` with a version and
 `publish` ticked does the same and creates the tag at that commit; without
-`publish` it builds and verifies a release-signed zip as an artifact only.
+`publish` it builds and verifies a release-signed zip and its appcast as an
+artifact only, committing no feed and touching no tap.
+
+## Updates
+
+Official builds compile in the shared updater,
+[`packages/openapps-updater`](../../packages/openapps-updater)
+(`OPENAPPS_OFFICIAL=1`; source builds have no updater at all and depend on
+nothing outside this repository). `Info.plist` pins the feed
+`https://openapps.space/updates/hertz/appcast.xml` (`SUFeedURL`) and the
+public update key (`SUPublicEDKey`); the app trusts nothing in a feed before
+its Ed25519 signature verifies, and nothing in a zip before its length,
+SHA-256 and signature do. **"Check for updates automatically" is on by
+default and "Download and install automatically" off** (RELEASES.md): a
+fresh install looks for updates and says when one is out — in the dashboard
+footer ("Hertz X.Y.Z available — Install") and in Settings → Updates — but
+installs nothing on its own. Each default is written once, the first time
+the app runs with no earlier preferences (none of the keys the app writes to
+its defaults domain is present — a stored "off" counts as a preference, and
+so do the free 0.1.x releases' flags) and no kept trial or license record,
+and recorded as decided under its own flag (`FreshInstallDefault` in
+`HertzCore/FirstRun.swift`, the rule "Open at login" already follows); an
+upgrade never changes a toggle the user could have set, and a toggle flipped
+in Settings while storage is still answering wins. "Check Now" always works,
+and `brew upgrade --cask hertz` keeps working.
+
+With "Check for updates automatically" on, the app checks on launch, every
+24 hours and on wake when a check is overdue, and retries a failed check
+once after an hour. With "Download and install automatically" on as well, a
+found update is downloaded, verified and unpacked into a private staging
+folder next to the app (`~/Applications/.Hertz.app.update`, mode 0700); the
+staged bundle must be validly signed and *satisfy the running app's
+designated requirement* (evaluated with the Security framework, the same
+check as `codesign --verify --strict -R=`, never compared as text) and
+carry the announced version and build. It installs when the app quits, or
+at once from the footer's "Update ready — Restart" / Settings' "Restart to
+Update"; the menu-bar item shows a small arrow while a restart is all that
+is left. Turning either toggle off cancels a download in flight and discards
+a staged automatic update, so nothing installs on quit; the quit path checks
+the toggle again. "Install" after a check is the user's explicit consent and
+installs immediately, independent of the toggles.
+
+The install is one atomic exchange of the two bundles (`renamex_np` with
+`RENAME_SWAP`), re-verified right before it: at no instant is the app
+missing, and the old bundle is deleted only after a recorded, read-back
+"superseded" state. A volume without atomic exchanges cannot be updated in
+place: the install is refused with "Move the app to the Applications folder
+on your startup disk" and nothing changes. A state file written before every
+step lets the next launch clean up only what it knows is safe; a staging
+folder holding a bundle of uncertain provenance is kept, and Settings shows
+it with "Remove Previous Copy" until the user decides. The installed
+bundle's version is re-read right before installing, so a newer copy put
+there by `brew upgrade` meanwhile is never replaced. The install on quit is
+cooperative: past its deadline it is abandoned only before the commit point,
+and after it the quit waits for the exchange; "Restart" runs through the
+normal quit (the trial's save, then the install) and reopens the app after
+it has exited. A copy running from a read-only volume or App Translocation
+shows "Move Hertz to Applications to enable updates" instead. Updates never
+depend on the license or trial state. `scripts/update-e2e.sh` proves the
+whole path locally (below); the package's own tests cover feed verification,
+version rules, the swap with injected failures and the copied-requirement
+case.
+
+The standalone repository's self-updater, removed on import, fetched the
+repository-wide latest GitHub release — in this monorepo usually another
+app's. `verify-release.sh` refuses a binary that names `api.github.com`.
 
 ## Local rehearsal
 
-Every release step has a local dry run that needs no secrets:
+Every release step has a local dry run that needs no secrets. To rehearse
+the release job's signing with a throwaway certificate and key, put their
+public halves into `release/` temporarily (do not commit them):
 
 ```sh
-scripts/release/create-signing-certificate.sh /tmp/hertz-rehearsal
-scripts/release/designated-requirement.sh com.openappshq.hertz /tmp/hertz-rehearsal/release-signing.cert.pem > /tmp/hertz-rehearsal/requirement.txt
+scripts/release/create-signing-certificate.sh /tmp/hertz-rehearsal          # from the repository root
+apps/hertz/scripts/create-update-key.sh /tmp/hertz-rehearsal-key apps/hertz/release/sparkle-public-key.txt
+scripts/release/designated-requirement.sh com.openappshq.hertz /tmp/hertz-rehearsal/release-signing.cert.pem \
+    > apps/hertz/release/designated-requirement.txt
 cd apps/hertz
-cp /tmp/hertz-rehearsal/requirement.txt release/designated-requirement.txt    # temporarily; do not commit
 UNIVERSAL=1 VERSION=0.2.0 RELEASE_SIGNING_P12_FILE=/tmp/hertz-rehearsal/release-signing.p12 \
   RELEASE_SIGNING_P12_PASSWORD="$(cat /tmp/hertz-rehearsal/release-signing.p12.password)" \
   OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1 OPENAPPS_DODO_ENV=live OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… \
   ../../scripts/release/with-signing-keychain.sh scripts/bundle.sh
-git checkout release/designated-requirement.txt
 scripts/make-zip.sh
-PINNED_REQUIREMENT_FILE=/tmp/hertz-rehearsal/requirement.txt scripts/verify-release.sh --release dist/Hertz-0.2.0.zip
+scripts/verify-release.sh --release dist/Hertz-0.2.0.zip
+SPARKLE_ED_KEY_FILE=/tmp/hertz-rehearsal-key/sparkle-ed25519.key scripts/make-appcast.sh dist/Hertz-0.2.0.zip
+git checkout release/   # restore the real pins
 ```
 
 `with-signing-keychain.sh` fails if the throwaway identity can still be
 found afterwards, so the rehearsal leaves nothing behind. A rehearsal
 against Dodo test mode (`OPENAPPS_DODO_ENV=test` with the test product ID)
-verifies without `--release`; the release check requires the live host.
+verifies without `--release`; the release check requires the live host. An
+ad-hoc development build of the official flavour needs only a throwaway
+public key:
+
+```sh
+UNIVERSAL=1 OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1 OPENAPPS_DODO_ENV=test \
+OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… VERSION=0.2.0 \
+UPDATE_PUBLIC_ED_KEY="$(xcrun swift -e 'import CryptoKit; print(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString())')" \
+scripts/bundle.sh
+scripts/make-zip.sh
+scripts/verify-release.sh dist/Hertz-0.2.0.zip    # the requirement is reported, not compared
+```
+
+### The update end-to-end test
+
+```sh
+scripts/update-e2e.sh
+```
+
+With no secrets and no network beyond `127.0.0.1`, it creates a throwaway
+certificate and update key in a temporary folder, builds versions 1.0.0 and
+1.0.1 of the update-test variant (bundle id
+`com.openappshq.hertz.updatetest`, no URL scheme, no login item and no setup
+guide, so it leaves nothing behind on any Mac), both signed with that
+certificate inside `with-signing-keychain.sh`, checks the keychain search
+list is unchanged and the identity gone afterwards, verifies both carry the
+same designated requirement and an ad-hoc re-signed copy does not, zips and
+update-signs 1.0.1, writes and verifies the signed appcast (and refuses a
+tampered one), serves both from a local port, runs 1.0.0 as a fresh install
+and asserts the fresh-install default turns checks on, finds 1.0.1 and
+downloads nothing, runs it as an upgrade with checks stored off and asserts
+the server sees no request and the toggle is untouched, runs it with both
+toggles on and turns "install automatically" off mid-download and again
+after staging (nothing may install or stay staged), runs it with both on and
+asserts 1.0.1 is downloaded, verified, staged and installed on quit with the
+requirement unchanged and no leftovers, then puts 1.0.0 back and takes
+"Restart": the install runs through the quit path and the app reopens as
+1.0.1. Everything it created is removed afterwards. It needs OpenSSL 3
+(`brew install openssl@3`), python3 and a logged-in session.
 
 Before the first licensed release, run LICENSING.md's end-to-end checks in
 Dodo test mode with a test-mode build: the trial starts and ends on its own
@@ -231,7 +376,9 @@ refund revokes, Remove this Mac frees a slot.
 
 ## Pulling a bad release
 
-Tags are never reused and releases are never rewritten. Ship the fix as a
-higher patch version; `brew upgrade` moves everyone forward. A GitHub Release
-can be marked as a pre-release or its notes edited, but its assets stay as
-verified.
+Tags are never reused and releases are never rewritten. Restore the previous
+`apps/website/public/updates/hertz/appcast.xml` on `main` from git history
+so the bad version is no longer offered (installs that already updated keep
+it), then ship the fix as a higher patch version; the feed, the updater and
+`brew upgrade` move everyone forward. A GitHub Release can be marked as a
+pre-release or its notes edited, but its assets stay as verified.

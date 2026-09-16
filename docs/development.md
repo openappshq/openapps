@@ -154,7 +154,7 @@ System-wide sound is implemented in the development desktop application below; p
 
 ## Hertz
 
-The menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift build`, `swift test`, `swift run Hertz`, `scripts/bundle.sh`; see [its README](../apps/hertz/README.md). It asks macOS for no permissions. Official builds compile licensing in from `packages/openapps-licensing` (`OPENAPPS_LICENSING=1` with a generated `LicensingConfig.swift`, [LICENSING.md](../LICENSING.md)): the 3-day trial, Settings → License, and the readings off after the trial; a build from source has none of it. Hertz has no in-app updater yet (`brew upgrade --cask hertz`). The [product contract](../design/products/hertz.md) records approved behavior.
+The menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift build`, `swift test`, `swift run Hertz`, `scripts/bundle.sh`; see [its README](../apps/hertz/README.md). It asks macOS for no permissions. Official builds compile licensing in from `packages/openapps-licensing` (`OPENAPPS_LICENSING=1` with a generated `LicensingConfig.swift`, [LICENSING.md](../LICENSING.md)): the 3-day trial, Settings → License, and the readings off after the trial; a build from source has none of it. Official builds also compile in the shared updater, `packages/openapps-updater` (`OPENAPPS_OFFICIAL=1`): the signed feed at `https://openapps.space/updates/hertz/appcast.xml`, automatic checks on for a fresh install, installing opt-in, `brew upgrade --cask hertz` always works ([RELEASES.md](../RELEASES.md), [its release guide](../apps/hertz/RELEASING.md)). The [product contract](../design/products/hertz.md) records approved behavior.
 
 ## Desktop application (in development)
 

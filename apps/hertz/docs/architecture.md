@@ -168,7 +168,10 @@ command and must report `ALL CHECKS PASSED`.
 | `Dashboard/DiagnosisCards.swift` | diagnosis with recent events; sleep blockers |
 | `Dashboard/ProcessCard.swift` | the process tree, sorting, context-menu actions |
 | `Dashboard/CleanupCard.swift`, `CleanupModel.swift` | Cleanup Scout: scan, sizes, reveal in the Finder, copy the report |
-| `Settings/SettingsWindow.swift` | Settings: Open at login, readout, visible cards, License, the Homebrew update note, diagnostics; `SettingsNavigation` scrolls to License |
+| `Settings/SettingsWindow.swift` | Settings: Open at login, readout, visible cards, License, Updates, diagnostics; `SettingsNavigation` scrolls to License |
+| `Updates/UpdateStatus.swift` | `Updating` (compile-time facts), `UpdateHint` and `UpdateStatus`: what the footer and the menu bar read in every build; an official build binds the updater's phase |
+| `Updates/Updates.swift` | official builds: owns the package's `Updater`, applies the fresh-install default for automatic checks, records a Settings choice before the switch |
+| `Updates/UpdatesSection.swift`, `UpdateTesting.swift` | Settings → Updates; the hooks `scripts/update-e2e.sh` drives, compiled only into update-test builds |
 | `Licensing/Licensing.swift` | `Licensing` (app id, name, journal suite, debug trial timing), `LicensingCopy`, `LicenseStatus` (what the views read in every build), `LicenseRestriction` (state → card) |
 | `Licensing/LicenseController.swift` | official builds: owns the package's `LicenseManager`; timers, wake, network, the snapshot → state on the main actor |
 | `Licensing/LicensePill.swift`, `LicenseCard.swift`, `LicenseSection.swift` | the trial pill (dashboard header, settings title bar, the guide), the dashboard's restricted card, Settings → License |
@@ -236,10 +239,23 @@ swapped for a symlink between the scan and the click.
 
 ## Updates
 
-Hertz has no in-app updater. `brew upgrade --cask hertz` is the update path;
-the app never contacts a feed or a release API, and `scripts/verify-release.sh`
-fails a build whose binary references one. The reasons and the plan to adopt
-the shared `packages/openapps-updater` are in [RELEASING.md](../RELEASING.md).
+Official builds compile in the shared updater,
+[`packages/openapps-updater`](../../../packages/openapps-updater)
+(RELEASES.md, "In-app updater"): `Info.plist` pins the feed
+`https://openapps.space/updates/hertz/appcast.xml` and the public update key
+(`release/sparkle-public-key.txt`); nothing in a feed or a zip is trusted
+before its Ed25519 signature verifies, and a staged bundle must satisfy the
+running app's designated requirement before the atomic swap. "Check for
+updates automatically" is on once on a fresh install (`FreshInstallDefault.updateChecks`,
+decided with the login item once licensing's record store has answered);
+installing is opt-in. `Updates` owns the updater and binds `UpdateStatus`,
+which the dashboard footer and the menu bar read in every build; builds from
+source have no updater and never contact a feed. `scripts/verify-release.sh`
+requires the pin in an official build and refuses the update-test variant's
+hooks; `scripts/update-e2e.sh` proves check → download → verify → install
+locally with throwaway keys ([RELEASING.md](../RELEASING.md)). The
+standalone repository's self-updater, which fetched the repository-wide
+latest GitHub release, stays gone: the binary may not name `api.github.com`.
 
 ## Build & release pipeline
 
@@ -248,8 +264,12 @@ flowchart LR
     tag["git tag hertz-vX.Y.Z"] --> action["GitHub Action<br/>macos-26 runner"]
     action --> build["bundle.sh<br/>universal build, release certificate,<br/>pinned designated requirement"]
     build --> zip["make-zip.sh + verify-release.sh --release"]
-    zip --> rel["GitHub Release<br/>Hertz-X.Y.Z.zip"]
-    rel --> cask["bump-cask.sh<br/>openappshq/homebrew-tap"]
+    zip --> appcast["make-appcast.sh<br/>update-signed zip, signed appcast"]
+    appcast --> rel["GitHub Release<br/>Hertz-X.Y.Z.zip"]
+    rel --> feed["feed job<br/>apps/website/public/updates/hertz/appcast.xml → main"]
+    feed --> live["verify-live.sh"]
+    live --> cask["bump-cask.sh<br/>openappshq/homebrew-tap"]
+    feed --> apps["installed Hertz<br/>daily check, opt-in install"]
     cask --> users["brew install / brew upgrade"]
 ```
 
@@ -263,5 +283,6 @@ The app is signed with the stable, self-signed **OpenApps HQ Release**
 certificate and is not notarized. Installs go to `~/Applications`, user-owned,
 so an upgrade needs no admin password. The cask's `postflight` strips the
 download quarantine so there's no Gatekeeper prompt. Hertz asks for no
-permissions, so nothing about it is tied to the signature except that
-`brew upgrade` replaces the same app in place.
+permissions, so nothing about it is tied to the signature except that the
+in-app updater accepts only a bundle satisfying the same designated
+requirement, and `brew upgrade` replaces the same app in place.

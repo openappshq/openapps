@@ -1,7 +1,7 @@
 # Hertz
 
 A native menu-bar system monitor: one click shows what the Mac is doing right now, read from the kernel, with nothing to grant.
-Open source under MIT; the official build is paid on the same terms as every OpenApps HQ app ([LICENSING.md](../../LICENSING.md): 3-day in-app trial, no signup, one license for 3 Macs). Installed and updated with Homebrew, never from inside the app.
+Open source under MIT; the official build is paid on the same terms as every OpenApps HQ app ([LICENSING.md](../../LICENSING.md): 3-day in-app trial, no signup, one license for 3 Macs). Installed with Homebrew; the official build checks a signed feed for updates once a day and installs one only when the user says so ([RELEASES.md](../../RELEASES.md)).
 
 ## Identity
 
@@ -15,6 +15,9 @@ Surfaces are glass cards (Liquid Glass on macOS 26, the system material before, 
 The template pulse symbol plus one readout: CPU % (default), memory %, or the symbol alone. Whole percentages, system font, tabular digits.
 Clicking opens the dashboard as a `MenuBarExtra` window, 400 pt wide, as tall as the screen allows within limits; the footer with version, Settings… and Quit stays fixed.
 While the license keeps the readings off (below), the item shows the pulse alone, whatever the readout setting.
+Once an update is staged and waits for a restart, a small `arrow.down.circle.fill` joins the readout and the accessibility label ends in "update ready"; a found update changes nothing in the menu bar.
+
+The footer follows the updater: "Hertz X.Y.Z available" + **Install** (found, not downloaded — the default state, since installing is opt-in), "Downloading X.Y.Z…", or "Update ready" + **Restart**; otherwise the version. Checking, up to date and failures stay in Settings → Updates.
 
 ## Dashboard
 
@@ -72,8 +75,8 @@ The dashboard card names the state in LICENSING.md's words and offers a way out,
 | General | Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off); menu bar shows CPU / memory / symbol only |
 | Dashboard | Diagnosis, sleep blockers, processes, Cleanup Scout on or off; the vitals are always shown |
 | License (official builds) | Status line; Buy a license (opens the website; never a price); paste a key + Activate; Remove this Mac (confirmed); Try again and the storage-error copy when a record can't be read; the shared privacy copy as the footer. The trial pill sits in the window's title bar while there is something to say |
-| Updates | Version; "installed and updated with Homebrew, never checks on its own"; the `brew upgrade` command with Copy |
-| About | What Hertz reads and where it goes (kernel; the only network calls are the license check and the trial registry, none in a source build); Show setup guide; MIT; Copy diagnostics (the same snapshot as the Diagnosis card, plus version, login state and the build's licensing flavour) |
+| Updates (official builds) | Version; "Check for updates automatically" (**on** once on a fresh install, decided by the same rule as Open at login); "Download and install automatically" (**off**, disabled while checks are off); the status line (last checked / checking / "Hertz X is available" + Install and Restart / downloading / "ready and installs when you quit" + Restart to Update / failed + Try Again) with **Check Now**; "Move Hertz to Applications to enable updates" from a read-only or translocated copy; "Remove Previous Copy" when an interrupted update kept a backup; the footer names the `brew upgrade` command. A build from source shows the version and that it has no updater |
+| About | What Hertz reads and where it goes (kernel; the only network calls are the license check, the trial registry and the update check, none in a source build); Show setup guide; MIT; Copy diagnostics (the same snapshot as the Diagnosis card, plus version, login state and the build's licensing flavour) |
 
 ## Setup guide
 
@@ -90,7 +93,9 @@ The same guide as OpenReaction and OpenKlack, opened once on the first launch of
 
 | Situation | Behavior |
 | --- | --- |
-| Fresh install (no earlier preferences, both records positively absent) | Open at login is turned on once, after storage answers; never revisited. An upgrade from a free 0.1.x build, a reinstall over kept records or a login item the user turned off is left alone |
+| Fresh install (no earlier preferences, both records positively absent) | Open at login and Check for updates automatically are turned on once, after storage answers, each under its own flag; never revisited. An upgrade from a free 0.1.x build, a reinstall over kept records or a setting the user turned off is left alone; a toggle flipped in Settings while storage is still answering wins |
+| An update is found | With installing off: the footer says "Hertz X.Y.Z available — Install" and Settings offers Install and Restart; nothing downloads on its own. With installing on: downloaded, verified (length, SHA-256, Ed25519, code signature satisfying the running app's designated requirement, version), staged next to the app and installed when Hertz quits, or now from Restart. Updates never depend on the license or trial state |
+| Running from a read-only volume or App Translocation | No checks; Settings says "Move Hertz to Applications to enable updates" |
 | A reading is unavailable (no battery, no fan, no SMC key, no pressure sysctl) | The card or line is omitted or reads "—"; nothing is invented |
 | Thermal or memory pressure signal missing | Fall back to `ProcessInfo.thermalState` / usage-derived level; label says which |
 | Process actions | Copy, reveal, open Activity Monitor only. A row is a snapshot of a PID and a path, not a process identity, so Hertz never signals anything; terminating happens in Activity Monitor |
@@ -100,7 +105,7 @@ The same guide as OpenReaction and OpenKlack, opened once on the first launch of
 | License or trial record can't be read or saved | Storage error in the dashboard card and Settings → License, retried; never a new trial over a record that couldn't be read, never a deleted setting |
 | Quit while the trial runs | The trial's latest observed time is saved first, bounded to two seconds |
 
-No permissions, no accounts, no telemetry. Diagnostics are copied only on request and only to the pasteboard. The privacy copy every licensed app ships (LICENSING.md, "Privacy copy") is Hertz's too: the only network calls are the license check and the trial registry's one-way device hash; builds from source make none.
+No permissions, no accounts, no telemetry. Diagnostics are copied only on request and only to the pasteboard. The privacy copy every licensed app ships (LICENSING.md, "Privacy copy") is Hertz's too: the only network calls are the license check, the trial registry's one-way device hash and the update check (a plain GET of the signed feed, no identifiers); builds from source make none.
 
 ## Marketing only
 

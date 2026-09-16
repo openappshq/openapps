@@ -12,13 +12,12 @@ cask "hertz" do
   desc "Native macOS menu-bar system monitor"
   homepage "https://openapps.space/hertz/"
 
-  # Hertz has no in-app updater; Homebrew is the only update path, so let it
-  # report and install upgrades as usual.
-  auto_updates false
+  # Hertz checks for updates itself; installing is opt-in. Homebrew shouldn’t fight it.
+  auto_updates true
   depends_on macos: :sonoma
 
-  # Installed into the user's Applications: no admin password to install or
-  # upgrade.
+  # Installed into the user's Applications, so an in-app update never needs
+  # an admin password.
   app "Hertz.app", target: "#{Dir.home}/Applications/Hertz.app"
 
   # Signed with the stable OpenApps HQ Release certificate but not notarized:
@@ -34,6 +33,8 @@ cask "hertz" do
   uninstall quit: "com.openappshq.hertz"
 
   zap trash: [
+    "~/Library/Caches/com.openappshq.hertz",
+    "~/Library/HTTPStorages/com.openappshq.hertz",
     "~/Library/Preferences/com.openappshq.hertz.plist",
   ]
 end
