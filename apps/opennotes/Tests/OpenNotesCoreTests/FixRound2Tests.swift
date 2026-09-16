@@ -357,23 +357,34 @@ final class NoteStoreFixRound2BudgetTests: XCTestCase {
         XCTAssertEqual(reloaded.text.utf8.count, 900_000)
     }
 
-    /// `body(of:)` reloading an evicted note is expected to account for the
-    /// bytes it brings back in (`retainedBodyBytes`) and evict something
-    /// else to stay within budget — the doc comment on `body(of:)` says the
-    /// note is "moved to the front of the budget's line". Isolated in its
-    /// own test because, per source inspection, `body(of:)` does not call
-    /// `account`/`enforceBudget` on the reload path (only `touch`, which is
-    /// a no-op for an id no longer in `loaded`): if this fails, it is that
-    /// gap, not a race or fixture issue — see the report for how to read a
-    /// failure here.
-    @MainActor func testBodyOfReloadKeepsRetainedBytesWithinBudget() throws {
+    /// `body(of:)` reloading an evicted note has to charge the bytes it
+    /// brings back in to `retainedBodyBytes` and make room first (c3b4c9c) —
+    /// the doc comment on `body(of:)` says the note is "moved to the front
+    /// of the budget's line". With a 3 MB budget and 900,000-byte bodies,
+    /// exactly 3 fit at once, so reloading one evicts another and the total
+    /// stays put at 2,700,000: the number to pin is not "more bytes
+    /// retained" but that `retainedBodyBytes` always equals what is
+    /// actually held (`bodyIsLoaded` notes' text) — that equality is
+    /// exactly what silently drifted before the fix, since the reloaded
+    /// body was held but never charged. Reload every evicted note in turn
+    /// and check the invariant holds after each one, plus that at most 3
+    /// bodies are ever loaded at once.
+    @MainActor func testReloadingEvictedBodiesKeepsAccountingEqualToWhatIsHeld() throws {
         try writeFixture()
         let store = makeStore(bodyBudget: 3_000_000)
-        let evictedID = try XCTUnwrap(store.notes.values.first { !$0.bodyIsLoaded }?.id)
-        let before = store.retainedBodyBytes
-        _ = store.body(of: evictedID)
-        XCTAssertGreaterThan(store.retainedBodyBytes, before, "reloading a body should be reflected in retainedBodyBytes")
-        XCTAssertLessThanOrEqual(store.retainedBodyBytes, 3_000_000, "reloading one body should evict another to stay in budget")
+        func loadedBytes() -> Int {
+            store.notes.values.filter(\.bodyIsLoaded).reduce(0) { $0 + $1.text.utf8.count }
+        }
+        let evictedIDs = store.notes.values.filter { !$0.bodyIsLoaded }.map(\.id)
+        XCTAssertFalse(evictedIDs.isEmpty, "fixture should have at least one evicted note to reload")
+        for id in evictedIDs {
+            let reloaded = try XCTUnwrap(store.body(of: id))
+            XCTAssertTrue(reloaded.bodyIsLoaded, id.rawValue)
+            XCTAssertEqual(store.note(id)?.bodyIsLoaded, true, id.rawValue)
+            XCTAssertLessThanOrEqual(store.retainedBodyBytes, 3_000_000, id.rawValue)
+            XCTAssertEqual(store.retainedBodyBytes, loadedBytes(), "retainedBodyBytes must equal what bodyIsLoaded notes actually hold — \(id.rawValue)")
+            XCTAssertLessThanOrEqual(store.notes.values.filter(\.bodyIsLoaded).count, 3, id.rawValue)
+        }
     }
 
     /// A dirty note's body is never evicted, even while other bodies are
