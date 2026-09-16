@@ -245,6 +245,40 @@ struct FileRecordStoreManagerTests {
         #expect(client.calls.count == 1, "the retry is a save, not another check")
     }
 
+    @Test("A pending write that lands durable notifies once; a retry that fails again notifies nothing new")
+    func retryStorageNotifiesOnceWhenAPendingWriteLandsDurable() async throws {
+        try endedTrial()
+        try paidRecord(lastSuccessAge: 8 * LicensingTests.Clock.day)
+        client.validation = .valid(serverDate: clock.now)
+        let manager = makeManager()
+        #expect(manager.state == .checkRequired)
+
+        failing.fail(.directorySync)
+        await manager.check()
+        #expect(manager.state == .checkRequired, "earned nothing new yet")
+        #expect(isIndeterminate(manager.storageError))
+
+        let seen = Snapshots()
+        manager.setOnChange { seen.append($0) }
+        func licensedNotifications() -> Int {
+            seen.states(now: clock.now, uptime: clock.uptime).filter { $0 == .licensed }.count
+        }
+        #expect(licensedNotifications() == 0)
+
+        // The retry fails again: onChange never observes the grant as confirmed.
+        await manager.tick()
+        #expect(manager.state == .checkRequired)
+        #expect(isIndeterminate(manager.storageError))
+        #expect(licensedNotifications() == 0, "a retry that still fails notifies nothing new")
+
+        // The retry lands durable: onChange observes the grant confirmed, exactly once.
+        failing.fail(.directorySync, false)
+        await manager.tick()
+        #expect(manager.state == .licensed)
+        #expect(manager.storageError == nil)
+        #expect(licensedNotifications() == 1, "onChange must reflect the confirming retry")
+    }
+
     @Test("valid:true settling an unreadable journal entry rebuilds the journal only once the grant is durable")
     func anIndeterminateGrantSettlesTheUnreadableJournalOnlyWhenDurable() async throws {
         try endedTrial()
