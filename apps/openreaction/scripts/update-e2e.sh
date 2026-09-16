@@ -16,8 +16,10 @@
 #      verified with the public key alone;
 #   4. A is installed into a temporary Applications folder, B's zip and the
 #      appcast are served from 127.0.0.1;
-#   5. A runs as a fresh install: automatic checks are off, so the server must
-#      see no request at all;
+#   5. A runs with nothing stored: the update-test variant compiles licensing
+#      out, so the fresh-install default (which needs licensing's record store
+#      to say the install is fresh) never applies, both toggles read off, and
+#      the server must see no request at all;
 #   6. A runs with both Settings toggles on (their user-defaults keys) and
 #      turns "install automatically" off again mid-download, then once more
 #      after staging: neither run may install anything or leave a staged copy;
@@ -163,7 +165,7 @@ BIN="$APP/Contents/MacOS/OpenReaction"
 defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
 rm -rf "$HOME/Library/Caches/$BUNDLE_ID"
 
-echo "==> 5. A fresh install never contacts the feed"
+echo "==> 5. With nothing stored (and no licensing, so no fresh-install default), A never contacts the feed"
 OPENREACTION_DISABLE_TAP=1 "$BIN" > "$TMP/run-fresh.log" 2>&1 &
 APP_PID=$!
 sleep 8

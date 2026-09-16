@@ -2,35 +2,39 @@
 import OpenAppsUpdater
 import SwiftUI
 
-/// Settings → Updates (RELEASES.md, "In-app updater").
+/// Settings → Updates (RELEASES.md, "In-app updater"). The check toggle
+/// goes through `Updates`, which records the choice before the switch so
+/// the fresh-install default can never undo it.
 struct UpdatesSection: View {
-    let updates: Updater
+    let updates: Updates
+
+    private var updater: Updater { updates.updater }
 
     var body: some View {
         Section {
-            if updates.location != .updatable {
+            if updater.location != .updatable {
                 note("Move OpenReaction to Applications to enable updates.")
             } else {
-                Toggle(isOn: Binding(get: { updates.checksAutomatically }, set: { updates.setChecksAutomatically($0) })) {
+                Toggle(isOn: Binding(get: { updater.checksAutomatically }, set: { updates.setChecksAutomatically($0) })) {
                     Text("Check for updates automatically").font(Brand.body(14))
                 }
-                Toggle(isOn: Binding(get: { updates.installsAutomatically }, set: { updates.setInstallsAutomatically($0) })) {
+                Toggle(isOn: Binding(get: { updater.installsAutomatically }, set: { updater.setInstallsAutomatically($0) })) {
                     Text("Download and install automatically").font(Brand.body(14))
                 }
-                .disabled(!updates.checksAutomatically)
+                .disabled(!updater.checksAutomatically)
                 statusRow
-                if let backup = updates.preservedBackup {
+                if let backup = updater.preservedBackup {
                     HStack(alignment: .top) {
                         note("An update could not be completed and the previous version was kept at \(backup.path). If OpenReaction works, remove it.")
                         Spacer()
-                        Button("Remove Previous Copy") { updates.discardPreservedBackup() }
+                        Button("Remove Previous Copy") { updater.discardPreservedBackup() }
                     }
                 }
             }
         } header: {
             MonoLabel("Updates")
         } footer: {
-            Text("Both are off by default, so OpenReaction only looks for updates when you click Check Now. Turned on, it checks once a day and installs updates when you quit; turning them off again cancels anything it downloaded. A check only downloads the update list from openapps.space and sends nothing about you or this Mac. Installed with Homebrew? `brew upgrade --cask openreaction` updates it too.")
+            Text("Checking is on for new installs: once a day OpenReaction looks for a new version and tells you when there is one. Installing is your call, unless \"Download and install automatically\" is on too; then it installs when you quit. Turning a switch off cancels anything it started. A check only downloads the update list from openapps.space and sends nothing about you or this Mac. Installed with Homebrew? `brew upgrade --cask openreaction` updates it too.")
                 .font(Brand.body(12))
                 .foregroundStyle(Brand.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -38,14 +42,14 @@ struct UpdatesSection: View {
     }
 
     @ViewBuilder private var statusRow: some View {
-        switch updates.phase {
+        switch updater.phase {
         case .idle, .upToDate:
             HStack {
-                Text(updates.phase == .upToDate ? "OpenReaction is up to date." : lastCheckText)
+                Text(updater.phase == .upToDate ? "OpenReaction is up to date." : lastCheckText)
                     .font(Brand.body(12))
                     .foregroundStyle(Brand.textSecondary)
                 Spacer()
-                Button("Check Now") { updates.checkNow() }
+                Button("Check Now") { updater.checkNow() }
             }
         case .checking:
             HStack {
@@ -57,7 +61,7 @@ struct UpdatesSection: View {
             HStack {
                 Text("OpenReaction \(item.version.description) is available.").font(Brand.body(13))
                 Spacer()
-                Button("Install and Restart") { updates.installAvailable() }
+                Button("Install and Restart") { updater.installAvailable() }
             }
         case .downloading(let item):
             HStack {
@@ -69,19 +73,19 @@ struct UpdatesSection: View {
             HStack {
                 Text("OpenReaction \(staged.item.version.description) is ready and installs when you quit.").font(Brand.body(13))
                 Spacer()
-                Button("Restart to Update") { updates.restartToUpdate() }
+                Button("Restart to Update") { updater.restartToUpdate() }
             }
         case .failed(let message):
             HStack(alignment: .top) {
                 note("Update failed: \(message)")
                 Spacer()
-                Button("Try Again") { updates.checkNow() }
+                Button("Try Again") { updater.checkNow() }
             }
         }
     }
 
     private var lastCheckText: String {
-        guard let date = updates.lastCheck else { return "Never checked" }
+        guard let date = updater.lastCheck else { return "Never checked" }
         return "Last checked \(date.formatted(.relative(presentation: .named)))"
     }
 

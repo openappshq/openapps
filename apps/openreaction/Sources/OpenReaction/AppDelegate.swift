@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var license: LicenseController?
     #endif
     #if OPENAPPS_OFFICIAL
-    private var updates: Updater?
+    private var updates: Updates?
     #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -63,7 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerURLHandler()
 
         let controller = AppController(provider: provider, dataSourceSummary: emojiData.summary)
+        // Both read the launch's preferences now, before anything writes any.
         let loginItem = LoginItem()
+        #if OPENAPPS_OFFICIAL
+        // Independent of licensing: updates never depend on the license or trial state.
+        let updates = Updates.make()
+        #endif
         let statusMenu = StatusMenuController(
             controller: controller,
             showOnboarding: { [weak self] in self?.onboarding?.show() },
@@ -92,15 +97,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             trialTiming: Licensing.trialTiming
         ))
         self.license = license
-        license.onChange = { [weak controller, weak license, weak loginItem] in
+        #if OPENAPPS_OFFICIAL
+        license.onChange = { [weak controller, weak license, weak loginItem, weak updates] in
             guard let controller, let license else { return }
             controller.setLicense(allowsFeature: license.isFeatureEnabled, badge: license.badge)
-            #if OPENAPPS_OFFICIAL
-            // Open at login by default, once storage says whether this is a
-            // fresh install (LoginItemDefault); anything else is left alone.
+            // Open at login and automatic update checks by default, once
+            // storage says whether this is a fresh install
+            // (FreshInstallDefault); anything else is left alone.
             loginItem?.applyDefaultIfNeeded(storageIsFresh: license.freshInstall)
-            #endif
+            updates?.applyCheckDefaultIfNeeded(storageIsFresh: license.freshInstall)
         }
+        #else
+        license.onChange = { [weak controller, weak license] in
+            guard let controller, let license else { return }
+            controller.setLicense(allowsFeature: license.isFeatureEnabled, badge: license.badge)
+        }
+        #endif
         // From the manager's thread, before storage: the gate stops
         // authorizing at once; the tap's stop and the UI follow on main.
         license.lockFeature = controller.featureLock()
@@ -114,11 +126,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
         #if OPENAPPS_OFFICIAL
-        // Independent of licensing: updates never depend on the license or trial state.
-        let updates = Updates.make()
         self.updates = updates
         settings.updates = updates
-        statusMenu.updates = updates
+        statusMenu.updates = updates?.updater
         #endif
         controller.onStateChange = { [weak statusMenu] in statusMenu?.updateButton() }
         onboarding.model.onOpenLicense = { [weak settings] in settings?.showLicense() }
@@ -138,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         license.start()
         #endif
         #if OPENAPPS_OFFICIAL
-        updates?.start()
+        updates?.updater.start()
         #endif
         if usesEventTap, OnboardingWindowController.shouldShowOnLaunch() {
             onboarding.show()
@@ -166,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let license: Never? = nil
         #endif
         #if OPENAPPS_OFFICIAL
-        let updates = self.updates
+        let updates = self.updates?.updater
         #else
         let updates: Never? = nil
         #endif

@@ -105,7 +105,7 @@ if [[ "$REQUIRE_RELEASE" == 1 || -n "$feed" ]]; then
         echo "error: the binary contains update-test hooks (or could not be scanned)" >&2; exit 1
     fi
     [[ -z "$(info NSAppTransportSecurity)" ]] || { echo "error: App Transport Security exceptions in a release" >&2; exit 1; }
-    echo "ok: feed ${feed}, key pinned, updater compiled in (automatic checks off by default)"
+    echo "ok: feed ${feed}, key pinned, updater compiled in (automatic checks on for a fresh install, downloads off)"
 else
     echo "ok: no updater (source build)"
 fi

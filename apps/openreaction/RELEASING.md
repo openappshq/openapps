@@ -259,9 +259,11 @@ cleared quarantine; a zip downloaded by hand instead needs right-click →
 Open once), the onboarding window asks for Accessibility and Input
 Monitoring, and after granting both, typing `:tada:` in TextEdit turns into
 🎉. Settings must have a License section with the Buy link and an Updates
-section with both toggles **off** and a working "Check Now" (a source build
-has neither section). Turning the toggles on, quitting and relaunching after
-the next release must install it without asking for permissions again.
+section with "Check for updates automatically" **on** (a fresh install),
+"Download and install automatically" **off** and a working "Check Now" (a
+source build has neither section). Turning the second toggle on, quitting
+and relaunching after the next release must install it without asking for
+permissions again.
 `brew upgrade --cask openreaction` must also work.
 
 ## Updates
@@ -273,8 +275,14 @@ nothing outside this repository). `Info.plist` pins the feed
 `https://openapps.space/updates/openreaction/appcast.xml` (`SUFeedURL`) and
 the public update key (`SUPublicEDKey`); the app trusts nothing in a feed
 before its Ed25519 signature verifies, and nothing in a zip before its
-length, SHA-256 and signature do. **Both Settings toggles are off by
-default**: a fresh install never contacts the feed on its own, "Check Now"
+length, SHA-256 and signature do. **"Check for updates automatically" is on
+by default and "Download and install automatically" off** (RELEASES.md): a
+fresh install looks for updates and says when one is out, but installs
+nothing on its own. Each default is written once, the first time the app
+runs with no earlier preferences and no kept trial or license record, and
+recorded as decided under its own flag (`FreshInstallDefault` in
+`OpenReactionCore/FirstRun.swift`, the rule "Open at login" already follows);
+an upgrade never changes a toggle the user could have set. "Check Now"
 always works, and most users update with `brew upgrade --cask openreaction`.
 
 With "Check for updates automatically" on, the app checks on launch, every

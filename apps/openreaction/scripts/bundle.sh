@@ -54,8 +54,10 @@
 # OPENAPPS_OFFICIAL=1 compiles the shared OpenAppsUpdater package in and pins
 # the feed (https://openapps.space/updates/openreaction/appcast.xml) and the
 # public update key from release/sparkle-public-key.txt in Info.plist
-# (SUFeedURL, SUPublicEDKey). Automatic checks and downloads are off until
-# the user turns them on. Official releases set both OPENAPPS_LICENSING and
+# (SUFeedURL, SUPublicEDKey). A fresh install checks for updates
+# automatically (decided once, with licensing's record store as the
+# fresh-install test; RELEASES.md); downloads stay off until the user turns
+# them on. Official releases set both OPENAPPS_LICENSING and
 # OPENAPPS_OFFICIAL.
 #
 # An ad-hoc signed official build may pin a throwaway key instead with
@@ -172,7 +174,7 @@ else
     echo "==> Licensing off (source build: no License UI, no license network calls)"
 fi
 if [[ "$OFFICIAL" == "1" ]]; then
-    echo "==> Updater on (feed ${FEED_URL}; automatic checks off until the user turns them on)"
+    echo "==> Updater on (feed ${FEED_URL}; a fresh install checks automatically, downloads stay off until the user turns them on)"
     if [[ "$FEED_URL" == http://* ]]; then NEEDS_LOCAL_NETWORKING=1; fi
 else
     echo "==> Updater off (source build: no update checks)"

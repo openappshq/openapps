@@ -34,7 +34,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let license: LicenseController
     #endif
     #if OPENAPPS_OFFICIAL
-    var updates: Updater?
+    var updates: Updates?
     #endif
 
     #if OPENAPPS_LICENSING
@@ -105,9 +105,9 @@ private struct SettingsView: View {
     let navigation: SettingsNavigation
     let showOnboarding: () -> Void
     #if OPENAPPS_OFFICIAL
-    var updates: Updater? = nil
+    var updates: Updates? = nil
 
-    func showingUpdates(_ updates: Updater?) -> SettingsView {
+    func showingUpdates(_ updates: Updates?) -> SettingsView {
         var view = self
         view.updates = updates
         return view
