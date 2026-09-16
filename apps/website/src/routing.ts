@@ -5,15 +5,18 @@ export type PathKind = "page" | "asset" | "unknown";
 /** Where visitors land when they ask for a page this site does not have. */
 export const FALLBACK_PAGE = "/";
 
+/** Extensionless install scripts (`public/install/<app>`), fetched by curl. */
+const INSTALL_SCRIPTS = /^\/install\/[a-z][a-z0-9-]*$/;
+
 /**
  * Sorts a request path into a known page, a static asset (anything with a
- * non-HTML extension, which must 404 normally so fetches and images behave),
- * or an unknown page that should redirect to the fallback.
+ * non-HTML extension, or an install script, which must 404 normally so fetches
+ * and images behave), or an unknown page that should redirect to the fallback.
  */
 export function classifyPath(pathname: string): PathKind {
   const path = pathname.split(/[?#]/, 1)[0];
   const extension = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase();
-  if (extension && extension !== "html") return "asset";
+  if ((extension && extension !== "html") || INSTALL_SCRIPTS.test(path)) return "asset";
   const page = path.replace(/index\.html$/, "").replace(/\/?$/, "/");
   return page === "/" || findPage(path) ? "page" : "unknown";
 }

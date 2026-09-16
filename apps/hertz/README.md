@@ -34,10 +34,12 @@ Hertz needs **no permissions**: everything comes from Mach, libproc, IOKit, the 
 ## Install
 
 ```sh
-brew install --cask openappshq/tap/hertz
+curl -fsSL https://openapps.space/install/hertz | sh
 ```
 
-The app lands in `/Applications`, opens in the menu bar, and needs no admin password. It is signed with the OpenApps HQ Release certificate but not notarized; the cask clears the download quarantine so it opens without a Gatekeeper prompt. Hertz checks for updates once a day and tells you when there is one (Settings → Updates turns the check off, or turns installing on so it updates when you quit); a check downloads only the signed update list from openapps.space and sends nothing about you or your Mac. Homebrew updates it too:
+No Homebrew needed: the [install script](../../RELEASES.md#install-script) downloads the signed release, checks its SHA-256 against the digest pinned in the script, puts the app in `/Applications` and opens it. Prefer Homebrew? `brew install --cask openappshq/tap/hertz` installs the same zip.
+
+The app lands in `/Applications`, opens in the menu bar, and needs no admin password. It is signed with the OpenApps HQ Release certificate but not notarized; the script and the cask clear the download quarantine so it opens without a Gatekeeper prompt. Hertz checks for updates once a day and tells you when there is one (Settings → Updates turns the check off, or turns installing on so it updates when you quit); a check downloads only the signed update list from openapps.space and sends nothing about you or your Mac. Homebrew updates it too:
 
 ```sh
 brew upgrade --cask hertz

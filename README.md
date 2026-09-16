@@ -10,12 +10,12 @@ Open-source Mac apps, each $5 once after a free 3-day trial. One home for their 
 
 | Our apps | A closer look |
 | :--- | :---: |
-| **OpenKlack**<br />Mechanical keyboard sounds for the keyboard you already own.<br />[Try the sounds](https://openapps.space/openklack/) · [Source](apps/openklack-desktop) | <img src="design/assets/openklack/ui/settings-light.png" alt="OpenKlack app preview: sound library, favorites, volume, and live keyboard" width="440" /> |
-| **OpenReaction**<br />Emoji shortcodes in every text field on your Mac.<br />[Try the demo](https://openapps.space/openreaction/) · [Source](apps/openreaction) | <img src="design/assets/openapps-hq/readme/openreaction.svg" alt="OpenReaction illustration: :heart: becomes a heart emoji" width="440" /> |
-| **Hertz**<br />Native macOS menu-bar system monitor.<br />[Install with Homebrew](https://openapps.space/hertz/) · [Source](apps/hertz) | <img src="apps/hertz/design/assets/app-icon.svg" alt="Hertz app icon: a pulse on a green tile" width="160" /> |
+| **OpenKlack**<br />Mechanical keyboard sounds for the keyboard you already own.<br />[Try the sounds](https://openapps.space/openklack/) · [Source](apps/openklack-desktop)<br />`curl -fsSL https://openapps.space/install/openklack \| sh` | <img src="design/assets/openklack/ui/settings-light.png" alt="OpenKlack app preview: sound library, favorites, volume, and live keyboard" width="440" /> |
+| **OpenReaction**<br />Emoji shortcodes in every text field on your Mac.<br />[Try the demo](https://openapps.space/openreaction/) · [Source](apps/openreaction)<br />`curl -fsSL https://openapps.space/install/openreaction \| sh` | <img src="design/assets/openapps-hq/readme/openreaction.svg" alt="OpenReaction illustration: :heart: becomes a heart emoji" width="440" /> |
+| **Hertz**<br />Native macOS menu-bar system monitor.<br />[Install](https://openapps.space/hertz/) · [Source](apps/hertz)<br />`curl -fsSL https://openapps.space/install/hertz \| sh` | <img src="apps/hertz/design/assets/app-icon.svg" alt="Hertz app icon: a pulse on a green tile" width="160" /> |
 | **macPaper**<br />Wallpapers made from the notch: gradients, mesh, patterns, pixelized photos.<br />In development · [Source](apps/macpaper) | <img src="apps/macpaper/design/assets/app-icon.svg" alt="macPaper app icon: a display with a notch on a tangerine tile" width="160" /> |
 
-OpenKlack, OpenReaction and macPaper are in development; their public Mac downloads are coming later. Hertz installs with `brew install --cask openappshq/tap/hertz` once its first release is tagged.
+Every released app installs with one Terminal line, no Homebrew needed: the command downloads the signed release, checks its digest, puts the app in `/Applications` and opens it ([how it works](RELEASES.md#install-script)). Prefer Homebrew? `brew install --cask openappshq/tap/<app>`. The trial starts the first time the app opens, no signup. macPaper is in development; its public download is coming later.
 
 ## Run locally
 

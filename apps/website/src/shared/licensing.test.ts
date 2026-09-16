@@ -6,7 +6,10 @@ import {
   checkoutUrl,
   DODO_CHECKOUT_ORIGINS,
   dodoConfigFrom,
+  installCommand,
   installLabel,
+  installScriptSourceUrl,
+  installScriptUrl,
   licensingFor,
   macDownloadUrlsFrom,
 } from "./licensing";
@@ -114,9 +117,25 @@ describe("brewCasksFrom", () => {
     expect(brewCasksFrom({ VITE_OPENKLACK_BREW_CASK: bad })).toEqual({});
   });
 
-  it("writes the exact command a visitor pastes", () => {
+  it("writes the exact Homebrew line", () => {
     expect(brewInstallCommand(casks.openreaction)).toBe(
       "brew install --cask openappshq/tap/openreaction",
+    );
+  });
+});
+
+describe("installCommand", () => {
+  it("writes the exact line a visitor pastes, fetching the served script", () => {
+    expect(installScriptUrl("openreaction")).toBe("https://openapps.space/install/openreaction");
+    expect(installCommand("openreaction")).toBe(
+      "curl -fsSL https://openapps.space/install/openreaction | sh",
+    );
+    expect(installCommand("hertz")).toBe("curl -fsSL https://openapps.space/install/hertz | sh");
+  });
+
+  it("points at the committed script for reading", () => {
+    expect(installScriptSourceUrl("hertz")).toBe(
+      "https://github.com/openappshq/openapps/blob/main/apps/website/public/install/hertz",
     );
   });
 });
@@ -153,25 +172,30 @@ describe("licensingFor", () => {
     }
   });
 
-  it("sells an app once its paid product and cask are set, with brew as the install path", () => {
+  it("sells an app once its paid product and cask are set, with the script as the install path and brew beside it", () => {
     for (const product of paidProducts) {
       const licensing = licensingFor(product.id, { dodo, casks, downloads: {} });
       expect(licensing.available, product.id).toBe(true);
       expect(licensing.buyUrl, product.id).not.toBeNull();
+      expect(licensing.installCommand, product.id).toBe(
+        `curl -fsSL https://openapps.space/install/${product.id} | sh`,
+      );
+      expect(licensing.installScriptSourceUrl, product.id).toBe(installScriptSourceUrl(product.id));
       expect(licensing.brewCask, product.id).toBe(casks[product.id as keyof typeof casks]);
       expect(licensing.brewCommand, product.id).toBe(
         `brew install --cask ${casks[product.id as keyof typeof casks]}`,
       );
-      // No direct installer configured: brew is the only way in, and that is fine.
+      // No direct installer configured: the command is the only way in, and that is fine.
       expect(licensing.downloadUrl, product.id).toBeNull();
-      expect(installLabel(licensing)).toBe("Install with Homebrew");
+      expect(installLabel(licensing)).toBe("Install for Mac");
     }
   });
 
-  it("adds the direct download beside brew when one is configured", () => {
+  it("adds the direct download beside the command when one is configured", () => {
     for (const product of paidProducts) {
       const licensing = licensingFor(product.id, { dodo, casks, downloads });
       expect(licensing.available, product.id).toBe(true);
+      expect(licensing.installCommand, product.id).not.toBeNull();
       expect(licensing.brewCommand, product.id).not.toBeNull();
       expect(licensing.downloadUrl, product.id).toBe(downloads[product.id as keyof typeof downloads]);
       expect(installLabel(licensing)).toBe("Download for Mac");
@@ -192,6 +216,7 @@ describe("licensingFor", () => {
       expect(licensing.available, product.id).toBe(false);
       expect(licensing.buyUrl, product.id).toBeNull();
       expect(licensing.brewCask, product.id).toBeNull();
+      expect(licensing.installCommand, product.id).toBeNull();
       expect(licensing.brewCommand, product.id).toBeNull();
       expect(licensing.downloadUrl, product.id).toBeNull();
     }

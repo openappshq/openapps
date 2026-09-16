@@ -11,14 +11,18 @@ const SHARE_TEXT = "I can type :tada anywhere on my Mac now. OpenReaction, $5, o
 
 export default function DownloadPage({
   // Only when the app's product and cask are configured; the download is a bonus.
+  installCommand = licensingFor("openreaction").installCommand,
   brewCommand = licensingFor("openreaction").brewCommand,
   downloadUrl = licensingFor("openreaction").downloadUrl,
 }: {
+  installCommand?: string | null;
   brewCommand?: string | null;
   downloadUrl?: string | null;
 }) {
   return (
     <Page
+      installCommand={installCommand}
+      installScriptSourceUrl={licensingFor("openreaction").installScriptSourceUrl}
       brewCommand={brewCommand}
       downloadUrl={downloadUrl}
       name="OpenReaction"

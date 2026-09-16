@@ -37,6 +37,8 @@ describe("classifyPath", () => {
       "/favicon.svg",
       "/assets/index-abc123.js",
       "/assets/home-abc123.css",
+      "/install/openklack",
+      "/install/hertz",
     ]) {
       expect(classifyPath(path), path).toBe("asset");
     }
@@ -56,6 +58,8 @@ describe("classifyPath", () => {
       "/openklack/thanks/trial",
       "/hertz/thanks/trial/",
       "/hertz/nope",
+      "/install/",
+      "/install/openklack/",
     ]) {
       expect(classifyPath(path), path).toBe("unknown");
     }

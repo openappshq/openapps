@@ -6,7 +6,8 @@ import ThanksPage from "./ThanksPage";
 
 const dodo = dodoConfigFrom({ VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid" });
 const casks = { openklack: "openappshq/tap/openklack" };
-const command = "brew install --cask openappshq/tap/openklack";
+const command = "curl -fsSL https://openapps.space/install/openklack | sh";
+const brewCommand = "brew install --cask openappshq/tap/openklack";
 
 /** What checkout returned, as the head script leaves it: no query string to scrub. */
 function returned(license_key: string | null) {
@@ -18,7 +19,7 @@ function returned(license_key: string | null) {
 }
 afterEach(() => vi.unstubAllGlobals());
 
-test("shows the brew command before the open-and-paste steps for a buyer without the app", () => {
+test("shows the install line before the open-and-paste steps for a buyer without the app", () => {
   returned("LK-1");
   const licensing = licensingFor("openklack", { dodo, casks, downloads: {} });
   const html = renderToStaticMarkup(<ThanksPage app="openklack" licensing={licensing} />);
@@ -26,7 +27,7 @@ test("shows the brew command before the open-and-paste steps for a buyer without
   expect(html).toContain('aria-label="Copy license key"');
   expect(html).toContain(`<code tabindex="-1">${command}</code>`);
   expect(html).toContain('aria-label="Copy install command"');
-  expect(html).toContain('href="https://brew.sh"');
+  expect(html).toContain(`Prefer Homebrew? <code>${brewCommand}</code>`);
   expect(html).toContain('href="openklack://activate?key=LK-1"');
   // Install (with the command) comes before Settings › License and Paste.
   expect(html.indexOf(command)).toBeLessThan(html.indexOf("Open Settings › License"));
@@ -51,6 +52,7 @@ test("offers the direct download beside the command when one is configured", () 
 test("falls back to the plain install step when the app has no cask", () => {
   returned("LK-1");
   const html = renderToStaticMarkup(<ThanksPage app="openklack" />);
+  expect(html).not.toContain("curl ");
   expect(html).not.toContain("brew install");
   expect(html).toContain("Move it to Applications");
   expect(html).toContain('href="/openklack/download/"');
@@ -71,7 +73,10 @@ test("Hertz's page deep-links its own scheme and repeats its own command", () =>
   expect(html).not.toContain("Grant the permissions");
   expect(html).toContain('href="hertz://activate?key=HZ-1"');
   expect(html).toContain("Open Hertz");
-  expect(html).toContain('<code tabindex="-1">brew install --cask openappshq/tap/hertz</code>');
+  expect(html).toContain(
+    '<code tabindex="-1">curl -fsSL https://openapps.space/install/hertz | sh</code>',
+  );
+  expect(html).toContain("Prefer Homebrew? <code>brew install --cask openappshq/tap/hertz</code>");
   expect(html).not.toContain("openreaction://");
   expect(html).not.toContain("openklack://");
 });
@@ -79,6 +84,7 @@ test("Hertz's page deep-links its own scheme and repeats its own command", () =>
 test("the site-wide page lists every app and shows no command", () => {
   returned("LK-1,LK-2");
   const html = renderToStaticMarkup(<ThanksPage />);
+  expect(html).not.toContain("curl ");
   expect(html).not.toContain("brew install");
   expect(html).toContain("Get OpenKlack");
   expect(html).toContain("Get OpenReaction");

@@ -12,9 +12,10 @@ on:
   push:
     branches: [main]
     tags: [openklack-v*]
-    # The release bot's feed commit deploys the website; it does not need the app checks.
+    # The release bot's feed and install-script commit deploys the website; it does not need the app checks.
     paths-ignore:
       - apps/website/public/updates/**
+      - apps/website/public/install/**
   workflow_dispatch:
     inputs:
       version:
@@ -286,8 +287,9 @@ jobs:
           DIST: apps/openklack-desktop/dist
         run: apps/openklack-desktop/release/publish-release.sh
 
-  # Once the release is public: commit the signed feed to main (the website
-  # deploy serves it), verify the live feed and zip, then bump the cask.
+  # Once the release is public: commit the signed feed and the install script
+  # to main (the website deploy serves both), verify the live feed, zip and
+  # script, then bump the cask.
   # No build runs here and no signing material is present.
   feed:
     if: github.repository == 'openappshq/openapps'
@@ -328,19 +330,47 @@ jobs:
             throw new Error(`dist/feed/latest.json names ${feed.version} ${feed.sha256}, not ${VERSION} ${EXPECTED_SHA256}`);
           }
           JS
+      - name: Never move the stable feed backwards
+        # The feed, the install script and the cask only ever advance. A
+        # back-port (allow_older) is published as a GitHub Release and nothing
+        # else: installed apps never downgrade anyway, and the cask and the
+        # install script refuse lower versions.
+        id: order
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          ALLOW_OLDER: ${{ inputs.allow_older == true }}
+        run: |
+          current=""
+          if [ -f apps/website/public/updates/openklack/latest.json ]; then
+            current="$(node -e 'const feed = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(feed.version ?? ""))' apps/website/public/updates/openklack/latest.json)"
+          fi
+          if [ -n "$current" ] && [ "$current" != "$VERSION" ] && [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" = "$current" ]; then
+            if [ "$ALLOW_OLDER" != true ]; then
+              echo "::error::The live feed is at $current, newer than $VERSION; a lower version is never promoted."; exit 1
+            fi
+            echo "::notice::$VERSION is a back-port below the live feed's $current: the release is published, the feed, the install script and the cask stay at $current."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Commit the feed to main
+        if: steps.order.outputs.promote == 'true'
         env:
           FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
           REPO: ${{ github.repository }}
         run: |
           mkdir -p apps/website/public/updates/openklack
           cp apps/openklack-desktop/dist/feed/latest.json apps/openklack-desktop/dist/feed/latest.json.sig apps/website/public/updates/openklack/
+          # The install script pins the same release as the feed (RELEASES.md,
+          # "Install script"); write-install-script.sh refuses to move it backwards.
+          scripts/release/write-install-script.sh openklack OpenKlack "$VERSION" "$SHA256" apps/website/public/install/openklack
           git config user.name "openapps-release"
           git config user.email "release@openapps.space"
-          git add apps/website/public/updates/openklack/latest.json apps/website/public/updates/openklack/latest.json.sig
-          if git diff --cached --quiet; then echo "The feed already names $VERSION."; exit 0; fi
-          git commit -m "Point OpenKlack's update feed at $VERSION"
+          git add apps/website/public/updates/openklack/latest.json apps/website/public/updates/openklack/latest.json.sig apps/website/public/install/openklack
+          if git diff --cached --quiet; then echo "The feed and the install script already name $VERSION."; exit 0; fi
+          git commit -m "Point OpenKlack's update feed and install script at $VERSION"
           # The token is passed per command and never written to .git/config.
           for _ in 1 2 3; do
             if git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" push "https://github.com/$REPO.git" HEAD:main; then exit 0; fi
@@ -348,13 +378,21 @@ jobs:
           done
           echo "::error::Could not push the feed to main after 3 attempts."; exit 1
       - name: Verify the live feed and download
+        if: steps.order.outputs.promote == 'true'
         env:
           VERSION: ${{ needs.release.outputs.version }}
           EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
           # The website deploys from main after the commit above.
           WAIT_SECONDS: "1500"
         run: apps/openklack-desktop/release/verify-live.sh "$VERSION" "$EXPECTED_SHA256"
+      - name: Verify the live install script
+        if: steps.order.outputs.promote == 'true'
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+        run: scripts/release/verify-live-install-script.sh openklack "$VERSION" "$EXPECTED_SHA256"
       - name: Bump the cask
+        if: steps.order.outputs.promote == 'true'
         env:
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           VERSION: ${{ needs.release.outputs.version }}
