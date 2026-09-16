@@ -173,8 +173,10 @@ final class NoteTextView: NSTextView {
             default: break
             }
         }
-        // ⌥⌘↑ / ⌥⌘↓ by key code: the arrows carry no character to match.
-        if flags == [.command, .option] {
+        // ⌥⌘↑ / ⌥⌘↓ by key code: the arrows carry no character to match,
+        // and a real keyboard's arrow event also carries the function and
+        // numeric-pad bits, which are not modifiers the user pressed.
+        if flags.subtracting([.function, .numericPad]) == [.command, .option] {
             switch event.keyCode {
             case 126: onCommand(.moveUp); return true
             case 125: onCommand(.moveDown); return true

@@ -176,7 +176,11 @@ final class DeckPanelController {
 
     /// The notes changed anywhere: the order, the open note's text.
     func notesChanged() {
+        let before = machine.order
         handle(.notesChanged(model.deckOrder, pinned: model.pinnedIDs))
+        // The order changed elsewhere (All Notes' drag) with a note open:
+        // its tab follows into view. Otherwise the scroll is the user's.
+        if machine.order != before, machine.isOpen { revealPending = true }
         render()
     }
 
@@ -247,9 +251,13 @@ final class DeckPanelController {
             // asked at the drop, and again by the store at the file); the
             // machine's order follows what the store now says.
             let mover = moving
+            let before = machine.order
             model.reorder(ids.map(current))
             _ = machine.handle(.notesChanged(model.deckOrder, pinned: model.pinnedIDs))
-            if let mover { announceMove(of: mover) }
+            // A note moved by the keyboard or VoiceOver may have left the
+            // fan's window: the open note's tab is brought back into view.
+            if machine.order != before, machine.isOpen { revealPending = true }
+            if let mover, machine.order != before { announceMove(of: mover) }
         case .cancelDrag:
             dragCancelToken += 1
             endDrag()
@@ -322,7 +330,11 @@ final class DeckPanelController {
         }
         content.onTab = { [weak self] in self?.handle(.tabClicked($0)) }
         content.dragCancelToken = dragCancelToken
-        content.onTabLifted = { [weak self] in self?.handle(.tabLifted($0)) }
+        content.onTabLifted = { [weak self] id in
+            guard let self else { return false }
+            self.handle(.tabLifted(id))
+            return self.machine.dragging == id
+        }
         content.onTabDropped = { [weak self] in self?.handle(.tabDropped(at: $0)) }
         content.onMove = { [weak self] id, step in self?.move(id, by: step) }
         content.onPlus = { [weak self] in self?.handle(.plusClicked) }

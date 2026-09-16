@@ -28,8 +28,10 @@ struct DeckContent {
     /// the license now, not `readOnly` as rendered.
     var mayEdit: () -> Bool = { true }
     var onTab: (NoteID) -> Void = { _ in }
-    /// The pointer moved past the drag threshold on a tab: the fan holds.
-    var onTabLifted: (NoteID) -> Void = { _ in }
+    /// The pointer moved past the drag threshold on a tab: true when the
+    /// controller accepted the lift (the license, asked now), and only
+    /// then does the tab rise; false leaves it a press.
+    var onTabLifted: (NoteID) -> Bool = { _ in true }
     /// The lifted tab was let go over this slot (nil: nowhere new).
     var onTabDropped: (Int?) -> Void = { _ in }
     /// VoiceOver's Move up / Move down on a tab: one slot along the deck.
@@ -341,11 +343,14 @@ struct DeckView: View {
                 if let current = drag, current.id == id {
                     updateDrag(from: current, to: DeckDrag(id: id, centerY: value.location.y - grab))
                 } else if drag == nil, canMove, abs(value.translation.height) >= threshold, let index = order.firstIndex(of: id) {
+                    // The controller asks the license now: refused (a
+                    // deadline passed since the last render), nothing lifts
+                    // and the press goes on as a press.
+                    guard content.onTabLifted(id) else { return }
                     // Where in the tab the pointer took it: kept, so the
                     // tab does not jump under the pointer.
                     grab = value.startLocation.y - slotCenterY(index)
                     withAnimation(reduceMotion ? nil : Self.lift) { drag = DeckDrag(id: id, centerY: value.location.y - grab) }
-                    content.onTabLifted(id)
                 }
             }
             .onEnded { _ in
