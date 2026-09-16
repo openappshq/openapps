@@ -154,19 +154,22 @@ public enum Pins {
         out.generator = carrySource(from: template.generator, to: out.generator)
         out.generator = carryKnobs(pinned, from: template.generator, to: out.generator)
         // A dark side edited by hand keeps its own pinned palette, photo
-        // and knobs, over the candidate's derived dark side.
+        // and knobs, over the candidate's derived dark side. The derived
+        // side already carries the light photo, so the dark one replaces
+        // it rather than filling a blank.
         if let dark = template.darkGenerator {
             var side = out.generator.darkened()
             if pinned.contains(.palette) { side = side.withPalette(Palettes.usable(dark.colors)) }
-            side = carrySource(from: dark, to: side)
+            side = carrySource(from: dark, to: side, replacing: true)
             side = carryKnobs(pinned, from: dark, to: side)
             out.darkGenerator = side == out.generator.darkened() ? nil : side
         }
         return out
     }
 
-    /// The template's photo into a candidate of a photo kind.
-    static func carrySource(from template: Generator, to candidate: Generator) -> Generator {
+    /// The template's photo into a candidate of a photo kind: where the
+    /// candidate has none, or over whatever it has when `replacing`.
+    static func carrySource(from template: Generator, to candidate: Generator, replacing: Bool = false) -> Generator {
         guard let source = template.source else { return candidate }
         let fit: ImageFit, focus: Point
         switch template {
@@ -175,10 +178,10 @@ public enum Pins {
         default: fit = .fill; focus = .center
         }
         switch candidate {
-        case .pixelize(var c) where c.source == nil:
+        case .pixelize(var c) where c.source == nil || replacing:
             c.source = source; c.fit = fit; c.focus = focus
             return .pixelize(c)
-        case .dither(var c) where c.source == nil:
+        case .dither(var c) where c.source == nil || replacing:
             c.source = source; c.fit = fit; c.focus = focus
             return .dither(c)
         default:
