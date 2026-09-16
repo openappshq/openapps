@@ -171,7 +171,7 @@ export const products: Product[] = [
         entry: "Home",
         title: "macPaper · Wallpapers your Mac makes itself",
         description:
-          "Gradients, meshes, patterns and pixel art, made on your Mac and set on every display from a panel that drops out of the notch. macPaper is an open-source Mac app. No permissions, no telemetry.",
+          "Gradients, meshes, dither, tints and light-and-dark pairs, made on your Mac at native pixels and set on every display from a panel that drops out of the notch. macPaper is an open-source Mac app. No permissions, no telemetry.",
         template: "src/apps/macpaper/template.html",
       },
       {
