@@ -152,16 +152,23 @@ struct SettingsView: View {
                 Spacer()
                 HotkeyRecorder(hotkey: $preferences.hotkey, problem: hotkeys.problem)
             }
-            HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: Brand.Space.s8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Notes folder").font(Brand.body(14))
                     note(folderNote)
                 }
-                Spacer()
-                if !preferences.usesDefaultFolder {
-                    Button("Use Default") { model.useDefaultFolder() }
+                StorageChoiceView(
+                    current: model.storage, iCloudAvailable: Preferences.iCloudIsAvailable,
+                    folderPath: preferences.folderDisplayPath, folderMissing: model.store.folderIsMissing,
+                    readOnly: model.readOnly, notice: model.storageNotice, onChoose: choose
+                )
+                .padding(.leading, Brand.Space.s4)
+                if model.storage == .other {
+                    HStack {
+                        Spacer()
+                        Button("Change…") { chooseFolder() }
+                    }
                 }
-                Button("Choose…") { chooseFolder() }
             }
         } header: {
             MonoLabel("General")
@@ -169,11 +176,17 @@ struct SettingsView: View {
     }
 
     private var folderNote: String {
-        var text = preferences.folderDisplayPath
-        if model.store.folderIsMissing { text += " — can’t find this folder; nothing is read or written until it is back or another is chosen." }
-        else { text += " · one .md file per note; iCloud Drive and an Obsidian vault work as well." }
+        var text = "One .md file per note. Switching copies the notes to the new folder; files are never moved or removed."
+        if let line = model.storageStatusLine { text = line + " · " + text }
         if model.readOnly { text += " Changing the folder waits for a license (read-only)." }
         return text
+    }
+
+    /// A row of the choice: On this Mac and iCloud Drive switch at once
+    /// (the license asked at the click, `AppModel.setStorage`); Other
+    /// folder… opens the chooser.
+    private func choose(_ choice: StorageChoice) {
+        if choice == .other { chooseFolder() } else { model.setStorage(choice) }
     }
 
     /// The folder change is a mutation: the license is asked at the click
@@ -181,14 +194,7 @@ struct SettingsView: View {
     /// (`setFolder`), since it may have stayed open across a deadline.
     private func chooseFolder() {
         guard model.mayChangeFolder() else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.directoryURL = preferences.folder
-        panel.prompt = "Use this folder"
-        panel.message = "Notes are read from and written to this folder as .md files. Files are never moved."
-        if panel.runModal() == .OK, let url = panel.url { model.setFolder(url) }
+        if let url = FolderChooser.present(current: preferences.folder) { model.setFolder(url) }
     }
 
     // MARK: - Notes

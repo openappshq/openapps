@@ -87,6 +87,8 @@ nonisolated public struct FreshInstallDefault {
         public static let loginItemApplied = "loginItem.defaultApplied"
         /// The automatic-update-check default was applied (or found unnecessary); never again.
         public static let updateChecksApplied = "updates.checkDefaultApplied"
+        /// The deck's display default ("every display") was applied (or found unnecessary); never again.
+        public static let displayApplied = "deck.displayDefaultApplied"
 
         /// Every preference the app writes to its standard defaults domain
         /// (the updater's included): any one present at launch, whatever its
@@ -97,8 +99,8 @@ nonisolated public struct FreshInstallDefault {
         public static let earlierPreferenceEvidence: [String] = [
             // OnboardingLaunch
             OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step,
-            // These defaults' own flags: either decided means an earlier launch resolved it.
-            loginItemApplied, updateChecksApplied,
+            // These defaults' own flags: any decided means an earlier launch resolved it.
+            loginItemApplied, updateChecksApplied, displayApplied,
             // Preferences (the app's Preferences.swift): the deck, capture and note defaults.
             "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.color", "notes.autoArchiveDays",
             // OpenAppsUpdater (Updater.Key): both toggles and the last check.
@@ -114,6 +116,16 @@ nonisolated public struct FreshInstallDefault {
     /// "Check for updates automatically".
     public static func updateChecks(store: any FlagStore) -> FreshInstallDefault {
         FreshInstallDefault(store: store, key: Key.updateChecksApplied)
+    }
+
+    /// The deck's Display: "every display" on a fresh install. Unlike the
+    /// two above this needs no record store (it is a look, not a
+    /// permission or a network call), so it is decided from the
+    /// preferences alone when they are read (`wouldApply`) and recorded
+    /// once the launch's other defaults have read the evidence
+    /// (`markDecided`).
+    public static func display(store: any FlagStore) -> FreshInstallDefault {
+        FreshInstallDefault(store: store, key: Key.displayApplied)
     }
 
     private let store: any FlagStore
@@ -150,5 +162,20 @@ nonisolated public struct FreshInstallDefault {
         guard let storageIsFresh, !isDecided else { return false }
         store.set(true, forKey: key)
         return storageIsFresh && !hadPreferences && !isOn
+    }
+
+    /// Whether the default applies, for a setting that needs no storage
+    /// answer: an install with no earlier preferences, not decided yet,
+    /// and `isSet` false (a stored choice is never replaced). Pure: the
+    /// caller records the decision with `markDecided` once every default
+    /// of the launch has read the evidence, since the record is evidence
+    /// itself.
+    public func wouldApply(isSet: Bool) -> Bool {
+        !isDecided && !hadPreferences && !isSet
+    }
+
+    /// The decision is made, whichever way: never revisited.
+    public func markDecided() {
+        store.set(true, forKey: key)
     }
 }

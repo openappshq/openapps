@@ -110,7 +110,11 @@ nonisolated enum NoteFile {
     }
 
     static func hash(_ contents: String) -> Data {
-        Data(SHA256.hash(data: Data(contents.utf8)))
+        hash(Data(contents.utf8))
+    }
+
+    static func hash(_ data: Data) -> Data {
+        Data(SHA256.hash(data: data))
     }
 
     // MARK: - Writing

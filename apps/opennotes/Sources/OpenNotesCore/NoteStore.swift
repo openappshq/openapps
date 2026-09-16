@@ -44,6 +44,10 @@ nonisolated public enum StoreError: Error, LocalizedError, Hashable {
     /// A flush (folder switch, quit) could not save these notes; they stay
     /// unsaved in memory and the operation was not performed.
     case unsaved([NoteID: String])
+    /// The note's file is an iCloud placeholder (evicted, or not downloaded
+    /// yet): nothing is written over a placeholder. The download was
+    /// asked for; the text stays in memory and the write is retried.
+    case waitingForDownload(NoteID)
     /// The system refused a file operation; the message names it.
     case io(String)
 
@@ -55,6 +59,7 @@ nonisolated public enum StoreError: Error, LocalizedError, Hashable {
         case .entryChanged(let id): return "\(id.fileName) is no longer a file; the note was not written."
         case .oversized(let id): return "\(id.fileName) is too large to edit here."
         case .bodyUnavailable(let id): return "Can’t read \(id.fileName) right now; shown in part."
+        case .waitingForDownload(let id): return "\(id.fileName) is in iCloud Drive but not on this Mac yet; your text is kept and written once it is downloaded."
         case .unsaved(let problems):
             let names = problems.keys.sorted().map(\.fileName).joined(separator: ", ")
             return "Couldn’t save \(names): \(problems.values.sorted().first ?? "")"
@@ -74,6 +79,35 @@ nonisolated public enum SaveOutcome: Hashable, Sendable {
     case keptAsConflictCopy(NoteID)
     /// A new note with no text was not written.
     case notWritten
+}
+
+/// What a folder switch that copies the notes did (design/products/opennotes.md,
+/// "Storage"): nothing in the old folder was moved or removed.
+nonisolated public struct FolderSwitchReport: Hashable, Sendable {
+    /// Files copied to the new folder under their own name.
+    public var copied = 0
+    /// Files already in the new folder with the same content: left alone.
+    public var identical = 0
+    /// Files already in the new folder with different content: ours went
+    /// beside them as `<name> (conflict <time>).md`.
+    public var conflictCopies = 0
+    /// iCloud placeholders in the old folder: nothing to copy yet.
+    public var notDownloaded = 0
+    /// Files that could not be copied, with why.
+    public var failed: [String] = []
+
+    public init() {}
+
+    /// One line for Settings, or nil when nothing was copied at all.
+    public var summary: String? {
+        guard copied + identical + conflictCopies + notDownloaded + failed.count > 0 else { return nil }
+        var parts = ["Copied \(copied) \(copied == 1 ? "note" : "notes")"]
+        if identical > 0 { parts.append("\(identical) already there") }
+        if conflictCopies > 0 { parts.append("\(conflictCopies) kept as \(conflictCopies == 1 ? "a conflict copy" : "conflict copies")") }
+        if notDownloaded > 0 { parts.append("\(notDownloaded) not downloaded from iCloud yet, not copied") }
+        if !failed.isEmpty { parts.append("\(failed.count) failed: \(failed[0])") }
+        return parts.joined(separator: " · ") + "; the old folder is untouched."
+    }
 }
 
 #if DEBUG
@@ -107,6 +141,16 @@ nonisolated public enum StoreInterleaving: Hashable, Sendable {
 /// only after the file open under that name proved to be the one the app
 /// wrote (design/products/opennotes.md, "Notes").
 ///
+/// A folder in iCloud Drive is the same folder with three more things in
+/// it (ICloudDrive.swift): a `.icloud` placeholder stands for a file not
+/// downloaded (a note that is only its name until opened, never written
+/// over), a file iCloud replaced by rename keeps its content identity (the
+/// hash, not the inode, says whether it changed outside), and a version
+/// iCloud could not merge is kept as a conflict copy beside the file. A
+/// file found missing is removed from memory only once a later rescan,
+/// after `removalGrace`, finds it still gone: a rename in progress is not
+/// a delete.
+///
 /// Memory is bounded twice: a file is read up to `maximumFileSize` (a
 /// larger one is shown truncated and read-only), and note bodies are kept
 /// under `bodyBudget` bytes in total — beyond it the least recently used
@@ -124,11 +168,23 @@ public final class NoteStore {
     public static let defaultBodyBudget = 8_000_000
     /// What an evicted note keeps: enough for the title and the first lines.
     public static let summarySize = 1_024
+    /// A file found missing is removed from memory only by a rescan this
+    /// much later that still does not find it: iCloud (and any sync tool)
+    /// replaces a file by rename, and a scan in the middle of one sees no
+    /// file for an instant.
+    public static let removalGrace: TimeInterval = 0.5
 
     public private(set) var folder: URL
     public private(set) var notes: [NoteID: Note] = [:]
     /// The folder could not be found on the last read or write.
     public private(set) var folderIsMissing = false
+    /// The folder is iCloud's (`isUbiquitousItem`: iCloud Drive, or
+    /// Desktop & Documents kept in iCloud), read when the folder is loaded.
+    /// Conflict versions are asked for only then; placeholders are read
+    /// everywhere, being nothing but a file name.
+    public private(set) var folderIsUbiquitous = false
+    /// iCloud refused the last download request; the status line says so.
+    public private(set) var downloadProblem: String?
     /// Whether the store may change anything right now: asked afresh at
     /// every mutation and again at the file boundary (`write`), never
     /// stored. The app binds the license's projected access (LICENSING.md);
@@ -172,11 +228,26 @@ public final class NoteStore {
     private var loaded: [NoteID] = []
     /// Notes the app holds open: never evicted.
     private var retained: [NoteID: Int] = [:]
+    /// iCloud's file-level API (a fake in tests).
+    private let ubiquity: any Ubiquity
+    /// Notes whose file is a `.icloud` placeholder as of the last rescan.
+    private var placeholders: Set<NoteID> = []
+    /// Placeholders whose download was asked for (the note was opened, or
+    /// a write found the placeholder).
+    private var downloadRequested: Set<NoteID> = []
+    /// Notes with unsaved text whose file is a placeholder: written once
+    /// the file is back.
+    private var heldForDownload: Set<NoteID> = []
+    /// Files a rescan did not find, and when it first did not: removed
+    /// from memory by a later rescan, after `removalGrace`, that still
+    /// does not find them.
+    private var missingSince: [NoteID: Date] = [:]
 
-    public init(folder: URL, fileManager: FileManager = .default, bodyBudget: Int = NoteStore.defaultBodyBudget, now: @escaping () -> Date = Date.init) {
+    public init(folder: URL, fileManager: FileManager = .default, bodyBudget: Int = NoteStore.defaultBodyBudget, ubiquity: (any Ubiquity)? = nil, now: @escaping () -> Date = Date.init) {
         self.folder = folder
         self.fileManager = fileManager
         self.bodyBudget = max(bodyBudget, Self.maximumFileSize)
+        self.ubiquity = ubiquity ?? FileManagerUbiquity(fileManager: fileManager)
         self.now = now
     }
 
@@ -210,21 +281,42 @@ public final class NoteStore {
     /// The notes with unsaved text, for the flush before a quit or a switch.
     public var unsavedNotes: [NoteID] { dirty.sorted() }
 
+    /// Files the last rescan did not find, not yet confirmed gone: the app
+    /// rescans again shortly, so a delete shows without waiting for the
+    /// next event.
+    public var pendingRemovals: [NoteID] { missingSince.keys.sorted() }
+
+    /// What the footer says about iCloud while the folder is iCloud's:
+    /// held writes first, then files not downloaded, else up to date.
+    public var storageStatus: StorageStatus {
+        if !heldForDownload.isEmpty { return .waiting }
+        if !placeholders.isEmpty { return .notDownloaded(count: placeholders.count, requested: downloadRequested.count) }
+        return .upToDate
+    }
+
     /// The note with its full body in memory (read from disk if it had
     /// been evicted), moved to the front of the budget's line. When the
     /// read fails the note comes back as it is, with `bodyIsLoaded` false
     /// and the summary as its text: shown in part, never editable, and
     /// asked again on the next call (the next render, keystroke or rescan).
+    /// A note behind an iCloud placeholder is asked for from iCloud here —
+    /// opening a note is what downloads it — and comes back as it is.
     public func body(of id: NoteID) -> Note? {
         guard var note = notes[id] else { return nil }
+        if placeholders.contains(id) { requestDownload(id) }
         if !note.bodyIsLoaded {
             guard case .file(let fd, let info) = NoteFile.open(fileURL(for: id)) else { return note }
             defer { NoteFile.close(fd) }
             guard let contents = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info)), let text = contents.text else { return note }
             let fresh = Self.parse(id: id, contents: text, fileDate: contents.identity.modified, fallbackCreated: contents.identity.modified, truncated: contents.truncated)
-            note.text = fresh.text
-            note.truncated = fresh.truncated
-            note.bodyIsLoaded = true
+            if note.isDownloading {
+                // The file arrived: the note was only its name until now.
+                note = fresh
+            } else {
+                note.text = fresh.text
+                note.truncated = fresh.truncated
+                note.bodyIsLoaded = true
+            }
             identities[id] = contents.identity
             // Room first (this note is not in the line yet, so it cannot be
             // the one evicted), then the body is accounted for.
@@ -283,19 +375,35 @@ public final class NoteStore {
         loaded = loaded.filter { dirty.contains($0) }
         retainedBodyBytes = loaded.reduce(0) { $0 + (notes[$1]?.text.utf8.count ?? 0) }
         accepted = accepted.intersection(dirty)
+        placeholders = []
+        downloadRequested = []
+        heldForDownload = heldForDownload.intersection(dirty)
+        missingSince = [:]
+        folderIsUbiquitous = ubiquity.isUbiquitous(folder)
         rescan(announce: false)
         onEvent(.reloaded)
     }
 
     /// Switches to another folder: every unsaved note is written to the old
     /// one first, and the switch is refused (`StoreError.unsaved`, nothing
-    /// changed) if any of them cannot be. Files are never moved.
-    public func switchFolder(to url: URL, create: Bool) throws {
+    /// changed) if any of them cannot be. Files are never moved. With
+    /// `copyingNotes` every note file in the old folder is copied to the
+    /// new one first (design/products/opennotes.md, "Storage"): a file
+    /// already there with the same content is left alone, one with
+    /// different content keeps its content and ours goes beside it as
+    /// `<name> (conflict <time>).md`, a placeholder has nothing to copy
+    /// yet; the old folder is not touched. The report says what happened.
+    @discardableResult
+    public func switchFolder(to url: URL, create: Bool, copyingNotes: Bool = false) throws -> FolderSwitchReport {
         // A folder change is a mutation the license decides (the app asks
         // before the panel and after it; this is the last word).
         guard !readOnly else { throw StoreError.readOnly }
         let problems = saveAll()
         guard problems.isEmpty else { throw StoreError.unsaved(problems) }
+        var report = FolderSwitchReport()
+        if copyingNotes, url.standardizedFileURL != folder.standardizedFileURL {
+            report = copyNotes(to: url, create: create)
+        }
         folder = url
         dirty = []
         accepted = []
@@ -305,7 +413,80 @@ public final class NoteStore {
         loaded = []
         retained = [:]
         retainedBodyBytes = 0
+        heldForDownload = []
         load(create: create)
+        return report
+    }
+
+    /// Every `.md` file of the old folder into `destination`, never over
+    /// anything: a file already there with the same bytes is left, one
+    /// with different bytes keeps them and ours is created beside it
+    /// under a conflict name. Nothing in the old folder changes.
+    private func copyNotes(to destination: URL, create: Bool) -> FolderSwitchReport {
+        var report = FolderSwitchReport()
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else { return report }
+        if !fileManager.fileExists(atPath: destination.path), create {
+            do {
+                try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+            } catch {
+                report.failed.append("\(destination.lastPathComponent): \(error.localizedDescription)")
+                return report
+            }
+        }
+        let names = ((try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? []).sorted()
+        report.notDownloaded = names.filter { ICloudDrive.note(forPlaceholderName: $0) != nil }.count
+        for name in names where !name.hasPrefix(".") && name.lowercased().hasSuffix(".md") {
+            let source = folder.appendingPathComponent(name, isDirectory: false)
+            guard case .file(let fd, let info) = NoteFile.open(source) else { continue }
+            defer { NoteFile.close(fd) }
+            guard let contents = NoteFile.read(fd: fd, stat: info, cap: Int(info.st_size) + 1) else {
+                report.failed.append("\(name): could not be read")
+                continue
+            }
+            let target = destination.appendingPathComponent(name, isDirectory: false)
+            switch NoteFile.open(target) {
+            case .absent:
+                do {
+                    try fileManager.copyItem(at: source, to: target)
+                    report.copied += 1
+                } catch {
+                    report.failed.append("\(name): \(error.localizedDescription)")
+                }
+            case .notRegular:
+                report.failed.append("\(name): something else is at that name in the new folder")
+            case .file(let targetFD, let targetInfo):
+                defer { NoteFile.close(targetFD) }
+                let theirs = NoteFile.read(fd: targetFD, stat: targetInfo, cap: 0)
+                if theirs?.identity.hash == contents.identity.hash, theirs?.identity.size == contents.identity.size {
+                    report.identical += 1
+                    continue
+                }
+                guard let text = contents.text else {
+                    report.failed.append("\(name): not UTF-8, and a different file is already there")
+                    continue
+                }
+                let stem = String(name.dropLast(3))
+                let base = NoteFileName.conflictStem(for: NoteID(stem), at: now())
+                var candidate = base
+                var counter = 2
+                var placed = false
+                while counter < 1000, !placed {
+                    do {
+                        _ = try NoteFile.createExclusively(destination.appendingPathComponent(candidate + ".md", isDirectory: false), contents: text)
+                        placed = true
+                    } catch NoteFile.Failure.exists {
+                        candidate = "\(base)-\(counter)"
+                        counter += 1
+                    } catch {
+                        report.failed.append("\(name): \(error.localizedDescription)")
+                        break
+                    }
+                }
+                if placed { report.conflictCopies += 1 }
+            }
+        }
+        return report
     }
 
     /// Reconciles memory with the folder: files added, changed or removed
@@ -327,6 +508,7 @@ public final class NoteStore {
         }
         folderIsMissing = false
         recoverStrandedTemporaries()
+        if folderIsUbiquitous { materialiseConflictVersions() }
         let urls = (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])) ?? []
         var seen: Set<NoteID> = []
         var updated: [NoteID] = []
@@ -334,6 +516,12 @@ public final class NoteStore {
             let id = NoteID(url.deletingPathExtension().lastPathComponent)
             guard case .file(let fd, let info) = NoteFile.open(url) else { continue }
             seen.insert(id)
+            // The file is back (downloaded, or the eviction undone): the
+            // note is a file again, whatever else changed.
+            if notes[id]?.isDownloading == true {
+                notes[id]?.isDownloading = false
+                updated.append(id)
+            }
             if dirty.contains(id) {
                 NoteFile.close(fd)
                 continue
@@ -358,16 +546,109 @@ public final class NoteStore {
             provisional.remove(id)
             updated.append(id)
         }
-        var removed: [NoteID] = []
-        for id in notes.keys where !seen.contains(id) && !dirty.contains(id) && !provisional.contains(id) {
-            forget(id)
-            removed.append(id)
+        // iCloud's placeholders: a note that is only its name until the
+        // file is downloaded, or a note held in memory whose file was
+        // evicted. Never removed, never written over; a hidden name, so
+        // listed by name.
+        let names = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? []
+        var placeholdersSeen: Set<NoteID> = []
+        for name in names {
+            guard let id = ICloudDrive.note(forPlaceholderName: name), !seen.contains(id) else { continue }
+            placeholdersSeen.insert(id)
+            if var note = notes[id] {
+                guard !note.isDownloading else { continue }
+                note.isDownloading = true
+                notes[id] = note
+            } else {
+                let attributes = try? fileManager.attributesOfItem(atPath: folder.appendingPathComponent(name).path)
+                let date = attributes?[.modificationDate] as? Date ?? now()
+                var note = Note(id: id, text: id.rawValue, created: date)
+                note.bodyIsLoaded = false
+                note.isDownloading = true
+                notes[id] = note
+            }
+            updated.append(id)
         }
-        // A dirty note whose file went away is written again on the next save.
-        for id in identities.keys where !seen.contains(id) { identities[id] = nil }
+        placeholders = placeholdersSeen
+        downloadRequested = downloadRequested.intersection(placeholdersSeen)
+        heldForDownload = heldForDownload.intersection(placeholdersSeen)
+        if placeholdersSeen.isEmpty { downloadProblem = nil }
+        // A file not found is gone only once a later rescan, after the
+        // grace, still does not find it; an unsaved or provisional note
+        // is never dropped for its file. The identity is kept meanwhile,
+        // so a file that comes back unchanged is the same file.
+        var removed: [NoteID] = []
+        var stillMissing: [NoteID: Date] = [:]
+        let time = now()
+        for id in notes.keys where !seen.contains(id) && !placeholdersSeen.contains(id) && !dirty.contains(id) && !provisional.contains(id) {
+            if let since = missingSince[id], time.timeIntervalSince(since) >= Self.removalGrace {
+                forget(id)
+                removed.append(id)
+            } else {
+                stillMissing[id] = missingSince[id] ?? time
+            }
+        }
+        missingSince = stillMissing
         if announce {
-            if !updated.isEmpty { onEvent(.updated(updated.sorted())) }
+            let changed = Array(Set(updated)).sorted()
+            if !changed.isEmpty { onEvent(.updated(changed)) }
             if !removed.isEmpty { onEvent(.removed(removed.sorted())) }
+        }
+    }
+
+    /// Asks iCloud for a placeholder's file, once per placeholder; a
+    /// refusal is kept for the status line, never thrown.
+    private func requestDownload(_ id: NoteID) {
+        guard !downloadRequested.contains(id) else { return }
+        downloadRequested.insert(id)
+        do {
+            try ubiquity.startDownloading(fileURL(for: id))
+            downloadProblem = nil
+        } catch {
+            downloadProblem = "\(id.fileName): \(error.localizedDescription)"
+        }
+    }
+
+    /// The versions iCloud could not merge (another Mac wrote the file at
+    /// the same time), each kept as a note beside the file —
+    /// `<name> (conflict from <device> <time>).md`, never over an existing
+    /// file — and then marked resolved, so nothing is silently lost. A
+    /// version identical to the file has nothing to keep. One that cannot
+    /// be kept stays unresolved and is tried again on the next rescan.
+    private func materialiseConflictVersions() {
+        let names = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in names where !name.hasPrefix(".") && name.lowercased().hasSuffix(".md") {
+            // The URL is the folder's own path plus the name, as every other
+            // call to iCloud makes it (a listing would hand back the
+            // symlink-resolved path instead).
+            let id = NoteID(String(name.dropLast(3)))
+            let url = fileURL(for: id)
+            let versions = ubiquity.unresolvedConflictVersions(of: url)
+            guard !versions.isEmpty else { continue }
+            let current = NoteFile.open(url).identity(cap: 0)
+            for version in versions {
+                guard let data = try? version.contents() else { continue }
+                if let current, current.hash == NoteFile.hash(data), current.size == data.count {
+                    version.markResolved()
+                    continue
+                }
+                guard let text = String(data: data, encoding: .utf8) else { continue }
+                let base = NoteFileName.conflictStem(for: id, device: version.device, at: version.modified ?? now())
+                var candidate = NoteID(base)
+                var counter = 2
+                while counter < 1000 {
+                    do {
+                        _ = try NoteFile.createExclusively(fileURL(for: candidate), contents: text)
+                        version.markResolved()
+                        break
+                    } catch NoteFile.Failure.exists {
+                        candidate = NoteID("\(base)-\(counter)")
+                        counter += 1
+                    } catch {
+                        break
+                    }
+                }
+            }
         }
     }
 
@@ -435,6 +716,10 @@ public final class NoteStore {
         notes[id] = nil
         identities[id] = nil
         retained[id] = nil
+        placeholders.remove(id)
+        downloadRequested.remove(id)
+        heldForDownload.remove(id)
+        missingSince[id] = nil
     }
 
     private func account(_ id: NoteID, bytes: Int) {
@@ -746,6 +1031,12 @@ public final class NoteStore {
     /// flushed (and may divert like any other write). Returns `.saved`, or
     /// `.keptAsConflictCopy` when the file had changed outside — before the
     /// check, or between the check and the swap.
+    ///
+    /// The file's identity is its content: the descriptor's bytes are
+    /// hashed and compared with what was last read or written, whatever
+    /// inode holds them now (iCloud replaces a file by rename on every
+    /// change it brings, unchanged bytes included). The inode that was
+    /// verified is what the swap is checked against afterwards.
     private func write(_ id: NoteID) throws -> SaveOutcome {
         guard let note = notes[id] else { throw StoreError.noSuchNote(id) }
         if note.truncated { throw StoreError.oversized(id) }
@@ -765,6 +1056,16 @@ public final class NoteStore {
             attempts += 1
             switch NoteFile.open(url) {
             case .absent:
+                // iCloud's placeholder in its place (the file evicted, or
+                // not downloaded): nothing is written over a placeholder.
+                // The download is asked for and the text waits, dirty.
+                if fileManager.fileExists(atPath: folder.appendingPathComponent(ICloudDrive.placeholderName(for: id)).path) {
+                    placeholders.insert(id)
+                    heldForDownload.insert(id)
+                    notes[id]?.isDownloading = true
+                    requestDownload(id)
+                    throw StoreError.waitingForDownload(id)
+                }
                 #if DEBUG
                 interleavingHook?(.beforeCreate(id))
                 #endif
@@ -772,6 +1073,7 @@ public final class NoteStore {
                     identities[id] = try NoteFile.createExclusively(url, contents: contents)
                     dirty.remove(id)
                     accepted.remove(id)
+                    heldForDownload.remove(id)
                     return .saved
                 } catch NoteFile.Failure.exists {
                     // Somebody made the file meanwhile: look again, at most a few times.
@@ -784,12 +1086,15 @@ public final class NoteStore {
                 throw StoreError.entryChanged(id)
             case .file(let fd, let info):
                 defer { NoteFile.close(fd) }
-                guard let known = identities[id], (info.st_dev, info.st_ino) == known.sameInode,
+                guard let known = identities[id],
                       let onDisk = NoteFile.read(fd: fd, stat: info, cap: 0),
                       onDisk.identity.hash == known.hash, onDisk.identity.size == known.size,
                       onDisk.identity.size <= Self.maximumFileSize else {
                     return try divert(id, note: note)
                 }
+                // The bytes are the verified ones: the inode holding them
+                // now is what the swap displaces.
+                let verified = onDisk.identity
                 #if DEBUG
                 interleavingHook?(.beforeReplace(id))
                 #endif
@@ -805,7 +1110,7 @@ public final class NoteStore {
                     NoteFile.removeTemporary(temporary.url)
                     throw StoreError.io("\(url.lastPathComponent): \(error)")
                 }
-                return try settle(id, note: note, url: url, temporary: temporary, known: known, fd: fd, info: info)
+                return try settle(id, note: note, url: url, temporary: temporary, known: verified, fd: fd, info: info)
             }
         }
     }
@@ -825,6 +1130,7 @@ public final class NoteStore {
             identities[id] = temporary.identity
             dirty.remove(id)
             accepted.remove(id)
+            heldForDownload.remove(id)
             return .saved
         }
         // An outside edit landed between the check and the swap: put it

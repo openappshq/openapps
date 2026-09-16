@@ -30,6 +30,7 @@ enum Diagnostics {
             hotkeyProblem: hotkeys.problem,
             folder: preferences.folderDisplayPath,
             folderIsMissing: model.store.folderIsMissing,
+            storage: preferences.storage.title.replacingOccurrences(of: "…", with: "") + (model.store.folderIsUbiquitous ? " · \(model.store.storageStatus.text)" : ""),
             watching: model.watcher.isWatching,
             activeCount: model.active.count,
             archivedCount: model.archived.count,

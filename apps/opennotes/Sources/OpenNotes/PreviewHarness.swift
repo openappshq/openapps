@@ -42,6 +42,14 @@ final class PreviewHarness {
         func hasValue(forKey key: String) -> Bool { values[key] != nil }
     }
 
+    /// The temporary folder passes for iCloud's, so the footer's line and
+    /// a placeholder note render; nothing is asked of iCloud.
+    private final class PreviewUbiquity: Ubiquity {
+        func isUbiquitous(_ url: URL) -> Bool { true }
+        func startDownloading(_ url: URL) throws {}
+        func unresolvedConflictVersions(of url: URL) -> [any UbiquityConflictVersion] { [] }
+    }
+
     /// Registers in memory only.
     private final class PreviewLoginItemService: LoginItemService {
         private(set) var status: SMAppService.Status = .enabled
@@ -59,7 +67,7 @@ final class PreviewHarness {
         preferences = Preferences(defaults: defaults)
         preferences.folder = folder
         loginItem = LoginItem(flags: MemoryFlags(), service: PreviewLoginItemService())
-        model = AppModel(preferences: preferences, license: license, store: NoteStore(folder: folder), watcher: FolderWatcher())
+        model = AppModel(preferences: preferences, license: license, store: NoteStore(folder: folder, ubiquity: PreviewUbiquity()), watcher: FolderWatcher())
         AppResources.registerFonts()
         if let icon = AppResources.appIcon() { NSApp.applicationIconImage = icon }
         license.openLicense = { print("PREVIEW_OPEN_LICENSE") }
@@ -100,6 +108,9 @@ final class PreviewHarness {
         var failures = 0
         let notes = model.active
         let groceries = notes.first { $0.title == "Groceries" }?.id ?? notes[0].id
+        // The placeholder: a note iCloud has not downloaded, opened.
+        let readingList = NoteID("reading-list")
+        _ = model.body(of: readingList)
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             let suffix = appearance == .aqua ? "light" : "dark"
             let scheme: ColorScheme = appearance == .aqua ? .light : .dark
@@ -110,6 +121,7 @@ final class PreviewHarness {
                 ("editing", .open(groceries, editing: true), false, false),
                 ("readonly", .open(groceries, editing: false), true, false),
                 ("toast", .fan, false, true),
+                ("downloading", .open(readingList, editing: false), false, false),
             ]
             for (name, state, readOnly, toast) in stages {
                 setRestricted(readOnly)
@@ -173,6 +185,10 @@ final class PreviewHarness {
         }
         let archived = Note(id: NoteID("old-plan"), text: "Old plan\nDone and dusted.", color: .paper, archived: true, created: base.addingTimeInterval(-30 * 86_400))
         try? Data(FrontMatter.serialize(archived).utf8).write(to: folder.appendingPathComponent(archived.id.fileName))
+        // A note another Mac wrote that iCloud has not downloaded here:
+        // the placeholder, as iCloud leaves it (a property list).
+        let placeholder = ICloudDrive.placeholderName(for: NoteID("reading-list"))
+        try? Data("<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>NSURLNameKey</key><string>reading-list.md</string></dict></plist>".utf8).write(to: folder.appendingPathComponent(placeholder))
     }
 
     /// The stage's screen: a 900 × 700 desktop.
@@ -184,7 +200,7 @@ final class PreviewHarness {
         let layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: visible, notes: notes.map(\.id), toast: toast)
         let open = state.openNote.flatMap { model.note($0) }
         let status: String
-        if model.readOnly { status = model.readOnlyNotice } else if state.isEditing { status = "Editing…" } else { status = open.map { "Saved · \(Age.text($0.modified))" } ?? "" }
+        if model.readOnly { status = model.readOnlyNotice } else if state.isEditing { status = "Editing…" } else { status = open.map { model.statusLine(for: $0.id) } ?? "" }
         let pending = toast ? ArchiveUndo.Pending(id: NoteID("x"), title: "Call mum", deadline: .distantFuture) : nil
         return DeckContent(layout: layout, state: state, side: preferences.side, notes: notes, openNote: open, readOnly: model.readOnly, readOnlyNotice: model.readOnlyNotice, statusLine: status, pendingUndo: pending, folderMissing: false, license: license)
     }

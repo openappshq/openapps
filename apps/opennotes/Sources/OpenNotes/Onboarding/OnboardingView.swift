@@ -213,8 +213,9 @@ private struct PermissionsStep: View {
 
 // MARK: - Files
 
-/// "Your notes are files": the folder in use, and that iCloud Drive or an
-/// Obsidian vault can be it.
+/// "Your notes are files": where they live — On this Mac, iCloud Drive
+/// (offered while it is reachable) or any folder — chosen here as in
+/// Settings, and that an Obsidian vault can be the folder.
 private struct FilesStep: View {
     let model: OnboardingModel
 
@@ -226,7 +227,7 @@ private struct FilesStep: View {
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text("Each note is one Markdown file with a short front matter for its color, order and dates. Open them in any editor, back them up, grep them; OpenNotes notices changes made elsewhere and never deletes a note you wrote (the one file it removes is a new note you closed empty).")
+                Text("Each note is one Markdown file with a short front matter for its color, order and dates. Open them in any editor, back them up, grep them; OpenNotes notices changes made elsewhere and never deletes a note you wrote (the one file it removes is a new note you closed empty). Keep them in iCloud Drive and they are on every Mac signed in to it.")
                     .font(Brand.body(16))
                     .lineSpacing(4)
                     .foregroundStyle(Brand.textSecondary)
@@ -234,13 +235,16 @@ private struct FilesStep: View {
             }
 
             VStack(alignment: .leading, spacing: Brand.Space.s12) {
-                GuideFact(title: "Notes folder", detail: model.preferences.folderDisplayPath + (model.preferences.usesDefaultFolder ? " (the default; created when it is missing)" : ""))
-                GuideFact(title: "iCloud Drive or Obsidian", detail: "Point the folder at iCloud Drive to have the notes on every Mac, or at an Obsidian vault to keep them in it. Files are never moved by OpenNotes: change the folder in Settings → General → Notes folder.")
-                HStack {
-                    Spacer()
-                    Button("Open Settings") { model.onOpenSettings?() }
-                        .buttonStyle(LinkButtonStyle())
-                }
+                StorageChoiceView(
+                    current: model.preferences.storage, iCloudAvailable: Preferences.iCloudIsAvailable,
+                    folderPath: model.preferences.folderDisplayPath, folderMissing: model.folderIsMissing(),
+                    readOnly: !model.license.hasAccess(), notice: model.storageNotice(),
+                    onChoose: { model.onChooseStorage?($0) }
+                )
+                Text("Switching copies the notes you have to the new folder; nothing is moved or removed. Change it any time in Settings → General.")
+                    .font(Brand.body(13))
+                    .foregroundStyle(Brand.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(Brand.Space.s16)
             .frame(maxWidth: .infinity, alignment: .leading)

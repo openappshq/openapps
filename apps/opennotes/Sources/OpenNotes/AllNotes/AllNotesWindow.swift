@@ -96,6 +96,14 @@ struct AllNotesView: View {
                     }
                 }
             }
+            // iCloud's state while the folder is iCloud's: one line under
+            // the split, nothing otherwise.
+            if let line = model.storageStatusLine {
+                Divider()
+                StorageStatusRow(line: line)
+                    .padding(.horizontal, Brand.Space.s12)
+                    .padding(.vertical, Brand.Space.s8)
+            }
             // An update asking for something (official builds): one line
             // under the split, nothing otherwise.
             if model.updates.hint() != nil {

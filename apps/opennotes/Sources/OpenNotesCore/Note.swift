@@ -84,6 +84,13 @@ nonisolated public struct Note: Hashable, Sendable, Identifiable {
     /// the store's body budget evicted it: `text` is then the first
     /// kilobyte, and `NoteStore.body(of:)` reads the rest back. Not persisted.
     public var bodyIsLoaded = true
+    /// The note's file is an iCloud placeholder right now (`.<name>.md.icloud`):
+    /// not downloaded yet, or evicted. With `bodyIsLoaded` false the note is
+    /// only its file name, shown greyed as "Downloading…" once asked for;
+    /// with it true the text in memory is the note (evicted while held) and
+    /// its write waits for the file to come back. Never written over. Not
+    /// persisted.
+    public var isDownloading = false
 
     public init(id: NoteID, text: String = "", color: NoteColor = .coral, face: NoteFace = .sans, pinned: Bool = false, archived: Bool = false, order: Int = 0, created: Date, modified: Date? = nil) {
         self.id = id
@@ -306,6 +313,16 @@ nonisolated public enum NoteFileName {
 
     public static func conflictName(for id: NoteID, at date: Date) -> String {
         conflictStem(for: id, at: date) + ".md"
+    }
+
+    /// `<name> (conflict from Kevin's MacBook 2026-09-16 10-30-05.123)`: a
+    /// version iCloud could not merge, kept as a note beside the file.
+    /// The device's name is slugged like a title, so the stem stays a
+    /// plain file name; without one it is the plain conflict stem.
+    public static func conflictStem(for id: NoteID, device: String?, at date: Date) -> String {
+        let name = device.map(slug) ?? ""
+        guard !name.isEmpty else { return conflictStem(for: id, at: date) }
+        return "\(id.rawValue) (conflict from \(name) \(conflictFormatter.string(from: date)))"
     }
 
     /// `<name> (recovered 2026-09-16 10-30-05.123)`: a version found in a

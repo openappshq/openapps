@@ -123,6 +123,8 @@ struct DeckView: View {
     private func tabView(_ tab: DeckLayout.Tab, index: Int) -> some View {
         let note = tab.id.flatMap { id in content.notes.first { $0.id == id } }
         let isOpen = content.state.openNote != nil && content.state.openNote == tab.id
+        // A note iCloud has not downloaded is only its file name: greyed.
+        let downloading = note.map { $0.isDownloading && !$0.bodyIsLoaded } ?? false
         let label = note.map(\.title) ?? "+\(tab.more) more"
         return Button {
             if let id = tab.id { content.onTab(id) } else { content.onMore() }
@@ -154,10 +156,11 @@ struct DeckView: View {
             }
         }
         .buttonStyle(.plain)
+        .opacity(downloading ? 0.55 : 1)
         .frame(width: tab.frame.width, height: tab.frame.height)
         .position(center(tab.frame))
         .zIndex(Double(index))
-        .accessibilityLabel(note.map { "Note: \($0.title)" } ?? label)
+        .accessibilityLabel(note.map { "Note: \($0.title)" + (downloading ? ", downloading" : "") } ?? label)
         .accessibilityAddTraits(isOpen ? .isSelected : [])
     }
 
@@ -221,7 +224,14 @@ struct NoteCard: View {
             LicensePillHeader(license: content.license)
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
-            if previewRendering {
+            if note.isDownloading, !note.bodyIsLoaded {
+                // Only the file name until iCloud brings the file; opening
+                // it asked for the download.
+                Text("Downloading…")
+                    .font(Brand.body(14))
+                    .foregroundStyle(Brand.noteInkSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if previewRendering {
                 // `ImageRenderer` draws no NSTextView: the styled text, static.
                 PreviewText(text: note.text, face: note.face, dark: colorScheme == .dark)
                     .padding(12)

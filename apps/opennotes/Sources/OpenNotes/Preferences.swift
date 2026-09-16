@@ -19,6 +19,8 @@ final class Preferences {
     }
 
     @ObservationIgnored private let defaults: UserDefaults
+    /// The display default applies to this install and is not recorded yet.
+    @ObservationIgnored private var pendingDisplayDefault = false
 
     var side: DeckSide {
         didSet { defaults.set(side.rawValue, forKey: Key.side) }
@@ -45,6 +47,18 @@ final class Preferences {
     /// Whether the folder is the default one (created when missing) or a
     /// chosen one (never created by the app).
     var usesDefaultFolder: Bool { defaults.string(forKey: Key.folder) == nil }
+    /// Where the notes live, read off the folder: the default folder is
+    /// "On this Mac", the iCloud Drive folder is "iCloud Drive", anything
+    /// else "Other folder". Nothing is stored beyond the folder itself.
+    var storage: StorageChoice {
+        if usesDefaultFolder || folder.standardizedFileURL.path == Self.defaultFolder.standardizedFileURL.path { return .thisMac }
+        if folder.standardizedFileURL.path == Self.iCloudFolder.standardizedFileURL.path { return .iCloudDrive }
+        return .other
+    }
+    /// The two folders the app makes when they are missing: its default
+    /// and the iCloud Drive one (Finder shows it under iCloud Drive as
+    /// "OpenNotes"). A chosen folder is never created.
+    var createsFolder: Bool { storage != .other }
     var face: NoteFace {
         didSet { defaults.set(face.rawValue, forKey: Key.face) }
     }
@@ -59,7 +73,15 @@ final class Preferences {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         side = defaults.string(forKey: Key.side).flatMap(DeckSide.init(rawValue:)) ?? .right
-        display = defaults.string(forKey: Key.display).flatMap(DeckDisplay.init(rawValue:)) ?? .main
+        // Every display on a fresh install; an install with earlier
+        // preferences and no stored choice keeps the main display it had.
+        // Nothing is written here: the launch's other defaults (the login
+        // item, the updater) read the evidence after this, and a write now
+        // would be an earlier launch to them. `commitLaunchDefaults`
+        // records it once they have.
+        let stored = defaults.string(forKey: Key.display).flatMap(DeckDisplay.init(rawValue:))
+        pendingDisplayDefault = FreshInstallDefault.display(store: defaults).wouldApply(isSet: stored != nil)
+        display = stored ?? (pendingDisplayDefault ? .every : .main)
         if let data = defaults.data(forKey: Key.hotkey) {
             hotkey = data.isEmpty ? nil : try? JSONDecoder().decode(Hotkey.self, from: data)
         } else {
@@ -71,11 +93,41 @@ final class Preferences {
         autoArchiveDays = defaults.object(forKey: Key.autoArchiveDays) as? Int ?? 0
     }
 
+    /// Records the fresh-install decisions read at init (the display
+    /// default: stored as the choice, and the flag either way), called by
+    /// the launch once every other default has read the evidence. Safe
+    /// to call again; nothing is written after the first time.
+    func commitLaunchDefaults() {
+        let display = FreshInstallDefault.display(store: defaults)
+        if pendingDisplayDefault {
+            pendingDisplayDefault = false
+            defaults.set(DeckDisplay.every.rawValue, forKey: Key.display)
+        }
+        if !display.isDecided { display.markDecided() }
+    }
+
     /// Back to `~/Documents/OpenNotes`, which the app creates when missing.
     func resetFolder() {
         defaults.removeObject(forKey: Key.folder)
         folder = Self.defaultFolder
         defaults.removeObject(forKey: Key.folder)
+    }
+
+    /// The iCloud Drive folder, `~/Library/Mobile Documents/com~apple~CloudDocs/OpenNotes`.
+    static var iCloudFolder: URL { ICloudDrive.folder() }
+
+    /// Whether iCloud Drive can be chosen: signed in, with iCloud Drive on.
+    static var iCloudIsAvailable: Bool { ICloudDrive.isAvailable() }
+
+    /// The choice from Settings or the guide. "Other folder…" is the
+    /// chooser's job (`folder` set to what it returned); nothing changes
+    /// for it here.
+    func setStorage(_ choice: StorageChoice) {
+        switch choice {
+        case .thisMac: resetFolder()
+        case .iCloudDrive: folder = Self.iCloudFolder
+        case .other: break
+        }
     }
 
     /// `~/Documents/OpenNotes`; the update-test variant (scripts/update-e2e.sh)
