@@ -239,12 +239,14 @@ jobs:
           OPENAPPS_SUPPORT_URL: ${{ vars.OPENAPPS_SUPPORT_URL }}
         run: |
           missing=0
-          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD SPARKLE_ED_PRIVATE_KEY; do
-            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the macpaper-release environment."; missing=1; fi
+          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set as a repository secret."; missing=1; fi
           done
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then echo "::error::Secret SPARKLE_ED_PRIVATE_KEY is not set in the macpaper-release environment."; missing=1; fi
           # Only publication uses these, but a missing token should fail before a long build, not after.
           if [ "$PUBLISH" = true ]; then
-            for name in RULESET_READ_TOKEN FEED_COMMIT_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
+            if [ -z "$RULESET_READ_TOKEN" ]; then echo "::error::Secret RULESET_READ_TOKEN is not set as a repository secret; publishing needs it."; missing=1; fi
+            for name in FEED_COMMIT_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
               if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the macpaper-release environment; publishing needs it."; missing=1; fi
             done
           fi

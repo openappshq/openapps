@@ -50,26 +50,39 @@ final class GatedPicker: ImagePicker, @unchecked Sendable {
 final class GatedExporter: FileExporter, @unchecked Sendable {
     let gate = Gate()
     private(set) var exported: [String] = []
+    /// Runs after each file is written (the user taking a while between two
+    /// save panels).
+    var afterWrite: @Sendable () -> Void = {}
     func export(_ data: Data, named name: String, to folder: URL, mayWrite: @escaping @MainActor () -> Bool) async throws -> URL {
         await gate.wait()
         guard mayWrite() else { throw AppModel.Refused() }
         exported.append(name)
+        afterWrite()
         return folder.appendingPathComponent(name)
     }
 }
 
 /// A desktop whose first apply takes long enough for a deadline to pass:
-/// `onApply` runs inside the call, before it returns.
+/// `onApply` runs inside the call, before it returns. It can refuse HEIC
+/// files (a display that only takes stills), running `onRefuse` then.
 final class SlowDesktop: DesktopApplier, @unchecked Sendable {
+    struct RefusedHEIC: Error {}
     private let lock = NSLock()
-    private var recorded: [DisplayID] = []
+    private var recorded: [(DisplayID, URL)] = []
     var onApply: @Sendable () -> Void = {}
-    var calls: [DisplayID] { lock.withLock { recorded } }
+    var onRefuse: @Sendable () -> Void = {}
+    var refusesHEIC = false
+    var calls: [DisplayID] { lock.withLock { recorded.map(\.0) } }
+    var urls: [URL] { lock.withLock { recorded.map(\.1) } }
     func apply(imageAt url: URL, to display: DisplayID) throws {
-        lock.withLock { recorded.append(display) }
+        if refusesHEIC, url.pathExtension == "heic" {
+            onRefuse()
+            throw RefusedHEIC()
+        }
+        lock.withLock { recorded.append((display, url)) }
         onApply()
     }
-    func currentImageURL(for display: DisplayID) -> URL? { nil }
+    func currentImageURL(for display: DisplayID) -> URL? { lock.withLock { recorded.last { $0.0 == display }?.1 } }
 }
 
 /// Work started while allowed and finished after the trial ended, with no
@@ -236,6 +249,56 @@ struct ContinuationTests {
         #expect(desktop.calls == [1])
     }
 
+    @Test("A display refuses the HEIC and the deadline passes before the fallback: no still reaches it, both files discarded")
+    func heicFallbackAcrossExpiry() async {
+        let model = await attach()
+        defer { tearDown() }
+        let clock = self.clock
+        desktop.refusesHEIC = true
+        desktop.onRefuse = { clock.advance(120) }
+        model.setPair(.lightDark)
+        model.apply()
+        await settle(model)
+        #expect(desktop.calls.isEmpty, "the fallback still was never handed over")
+        #expect(model.appliedState.byDisplay.isEmpty)
+        #expect(appliedFiles().isEmpty, "the refused HEIC and the still are both discarded")
+        #expect(model.status == StatusLine(text: AppModel.restrictedMessage, tone: .error))
+    }
+
+    @Test("With time to spare the refused HEIC falls back to a still, marked so the theme swap follows")
+    func heicFallbackWithinTheTrial() async {
+        let model = await attach(secondsLeft: FakeClock.day)
+        defer { tearDown() }
+        desktop.refusesHEIC = true
+        model.setPair(.lightDark)
+        model.apply()
+        await settle(model)
+        #expect(desktop.calls == [1, 2])
+        #expect(desktop.urls.allSatisfy { $0.pathExtension == "png" })
+        #expect(model.appliedState.fallbackDisplayIDs == [1, 2])
+        #expect(appliedFiles() == ["1-2.png", "2-2.png"], "the refused HEICs are gone, the stills kept")
+    }
+
+    @Test("The theme swap after the deadline touches no display; the sides applied stay")
+    func themeSwapAcrossExpiry() async {
+        let model = await attach()
+        defer { tearDown() }
+        desktop.refusesHEIC = true
+        model.systemAppearance = { .light }
+        model.setPair(.lightDark)
+        model.apply()
+        await settle(model)
+        #expect(model.appliedState.fallbackDisplayIDs == [1, 2])
+        let before = desktop.urls
+        clock.advance(120)
+        model.systemAppearance = { .dark }
+        model.themeChanged()
+        await settle(model)
+        #expect(desktop.urls == before, "nothing swapped")
+        #expect(appliedFiles() == ["1-2.png", "2-2.png"], "the prepared dark stills are discarded")
+        #expect(model.appliedState.file(for: 1) == before[0] && model.appliedState.file(for: 2) == before[1])
+    }
+
     @Test("Export whose render crosses the deadline writes nothing")
     func exportRenderAcrossExpiry() async {
         let model = await attach()
@@ -261,6 +324,20 @@ struct ContinuationTests {
         #expect(exporter.exported.isEmpty)
         #expect(model.status == StatusLine(text: AppModel.restrictedMessage, tone: .error))
         #expect(!model.isExporting, "the busy flag is reset")
+    }
+
+    @Test("A multi-file export: the deadline between two files stops the second")
+    func multiFileExportAcrossExpiry() async {
+        let model = await attach()
+        defer { tearDown() }
+        exporter.gate.release()
+        let clock = self.clock
+        exporter.afterWrite = { clock.advance(120) }
+        model.export(.phonePair)
+        await settle(model)
+        #expect(exporter.exported.count == 1, "the desktop PNG was written before the deadline, the phone PNG refused after it")
+        #expect(model.status == StatusLine(text: AppModel.restrictedMessage, tone: .error))
+        #expect(!model.isExporting)
     }
 
     @Test("The same work, with time to spare, completes")

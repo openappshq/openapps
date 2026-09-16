@@ -206,20 +206,30 @@ workflow creates the cask from
 [`packaging/homebrew/Casks/macpaper.rb`](../../packaging/homebrew/Casks/macpaper.rb)
 on the first release and bumps it after every later one.
 
-**Environment.** Create the environment **`macpaper-release`** (Settings →
-Environments) and add, on that environment, the following. Restrict its
-deployment branches and tags to `main` and `macpaper-v*` so nothing else can
-reach the signing certificate or publish. The build, publish and feed jobs
-all run in this environment, so any required reviewers approve each.
+**Shared secrets (already there).** The certificate and the read-only
+ruleset token are **repository** secrets shared by every app ([RELEASES.md,
+Signing material](../../RELEASES.md#signing-material)); the workflow reads
+them by name and they are never copied per app:
 
-**Secrets:**
-
-| Secret | Value |
+| Repository secret | Value |
 | --- | --- |
 | `RELEASE_SIGNING_P12` | The certificate and key as a `.p12`, base64-encoded (`release-signing.p12.base64`) |
 | `RELEASE_SIGNING_P12_PASSWORD` | Its password (`release-signing.p12.password`) |
-| `SPARKLE_ED_PRIVATE_KEY` | The update key (`sparkle-ed25519.key`, one base64 line) |
 | `RULESET_READ_TOKEN` | [Fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository only, Administration: Read-only, created by a repository admin; used only to read the tag ruleset before publishing |
+
+**Environment.** Create the environment **`macpaper-release`** (Settings →
+Environments) and add, on that environment, the following. Restrict its
+deployment branches and tags to `main` and `macpaper-v*` so nothing else can
+reach the update key or publish. The build, publish and feed jobs all run
+in this environment, so any required reviewers approve each.
+
+**Secrets** — the app's own update key, and the two publishing credentials
+(the same values every app uses, restored from the offline backup; they stay
+per environment so only `main` and release tags can publish):
+
+| Secret | Value |
+| --- | --- |
+| `SPARKLE_ED_PRIVATE_KEY` | The update key (`sparkle-ed25519.key`, one base64 line) |
 | `FEED_COMMIT_TOKEN` | Fine-grained token for this repository only, Contents: Read and write; used only to push the update feed commit to `main` |
 | `HOMEBREW_TAP_DEPLOY_KEY` | The private half of an SSH deploy key added to `openappshq/homebrew-tap` with write access (`gh repo deploy-key add --allow-write`); it can push only to the tap |
 
@@ -235,7 +245,7 @@ Environment **variables** (public configuration, not secrets):
 | --- | --- |
 | `OPENAPPS_DODO_PAID_PRODUCT_ID` | macPaper's **live** Dodo product (`pdt_…`, LICENSING.md "Dodo Payments setup"). The release job fails before building when it is unset or not a product ID; `generate-licensing-config.sh` refuses a placeholder for a live build |
 | `OPENAPPS_BUY_URL` | Optional. Where "Buy a license" opens; the app's default is `https://openapps.space/macpaper/` |
-| `OPENAPPS_SUPPORT_URL` | Optional. "Contact support" on a revoked license; nothing is shown without it |
+| `OPENAPPS_SUPPORT_URL` | Optional. "Contact support" on a revoked license; the app's default is `https://openapps.space/macpaper/#questions`, an empty value hides the link |
 
 The checks job never sees these: it compiles the licensed and the official
 flavour against Dodo **test** mode with the placeholder
@@ -245,7 +255,7 @@ ID or the test host.
 
 The release job checks every secret, the product ID and both committed
 public files before it touches the certificate, and fails naming what is
-missing. There is no unsigned fallback. The certificate lives in a temporary
+missing and where it belongs. There is no unsigned fallback. The certificate lives in a temporary
 keychain for exactly the build-and-sign step (`with-signing-keychain.sh`),
 which deletes it before the zip, the feed, the upload or the publish run.
 

@@ -44,7 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let license = LicenseStatus()
         licenseStatus = license
         let model = AppModel(
-            preferences: preferences, license: license, paths: .standard(), desktop: WorkspaceDesktopApplier(),
+            preferences: preferences, license: license, paths: .standard(appID: UpdateTesting.isCompiledIn ? "macpaper-updatetest" : "macpaper"),
+            desktop: WorkspaceDesktopApplier(),
             exporter: PanelFileExporter(), imagePicker: PanelImagePicker(), displays: { ScreenCatalog.displays() }
         )
         self.model = model

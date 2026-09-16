@@ -68,8 +68,10 @@ struct EnforcementTests {
 
     /// What every restricted state must look like at the outputs: the card
     /// and the badge say so, and every action — Apply, Shuffle, the
-    /// scheduled shuffle, Export, a new seed, a typed seed — changes nothing
-    /// on the desktop, in the export folder or in the draft.
+    /// scheduled shuffle, Export, a new seed, a typed seed, a remix, a
+    /// finish, the generator and the grain bindings, never-show's move to
+    /// a new seed — changes nothing on the desktop, in the export folder or
+    /// in the draft.
     func expectRestricted(title: String, sourceLocation: SourceLocation = #_sourceLocation) async {
         #expect(!status.hasAccess(), sourceLocation: sourceLocation)
         #expect(status.restriction()?.title == title, sourceLocation: sourceLocation)
@@ -78,6 +80,13 @@ struct EnforcementTests {
         let desktopBefore = harness.desktop.calls.count
         let exportsBefore = harness.exporter.exported.count
         let draftBefore = model.draft
+        // Never-show still blocks (curation), but moves to no new document.
+        model.neverShowThis()
+        #expect(model.blockedCount == 1, sourceLocation: sourceLocation)
+        #expect(model.draft == draftBefore, "no reseeded replacement while restricted", sourceLocation: sourceLocation)
+        model.clearBlocklist()
+        model.remix()
+        model.useTrueBlack()
         model.apply()
         model.apply(ApplyTarget(scope: .allDisplays))
         model.shuffle()
