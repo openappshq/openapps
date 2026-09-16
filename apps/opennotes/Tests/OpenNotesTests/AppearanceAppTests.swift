@@ -213,4 +213,86 @@ final class AppearanceAppTests: XCTestCase {
         XCTAssertFalse(contents.contains("face:"), contents)
         XCTAssertFalse(contents.contains("font:"), contents)
     }
+
+    // MARK: - NoteColorPanel
+
+    @MainActor func testPresentingADifferentOwnerFlushesThePreviousOwnersPendingPickFirst() {
+        let panel = NoteColorPanel(usesSystemPanel: false)
+        var picksA: [NoteColor] = []
+        var picksB: [NoteColor] = []
+        panel.present(for: "note:a", current: .coral) { picksA.append($0) }
+        panel.receive(0x112233)
+        // Before the settle: owner b takes the panel, and a's pick is
+        // flushed to a first, never reaching b.
+        panel.present(for: "note:b", current: .coral) { picksB.append($0) }
+        XCTAssertEqual(picksA, [.custom(0x112233)])
+        XCTAssertEqual(picksB, [])
+
+        panel.receive(0x445566)
+        panel.dismiss(for: "note:b")
+        XCTAssertEqual(picksB, [.custom(0x445566)])
+        XCTAssertEqual(picksA, [.custom(0x112233)], "a is not touched again")
+
+        // After dismiss, the panel has no owner: a pick reaches no one.
+        panel.receive(0x999999)
+        XCTAssertNil(panel.owner)
+        XCTAssertEqual(picksA, [.custom(0x112233)])
+        XCTAssertEqual(picksB, [.custom(0x445566)])
+    }
+
+    @MainActor func testAPendingPickSettlesByItselfAfterTheTimerAndIsNotDeliveredTwice() throws {
+        let panel = NoteColorPanel(usesSystemPanel: false)
+        var picks: [NoteColor] = []
+        panel.present(for: "note:z", current: .coral) { picks.append($0) }
+        panel.receive(0xABCDEF)
+        XCTAssertEqual(picks, [])
+        let settled = expectation(description: "settled after the debounce")
+        DispatchQueue.main.asyncAfter(deadline: .now() + NoteColorPanel.settle + 0.2) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+        XCTAssertEqual(picks, [.custom(0xABCDEF)])
+        panel.dismiss(for: "note:z")
+        XCTAssertEqual(picks, [.custom(0xABCDEF)], "no duplicate delivery")
+    }
+
+    @MainActor func testSettleDeliversPendingWithoutClearingTheOwner() {
+        let panel = NoteColorPanel(usesSystemPanel: false)
+        var picks: [NoteColor] = []
+        panel.present(for: "note:a", current: .coral) { picks.append($0) }
+        panel.receive(0x111111)
+        panel.settle(ownersStartingWith: "note:")
+        XCTAssertEqual(picks, [.custom(0x111111)])
+        XCTAssertEqual(panel.owner, "note:a")
+    }
+
+    @MainActor func testSettleWithANonMatchingPrefixDoesNothing() {
+        let panel = NoteColorPanel(usesSystemPanel: false)
+        var picks: [NoteColor] = []
+        panel.present(for: "note:a", current: .coral) { picks.append($0) }
+        panel.receive(0x111111)
+        panel.settle(ownersStartingWith: "settings")
+        XCTAssertEqual(picks, [])
+        XCTAssertEqual(panel.owner, "note:a")
+    }
+
+    @MainActor func testTwoReceivesBeforeSettleDeliverOnlyTheLastColour() {
+        let panel = NoteColorPanel(usesSystemPanel: false)
+        var picks: [NoteColor] = []
+        panel.present(for: "note:a", current: .coral) { picks.append($0) }
+        panel.receive(0x111111)
+        panel.receive(0x222222)
+        panel.settle(ownersStartingWith: "note:")
+        XCTAssertEqual(picks, [.custom(0x222222)])
+    }
+
+    // MARK: - Styler link on a custom colour
+
+    @MainActor func testTheStylersLinkForASoftCustomColourIsNotTheBaseAccentAndReadsAtTheFloor() throws {
+        let styler = NoteStyler(look: NoteAppearance(color: .custom(0x7BAF9E)), appearance: NSAppearance(named: .aqua))
+        XCTAssertNotEqual(styler.link, NSColor(hex: 0xA53A20))
+        let face = NoteColor.custom(0x7BAF9E).face(dark: false)
+        let link = try XCTUnwrap(NoteColorPanel.rgb(styler.link))
+        XCTAssertGreaterThanOrEqual(NotePaper.contrast(link, face), NotePaper.minimumSecondaryContrast)
+        let secondary = try XCTUnwrap(NoteColorPanel.rgb(styler.secondary))
+        XCTAssertGreaterThanOrEqual(NotePaper.contrast(secondary, face), NotePaper.minimumSecondaryContrast)
+    }
 }

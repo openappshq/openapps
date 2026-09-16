@@ -253,4 +253,72 @@ final class AppearanceTests: XCTestCase {
         let results = Set((0..<50).map { NotePaper.pick(avoiding: [], seed: $0) })
         XCTAssertGreaterThan(results.count, 1)
     }
+
+    // MARK: - Contrast for every text role (ink, secondary, link)
+
+    /// The grey ramp, plus the review's specific greys and a few saturated
+    /// midtones: every role still reads at its floor in both appearances.
+    @MainActor func testEveryTextRoleReadsAtItsFloorAcrossAGreyRampAndSomeMidtones() {
+        var customs = stride(from: UInt32(0), through: 255, by: 17).map { $0 << 16 | $0 << 8 | $0 }
+        customs += [0x777777, 0x7BAF9E, 0xE06030, 0x3080D0, 0x40A040]
+        let validInks: Set<UInt32> = [NotePaper.lightInk, NotePaper.darkInk, 0x000000, 0xFFFFFF]
+        for rgb in customs {
+            let color = NoteColor.custom(rgb)
+            for dark in [false, true] {
+                let label = String(format: "#%06X dark=\(dark)", rgb)
+                let face = color.face(dark: dark)
+                let ink = color.ink(dark: dark)
+                XCTAssertGreaterThanOrEqual(NotePaper.contrast(ink, face), NotePaper.minimumContrast, label)
+                XCTAssertTrue(validInks.contains(ink), label + " ink=" + String(format: "#%06X", ink))
+                XCTAssertGreaterThanOrEqual(NotePaper.contrast(color.inkSecondary(dark: dark), face), NotePaper.minimumSecondaryContrast, label)
+                XCTAssertGreaterThanOrEqual(NotePaper.contrast(color.link(dark: dark), face), NotePaper.minimumSecondaryContrast, label)
+            }
+        }
+    }
+
+    /// A genuine midtone: neither brand ink reaches 4.5:1, so light mode
+    /// falls all the way to pure black (the higher of the two contrasts).
+    @MainActor func testAMidtoneNoBrandInkReachesFallsToPureBlackOrWhite() {
+        let color = NoteColor.custom(0x777777)
+        let face = color.face(dark: false)
+        XCTAssertLessThan(NotePaper.contrast(NotePaper.lightInk, face), NotePaper.minimumContrast)
+        XCTAssertLessThan(NotePaper.contrast(NotePaper.darkInk, face), NotePaper.minimumContrast)
+        XCTAssertEqual(color.ink(dark: false), 0x000000)
+    }
+
+    @MainActor func testEveryPresetsLinkReadsAtTheSecondaryFloorInBothAppearances() {
+        for paper in NotePaper.allCases {
+            let color = NoteColor.preset(paper)
+            for dark in [false, true] {
+                XCTAssertGreaterThanOrEqual(NotePaper.contrast(color.link(dark: dark), color.face(dark: dark)), NotePaper.minimumSecondaryContrast, "\(paper) dark=\(dark)")
+            }
+        }
+    }
+
+    @MainActor func testPresetsTakeTheBrandSecondaryOfTheBodysPolarity() {
+        for paper in NotePaper.allCases {
+            let color = NoteColor.preset(paper)
+            XCTAssertEqual(color.inkSecondary(dark: true), NotePaper.darkInkSecondary, "\(paper) dark")
+            if paper == .graphite {
+                XCTAssertEqual(color.inkSecondary(dark: false), NotePaper.darkInkSecondary, "\(paper) light")
+            } else {
+                XCTAssertEqual(color.inkSecondary(dark: false), NotePaper.lightInkSecondary, "\(paper) light")
+            }
+        }
+    }
+
+    @MainActor func testSecondaryAndLinkInkAreDeterministicForACustomColour() {
+        let color = NoteColor.custom(0x7BAF9E)
+        XCTAssertEqual(color.inkSecondary(dark: false), color.inkSecondary(dark: false))
+        XCTAssertEqual(color.link(dark: false), color.link(dark: false))
+    }
+
+    @MainActor func testLinkOnASoftCustomColourIsNotTheBaseAccentButAShadeThatReachesTheFloor() {
+        let color = NoteColor.custom(0x7BAF9E)
+        let face = color.face(dark: false)
+        XCTAssertLessThan(NotePaper.contrast(0xA53A20, face), NotePaper.minimumSecondaryContrast)
+        let link = color.link(dark: false)
+        XCTAssertNotEqual(link, 0xA53A20)
+        XCTAssertGreaterThanOrEqual(NotePaper.contrast(link, face), NotePaper.minimumSecondaryContrast)
+    }
 }
