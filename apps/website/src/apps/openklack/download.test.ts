@@ -14,6 +14,7 @@ test("download page says the release is coming soon and offers nothing without t
     expect(pending).toContain("Mac release is coming soon");
     expect(pending).not.toContain("curl ");
     expect(pending).not.toContain("brew install");
+    expect(pending).not.toContain("How do I install this?");
     expect(pending).not.toContain("Start it manually");
     expect(pending).not.toContain("download=");
     expect(pending).not.toContain("/releases");
@@ -27,6 +28,8 @@ test("download page leads with the one-line install and a Copy button, Homebrew 
   expect(html).toContain(`<code tabindex="-1">${command}</code>`);
   expect(html).toContain('aria-label="Copy install command"');
   expect(html).toContain(`Prefer Homebrew? <code>${brewCommand}</code>`);
+  expect(html).toContain("How do I install this?");
+  expect(html.indexOf("How do I install this?")).toBeLessThan(html.indexOf(command));
   expect(html).toContain('href="https://github.com/openappshq/openapps/blob/main/apps/website/public/install/openklack"');
   expect(html).toContain("Paste this into Terminal");
   // No disk image to drag: the script opens the app itself.

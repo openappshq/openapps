@@ -13,6 +13,12 @@ export type Product = {
    * page either.
    */
   free?: boolean;
+  /**
+   * The macOS permissions the app asks for on first launch, named as System
+   * Settings names them (e.g. "Input Monitoring"). Left out for an app that
+   * asks for nothing. The install guide and the setup copy read this.
+   */
+  permissions?: readonly string[];
   icon: string;
   accent: "cobalt" | "orchid" | "green" | "tangerine";
   /** Whether `/brand/<id>/wordmark-{ink,paper}.svg` exist; otherwise the name is set in type. */
@@ -40,6 +46,7 @@ export const products: Product[] = [
     description: "Mechanical keyboard sounds. For the keyboard you already own.",
     platform: "macOS",
     price: "$5",
+    permissions: ["Input Monitoring"],
     icon: "/brand/openklack/app-icon.svg",
     accent: "cobalt",
     brandSource: "design/assets/openklack",
@@ -78,6 +85,7 @@ export const products: Product[] = [
     description: "Type :tada: in any text field on your Mac. Get 🎉.",
     platform: "macOS",
     price: "$5",
+    permissions: ["Accessibility", "Input Monitoring"],
     icon: "/brand/openreaction/app-icon.svg",
     accent: "orchid",
     wordmark: false,
@@ -158,6 +166,7 @@ export const products: Product[] = [
     description: "Wallpapers your Mac makes itself, from the notch.",
     platform: "macOS",
     price: "$5",
+    permissions: [],
     icon: "/brand/macpaper/app-icon.svg",
     accent: "tangerine",
     wordmark: false,

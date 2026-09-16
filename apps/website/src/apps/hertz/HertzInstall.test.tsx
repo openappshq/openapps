@@ -13,6 +13,9 @@ test("shows the one-line install once Hertz is on sale, with the trial and Homeb
     '<code tabindex="-1">curl -fsSL https://openapps.space/install/hertz | sh</code>',
   );
   expect(html).toContain('aria-label="Copy install command"');
+  // The guide's link sits above the line it explains.
+  expect(html).toContain("How do I install this?");
+  expect(html.indexOf("How do I install this?")).toBeLessThan(html.indexOf("curl -fsSL"));
   expect(html).toContain("Prefer Homebrew? <code>brew install --cask openappshq/tap/hertz</code>");
   expect(html).toContain(
     'href="https://github.com/openappshq/openapps/blob/main/apps/website/public/install/hertz"',
@@ -35,4 +38,5 @@ test.each([
   expect(html).not.toContain("brew install");
   expect(html).not.toContain("curl ");
   expect(html).not.toContain("/install/");
+  expect(html).not.toContain("How do I install this?");
 });

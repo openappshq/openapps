@@ -28,6 +28,8 @@ test("shows the install line before the open-and-paste steps for a buyer without
   expect(html).toContain(`<code tabindex="-1">${command}</code>`);
   expect(html).toContain('aria-label="Copy install command"');
   expect(html).toContain(`Prefer Homebrew? <code>${brewCommand}</code>`);
+  expect(html).toContain("How do I install this?");
+  expect(html.indexOf("How do I install this?")).toBeLessThan(html.indexOf(command));
   expect(html).toContain('href="openklack://activate?key=LK-1"');
   // Install (with the command) comes before Settings › License and Paste.
   expect(html.indexOf(command)).toBeLessThan(html.indexOf("Open Settings › License"));
@@ -54,6 +56,7 @@ test("falls back to the plain install step when the app has no cask", () => {
   const html = renderToStaticMarkup(<ThanksPage app="openklack" />);
   expect(html).not.toContain("curl ");
   expect(html).not.toContain("brew install");
+  expect(html).not.toContain("How do I install this?");
   expect(html).toContain("Move it to Applications");
   expect(html).toContain('href="/openklack/download/"');
 });
@@ -111,6 +114,7 @@ test("the site-wide page lists every app and shows no command", () => {
   const html = renderToStaticMarkup(<ThanksPage />);
   expect(html).not.toContain("curl ");
   expect(html).not.toContain("brew install");
+  expect(html).not.toContain("How do I install this?");
   expect(html).toContain("Get OpenKlack");
   expect(html).toContain("Get OpenReaction");
   expect(html).toContain("Get Hertz");

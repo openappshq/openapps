@@ -13,6 +13,9 @@ test("shows the one-line install once macPaper is on sale, with the trial and Ho
     '<code tabindex="-1">curl -fsSL https://openapps.space/install/macpaper | sh</code>',
   );
   expect(html).toContain('aria-label="Copy install command"');
+  // The guide's link sits above the line it explains.
+  expect(html).toContain("How do I install this?");
+  expect(html.indexOf("How do I install this?")).toBeLessThan(html.indexOf("curl -fsSL"));
   expect(html).toContain(
     "Prefer Homebrew? <code>brew install --cask openappshq/tap/macpaper</code>",
   );
@@ -36,6 +39,7 @@ test.each([
   expect(html).toContain("Coming soon");
   expect(html).toContain('aria-disabled="true"');
   expect(html).not.toContain("brew install");
+  expect(html).not.toContain("How do I install this?");
   expect(html).not.toContain("curl ");
   expect(html).not.toContain("/install/");
 });
