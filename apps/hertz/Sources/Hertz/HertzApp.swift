@@ -34,7 +34,11 @@ private struct MenuBarLabel: View {
     let license: LicenseStatus
 
     var body: some View {
-        let text = license.isFeatureEnabled ? preferences.menuBarReadout.text(cpu: model.cpu, memory: model.memory) : ""
+        // Asked now, not remembered: a lapsed trial hides the readout on the
+        // next body even before the model dropped its sample.
+        let text = MenuBarText.readout(
+            preferences.menuBarReadout, access: license.hasAccess(), hasSample: model.hasSample, cpu: model.cpu, memory: model.memory
+        ) ?? ""
         Label {
             if !text.isEmpty {
                 Text(text).font(.system(size: 12).monospacedDigit())
@@ -43,6 +47,17 @@ private struct MenuBarLabel: View {
             Image(nsImage: AppResources.menuBarImage())
         }
         .accessibilityLabel(text.isEmpty ? "Hertz" : "Hertz, \(preferences.menuBarReadout.title) \(text)")
+    }
+}
+
+/// What the menu-bar item prints beside the pulse: the chosen readout while
+/// the license allows the readings now and a sample is held; nothing
+/// otherwise (the pulse alone).
+nonisolated enum MenuBarText {
+    static func readout(_ readout: MenuBarReadout, access: Bool, hasSample: Bool, cpu: CPUSnapshot, memory: MemorySnapshot) -> String? {
+        guard access, hasSample else { return nil }
+        let text = readout.text(cpu: cpu, memory: memory)
+        return text.isEmpty ? nil : text
     }
 }
 
@@ -88,6 +103,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             trialTiming: Licensing.trialTiming
         ))
         self.license = license
+        // One projected entitlement for every consumer: the model asks it on
+        // every read, the views and exports on every evaluation.
+        model.access = { [weak license] in license?.isFeatureEnabled ?? false }
+        licenseStatus.bind(
+            access: { [weak license] in license?.isFeatureEnabled ?? false },
+            state: { [weak license] in license?.state },
+            restriction: { [weak license] in license?.restriction },
+            badge: { [weak license] in license?.badge },
+            canBuy: LicensingConfig.buyURL != nil
+        )
         licenseStatus.buy = { if let url = LicensingConfig.buyURL { NSWorkspace.shared.open(url) } }
         licenseStatus.tryAgain = { [weak self] in
             Task { [weak self] in
@@ -103,6 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyLicense()
         license.start()
         #else
+        // Licensing compiled out: every reading on, from the first tick.
+        model.start()
         // No record store to wait for: the install is fresh when no earlier
         // launch left preferences behind.
         loginItem.applyDefaultIfNeeded(storageIsFresh: true)
@@ -118,19 +145,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     #if OPENAPPS_LICENSING
-    /// The controller's state, copied to what the UI reads: the readings
-    /// stop collecting while they may not be shown, and the login-item
-    /// default is decided once storage says whether this install is fresh.
+    /// The controller published a change: the views re-read the projected
+    /// entitlement, collection is started or stopped (the model re-checks
+    /// access on every tick regardless), and the login-item default is
+    /// decided once storage says whether this install is fresh.
     private func applyLicense() {
         guard let license else { return }
-        licenseStatus.update(
-            isFeatureEnabled: license.isFeatureEnabled,
-            badge: license.badge,
-            restriction: license.restriction,
-            isBusy: license.isBusy,
-            canBuy: LicensingConfig.buyURL != nil
-        )
-        model.setMonitoring(license.isFeatureEnabled)
+        licenseStatus.publish()
+        licenseStatus.setBusy(license.isBusy)
+        if license.isFeatureEnabled { model.start() } else { model.stop() }
         loginItem.applyDefaultIfNeeded(storageIsFresh: license.freshInstall)
     }
 

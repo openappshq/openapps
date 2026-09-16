@@ -27,6 +27,17 @@ final class LoginItem {
     var isOn: Bool { status == .enabled || status == .requiresApproval }
     var requiresApproval: Bool { status == .requiresApproval }
 
+    /// The status in words, for Copy Diagnostics.
+    var statusDescription: String {
+        switch status {
+        case .enabled: "on"
+        case .requiresApproval: "waiting for approval in Login Items"
+        case .notRegistered: "off"
+        case .notFound: "not found"
+        @unknown default: "unknown (\(status.rawValue))"
+        }
+    }
+
     func refresh() {
         let current = SMAppService.mainApp.status
         if current != status { status = current }

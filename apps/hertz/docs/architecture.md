@@ -89,9 +89,11 @@ of recent pressure changes. The SwiftUI views observe the model and re-render.
 There is no other background work besides that timer, except in official
 builds the licensing controller's daily check and the trial's one-time
 registration (LICENSING.md); the readings themselves never touch the network.
-While the license keeps the core feature off, `MetricsModel.setMonitoring(false)`
-stops the timer and the dashboard shows the license card instead of the
-metric cards.
+`MetricsModel` starts with nothing collected and asks its `access` closure
+— the license controller's projection of the latest snapshot to the current
+clocks — on every tick and every export; a lapse drops the held sample, and
+the dashboard shows the license card instead of the metric cards. The
+timers are wake-ups, never the authorisation.
 
 ### The refresh cycle
 

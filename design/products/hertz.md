@@ -44,8 +44,12 @@ Official builds follow [LICENSING.md](../../LICENSING.md) through the shared `pa
 | Surface | While the readings run | While they are off |
 | --- | --- | --- |
 | Menu-bar item | Pulse + the chosen readout | Pulse alone |
-| Dashboard | The cards above; the license pill in the Health card while not simply licensed | One card at the top in place of the cards, then the footer. Collection pauses |
+| Dashboard | The cards above; the license pill in the Health card while not simply licensed | One card at the top in place of the cards, then the footer |
+| Collection | Every two seconds, started only once the license has granted access | Off: nothing is read, and the sample taken under the earlier grant is dropped |
+| Copy snapshot, Copy Diagnostics | The report | Version, login state and the build's licensing flavour only; the readings line says they are not collected |
 | Settings, License, Quit | Work | Work |
+
+The entitlement is asked at the moment it matters, never remembered: the collector, the readout, the dashboard and both copy paths read the license controller's projection of the manager's latest snapshot to the current clocks (the trial's monotonic clock, a held clock-behind, an unchecked wake). A deadline that passes between the deadline timer's schedule and its callback therefore already refuses the next read; the timers only wake the app to re-render and run the manager's housekeeping.
 
 The dashboard card names the state in LICENSING.md's words and offers a way out, never a price (the website states it):
 

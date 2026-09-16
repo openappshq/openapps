@@ -1,4 +1,6 @@
 import Foundation
+@testable import Hertz
+import HertzCore
 import OpenAppsLicensing
 
 /// In-memory stand-ins for the package's protocols, the shape of the ones
@@ -105,4 +107,44 @@ final class FakeRegistry: TrialRegistryClient, @unchecked Sendable {
 final class FakeDevice: DeviceIdentity, @unchecked Sendable {
     var uuid: String? = "00000000-1111-2222-3333-444444444444"
     func hardwareUUID() -> String? { uuid }
+}
+
+/// A license state a test moves by hand, for sources bound to `LicenseStatus`.
+final class StateBox: @unchecked Sendable {
+    var state: LicenseState
+    init(_ state: LicenseState) { self.state = state }
+}
+
+/// The latest snapshot the manager published, as the app's controller
+/// keeps it: the projection to the current clocks happens where it is read.
+final class SnapshotBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _snapshot = LicenseSnapshot()
+    var snapshot: LicenseSnapshot {
+        get { lock.withLock { _snapshot } }
+        set { lock.withLock { _snapshot = newValue } }
+    }
+}
+
+/// Inert collectors that count their reads and return fixed values: no
+/// Mach, libproc, IOKit or SMC call happens in a test.
+@MainActor
+final class CountingReaders {
+    private(set) var reads = 0
+    private(set) var hardwareReads = 0
+
+    var readers: MetricsReaders {
+        MetricsReaders(
+            hardware: { self.hardwareReads += 1; return HardwareInfo(chip: "Test M1", memoryGB: 16) },
+            cpu: { self.reads += 1; return CPUSnapshot(total: 42, thermalPressure: .nominal) },
+            memory: { MemorySnapshot(usedPercent: 63, pressurePercent: 30, pressureLevel: .normal) },
+            disk: { DiskSnapshot(usedPercent: 50) },
+            network: { NetSnapshot() },
+            battery: { BatterySnapshot() },
+            accessories: { [] },
+            sensors: { SensorSnapshot() },
+            processes: { [ProcSample(pid: 10, ppid: 1, name: "TestApp", path: "/Applications/TestApp.app", memory: 1 << 30, cpu: 12)] },
+            powerAssertions: { _ in PowerAssertionsSnapshot() }
+        )
+    }
 }

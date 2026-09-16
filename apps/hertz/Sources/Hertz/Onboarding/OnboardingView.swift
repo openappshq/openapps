@@ -115,8 +115,8 @@ private struct WelcomeStep: View {
                     .font(Brand.body(16))
                     .foregroundStyle(Brand.textSecondary)
             }
-            if Licensing.isCompiledIn {
-                trial
+            if let line = model.licenseLine {
+                trial(line)
             }
             HStack(spacing: Brand.Space.s16) {
                 Button("Get started", action: model.getStarted)
@@ -132,11 +132,12 @@ private struct WelcomeStep: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
-    /// Official builds: the trial started by itself. The pill shows where it
-    /// stands, also when the guide is opened again later.
-    private var trial: some View {
+    /// Official builds: what the license reports now (the trial running,
+    /// ended, a license), never a claim the state does not back. The pill
+    /// shows where it stands, also when the guide is opened again later.
+    private func trial(_ line: String) -> some View {
         VStack(alignment: .leading, spacing: Brand.Space.s8) {
-            Text("Your free 3-day trial started when you opened Hertz — no signup. Buy a license any time in Settings → License.")
+            Text(line)
                 .font(Brand.body(14))
                 .lineSpacing(3)
                 .foregroundStyle(Brand.textSecondary)

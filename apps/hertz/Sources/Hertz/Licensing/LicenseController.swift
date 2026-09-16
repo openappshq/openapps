@@ -10,16 +10,19 @@ import SwiftUI
 ///
 /// The manager lives on its own actor and hands over a `LicenseSnapshot`
 /// right after its memory changes, before it touches the record store. The
-/// entitlement is derived from that snapshot with the clock, so deadlines
-/// never wait on storage. Hertz's core feature is shown on the main actor
-/// (the readout, the dashboard), so the state lands there and nothing has
-/// to be locked from the manager's thread.
+/// entitlement is never cached here: `state` projects the latest snapshot
+/// to the clocks at the moment it is asked (the trial's monotonic clock, a
+/// held clock-behind, an unchecked wake), so every consumer — the metrics
+/// timer, the readout, the dashboard, an export — sees a deadline the
+/// instant it passes, whether or not the deadline timer has fired yet. The
+/// timers only wake the app up to re-render and to run the manager's
+/// housekeeping. Hertz's core feature is shown on the main actor, so
+/// nothing has to be locked from the manager's thread.
 @MainActor
 @Observable
 final class LicenseController {
     let manager: LicenseManager
     private(set) var snapshot: LicenseSnapshot
-    private(set) var state: LicenseState
     private(set) var isBusy = false
     private(set) var message: LicenseMessage?
     /// A key from a deep link, waiting for the user's confirmation.
@@ -45,13 +48,19 @@ final class LicenseController {
     }
     @ObservationIgnored private var published: Published
 
+    /// The clocks the projection uses; the app passes the real ones, and
+    /// they must be the manager's, so both sides see the same time.
+    @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let uptime: () -> TimeInterval
+
     /// Until the manager has loaded, there is no record: the readings are off.
-    init(manager: LicenseManager) {
+    init(manager: LicenseManager, now: @escaping () -> Date = Date.init, uptime: @escaping () -> TimeInterval = LicenseManager.continuousUptime) {
         self.manager = manager
+        self.now = now
+        self.uptime = uptime
         let initial = LicenseSnapshot(trialTiming: manager.trialTiming)
-        let initialState = initial.state(now: Date(), uptime: LicenseManager.continuousUptime())
+        let initialState = initial.state(now: now(), uptime: uptime())
         snapshot = initial
-        state = initialState
         published = Published(state: initialState, badge: LicenseBadge.label(for: initialState, appName: Licensing.appName), freshInstall: nil)
     }
 
@@ -79,7 +88,17 @@ final class LicenseController {
     /// it has, the clock-behind check is projected here, before any I/O.
     @ObservationIgnored private var pendingWake: TimeInterval?
 
-    /// Whether the readings run (LICENSING.md: the core feature).
+    /// The entitlement now: the latest snapshot projected to the current
+    /// clocks. Reading `snapshot` registers observation, so an observer
+    /// re-evaluates when the manager publishes; the clocks it does not
+    /// observe, which is what `publish`/the timers are for.
+    var state: LicenseState {
+        snapshot.state(now: now(), uptime: uptime(), wakeSince: pendingWake)
+    }
+
+    /// Whether the readings may run and be shown right now (LICENSING.md:
+    /// the core feature). Never cached: the metrics model asks on every
+    /// read, the views on every body.
     var isFeatureEnabled: Bool { state.isFeatureEnabled }
 
     var storageError: LicenseStoreError? { snapshot.storageError }
@@ -93,11 +112,7 @@ final class LicenseController {
     func start() {
         // Storage, the provisional trial and the launch check run on the
         // license actor; nothing here waits for them.
-        Task {
-            await subscribe()
-            await manager.checkOnLaunch()
-            refresh()
-        }
+        Task { await attach() }
         scheduleTimers()
 
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
@@ -122,6 +137,15 @@ final class LicenseController {
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "space.openapps.hertz.license.network"))
+    }
+
+    /// Reads storage and runs the launch check on the license actor; the
+    /// snapshot feed is live from the first read. `start` calls it; tests
+    /// call it directly, without the timers and system observers.
+    func attach() async {
+        await subscribe()
+        await manager.checkOnLaunch()
+        refresh()
     }
 
     // MARK: - User actions
@@ -197,7 +221,7 @@ final class LicenseController {
     /// Wake from sleep: the clock-behind check is projected from the snapshot
     /// at once, on the main actor, then the manager observes the wake.
     private func didWake() {
-        pendingWake = LicenseManager.continuousUptime()
+        pendingWake = uptime()
         refresh()
         Task {
             await manager.wake()
@@ -239,7 +263,7 @@ final class LicenseController {
         deadlineTimer = nil
         // Keyed off the projected trial clock (monotonic time), or the paid
         // license's wall-clock deadline.
-        if let delay = snapshot.deadlineDelay(now: Date(), uptime: LicenseManager.continuousUptime(), wakeSince: pendingWake) {
+        if let delay = snapshot.deadlineDelay(now: now(), uptime: uptime(), wakeSince: pendingWake) {
             deadlineTimer = makeTimer(after: delay + 1) { [weak self] in
                 self?.deadlineOrClock()
             }
@@ -255,10 +279,11 @@ final class LicenseController {
         return timer
     }
 
-    /// Re-evaluates the state from the snapshot and the clock — never from
-    /// storage — and re-arms both timers. Cheap; called on every timer and event.
+    /// Re-arms both timers from the snapshot and the clock — never from
+    /// storage — and tells the app when what it shows may have changed.
+    /// Cheap; called on every timer and event. Not an authorisation step:
+    /// `state` is projected afresh by whoever asks.
     private func refresh() {
-        state = snapshot.state(now: Date(), uptime: LicenseManager.continuousUptime(), wakeSince: pendingWake)
         scheduleTimers()
         let current = Published(state: state, badge: badge, freshInstall: freshInstall)
         if current != published {

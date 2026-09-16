@@ -263,10 +263,18 @@ enum Diagnostics {
     }
 
     static func text(model: MetricsModel, loginItem: LoginItem) -> String {
+        text(model: model, loginStatus: loginItem.statusDescription)
+    }
+
+    /// Version, login state and the build's licensing flavour always; the
+    /// readings only through the model's own gate (`diagnosticReport`),
+    /// which refuses while the license does not allow them now.
+    static func text(model: MetricsModel, loginStatus: String) -> String {
         [
             "Hertz \(versionString)",
-            "Open at login: \(loginItem.status.rawValue)",
+            "Open at login: \(loginStatus)",
             "Licensing: \(Licensing.isCompiledIn ? "official build" : "compiled out (source build)")",
+            "Readings: \(model.hasAccess ? "allowed" : "off (license)")",
             "",
             model.diagnosticReport,
         ].joined(separator: "\n")

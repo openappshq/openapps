@@ -48,24 +48,30 @@ nonisolated enum LicensingCopy {
     }
 }
 
-/// What the UI reads about licensing, in every build: the readings are on
-/// with nothing to say until an official build's `LicenseController` says
-/// otherwise (`AppDelegate` copies its state here on every change). A build
-/// with licensing compiled out never changes it.
+/// What the UI reads about licensing, in every build. The entitlement is
+/// never a stored flag here: `hasAccess`, `restriction` and `badge` ask the
+/// bound source each time — in an official build the license controller's
+/// projection of the manager's latest snapshot to the current clocks — so a
+/// view body, a readout or an export evaluated after a deadline sees the
+/// lapse even before any timer has fired. `revision` is what a view observes;
+/// the controller bumps it on every published change so SwiftUI re-reads. A
+/// build with licensing compiled out never binds anything: always on.
 @MainActor
 @Observable
 final class LicenseStatus {
-    /// Whether the readings run (LICENSING.md: the core feature).
-    private(set) var isFeatureEnabled = true
-    /// The trial's remaining time or the short reason the readings are off;
-    /// nil while simply licensed, or without licensing.
-    private(set) var badge: LicenseBadge.Label?
-    /// The dashboard's card while the readings are off.
-    private(set) var restriction: LicenseRestriction?
+    /// Bumped whenever the source published a change; read by the accessors
+    /// so observers re-evaluate them.
+    private(set) var revision = 0
     /// An activation, removal or check is running: the card's buttons wait.
     private(set) var isBusy = false
     /// The website has a page to buy on (`LicensingConfig.buyURL`).
     private(set) var canBuy = false
+
+    /// The entitlement now (LICENSING.md: the core feature).
+    @ObservationIgnored private var currentAccess: () -> Bool = { true }
+    @ObservationIgnored private var currentState: () -> LicenseState? = { nil }
+    @ObservationIgnored private var currentRestriction: () -> LicenseRestriction? = { nil }
+    @ObservationIgnored private var currentBadge: () -> LicenseBadge.Label? = { nil }
 
     /// Opens the website's Hertz page.
     @ObservationIgnored var buy: () -> Void = {}
@@ -76,16 +82,76 @@ final class LicenseStatus {
     /// Retries storage, the registry or the check now.
     @ObservationIgnored var tryAgain: () -> Void = {}
 
-    func update(isFeatureEnabled: Bool, badge: LicenseBadge.Label?, restriction: LicenseRestriction?, isBusy: Bool, canBuy: Bool) {
-        if self.isFeatureEnabled != isFeatureEnabled { self.isFeatureEnabled = isFeatureEnabled }
-        if self.badge != badge { self.badge = badge }
-        if self.restriction != restriction { self.restriction = restriction }
-        setBusy(isBusy)
-        if self.canBuy != canBuy { self.canBuy = canBuy }
+    /// Whether the readings may run and be shown right now.
+    func hasAccess() -> Bool {
+        _ = revision
+        return currentAccess()
+    }
+
+    /// The projected state, for copy that names it (the guide); nil without
+    /// licensing.
+    func state() -> LicenseState? {
+        _ = revision
+        return currentState()
+    }
+
+    /// The dashboard's card while the readings are off; nil while they run.
+    func restriction() -> LicenseRestriction? {
+        _ = revision
+        return currentRestriction()
+    }
+
+    /// The trial's remaining time or the short reason the readings are off;
+    /// nil while simply licensed, or without licensing.
+    func badge() -> LicenseBadge.Label? {
+        _ = revision
+        return currentBadge()
+    }
+
+    /// Binds the live source. Every accessor calls these closures afresh.
+    func bind(
+        access: @escaping () -> Bool,
+        state: @escaping () -> LicenseState?,
+        restriction: @escaping () -> LicenseRestriction?,
+        badge: @escaping () -> LicenseBadge.Label?,
+        canBuy: Bool
+    ) {
+        currentAccess = access
+        currentState = state
+        currentRestriction = restriction
+        currentBadge = badge
+        self.canBuy = canBuy
+        publish()
+    }
+
+    /// The source changed (a new snapshot, a deadline, a wake): observers
+    /// re-read through the closures.
+    func publish() {
+        revision &+= 1
     }
 
     func setBusy(_ busy: Bool) {
         if isBusy != busy { isBusy = busy }
+    }
+}
+
+/// What the setup guide says about the license: only what the state
+/// reports now, never a claim it does not back (a kept ended trial, a
+/// failed first save, a paid license). Nothing without licensing.
+nonisolated enum GuideCopy {
+    static func licenseLine(state: LicenseState?) -> String? {
+        guard let state else { return nil }
+        switch state {
+        case .trial(let days):
+            let left = days <= 1 ? "less than a day left" : "\(days) days left"
+            return "Your free trial is running, with \(left). No signup needed. Buy a license any time in Settings → License."
+        case .trialEnded:
+            return "Your free trial has ended. Settings → License is where to buy a license or paste a key."
+        case .licensed, .grace:
+            return "This Mac is licensed."
+        case .trialUnavailable, .trialNeedsConnection, .trialClockBehind, .checkRequired, .revoked:
+            return "Official builds include a free 3-day trial. Settings → License shows where it stands."
+        }
     }
 }
 

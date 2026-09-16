@@ -1,5 +1,6 @@
 import Foundation
 @testable import Hertz
+import HertzCore
 import OpenAppsLicensing
 import Testing
 
@@ -118,27 +119,83 @@ struct BadgeTests {
 }
 
 /// `LicenseStatus` is what the views read in every build: on with nothing
-/// to say until an official build's controller says otherwise.
+/// to say until bound to a live source, and never a stored answer after.
 @Suite("License status")
 @MainActor
 struct LicenseStatusTests {
     @Test func startsOnWithNothingToSay() {
         let status = LicenseStatus()
-        #expect(status.isFeatureEnabled)
-        #expect(status.badge == nil)
-        #expect(status.restriction == nil)
+        #expect(status.hasAccess())
+        #expect(status.state() == nil)
+        #expect(status.badge() == nil)
+        #expect(status.restriction() == nil)
         #expect(!status.canBuy)
     }
 
-    @Test func copiesTheControllersState() {
+    @Test("Every accessor asks the bound source afresh; nothing is cached between calls")
+    func readsTheSourceLive() {
         let status = LicenseStatus()
-        let card = LicenseRestriction.card(for: .trialEnded)
-        status.update(isFeatureEnabled: false, badge: LicenseBadge.label(for: .trialEnded, appName: "Hertz"), restriction: card, isBusy: false, canBuy: true)
-        #expect(!status.isFeatureEnabled)
-        #expect(status.badge?.text == "Trial ended")
-        #expect(status.restriction == card)
+        let source = StateBox(.trial(daysLeft: 3))
+        status.bind(
+            access: { source.state.isFeatureEnabled },
+            state: { source.state },
+            restriction: { LicenseRestriction.card(for: source.state) },
+            badge: { LicenseBadge.label(for: source.state, appName: "Hertz") },
+            canBuy: true
+        )
+        #expect(status.hasAccess())
+        #expect(status.restriction() == nil)
+        #expect(status.badge()?.text == "Free trial · 3 days left")
+        // The source moves on without anyone calling `publish`: the next
+        // read already sees it.
+        source.state = .trialEnded
+        #expect(!status.hasAccess())
+        #expect(status.restriction()?.title == "Your free trial has ended")
+        #expect(status.badge()?.text == "Trial ended")
         #expect(status.canBuy)
         status.setBusy(true)
         #expect(status.isBusy)
+    }
+
+    @Test func publishBumpsTheRevisionObserversRead() {
+        let status = LicenseStatus()
+        let before = status.revision
+        status.publish()
+        #expect(status.revision == before + 1)
+    }
+}
+
+/// The guide's welcome line says only what the state backs.
+@Suite("Guide license line")
+struct GuideCopyTests {
+    @Test func nothingWithoutAState() {
+        #expect(GuideCopy.licenseLine(state: nil) == nil)
+    }
+
+    @Test func followsTheState() {
+        #expect(GuideCopy.licenseLine(state: .trial(daysLeft: 3)) == "Your free trial is running, with 3 days left. No signup needed. Buy a license any time in Settings → License.")
+        #expect(GuideCopy.licenseLine(state: .trial(daysLeft: 1))?.contains("less than a day left") == true)
+        #expect(GuideCopy.licenseLine(state: .trialEnded)?.hasPrefix("Your free trial has ended.") == true)
+        #expect(GuideCopy.licenseLine(state: .licensed) == "This Mac is licensed.")
+        #expect(GuideCopy.licenseLine(state: .grace(daysLeft: 2, showWarning: true)) == "This Mac is licensed.")
+        for state in [LicenseState.trialUnavailable, .trialClockBehind, .trialNeedsConnection, .checkRequired, .revoked] {
+            #expect(GuideCopy.licenseLine(state: state)?.contains("started") != true, "\(state) never claims a trial started")
+            #expect(GuideCopy.licenseLine(state: state)?.contains("Settings → License") == true)
+        }
+    }
+}
+
+/// The menu-bar text: the readout only with access now and a sample.
+@Suite("Menu bar text")
+@MainActor
+struct MenuBarTextTests {
+    @Test func readoutNeedsAccessAndASample() {
+        let cpu = CPUSnapshot(total: 42)
+        let memory = MemorySnapshot(usedPercent: 63)
+        #expect(MenuBarText.readout(.cpu, access: true, hasSample: true, cpu: cpu, memory: memory) == "42%")
+        #expect(MenuBarText.readout(.memory, access: true, hasSample: true, cpu: cpu, memory: memory) == "63%")
+        #expect(MenuBarText.readout(.none, access: true, hasSample: true, cpu: cpu, memory: memory) == nil)
+        #expect(MenuBarText.readout(.cpu, access: false, hasSample: true, cpu: cpu, memory: memory) == nil)
+        #expect(MenuBarText.readout(.cpu, access: true, hasSample: false, cpu: cpu, memory: memory) == nil)
     }
 }

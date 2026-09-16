@@ -30,7 +30,11 @@ final class OnboardingModel {
 
     /// The trial's remaining time or the license's short reason, in
     /// official builds; nil while licensed or without licensing.
-    var licenseBadge: LicenseBadge.Label? { license.badge }
+    var licenseBadge: LicenseBadge.Label? { license.badge() }
+
+    /// What the welcome step says about the trial: only what the license
+    /// reports now. Nothing without licensing.
+    var licenseLine: String? { GuideCopy.licenseLine(state: license.state()) }
 
     // MARK: - Visibility
 

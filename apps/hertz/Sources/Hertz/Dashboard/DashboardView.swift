@@ -28,7 +28,9 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        if let restriction = license.restriction {
+        // Projected now, on every body: the card appears the moment a
+        // deadline passes, whether or not a timer has fired yet.
+        if let restriction = license.restriction() {
             // One card, as tall as it needs: nothing to scroll.
             VStack(spacing: 0) {
                 LicenseCard(restriction: restriction, status: license)
@@ -53,7 +55,7 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private var readings: some View {
-        HealthCard(hardware: model.hardware, health: model.health, badge: license.badge, openLicense: license.openLicense)
+        HealthCard(hardware: model.hardware, health: model.health, badge: license.badge(), openLicense: license.openLicense)
         if preferences.showsDiagnosis {
             DiagnosisCard(insights: model.diagnostics,
                           records: model.flightRecorder,

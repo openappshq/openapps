@@ -1,6 +1,6 @@
 # Releases and updates
 
-How every OpenApps HQ app is released, installed and kept up to date. OpenKlack, OpenReaction and Hertz follow this document, and any new app under `apps/` must too. If an app needs to differ, change this document first. Licensing rules live in [LICENSING.md](LICENSING.md); Hertz is free and has none.
+How every OpenApps HQ app is released, installed and kept up to date. OpenKlack, OpenReaction and Hertz follow this document, and any new app under `apps/` must too. If an app needs to differ, change this document first. Licensing rules live in [LICENSING.md](LICENSING.md).
 
 ## Summary
 
@@ -14,7 +14,7 @@ How every OpenApps HQ app is released, installed and kept up to date. OpenKlack,
 | Updates | Automatic *checks* on by default (decided 2026-09-16; before that, off): the app notices a new version and says so. Installing stays the user's move: "Update available — Install", `brew upgrade --cask <app>`, or the opt-in "Download and install automatically" toggle, **off by default** |
 | Update signatures | Every feed and every zip is signed with an app-specific update key that official builds pin |
 
-**Hertz, for now:** no in-app updater, no feed and no update key. `brew upgrade --cask hertz` is its only update path, its cask sets `auto_updates false` so Homebrew reports upgrades, and its workflow has no feed job. Its standalone self-updater was removed on import because it fetched the repository-wide latest release. When the shared Swift updater package lands, Hertz adopts it and this exception goes away.
+**Hertz, for now:** paid and licensed like the other apps (LICENSING.md), but still without an in-app updater, feed or update key. `brew upgrade --cask hertz` is its only update path, its cask sets `auto_updates false` so Homebrew reports upgrades, and its workflow has no feed job. Its standalone self-updater was removed on import because it fetched the repository-wide latest release. The updater ticket adopts `packages/openapps-updater` for Hertz and removes this exception.
 
 ## Why a stable self-signed certificate
 

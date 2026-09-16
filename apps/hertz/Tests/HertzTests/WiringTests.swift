@@ -181,29 +181,3 @@ struct WiringTests {
         #expect(sent.first?.count == 64)
     }
 }
-
-#if OPENAPPS_LICENSING
-/// The controller as the licensed build wires it: before storage answers
-/// there is no record, the readings are off and the dashboard says the
-/// trial is starting; its badge and card come from the same state.
-@Suite("License controller")
-@MainActor
-struct LicenseControllerTests {
-    @Test func startsRestrictedUntilStorageAnswers() {
-        let clock = FakeClock()
-        let trialStore = MemoryTrialStore()
-        let manager = LicenseManager(
-            appID: Licensing.appID, products: WiringTests.products, client: FakeClient(), store: MemoryStore(), journal: MemoryJournal(),
-            trialStore: trialStore, registry: FakeRegistry(), device: FakeDevice(), now: { clock.now }, uptime: { clock.uptime }
-        )
-        let controller = LicenseController(manager: manager)
-        #expect(controller.state == .trialUnavailable)
-        #expect(!controller.isFeatureEnabled)
-        #expect(controller.badge?.text == "Starting your free trial…")
-        #expect(controller.restriction?.title == "Starting your free trial…")
-        #expect(controller.freshInstall == nil)
-        #expect(LicenseController.trialText(daysLeft: 2) == "Free trial: 2 days left")
-        #expect(LicenseController.trialText(daysLeft: 1) == "Free trial: less than a day left")
-    }
-}
-#endif
