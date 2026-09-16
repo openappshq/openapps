@@ -18,13 +18,16 @@ test("each product owns its routes and adding another product cannot shadow Open
     "/hertz/",
     "/hertz/download/",
     "/hertz/thanks/",
+    "/macpaper/",
+    "/macpaper/download/",
+    "/macpaper/thanks/",
     "/another_route/",
     "/another_route/download/",
     "/another_route/thanks/",
   ]);
-  expect(combined[9]?.productId).toBe("another-app");
+  expect(combined[12]?.productId).toBe("another-app");
   expect(findPage("/openklack/download/")?.productId).toBe("openklack");
-  expect(combined[9]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(combined[12]?.module).toBe("./apps/another-app/pages/Home.tsx");
   expect(findPage("/openklack/thanks/trial/")).toBeUndefined();
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
   for (const path of ["/openklack", "/openklack/", "/openklack/index.html"])
@@ -39,7 +42,12 @@ test("each product owns its routes and adding another product cannot shadow Open
 });
 
 test("every app is sold on the same terms: a price, a download page and a checkout return", () => {
-  expect(paidProducts.map((product) => product.id)).toEqual(["openklack", "openreaction", "hertz"]);
+  expect(paidProducts.map((product) => product.id)).toEqual([
+    "openklack",
+    "openreaction",
+    "hertz",
+    "macpaper",
+  ]);
   for (const product of products) {
     expect(product.free, product.id).toBeUndefined();
     expect(product.price, product.id).toBe("$5");
@@ -92,7 +100,13 @@ test("catalog routes emit separate static HTML entries with product metadata", (
       'name="robots" content="noindex"',
     );
     expect(readFileSync(join(root, "openreaction/index.html"), "utf8")).not.toContain("noindex");
-    for (const file of ["thanks", "openreaction/thanks", "openklack/thanks", "hertz/thanks"]) {
+    for (const file of [
+      "thanks",
+      "openreaction/thanks",
+      "openklack/thanks",
+      "hertz/thanks",
+      "macpaper/thanks",
+    ]) {
       const html = readFileSync(join(root, `${file}/index.html`), "utf8");
       const head = html.slice(html.indexOf("<head>") + 6);
       // The referrer policy and capture script must precede every other head tag.
@@ -133,6 +147,17 @@ test("catalog routes emit separate static HTML entries with product metadata", (
     );
     expect(readFileSync(join(root, "hertz/thanks/index.html"), "utf8")).toContain(
       'property="og:site_name" content="Hertz"',
+    );
+    const macpaper = readFileSync(join(root, "macpaper/index.html"), "utf8");
+    expect(macpaper).toContain('property="og:site_name" content="macPaper"');
+    expect(macpaper).toContain('rel="icon" href="/brand/macpaper/app-icon.svg"');
+    expect(macpaper).not.toContain("__openappsCheckout");
+    expect(macpaper).not.toContain("noindex");
+    expect(readFileSync(join(root, "macpaper/download/index.html"), "utf8")).toContain(
+      "Install · macPaper",
+    );
+    expect(readFileSync(join(root, "macpaper/thanks/index.html"), "utf8")).toContain(
+      'property="og:site_name" content="macPaper"',
     );
     expect(inputs).toHaveLength(pages.length + 1);
   } finally {

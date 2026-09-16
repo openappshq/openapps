@@ -81,6 +81,26 @@ test("Hertz's page deep-links its own scheme and repeats its own command", () =>
   expect(html).not.toContain("openklack://");
 });
 
+test("macPaper's page deep-links its own scheme, promises nothing to grant and repeats its own command", () => {
+  returned("MP-1");
+  const licensing = licensingFor("macpaper", {
+    dodo: dodoConfigFrom({ VITE_MACPAPER_DODO_PAID_PRODUCT_ID: "pdt_mpPaid" }),
+    casks: { macpaper: "openappshq/tap/macpaper" },
+    downloads: {},
+  });
+  const html = renderToStaticMarkup(
+    <ThanksPage app="macpaper" asksPermissions={false} licensing={licensing} />,
+  );
+  expect(html).toContain("macPaper is");
+  expect(html).toContain("Nothing to grant.");
+  expect(html).not.toContain("Grant the permissions");
+  expect(html).toContain('href="macpaper://activate?key=MP-1"');
+  expect(html).toContain("Open macPaper");
+  expect(html).toContain('<code tabindex="-1">brew install --cask openappshq/tap/macpaper</code>');
+  expect(html).not.toContain("hertz://");
+  expect(html).not.toContain("openklack://");
+});
+
 test("the site-wide page lists every app and shows no command", () => {
   returned("LK-1,LK-2");
   const html = renderToStaticMarkup(<ThanksPage />);
@@ -89,5 +109,6 @@ test("the site-wide page lists every app and shows no command", () => {
   expect(html).toContain("Get OpenKlack");
   expect(html).toContain("Get OpenReaction");
   expect(html).toContain("Get Hertz");
+  expect(html).toContain("Get macPaper");
   expect(html).toContain("Install the app");
 });

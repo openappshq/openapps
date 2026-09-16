@@ -17,7 +17,13 @@ test("every checkout return page is uncached, unindexed and sends no referrer", 
   const headers = rules(siteHeaders());
   const returns = pages.filter((page) => page.checkoutReturn).map((page) => page.path);
   expect(returns).toEqual(
-    expect.arrayContaining(["/openklack/thanks/", "/openreaction/thanks/", "/thanks/"]),
+    expect.arrayContaining([
+      "/openklack/thanks/",
+      "/openreaction/thanks/",
+      "/hertz/thanks/",
+      "/macpaper/thanks/",
+      "/thanks/",
+    ]),
   );
   for (const path of returns) {
     expect(headers.get(path), path).toEqual([

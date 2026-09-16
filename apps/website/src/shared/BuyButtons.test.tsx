@@ -8,16 +8,19 @@ const dodo = dodoConfigFrom({
   VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
   VITE_OPENKLACK_DODO_PAID_PRODUCT_ID: "pdt_okPaid",
   VITE_HERTZ_DODO_PAID_PRODUCT_ID: "pdt_hzPaid",
+  VITE_MACPAPER_DODO_PAID_PRODUCT_ID: "pdt_mpPaid",
 });
 const casks = {
   openreaction: "openappshq/tap/openreaction",
   openklack: "openappshq/tap/openklack",
   hertz: "openappshq/tap/hertz",
+  macpaper: "openappshq/tap/macpaper",
 };
 const downloads = {
   openreaction: "https://downloads.example/OpenReaction.dmg",
   openklack: "https://downloads.example/OpenKlack.dmg",
   hertz: "https://downloads.example/Hertz.dmg",
+  macpaper: "https://downloads.example/macPaper.dmg",
 };
 
 test("app pages offer the install with its trial and a priced purchase, and no trial checkout", () => {

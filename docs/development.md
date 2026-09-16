@@ -33,6 +33,7 @@ apps/
       pages/                  Lazy-loaded page entries
     src/apps/openreaction/     OpenReaction marketing and emoji demo
     src/apps/hertz/            Hertz marketing and the drawn dashboard
+    src/apps/macpaper/         macPaper marketing and the notch scene
   site-worker/                Cloudflare Worker: serves the site, runs /api/trial on D1
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
   openreaction/               OpenReaction's Swift app
@@ -58,7 +59,7 @@ design/
 ```
 
 The workspace remains pnpm + Vite+, with no additional task runner.
-`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/openklack/`, its download page at `/openklack/download/`, OpenReaction at `/openreaction/`, and Hertz at `/hertz/`.
+`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/openklack/`, its download page at `/openklack/download/`, OpenReaction at `/openreaction/`, Hertz at `/hertz/`, and macPaper at `/macpaper/`.
 `pnpm openklack:dev` runs the native utility.
 `pnpm build` emits one static `dist/` with a real HTML entry for each catalog page and a `404.html` fallback.
 The website loads each product's code and styles only when its route opens.
@@ -116,7 +117,7 @@ The website’s install links open `/openklack/download/`, a separate static HTM
 
 What no page code can prevent: the host that serves the thanks page receives the initial request, query string included. The build emits `dist/_headers` from the catalog (`apps/website/headers.ts`): every `noindex` page is served with `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex` and `Cache-Control: no-store`. On Cloudflare those pages are plain static asset requests that never run Worker code, and the Worker keeps Workers Logs off; don't enable Logpush or Workers Logs for it.
 
-Paid app pages offer the install (the one-line command with Homebrew under it, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the install command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's page also keeps an install section with the command and the Homebrew line, on the same gate (`VITE_HERTZ_DODO_PAID_PRODUCT_ID` and `VITE_HERTZ_BREW_CASK`).
+Paid app pages offer the install (the one-line command with Homebrew under it, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the install command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's and macPaper's pages also keep an install section with the command and the Homebrew line, on the same gate (`VITE_<APP>_DODO_PAID_PRODUCT_ID` and `VITE_<APP>_BREW_CASK`).
 
 ## Sound library
 
