@@ -398,6 +398,11 @@ struct CuratedShuffleTests {
             nil, .quiet
         ),
         ("a repeat of the previous document", TasteSet.recipes[1].wallpaper, TasteSet.recipes[1].wallpaper, .sameAsBefore),
+        // A bare pixelize (no source) still fails: the gate's photo-aware
+        // separation (Curation.swift) only kicks in when there is a
+        // source; without one it falls back to `wallpaper.colors`, which
+        // for pixelize is the single background color.
+        ("bare pixelize, no photo", Wallpaper(generator: .pixelize(PixelizeParameters(source: nil, blockSize: 16, background: RGBAColor(hex: 0x304BFF))), seed: 1), nil, .palette),
     ]
 
     @Test("Known-bad documents, data-driven: each fails the gate for its own named reason", arguments: badDocuments.indices)
@@ -410,8 +415,9 @@ struct CuratedShuffleTests {
     /// One known-good document per shuffle family, from a fixed seed that
     /// passes the gate at the default (14") context — the same bar the
     /// taste set is held to. Seed 1 with the "Neon Night" preset happens to
-    /// pass for nine of the ten families; only "Pixelized photo" (no photo
-    /// in a unit test, so it renders as a flat background) needed a search.
+    /// pass for nine of the ten families; "Pixelized photo" needs a real
+    /// photo behind it (a bare background always fails the gate's palette
+    /// check), so it is covered separately below, with its own renderer.
     static let knownGoodSeeds: [(String, UInt64, String)] = [
         ("Moiré atlas", 1, "Neon Night"),
         ("Moiré lattice", 1, "Neon Night"),
@@ -437,6 +443,27 @@ struct CuratedShuffleTests {
         wallpaper.seed = seed
         let verdict = QualityGate.assess(wallpaper, renderer: Self.renderer, context: QualityGate.defaultContext)
         #expect(verdict.passes, "\(name) @\(seed) \(paletteName): \(verdict.failures) \(verdict.metrics)")
+    }
+
+    /// "Pixelized photo" needs a real, textured photo to pass the gate's
+    /// photo-aware separation check — a checkerboard, not a flat half like
+    /// `PixelizeTests`' red/blue source (its own lightness separation is
+    /// only ~0.18, under the 0.25 floor).
+    @Test("A known-good Pixelized photo document, with a real photo behind it, passes the gate")
+    func knownGoodPixelizedPhoto() {
+        let source = PhotoCarryTests.source
+        let reference = PhotoCarryTests.reference
+        let renderer = WallpaperRenderer(images: MemoryImages([reference: source]))
+        let family = RecipeFamily.named("Pixelized photo")!
+        let palette = Palettes.preset(named: "Neon Night")!
+        var g = SeededGenerator(seed: 4)
+        var wallpaper = family.draw(palette, &g)
+        wallpaper.seed = 4
+        guard case .pixelize(var p) = wallpaper.generator else { Issue.record("not pixelize"); return }
+        p.source = reference
+        wallpaper.generator = .pixelize(p)
+        let verdict = QualityGate.assess(wallpaper, renderer: renderer, context: QualityGate.defaultContext)
+        #expect(verdict.passes, "\(verdict.failures) \(verdict.metrics)")
     }
 
     @Test("The taste set is at least 30 recipes with stable ids, names and documents")

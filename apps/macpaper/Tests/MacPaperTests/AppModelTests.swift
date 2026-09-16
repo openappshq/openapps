@@ -168,6 +168,27 @@ struct AppModelTests {
         #expect(h.model.draft == h.model.appliedState.wallpaper(for: 1))
     }
 
+    @Test("Shuffle finds nothing better when the pins can't be satisfied: no desktop calls, the draft and applied state untouched, the status names it")
+    func shuffleNothingBetter() async {
+        let h = Harness()
+        defer { h.tearDown() }
+        h.preferences.sameOnAllDisplays = true
+        // A pinned generator the gate always refuses (a bare gradient):
+        // every attempt on every display fails `.bare`, so the plan comes
+        // back empty and shuffle() must not fall back to an unvalidated
+        // candidate (fix round 1, P0-1).
+        let bare = Wallpaper(generator: .gradient(GradientParameters(kind: .linear, stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)])), seed: 1, pinned: [.generator])
+        h.model.load(bare)
+        let before = h.model.draft
+        h.model.shuffle()
+        await h.settle()
+        #expect(h.desktop.calls.isEmpty)
+        #expect(h.model.draft == before)
+        #expect(h.model.appliedState.byDisplay.isEmpty)
+        #expect(h.model.status?.text == Shuffle.nothingBetterMessage)
+        #expect(h.model.status?.tone == .error)
+    }
+
     @Test("Favorites toggle by document and reload from disk")
     func favorites() {
         let h = Harness()
