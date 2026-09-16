@@ -110,6 +110,15 @@ jobs:
         run: |
           scripts/generate-licensing-config.sh Sources/MacPaper/Licensing/LicensingConfig.swift
           swift test --scratch-path .build/official
+      - name: Build and test the update-test flavour
+        # The variant scripts/update-e2e.sh drives: the updater with its test
+        # hooks, licensing compiled out (Package.swift refuses it with
+        # OPENAPPS_LICENSING=1), so its isolation is checked on every change.
+        env:
+          OPENAPPS_LICENSING: "0"
+          OPENAPPS_OFFICIAL: "1"
+          MACPAPER_UPDATE_TEST: "1"
+        run: swift test --scratch-path .build/updatetest
       - name: Test the licensing package
         run: swift test --package-path ../../packages/openapps-licensing
       - name: Test the updater package
@@ -147,6 +156,18 @@ jobs:
           scripts/bundle.sh
           scripts/make-zip.sh
           scripts/verify-release.sh dist/macPaper-*.zip
+      # The whole update path, end to end, with a throwaway certificate and
+      # key and nothing beyond 127.0.0.1: builds the update-test variant twice,
+      # signs, serves and installs it (RELEASING.md, "The update end-to-end
+      # test"). Runs the variant as a real menu-bar app on the runner's GUI
+      # session; it applies nothing to any desktop and asks for no permission.
+      - name: Run the update end-to-end test
+        env:
+          OPENAPPS_LICENSING: "0"
+          SCRATCH_PATH: .build/update-e2e
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3 >/dev/null
+          scripts/update-e2e.sh
       - uses: actions/upload-artifact@v4
         with:
           name: macPaper-development-unsigned

@@ -78,6 +78,54 @@ struct SaverTests {
         #expect(Self.marker(at: destination) == "new")
     }
 
+    @Test("The replacement is one exchange: the destination is never missing, leftovers of an interrupted install are removed, foreign ones kept")
+    func installerExchangesAndRecovers() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-saver-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Screen Savers")
+        let destination = folder.appendingPathComponent(SaverInstaller.name)
+        try Self.plantSaver(at: destination, bundleID: SaverInstaller.bundleIdentifier, marker: "old")
+        let source = root.appendingPathComponent("source/macPaper.saver")
+        try Self.plantSaver(at: source, bundleID: SaverInstaller.bundleIdentifier, marker: "new")
+        // An earlier install was interrupted right after its exchange: the
+        // old bundle sits under the staging prefix. A foreign directory
+        // under the same prefix is somebody else's.
+        let ours = folder.appendingPathComponent(SaverInstaller.stagingPrefix + "interrupted")
+        try Self.plantSaver(at: ours, bundleID: SaverInstaller.bundleIdentifier, marker: "older")
+        let foreign = folder.appendingPathComponent(SaverInstaller.stagingPrefix + "foreign")
+        try Self.plantSaver(at: foreign, bundleID: "com.example.other", marker: "theirs")
+        let installer = SaverInstaller(source: source, destination: destination)
+        #expect(installer.isInstalled, "asking removes our leftover")
+        #expect(!FileManager.default.fileExists(atPath: ours.path))
+        #expect(Self.marker(at: foreign) == "theirs", "the foreign one stays")
+        // The exchange: the destination's inode changes in place, the old
+        // bundle is gone, nothing is left under the prefix but the foreign one.
+        try installer.install()
+        #expect(Self.marker(at: destination) == "new")
+        #expect(Self.leftovers(in: folder) == [SaverInstaller.stagingPrefix + "foreign"])
+        #expect(installer.isInstalled)
+        // Installing over nothing: a single rename.
+        try FileManager.default.removeItem(at: destination)
+        try installer.install()
+        #expect(Self.marker(at: destination) == "new")
+    }
+
+    @Test("A symbolic link where the Screen Savers folder should be is refused; nothing is written through it")
+    func installerRefusesRedirectedFolder() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-saver-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let elsewhere = root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        let folder = root.appendingPathComponent("Screen Savers")
+        try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: elsewhere)
+        let source = root.appendingPathComponent("source/macPaper.saver")
+        try Self.plantSaver(at: source, bundleID: SaverInstaller.bundleIdentifier, marker: "new")
+        let installer = SaverInstaller(source: source, destination: folder.appendingPathComponent(SaverInstaller.name))
+        #expect(throws: SaverInstaller.InstallError.folderIsSymlink) { try installer.install() }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).isEmpty, "nothing landed behind the link")
+        #expect(!installer.isInstalled)
+    }
+
     // MARK: Saver playback
 
     @Test("The saver's player restarts from the first frame when the frames change, and never indexes past a smaller set")

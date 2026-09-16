@@ -105,6 +105,13 @@ public struct AppliedImage: Equatable, Sendable {
     public let wallpaper: Wallpaper
     public let url: URL
     public let format: AppliedFormat
+
+    public init(display: DisplayID, wallpaper: Wallpaper, url: URL, format: AppliedFormat) {
+        self.display = display
+        self.wallpaper = wallpaper
+        self.url = url
+        self.format = format
+    }
 }
 
 /// Renders a document for each display and hands the files to the
@@ -282,6 +289,7 @@ public struct WallpaperApplier: Sendable {
             throw error
         }
         var manifest = AppliedManifest.load(in: directory)
+        manifest.markCommitted(image.url.lastPathComponent, for: image.displayID)
         prune(display: image.displayID, manifest: &manifest)
         manifest.save(in: directory)
         return AppliedImage(display: image.displayID, wallpaper: image.wallpaper, url: image.url, format: image.format)
@@ -304,11 +312,15 @@ public struct WallpaperApplier: Sendable {
 
     /// Re-applies a file that was applied before (the pin): no render, the
     /// same URL handed over again — only while it is still one of the
-    /// applier's own regular files, listed in its manifest for that display.
+    /// applier's own regular files, listed in its manifest for that display
+    /// as committed (a prepared file never committed, or since discarded,
+    /// is refused). The one desktop call that asks no license: it keeps
+    /// what an allowed apply already put there, and makes nothing new.
     public func reapply(_ url: URL, to display: DisplayID) throws {
         let realDirectory = URL(fileURLWithPath: directory.path).resolvingSymlinksInPath().standardizedFileURL.path
         let manifest = AppliedManifest.load(in: directory)
-        guard manifest.names(for: display).contains(url.lastPathComponent), Self.isOwnedRegularFile(url, inside: realDirectory) else {
+        guard manifest.entry(named: url.lastPathComponent, for: display)?.committed == true,
+              Self.isOwnedRegularFile(url, inside: realDirectory) else {
             throw ApplyError.notOwned
         }
         try applier.apply(imageAt: url, to: display)
@@ -401,6 +413,24 @@ struct AppliedManifest: Codable, Sendable {
     struct Entry: Codable, Hashable, Sendable {
         let name: String
         let counter: Int
+        /// The file reached a desktop through `commit`. A prepared file not
+        /// yet committed, or discarded, is never one the pin may hand over.
+        var committed = false
+
+        init(name: String, counter: Int, committed: Bool = false) {
+            self.name = name
+            self.counter = counter
+            self.committed = committed
+        }
+
+        enum CodingKeys: String, CodingKey { case name, counter, committed }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            counter = try container.decode(Int.self, forKey: .counter)
+            committed = try container.decodeIfPresent(Bool.self, forKey: .committed) ?? false
+        }
     }
 
     static let fileName = "manifest.json"
@@ -421,6 +451,12 @@ struct AppliedManifest: Codable, Sendable {
 
     mutating func record(_ name: String, counter: Int, for display: DisplayID) {
         files[String(display), default: []].append(Entry(name: name, counter: counter))
+    }
+
+    /// The file reached the desktop: the pin may hand it over again.
+    mutating func markCommitted(_ name: String, for display: DisplayID) {
+        guard let index = files[String(display)]?.firstIndex(where: { $0.name == name }) else { return }
+        files[String(display)]?[index].committed = true
     }
 
     /// The oldest entries past the newest `kept`.

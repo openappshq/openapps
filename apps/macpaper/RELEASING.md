@@ -279,11 +279,13 @@ which deletes it before the zip, the feed, the upload or the publish run.
 4. The workflow runs four jobs, following RELEASES.md step by step:
    - `checks`, as on every change: `swift test` in the source flavour and,
      with a generated test-mode configuration, in the licensed flavour
-     (licensing only) and the official flavour (licensing and the updater);
-     the licensing and updater packages' tests;
-     shellcheck and actionlint; the cask template; and an ad-hoc signed
-     universal development zip of the official flavour against Dodo test
-     mode with a throwaway update key.
+     (licensing only) and the official flavour (licensing and the updater),
+     and in the update-test flavour (the updater with its hooks, licensing
+     off); the licensing and updater packages' tests; shellcheck and
+     actionlint; the cask template; an ad-hoc signed universal development
+     zip of the official flavour against Dodo test mode with a throwaway
+     update key; and `scripts/update-e2e.sh`, the whole update path with a
+     throwaway certificate and key on the runner's own session.
    - `release` (read-only token): checks the secrets, the product ID
      variable and both public pins, imports the certificate into a temporary
      keychain, generates the live licensing configuration and builds the
