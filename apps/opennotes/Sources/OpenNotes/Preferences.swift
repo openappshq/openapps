@@ -16,6 +16,7 @@ final class Preferences {
         static let face = "notes.face"
         static let color = "notes.color"
         static let autoArchiveDays = "notes.autoArchiveDays"
+        static let hideFromScreenSharing = FreshInstallDefault.Key.hideFromScreenSharing
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -62,11 +63,26 @@ final class Preferences {
     var autoArchiveDays: Int {
         didSet { defaults.set(autoArchiveDays, forKey: Key.autoArchiveDays) }
     }
+    /// The deck and All Notes leave screen shares and recordings
+    /// (`ScreenSharing`). Turned on once on a fresh install
+    /// (`applyScreenSharingDefaultIfNeeded`, `FreshInstallDefault`); any
+    /// write here — the user's or the default's — records the decision, so
+    /// a choice made before storage answers is never undone.
+    var hideFromScreenSharing: Bool {
+        didSet {
+            defaults.set(hideFromScreenSharing, forKey: Key.hideFromScreenSharing)
+            screenSharingDefault.markSuperseded()
+        }
+    }
+    /// Created with the preferences, before this launch writes any.
+    @ObservationIgnored private let screenSharingDefault: FreshInstallDefault
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         flags = defaults
         hadEarlierPreferences = FreshInstallDefault.Key.earlierPreferenceEvidence.contains { defaults.hasValue(forKey: $0) }
+        screenSharingDefault = .screenSharing(store: defaults)
+        hideFromScreenSharing = defaults.object(forKey: Key.hideFromScreenSharing) as? Bool ?? false
         side = defaults.string(forKey: Key.side).flatMap(DeckSide.init(rawValue:)) ?? .right
         display = defaults.string(forKey: Key.display).flatMap(DeckDisplay.init(rawValue:)) ?? .main
         if let data = defaults.data(forKey: Key.hotkey) {
@@ -78,6 +94,16 @@ final class Preferences {
         face = defaults.string(forKey: Key.face).flatMap(NoteFace.init(rawValue:)) ?? .sans
         color = defaults.string(forKey: Key.color).flatMap(NoteColor.init(rawValue:)) ?? .coral
         autoArchiveDays = defaults.object(forKey: Key.autoArchiveDays) as? Int ?? 0
+    }
+
+    /// "Hide notes from screen sharing", on once: when the install is
+    /// demonstrably fresh (no earlier preferences, and `storageIsFresh` —
+    /// true from source, nil while an official build's storage has not
+    /// answered, which waits). Once decided, never revisited: an upgrade
+    /// keeps what the user's screen shares showed before.
+    func applyScreenSharingDefaultIfNeeded(storageIsFresh: Bool?) {
+        guard screenSharingDefault.shouldTurnOn(isOn: hideFromScreenSharing, storageIsFresh: storageIsFresh) else { return }
+        hideFromScreenSharing = true
     }
 
     /// Back to `~/Documents/OpenNotes`, which the app creates when missing.

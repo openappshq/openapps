@@ -57,6 +57,9 @@ final class PreviewHarness {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-preview-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         preferences = Preferences(defaults: defaults)
+        // The throwaway suite is a fresh install: Settings shows the
+        // screen-sharing default as a first launch leaves it.
+        preferences.applyScreenSharingDefaultIfNeeded(storageIsFresh: true)
         preferences.folder = folder
         loginItem = LoginItem(flags: MemoryFlags(), service: PreviewLoginItemService())
         model = AppModel(preferences: preferences, license: license, store: NoteStore(folder: folder), watcher: FolderWatcher())
@@ -123,6 +126,21 @@ final class PreviewHarness {
                 let stage = DeckStage(content: content(state: state, toast: toast), side: preferences.side, dark: scheme == .dark)
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-\(name)-\(suffix).png") { failures += 1 }
             }
+            setRestricted(false)
+            // Text held over the pill: the pill lit as the drop's target;
+            // then over the `+` tab with the fan out.
+            var dropPill = content(state: .pill, toast: false)
+            dropPill.dropTarget = true
+            if await !write(DeckStage(content: dropPill, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-drop-target-\(suffix).png") { failures += 1 }
+            var dropFan = content(state: .fan, toast: false)
+            dropFan.dropTarget = true
+            if await !write(DeckStage(content: dropFan, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-drop-target-fan-\(suffix).png") { failures += 1 }
+            // The same drag while read-only: refused, the license line
+            // under the pill.
+            setRestricted(true)
+            var dropRefused = content(state: .pill, toast: false, notice: true)
+            dropRefused.dropRefusal = model.readOnlyNotice
+            if await !write(DeckStage(content: dropRefused, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-drop-refused-\(suffix).png") { failures += 1 }
             setRestricted(false)
             // A tab lifted mid-drag: the third note pulled up past the
             // second, which has slid into the gap.
@@ -194,7 +212,7 @@ final class PreviewHarness {
     private func seedNotes() {
         let base = Date()
         let samples: [(String, NoteColor, NoteFace, Bool, Int, TimeInterval)] = [
-            ("Groceries\n- [x] milk\n- [ ] eggs\n- [ ] sourdough from **Bread Ahead**\n- [ ] coffee beans\n\nAsk about the _oat_ one.", .coral, .sans, true, 0, -3600),
+            ("Groceries\n- [x] milk\n- [X] eggs\n- [x] butter\n- [ ] sourdough from **Bread Ahead**\n  - [ ] the `[ ] seeded` one\n- [ ] coffee beans\n- [ ] apples\n\nAsk about the _oat_ one.", .coral, .sans, true, 0, -3600),
             ("Standup 16 Sep\n- feed key rotation\n- reply re ⌘W focus\n- release notes: paste as plain text", .yellow, .sans, false, 1, -7200),
             ("# Snippets\n`brew upgrade --cask opennotes`\nsee https://openapps.space/opennotes/", .sky, .mono, false, 2, -86_400),
             ("Side project\nName ideas, none good yet.", .mint, .sans, false, 3, -3 * 86_400),
@@ -249,11 +267,11 @@ final class PreviewHarness {
     /// The stage's screen: a 900 × 700 desktop.
     static let stageSize = CGSize(width: 900, height: 700)
 
-    private func content(state: DeckState, toast: Bool, model: AppModel? = nil, scroll: CGFloat = 0) -> DeckContent {
+    private func content(state: DeckState, toast: Bool, notice: Bool = false, model: AppModel? = nil, scroll: CGFloat = 0) -> DeckContent {
         let model = model ?? self.model
         let notes = model.active
         let visible = CGRect(origin: .zero, size: Self.stageSize)
-        let layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: visible, notes: notes.map(\.id), toast: toast, scroll: scroll)
+        let layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: visible, notes: notes.map(\.id), toast: toast, notice: notice, scroll: scroll)
         let open = state.openNote.flatMap { model.note($0) }
         let status: String
         if model.readOnly { status = model.readOnlyNotice } else if state.isEditing { status = "Editing…" } else { status = open.map { "Saved · \(Age.text($0.modified))" } ?? "" }

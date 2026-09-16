@@ -6,33 +6,56 @@ import UniformTypeIdentifiers
 final class AllNotesWindowController: NSObject, NSWindowDelegate {
     private let model: AppModel
     private let openNote: (NoteID) -> Void
-    private var window: NSWindow?
+    /// Made on the first `show()`; replaced when the screen-sharing
+    /// setting turns off (`applyScreenSharing`).
+    private(set) var window: NSWindow?
 
     init(model: AppModel, openNote: @escaping (NoteID) -> Void) {
         self.model = model
         self.openNote = openNote
+        super.init()
+        // "Hide notes from screen sharing": the window shows note text, so
+        // it follows the setting like the deck.
+        observeChanges({ [model] in _ = model.preferences.hideFromScreenSharing }, onChange: { [weak self] in self?.applyScreenSharing() })
     }
 
     func show() {
-        if window == nil {
-            let root = AllNotesView(model: model, openNote: openNote, export: { [weak self] id, format in self?.export(id, as: format) })
-            let hostingView = NSHostingView(rootView: root)
-            let window = NSWindow(
-                contentRect: NSRect(origin: .zero, size: NSSize(width: 760, height: 520)),
-                styleMask: [.titled, .closable, .resizable, .miniaturizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "All Notes"
-            window.minSize = NSSize(width: 560, height: 360)
-            window.isReleasedWhenClosed = false
-            window.contentView = hostingView
-            window.setFrameAutosaveName("AllNotes")
-            window.center()
-            self.window = window
-        }
+        if window == nil { makeWindow() }
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// The window, not yet on screen; `show()` orders it front.
+    func makeWindow() {
+        let root = AllNotesView(model: model, openNote: openNote, export: { [weak self] id, format in self?.export(id, as: format) })
+        let hostingView = NSHostingView(rootView: root)
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: NSSize(width: 760, height: 520)),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "All Notes"
+        window.minSize = NSSize(width: 560, height: 360)
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        window.setFrameAutosaveName("AllNotes")
+        window.center()
+        ScreenSharing.apply(to: window, surface: .allNotes, hidden: model.preferences.hideFromScreenSharing)
+        self.window = window
+    }
+
+    /// The setting changed: the window follows. Turned off, a window once
+    /// hidden cannot be shown again (`ScreenSharing`): one made anew takes
+    /// its place (the frame is autosaved), on screen if the old one was,
+    /// without taking the focus from Settings.
+    private func applyScreenSharing() {
+        guard let window else { return }
+        guard !ScreenSharing.apply(to: window, surface: .allNotes, hidden: model.preferences.hideFromScreenSharing) else { return }
+        let wasVisible = window.isVisible
+        window.orderOut(nil)
+        makeWindow()
+        if wasVisible { self.window?.orderFront(nil) }
     }
 
     /// Export… through the save panel; works while read-only.

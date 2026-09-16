@@ -51,6 +51,11 @@ nonisolated public enum DeckEvent: Hashable, Sendable {
     case plusClicked
     /// The global hotkey: a new note, focused, from anywhere.
     case hotkey
+    /// Text, a link or files let go over the pill or the fan: a new note
+    /// with what was dropped, focused — the hotkey's path, the controller
+    /// supplying the text when the store answers `.createNote`. Refused
+    /// while read-only the same way (the fan shows, nothing is made).
+    case dropped
     /// The store made the note the `.createNote` effect asked for.
     case noteCreated(NoteID)
     /// All Notes or the menu asked for this note.
@@ -113,7 +118,7 @@ nonisolated public enum DeckEffect: Hashable, Sendable {
 /// The deck's rules, pure: the controller owns the windows and timers and
 /// feeds events back. Hover fans the pill out after a delay and collapses
 /// it after the pointer has left both the edge and the deck; only a click,
-/// the hotkey, ⌘W or All Notes opens a note; an open note closes only on
+/// the hotkey, a drop, ⌘W or All Notes opens a note; an open note closes only on
 /// Escape, a click outside, the hotkey, ⌘W or Archive, and closing always
 /// saves. A lifted tab holds the fan out until it is dropped; the drop and
 /// ⌥⌘↑ / ⌥⌘↓ ask for one `.reorder`, the write the All Notes list makes.
@@ -197,7 +202,7 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
             cancelClose(&effects)
             state = .open(id, editing: true)
             effects.append(.openNote(id, focus: true))
-        case .plusClicked, .hotkey:
+        case .plusClicked, .hotkey, .dropped:
             if case .open(let current, _) = state {
                 effects.append(.closeNote(current))
             }
@@ -438,6 +443,9 @@ nonisolated public struct DeckMetrics: Hashable, Sendable {
     public var noteHeight: CGFloat = 360
     public var toastWidth: CGFloat = 260
     public var toastHeight: CGFloat = 36
+    /// A refused drop's notice under the deck: the toast's width, room
+    /// for the license line's three lines.
+    public var noticeHeight: CGFloat = 58
     public var gap: CGFloat = 8
     /// Room for the open note's shadow, and the pointer past the edge.
     public var margin: CGFloat = 24
@@ -482,7 +490,8 @@ nonisolated public struct DeckLayout: Hashable, Sendable {
     public var maxScroll: CGFloat
     public var plusTab: CGRect
     public var note: CGRect?
-    /// The archive toast ("Archived … · Undo"), under the deck, while one shows.
+    /// The archive toast ("Archived … · Undo") under the deck while one
+    /// shows, or the taller notice a refused drop shows in its place.
     public var toast: CGRect?
     /// From one tab's top to the next's.
     public var tabStep: CGFloat
@@ -498,8 +507,10 @@ nonisolated public enum DeckGeometry {
     /// coordinates; the deck is centred on it vertically and clamped inside.
     /// Every active note gets a tab, `tabStep` apart; what does not fit
     /// between the margins and the `+` tab scrolls (`scroll`, clamped to
-    /// `maxScroll`), the `+` tab staying put under the fan.
-    public static func layout(state: DeckState, side: DeckSide, visibleFrame: CGRect, notes: [NoteID], toast: Bool = false, scroll requested: CGFloat = 0, metrics: DeckMetrics = DeckMetrics()) -> DeckLayout {
+    /// `maxScroll`), the `+` tab staying put under the fan. `toast` leaves
+    /// room under the deck for the archive toast, `notice` for the taller
+    /// line a refused drop shows there instead (the same rect, `toast`).
+    public static func layout(state: DeckState, side: DeckSide, visibleFrame: CGRect, notes: [NoteID], toast: Bool = false, notice: Bool = false, scroll requested: CGFloat = 0, metrics: DeckMetrics = DeckMetrics()) -> DeckLayout {
         let step = metrics.tabStep
         let count = notes.count
         let stackHeight = count == 0 ? 0 : metrics.tabHeight + CGFloat(count - 1) * step
@@ -524,9 +535,10 @@ nonisolated public enum DeckGeometry {
             contentHeight = max(fanBlock, metrics.noteHeight)
             contentWidth = metrics.tabWidth + metrics.gap + metrics.noteWidth
         }
-        if toast {
+        let messageHeight: CGFloat? = notice ? metrics.noticeHeight : toast ? metrics.toastHeight : nil
+        if let messageHeight {
             contentWidth = max(contentWidth, metrics.toastWidth)
-            contentHeight += metrics.gap + metrics.toastHeight
+            contentHeight += metrics.gap + messageHeight
         }
         let panelHeight = min(contentHeight + 2 * metrics.margin, visibleFrame.height)
         let panelWidth = contentWidth + metrics.margin
@@ -557,8 +569,8 @@ nonisolated public enum DeckGeometry {
             note = CGRect(x: noteX, y: top - metrics.noteHeight, width: metrics.noteWidth, height: metrics.noteHeight)
         }
         var toastRect: CGRect?
-        if toast {
-            toastRect = CGRect(x: edgeX(width: metrics.toastWidth), y: metrics.margin, width: metrics.toastWidth, height: metrics.toastHeight)
+        if let messageHeight {
+            toastRect = CGRect(x: edgeX(width: metrics.toastWidth), y: metrics.margin, width: metrics.toastWidth, height: messageHeight)
         }
         return DeckLayout(panelFrame: panelFrame, pill: pill, tabs: tabs, fan: fan, scroll: scroll, maxScroll: maxScroll, plusTab: plusTab, note: note, toast: toastRect, tabStep: step)
     }

@@ -127,6 +127,14 @@ struct SettingsView: View {
     private var general: some View {
         Section {
             LoginItemToggle(loginItem: loginItem)
+            Toggle(isOn: $preferences.hideFromScreenSharing) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hide notes from screen sharing")
+                        .font(Brand.body(14))
+                        .foregroundStyle(Brand.textPrimary)
+                    note("The deck and All Notes stay on your screen but leave screen shares and recordings; Settings and the setup guide show as usual.")
+                }
+            }
             Picker(selection: $preferences.side) {
                 ForEach(DeckSide.allCases, id: \.self) { side in
                     Text(side.title).tag(side)
