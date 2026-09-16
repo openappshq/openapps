@@ -16,14 +16,12 @@ Open source · Mac native · No permissions · No telemetry · In development
 
 Click or hover the notch and a panel drops down with the wallpaper on your desktop. Pick a generator, move a slider, press Apply:
 
-- **Gradient** — linear, radial or conic, two to six colors, angle or center
-- **Mesh** — a grid of control points blended into one soft field; the seed places them
-- **Pattern** — dots, lines, checks or noise, two colors, any scale and angle
-- **Solid** — one color, with film grain if you like
-- **Pixelize** — your own photo in blocks, optionally reduced to a small palette, framed by a focal point you drag
-- **Dither** — the same photo through Bayer, Floyd–Steinberg, blue noise, halftone or ASCII, in two colors or a palette from the image
+- **Pixel fields** — six authored looks on one sampled-field engine, every cell of the display's pixel grid one flat tone: **Moiré** (a radial and a linear wave beating inside a crescent, or two twisted lattices), **Relief** (warped noise cut into shifted terraces with lit rims), **Islands** (an archipelago with dithered shores), **Plate** (Chladni nodal lines gathering grains inside an aperture), **Circuit** (Truchet ribbons joined across tiles), **Sky** (a horizon, two ridges, a cropped sun, diffused into large cells)
+- **Dither** — Bayer, Floyd–Steinberg, blue noise, halftone or ASCII over a photo, or over the base layer when there is none
+- **Pattern** — dots, lines or checks over a gradient or mesh base
+- **Mesh**, **Pixelize** and (last, as the advanced pick) **Gradient**; a flat color is a base, not a generator
 
-Every wallpaper is a *document*: a generator, its parameters, a seed, the finishes (tint, duotone, gradient map, grain, a shade for the menu bar) and how it composes around the notch (emerge, contours, a painted pill for displays without one), rendered on your Mac at your display's exact pixel size. Every document has a light and a dark side (the dark one derived unless you edit it) and can be applied as a **light/dark pair** or a **time-of-day set** — a HEIC with Apple's own dynamic-desktop record, so macOS keeps switching after macPaper quits. **Pin so it stays** re-applies macPaper's file whenever macOS shows something else. The seed is shown so a look can be typed back in; **Copy link** shares the whole document as `macpaper://s/…`; a favorite is the document, so it renders again on any display. **Shuffle** makes a random one and applies it; Settings can shuffle on a schedule, from your favorites only, the same on every display or a different one per display, and never from what you marked "never show". **Export** writes PNG, a real SVG where the generator is vector, the HEIC pair, or a desktop + phone pair. A palette-matched clock can sit on the wallpaper layer, and a screen saver module shows your stills.
+Every wallpaper is a *document*: a generator, its parameters, a seed, a **base layer** (flat, gradient or mesh under the texture), the finishes (tint, duotone, gradient map, wash, vignette, fringe, grain, a shade for the menu bar) and how it composes around the notch, rendered on your Mac at your display's exact pixel size. **56 preset palettes** in OKLCH, grouped and named, feed every generator; a document's colors name it after its palette. Every document has a light and a dark side and can be applied as a **light/dark pair** or a **time-of-day set** — a HEIC with Apple's own dynamic-desktop record. **Pin so it stays** re-applies macPaper's file whenever macOS shows something else. **Shuffle only ever lands on a curated recipe**: a family of authored looks, a preset palette, and a quality gate that refuses flat fills, bare gradients, mud, no silhouette and unreadable menu bars — macPaper never ships a bare gradient. Every parameter has a **pin**: pinned, Shuffle keeps it. A **recipe** is a named document; the library starts with a taste set of 34, and a recipe travels as a `.macpaper` file (export, import, double-click, drag) or as a `macpaper://s/…` link — the same document. **Export** writes PNG, SVG, the HEIC pair, or a desktop + phone pair. A palette-matched clock can sit on the wallpaper layer, and a screen saver module shows your stills.
 
 Without a notch (or with the panel turned off) everything lives in the menu-bar popover. A global hotkey (⌃⌥⌘W by default) opens either.
 
@@ -43,7 +41,7 @@ Requires Xcode 26 (Swift 6.2 or later).
 
 ```sh
 swift build            # debug build, licensing compiled out
-swift test             # MacPaperCore (generators with golden hashes, pixelize, export, stores, apply, shuffle, notch geometry, panel rules)
+swift test             # MacPaperCore (generators and pixel fields with golden hashes, palettes, the quality gate, recipes, pins, export, stores, apply, notch geometry, panel rules)
                        # and MacPaperTests (the model over fakes, preferences, the licensing seam)
 scripts/bundle.sh      # release build → build/macPaper.app, ad-hoc signed
 ```
@@ -54,6 +52,8 @@ To see the UI without changing anything on the Mac, the debug build has a previe
 swift build && .build/debug/MacPaper --preview /tmp/macpaper-preview
 ```
 
+The debug build also renders documents and contact sheets without any UI — the taste set at three display sizes, every shuffle family across palettes and seeds with the gate's verdict, the moiré at three cell sizes, a run of curated Shuffle, a timed 5K render — with `MacPaper --renders /tmp/macpaper-renders [taste|families|cells|shuffle|bench|dither|pick]`; a release build with the harness compiled in (`swift build -c release -Xswiftc -DDEBUG`) does it ten times faster.
+
 Regenerate the app icon and menu-bar image from the SVG masters in `design/assets` with `scripts/make-icons.sh`.
 
 Licensing and the updater are compiled out of every build until the licensing ticket wires `packages/openapps-licensing` and `packages/openapps-updater` in; the `#if OPENAPPS_LICENSING` seams are in place.
@@ -62,9 +62,10 @@ Licensing and the updater are compiled out of every build until the licensing ti
 
 | Layer | Where | Notes |
 | --- | --- | --- |
-| Documents and generators | `MacPaperCore` | `Wallpaper` (JSON, version 2), software renderers for every generator, the dither lab, pixelize with median cut, OKLCH, finishes, notch compositions, the dark side and the day curve; the same seed gives the same bytes on every Mac |
-| Export and pairs | `MacPaperCore/Export.swift`, `Pairs.swift`, `Share.swift` | PNG through ImageIO; SVG as gradients, patterns and a turbulence filter, an embedded PNG otherwise; HEIC with `apple_desktop:apr` / `h24`; share codes; the never-show list |
-| Stores | `MacPaperCore/Stores.swift` | Favorites, the applied state (files, per-Space and fallback displays) and bounded imports under `~/Library/Application Support/OpenApps/macpaper/`; a byte-bounded render cache |
+| Documents and generators | `MacPaperCore` | `Wallpaper` (JSON, version 3: generator, base, finishes, pins), software renderers for every generator, the pixel-field engine (`Field.swift`, `FieldEngine.swift`: six families on one sampled grid, tone bracketing, the residual dither, native cell fill and area-filtered previews), the dither lab, pixelize with median cut, OKLCH, finishes, notch compositions, the dark side and the day curve; the same seed gives the same bytes on every Mac |
+| Palettes, curation | `MacPaperCore/Palettes.swift`, `Curation.swift`, `TasteSet.swift` | The 56 presets and the preset rule; the recipe families, the quality gate and curated Shuffle with pins; the taste set the library starts with |
+| Export and pairs | `MacPaperCore/Export.swift`, `Pairs.swift`, `Share.swift`, `Recipes.swift` | PNG through ImageIO; SVG as gradients, patterns and a turbulence filter, an embedded PNG otherwise; HEIC with `apple_desktop:apr` / `h24`; recipe documents as `.macpaper` files and share codes; the never-show list |
+| Stores | `MacPaperCore/Stores.swift`, `Recipes.swift` | The recipe library (the favorites of earlier versions, migrated), the applied state (files, per-Space and fallback displays) and bounded imports under `~/Library/Application Support/OpenApps/macpaper/`; a byte-bounded render cache |
 | Apply | `MacPaperCore/Displays.swift` | A new file per display and per apply (PNG or HEIC, with a PNG fallback), owned through a manifest, handed to an injectable `DesktopApplier`; the pin policy; the app's applier calls `NSWorkspace`, tests record |
 | Panel rules | `MacPaperCore/PanelStateMachine.swift`, `Notch.swift` | Hover, click, hotkey, fullscreen and settings as a pure state machine; the notch rect and the panel frame as pure geometry |
 | App | `MacPaper` | `AppModel` (the draft behind one gated edit entry, previews off the main actor, actions), the status item and popover, `NotchPanelController` (the hover window and the `NSPanel`), `DesktopKeeper` (the pin), `ThemeWatcher`, `ClockController`, `HotkeyCenter` (Carbon), `ShuffleEngine`, Settings, the login item, the preview harness |

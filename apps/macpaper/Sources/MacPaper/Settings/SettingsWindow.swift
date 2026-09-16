@@ -225,7 +225,7 @@ struct SettingsView: View {
             Toggle(isOn: $preferences.favoritesOnly) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Favorites only").font(Brand.body(14))
-                    note(model.favoriteList.isEmpty ? "No favorites yet: shuffle picks at random until you star one." : "\(model.favoriteList.count) favorite\(model.favoriteList.count == 1 ? "" : "s").")
+                    note(model.favoriteList.isEmpty ? "No favorites yet: shuffle draws a curated recipe until you star one." : "\(model.favoriteList.count) favorite\(model.favoriteList.count == 1 ? "" : "s").")
                 }
             }
             Toggle(isOn: $preferences.sameOnAllDisplays) {
