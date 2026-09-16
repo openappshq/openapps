@@ -7,10 +7,36 @@ import XCTest
 private final class FakeUbiquity: Ubiquity {
     var ubiquitous = false
     var downloadsRequested: [URL] = []
+    var downloadError: (any Error)?
+    var versions: [URL: [FakeVersion]] = [:]
 
     func isUbiquitous(_ url: URL) -> Bool { ubiquitous }
-    func startDownloading(_ url: URL) throws { downloadsRequested.append(url) }
-    func unresolvedConflictVersions(of url: URL) -> [any UbiquityConflictVersion] { [] }
+
+    func startDownloading(_ url: URL) throws {
+        downloadsRequested.append(url)
+        if let downloadError { throw downloadError }
+    }
+
+    func unresolvedConflictVersions(of url: URL) -> [any UbiquityConflictVersion] {
+        (versions[url] ?? []).filter { !$0.resolved }
+    }
+}
+
+/// One unresolved version a fake `Ubiquity` hands back.
+private final class FakeVersion: UbiquityConflictVersion {
+    var data: Data
+    var device: String?
+    var modified: Date?
+    var contentsError: (any Error)?
+    private(set) var resolved = false
+
+    init(data: String) { self.data = Data(data.utf8) }
+
+    func contents() throws -> Data {
+        if let contentsError { throw contentsError }
+        return data
+    }
+    func markResolved() { resolved = true }
 }
 
 // `MemoryFlags` (a `FlagStore` kept in memory) already lives in
@@ -214,6 +240,37 @@ final class AppModelICloudStatusTests: XCTestCase {
         XCTAssertEqual(model.storageStatusLine, "In iCloud · 1 not downloaded")
         _ = model.body(of: NoteID("x"))
         XCTAssertEqual(model.storageStatusLine, "In iCloud · downloading 1 of 1")
+    }
+
+    @MainActor func testFolderProblemAndStorageStatusLineShowAConflictThatCouldNotBeRead() throws {
+        try Data("Mine".utf8).write(to: folder.appendingPathComponent("a.md"))
+        ubiquity.ubiquitous = true
+        let url = folder.appendingPathComponent("a.md")
+        let version = FakeVersion(data: "Theirs")
+        version.contentsError = CocoaError(.fileReadUnknown)
+        ubiquity.versions[url] = [version]
+        let model = makeModel()
+        let problem = try XCTUnwrap(model.folderProblem)
+        XCTAssertTrue(problem.contains("a.md"), problem)
+        XCTAssertEqual(model.storageStatusLine, "In iCloud · \(problem)")
+    }
+
+    @MainActor func testStatusLineShowsARefusedDownload() throws {
+        try Data("placeholder".utf8).write(to: folder.appendingPathComponent(".x.md.icloud"))
+        ubiquity.ubiquitous = true
+        ubiquity.downloadError = CocoaError(.fileWriteUnknown)
+        let model = makeModel()
+        _ = model.body(of: NoteID("x"))
+        let line = model.statusLine(for: NoteID("x"))
+        XCTAssertTrue(line.hasPrefix("iCloud Drive refused the download ("), line)
+    }
+
+    @MainActor func testStorageStatusLineForAnAllLocalUbiquitousFolderSaysAllNotesOnThisMac() throws {
+        try Data("A".utf8).write(to: folder.appendingPathComponent("a.md"))
+        ubiquity.ubiquitous = true
+        let model = makeModel()
+        XCTAssertEqual(model.storageStatusLine, "In iCloud · all notes on this Mac")
+        XCTAssertFalse(StorageStatus.allOnThisMac.text.contains("up to date"))
     }
 }
 

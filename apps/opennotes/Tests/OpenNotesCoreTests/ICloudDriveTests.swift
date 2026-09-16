@@ -19,7 +19,8 @@ final class FakeUbiquity: Ubiquity {
 
     func unresolvedConflictVersions(of url: URL) -> [any UbiquityConflictVersion] {
         unresolvedConflictVersionsCallCount += 1
-        return versions[url] ?? []
+        // Realistic: a version already marked resolved is not handed back again.
+        return (versions[url] ?? []).filter { !$0.resolved }
     }
 }
 
@@ -28,6 +29,11 @@ final class FakeVersion: UbiquityConflictVersion {
     var data: Data
     var device: String?
     var modified: Date?
+    /// Run inside `contents()`, before the data is returned: lets a test
+    /// change the file on disk between the version being read and the
+    /// fresh comparison that follows.
+    var onContents: (() -> Void)?
+    var contentsError: (any Error)?
     private(set) var resolved = false
 
     init(data: String, device: String? = nil, modified: Date? = nil) {
@@ -36,7 +42,11 @@ final class FakeVersion: UbiquityConflictVersion {
         self.modified = modified
     }
 
-    func contents() throws -> Data { data }
+    func contents() throws -> Data {
+        onContents?()
+        if let contentsError { throw contentsError }
+        return data
+    }
     func markResolved() { resolved = true }
 }
 
@@ -155,7 +165,7 @@ final class ICloudDriveTests: XCTestCase {
         let b = try XCTUnwrap(store.note(NoteID("b")))
         XCTAssertEqual(b.text, "b text")
         XCTAssertFalse(b.isDownloading)
-        XCTAssertEqual(store.storageStatus, .upToDate)
+        XCTAssertEqual(store.storageStatus, .allOnThisMac)
     }
 
     @MainActor func testADownloadRequestThatFailsIsShownAsAProblem() throws {
@@ -415,9 +425,227 @@ final class ICloudDriveTests: XCTestCase {
     // MARK: - StorageStatus
 
     func testStorageStatusText() {
-        XCTAssertEqual(StorageStatus.upToDate.text, "up to date")
+        XCTAssertEqual(StorageStatus.allOnThisMac.text, "all notes on this Mac")
         XCTAssertEqual(StorageStatus.notDownloaded(count: 3, requested: 0).text, "3 not downloaded")
         XCTAssertEqual(StorageStatus.notDownloaded(count: 3, requested: 2).text, "downloading 2 of 3")
         XCTAssertEqual(StorageStatus.waiting.text, "waiting for iCloud")
+    }
+
+    // MARK: - Copy on switch: destination placeholders
+
+    @MainActor func testCopyOnSwitchSkipsADestinationPlaceholderAndAConflictNamePlaceholder() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "LOCAL")
+        let store = makeStore()
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-dest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dest) }
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        try write(".a.md.icloud", "placeholder", in: dest)
+        let base = NoteFileName.conflictStem(for: NoteID("a"), at: clock)
+        try write(ICloudDrive.placeholderName(for: NoteID(base)), "placeholder", in: dest)
+
+        let report = try store.switchFolder(to: dest, create: true, copyingNotes: true)
+
+        XCTAssertEqual(report.copied, 0)
+        XCTAssertEqual(report.conflictCopies, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dest.appendingPathComponent("a.md").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dest.appendingPathComponent(".a.md.icloud").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dest.appendingPathComponent(ICloudDrive.placeholderName(for: NoteID(base))).path))
+        XCTAssertEqual(try String(contentsOf: dest.appendingPathComponent("\(base)-2.md"), encoding: .utf8), "LOCAL")
+    }
+
+    // MARK: - isOccupied through public paths
+
+    @MainActor func testFinishProvisionalSkipsATitleNameThatIsAPlaceholder() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write(".groceries.md.icloud", "placeholder")
+        let store = makeStore()
+        let note = try store.create(color: .coral, face: .sans)
+        try store.setText("Groceries", for: note.id)
+        let finalID = try store.finishProvisional(note.id)
+        XCTAssertEqual(finalID, NoteID("groceries-2"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("groceries.md").path))
+        XCTAssertTrue(try read("groceries-2.md").hasSuffix("\n\nGroceries"))
+    }
+
+    @MainActor func testAConflictCopyNameThatIsAPlaceholderIsSkipped() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "A")
+        let store = makeStore()
+        try store.setText("Ours", for: NoteID("a"))
+        let base = NoteFileName.conflictStem(for: NoteID("a"), at: clock)
+        try write(ICloudDrive.placeholderName(for: NoteID(base)), "placeholder")
+        try write("a.md", "Theirs, longer")
+        store.rescan()
+        let outcome = try store.save(NoteID("a"))
+        guard case .keptAsConflictCopy(let copy) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertEqual(copy, NoteID("\(base)-2"))
+        XCTAssertTrue(try read(copy.fileName).hasSuffix("\n\nOurs"))
+    }
+
+    // MARK: - Fresh comparison at resolve time
+
+    @MainActor func testAConflictVersionIsReComparedAgainstTheFileAtResolveTime() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "A")
+        ubiquity.ubiquitous = true
+        let url = folder.appendingPathComponent("a.md")
+        let version = FakeVersion(data: "A")
+        version.onContents = { [self] in try? write("a.md", "B") }
+        ubiquity.versions[url] = [version]
+        let base = NoteFileName.conflictStem(for: NoteID("a"), at: clock)
+        _ = makeStore()
+        XCTAssertTrue(version.resolved)
+        XCTAssertEqual(try read(base + ".md"), "A")
+        XCTAssertEqual(try read("a.md"), "B")
+    }
+
+    // MARK: - Conflict versions while read-only
+
+    @MainActor func testConflictVersionsWaitForALicenseWhileReadOnlyThenMaterialiseOnceAllowed() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "Mine")
+        ubiquity.ubiquitous = true
+        let store = makeStore()
+        store.access = { false }
+        let url = folder.appendingPathComponent("a.md")
+        let version = FakeVersion(data: "Theirs")
+        ubiquity.versions[url] = [version]
+        let base = NoteFileName.conflictStem(for: NoteID("a"), at: clock)
+
+        store.rescan()
+        XCTAssertFalse(version.resolved)
+        XCTAssertEqual(store.conflictVersionsWaiting, 1)
+        XCTAssertEqual(store.storageStatus, .conflictsWaiting(1))
+        XCTAssertEqual(store.storageStatus.text, "1 conflict version waits for a license")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(base + ".md").path))
+
+        store.access = { true }
+        store.rescan()
+        XCTAssertTrue(version.resolved)
+        XCTAssertEqual(store.conflictVersionsWaiting, 0)
+        XCTAssertEqual(try read(base + ".md"), "Theirs")
+    }
+
+    // MARK: - Conflict problems surfaced
+
+    @MainActor func testAConflictVersionThatCannotBeReadIsAProblemThenResolvesOnceItCan() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "Mine")
+        ubiquity.ubiquitous = true
+        let url = folder.appendingPathComponent("a.md")
+        let version = FakeVersion(data: "Theirs")
+        version.contentsError = CocoaError(.fileReadUnknown)
+        ubiquity.versions[url] = [version]
+        let base = NoteFileName.conflictStem(for: NoteID("a"), at: clock)
+        let store = makeStore()
+
+        let problem = try XCTUnwrap(store.conflictProblem)
+        XCTAssertTrue(problem.contains("a.md"), problem)
+        XCTAssertFalse(version.resolved)
+
+        version.contentsError = nil
+        store.rescan()
+        XCTAssertNil(store.conflictProblem)
+        XCTAssertTrue(version.resolved)
+        XCTAssertEqual(try read(base + ".md"), "Theirs")
+
+        // No second copy: the version is not handed back once resolved.
+        store.rescan()
+        XCTAssertEqual(try files(), [base + ".md", "a.md"])
+    }
+
+    // MARK: - Refused downloads retry
+
+    @MainActor func testARefusedDownloadIsRetriedOnEveryOpenAndByRescan() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write(".b.md.icloud", "placeholder")
+        ubiquity.downloadError = CocoaError(.fileWriteUnknown)
+        let store = makeStore()
+
+        _ = store.body(of: NoteID("b"))
+        XCTAssertNotNil(store.downloadProblems[NoteID("b")])
+        XCTAssertEqual(ubiquity.downloadsRequested.count, 1)
+        let problem = try XCTUnwrap(store.downloadProblem)
+        XCTAssertTrue(problem.hasPrefix("b.md: "), problem)
+
+        _ = store.body(of: NoteID("b"))
+        XCTAssertEqual(ubiquity.downloadsRequested.count, 2, "retried, not suppressed")
+
+        ubiquity.downloadError = nil
+        store.rescan()
+        XCTAssertEqual(ubiquity.downloadsRequested.count, 3)
+        XCTAssertNil(store.downloadProblems[NoteID("b")])
+
+        _ = store.body(of: NoteID("b"))
+        XCTAssertEqual(ubiquity.downloadsRequested.count, 3, "accepted once")
+    }
+
+    // MARK: - Folder guard
+
+    @MainActor func testSaveRefusesWhenTheFolderIsReplacedByALinkElsewhereThenSucceedsOnceRestored() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("a.md", "A")
+        let store = makeStore()
+        try store.setText("Ours", for: NoteID("a"))
+
+        let aside = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-aside-\(UUID().uuidString)", isDirectory: true)
+        let elsewhere = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-elsewhere-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.removeItem(at: elsewhere)
+        }
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try write("a.md", "Elsewhere", in: elsewhere)
+        try FileManager.default.moveItem(at: folder, to: aside)
+        try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: elsewhere)
+
+        XCTAssertThrowsError(try store.save(NoteID("a"))) {
+            XCTAssertEqual($0 as? StoreError, .folderReplaced(folder))
+        }
+        XCTAssertEqual(try String(contentsOf: elsewhere.appendingPathComponent("a.md"), encoding: .utf8), "Elsewhere")
+        XCTAssertTrue(store.hasUnsavedChanges(NoteID("a")))
+
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.moveItem(at: aside, to: folder)
+        XCTAssertEqual(try store.save(NoteID("a")), .saved)
+        XCTAssertTrue(try read("a.md").hasSuffix("\n\nOurs"))
+    }
+
+    @MainActor func testDiscardIfEmptyRefusesAndUnlinksNothingWhenTheFolderIsReplacedByALink() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let store = makeStore()
+        let note = try store.create(color: .coral, face: .sans)
+        try store.setText("x", for: note.id)
+        XCTAssertEqual(try store.save(note.id), .saved)
+        try store.setText("", for: note.id)
+
+        let aside = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-aside-\(UUID().uuidString)", isDirectory: true)
+        let elsewhere = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-elsewhere-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.removeItem(at: elsewhere)
+        }
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try write(note.id.fileName, "Linked directory's own file", in: elsewhere)
+        try FileManager.default.moveItem(at: folder, to: aside)
+        try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: elsewhere)
+
+        XCTAssertFalse(store.discardIfEmpty(note.id))
+        XCTAssertEqual(try String(contentsOf: elsewhere.appendingPathComponent(note.id.fileName), encoding: .utf8), "Linked directory's own file")
+
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.moveItem(at: aside, to: folder)
+    }
+
+    // MARK: - Export of a placeholder note
+
+    @MainActor func testExportingAPlaceholderThrowsBodyUnavailable() throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write(".b.md.icloud", "placeholder")
+        let store = makeStore()
+        XCTAssertThrowsError(try store.export(NoteID("b"), as: .markdown)) {
+            XCTAssertEqual($0 as? StoreError, .bodyUnavailable(NoteID("b")))
+        }
     }
 }
