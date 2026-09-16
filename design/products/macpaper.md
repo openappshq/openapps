@@ -33,7 +33,7 @@ Renders are made at the display's pixel size (points × backing scale); previews
 
 ## Notch panel
 
-The panel is anchored to the notch of the display that hosts it and opens downwards from it, exactly as wide as the notch (plus the width setting), with the same corner radius as the notch's lower corners. Without a notch the panel opens from the top center of the host display and the menu-bar popover stays the primary surface.
+The panel is anchored to the notch of the display that hosts it and opens downwards from it, centered on the notch, its top squared against the menu bar and its bottom corners rounded. Without a notch the panel opens from the top center of the host display (the hover zone is then a 2-point strip at the top edge, so no menu-bar item is covered) and the menu-bar popover stays the primary surface.
 
 | Setting | Values | Default |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ The panel is anchored to the notch of the display that hosts it and opens downwa
 | Host display | the notch display / the main display / every notched display | the notch display |
 | Open on | hover / click / both | both |
 | Direction | down (v1 renders down only; left, right are stored for a later release) | down |
-| Width | narrow / notch width / wide (adds 0 / 120 / 240 pt on each side) | notch width |
+| Width | compact / regular / wide (360 / 440 / 560 pt) | regular |
 | Hide in fullscreen | on / off | on |
 | Hotkey | any key with at least one modifier, or none | ⌃⌥⌘ W |
 
@@ -52,11 +52,11 @@ Behavior:
 - In fullscreen (Hide in fullscreen on) the panel closes and hover does nothing until the space leaves fullscreen; the hotkey still opens the popover.
 - Reduce Motion: no drop animation, the panel appears in place; the standard drop takes 180 ms otherwise.
 - The panel never takes key focus from the app in front unless the user types in it (the seed field, a color field); Escape then returns focus.
-- The panel's content, top to bottom: the current wallpaper's preview in the display's aspect ratio (with a "this display" label when displays differ); the generator segmented control; the generator's parameters; a row of actions: **Shuffle**, **Apply** (this display · all displays in a menu, or one button while "same on all displays" is on), Favorite (a star, filled while the document is a favorite), Export (PNG / SVG); a footer with the seed, Settings… and Quit.
+- The panel's content, top to bottom: the current wallpaper's preview in the display's aspect ratio (with the display's name when there is more than one, and "on the desktop" while the draft is what the display shows); the generator segmented control; the generator's parameters (sliders, brand segmented controls, color swatches that open the system color panel, minus/plus counters); the grain slider; a row of actions: **Shuffle** (a random document, applied at once), **Apply** (this display · all displays in a split button, or one button while "same on all displays" is on), Favorite (a star, filled while the document is a favorite), Export (PNG / SVG); a status line after an action; a footer with the seed (click to type one, a die for a new one), Settings… and Quit.
 
 ## Menu bar
 
-A template symbol (the mark) with no readout. Clicking opens the popover with the same content as the notch panel, 360 pt wide. The popover is the only surface when the notch panel is off, when no display has a notch and the host display setting is "the notch display", and in fullscreen while the panel is hidden.
+A template symbol (the mark) with no readout. Clicking opens the popover with the same content as the notch panel, 420 pt wide. The popover is the only surface when the notch panel is off, when no display has a notch and the host display setting is "the notch display", and in fullscreen while the panel is hidden.
 
 ## Wallpapers settings
 

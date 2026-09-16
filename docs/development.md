@@ -1,7 +1,7 @@
 # Development and release guide
 
 OpenApps HQ is one workspace for independent desktop apps and their marketing pages.
-OpenKlack, [OpenReaction](../apps/openreaction/README.md) and [Hertz](../apps/hertz/README.md) have independent native apps.
+OpenKlack, [OpenReaction](../apps/openreaction/README.md), [Hertz](../apps/hertz/README.md) and [macPaper](../apps/macpaper/README.md) have independent native apps.
 
 ## Run
 
@@ -37,6 +37,7 @@ apps/
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
   openreaction/               OpenReaction's Swift app
   hertz/                      Hertz's Swift app
+  macpaper/                   macPaper's Swift app (in development; no website page yet)
 packages/
   openapps-licensing/         Swift: licensing rules, trial, record store and clients (LICENSING.md)
   openapps-updater/           Swift: the in-app updater (RELEASES.md)
@@ -155,6 +156,10 @@ System-wide sound is implemented in the development desktop application below; p
 ## Hertz
 
 The menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift build`, `swift test`, `swift run Hertz`, `scripts/bundle.sh`; see [its README](../apps/hertz/README.md). It asks macOS for no permissions. Official builds compile licensing in from `packages/openapps-licensing` (`OPENAPPS_LICENSING=1` with a generated `LicensingConfig.swift`, [LICENSING.md](../LICENSING.md)): the 3-day trial, Settings → License, and the readings off after the trial; a build from source has none of it. Official builds also compile in the shared updater, `packages/openapps-updater` (`OPENAPPS_OFFICIAL=1`): the signed feed at `https://openapps.space/updates/hertz/appcast.xml`, automatic checks on for a fresh install, installing opt-in, `brew upgrade --cask hertz` always works ([RELEASES.md](../RELEASES.md), [its release guide](../apps/hertz/RELEASING.md)). The [product contract](../design/products/hertz.md) records approved behavior.
+
+## macPaper
+
+The notch wallpaper maker lives in `apps/macpaper` and is plain SwiftPM: `swift build`, `swift test`, `scripts/bundle.sh`; see [its README](../apps/macpaper/README.md). It asks macOS for no permissions. It is in development: no catalog entry, website page, release workflow or cask yet, and licensing and the updater are compiled out of every build until the licensing ticket wires the shared packages in (the `#if OPENAPPS_LICENSING` seams are in place). The debug build's `--preview <directory>` renders the notch panel, the popover and Settings to PNGs without a status item, a window or a desktop change: on a shared Mac that is the way to look at the UI, never `open` or `swift run`. The [product contract](../design/products/macpaper.md) records approved behavior.
 
 ## Desktop application (in development)
 

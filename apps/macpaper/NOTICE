@@ -1,0 +1,33 @@
+macPaper
+Copyright (c) 2026 OpenApps HQ. Licensed under the MIT License (see LICENSE).
+
+macPaper includes the third-party material listed below. Each item keeps its
+original license.
+
+-------------------------------------------------------------------------------
+Fonts (SIL Open Font License 1.1)
+-------------------------------------------------------------------------------
+Directory: Sources/MacPaper/Resources/Fonts (unmodified font binaries)
+Source:    https://github.com/google/fonts at revision
+           809e4d8b8d7e9364a914909bb777679606c178b8
+
+- Bricolage Grotesque  ofl/bricolagegrotesque/BricolageGrotesque[opsz,wdth,wght].ttf
+                       License text: Fonts/OFL-BricolageGrotesque.txt
+- Instrument Sans      ofl/instrumentsans/InstrumentSans[wdth,wght].ttf
+                       License text: Fonts/OFL-InstrumentSans.txt
+- IBM Plex Mono        ofl/ibmplexmono/IBMPlexMono-Regular.ttf, IBMPlexMono-Medium.ttf
+                       License text: Fonts/OFL-IBMPlexMono.txt
+
+-------------------------------------------------------------------------------
+Brand system
+-------------------------------------------------------------------------------
+design/tokens.json comes from the OpenApps HQ "Tactile Studio" system
+(openappshq/openapps, MIT). The tangerine ramp and the notch mark are
+original to this app.
+
+-------------------------------------------------------------------------------
+Generators
+-------------------------------------------------------------------------------
+The idea of a wallpaper maker that lives in the notch is shared with other
+apps; every generator, the panel and the assets here are original work. No
+source, copy, name or asset of any other product is included.
