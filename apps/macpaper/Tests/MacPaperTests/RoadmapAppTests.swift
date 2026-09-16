@@ -55,18 +55,18 @@ struct RoadmapAppTests {
         h.model.apply()
         await h.settle()
         let recorded = h.desktop.calls.map(\.url)
-        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop)
+        let scheduler = ManualScheduler()
+        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop, scheduler: scheduler)
         // macOS "changed" display 2's wallpaper.
         h.desktop.currentOverride[2] = URL(fileURLWithPath: "/System/Library/Desktop Pictures/x.heic")
         keeper.check(reason: "test")
-        try? await Task.sleep(for: .milliseconds(1000))
+        scheduler.fire()
         #expect(h.desktop.calls.count == 3 && h.desktop.calls.last?.url == recorded[1] && h.desktop.calls.last?.display == 2)
         #expect(keeper.lastReport.contains("re-applied 2"))
-        // Off: nothing.
+        // Off: `check` re-reads the setting synchronously, before any debounce.
         h.preferences.keepApplied = false
         h.desktop.currentOverride[1] = URL(fileURLWithPath: "/other.png")
         keeper.check(reason: "test")
-        try? await Task.sleep(for: .milliseconds(900))
         #expect(h.desktop.calls.count == 3 && keeper.lastReport == "off")
     }
 

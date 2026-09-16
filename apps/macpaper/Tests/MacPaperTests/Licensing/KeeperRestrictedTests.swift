@@ -18,11 +18,6 @@ struct KeeperRestrictedTests {
         ((try? FileManager.default.contentsOfDirectory(atPath: AppPaths(root: h.directory).appliedImages.path)) ?? []).filter { $0.hasSuffix(".png") || $0.hasSuffix(".heic") }.sorted()
     }
 
-    /// Lets the keeper's debounce fire.
-    func wait() async {
-        try? await Task.sleep(for: .milliseconds(1000))
-    }
-
     @Test("After the trial ends, the keeper restores the committed file and renders nothing; a new apply still refuses")
     func restoresOnlyTheCommittedFile() async {
         let h = AppModelTests.Harness()
@@ -39,10 +34,11 @@ struct KeeperRestrictedTests {
         // The trial ends; macOS puts something else on display 1.
         access.state = .trialEnded
         #expect(!h.license.hasAccess())
-        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop)
+        let scheduler = ManualScheduler()
+        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop, scheduler: scheduler)
         h.desktop.currentOverride[1] = URL(fileURLWithPath: "/System/Library/Desktop Pictures/x.heic")
         keeper.check(reason: "space")
-        await wait()
+        scheduler.fire()
         #expect(h.desktop.calls.count == 3, "one desktop call: the restore")
         #expect(h.desktop.calls.last?.url == recorded && h.desktop.calls.last?.display == 1, "the very file that was committed")
         #expect(appliedFiles(h) == filesBefore, "nothing rendered or written")
@@ -94,16 +90,17 @@ struct KeeperRestrictedTests {
             state.record(AppliedImage(display: 1, wallpaper: .starter, url: uncommitted, format: .still), perSpace: false)
         }
         h.model.reloadAppliedState()
-        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop)
+        let scheduler = ManualScheduler()
+        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop, scheduler: scheduler)
         h.desktop.currentOverride[1] = URL(fileURLWithPath: "/System/Library/Desktop Pictures/x.heic")
         keeper.check(reason: "space")
-        await wait()
+        scheduler.fire()
         #expect(h.desktop.calls.count == callsBefore)
         #expect(keeper.lastReport.contains("failed 1:"))
         // The committed file for display 2 is still a valid candidate.
         h.desktop.currentOverride[2] = URL(fileURLWithPath: "/System/Library/Desktop Pictures/y.heic")
         keeper.check(reason: "space")
-        await wait()
+        scheduler.fire()
         #expect(h.desktop.calls.last?.url == display2File && h.desktop.calls.last?.display == 2)
     }
 }

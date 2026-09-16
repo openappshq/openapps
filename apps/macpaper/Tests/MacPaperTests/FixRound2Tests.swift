@@ -61,6 +61,15 @@ struct FixRound2Tests {
 
     // MARK: The pin
 
+    /// Yields until `condition` holds, or `attempts` runs out (a bounded
+    /// wait on a signal, never a clock): `observeChanges`' re-check after a
+    /// property changes goes through one `DispatchQueue.main.async` hop
+    /// before it re-arms the keeper's debounce, so a scheduled check is not
+    /// always visible on the very next line.
+    func waitUntil(_ attempts: Int = 200, _ condition: () -> Bool) async {
+        for _ in 0..<attempts where !condition() { await Task.yield() }
+    }
+
     @Test("Turning the pin off during its debounce drops the pending re-apply")
     func keeperCancelsOnDisable() async {
         let h = AppModelTests.Harness()
@@ -68,16 +77,18 @@ struct FixRound2Tests {
         h.preferences.sameOnAllDisplays = true
         h.model.apply()
         await h.settle()
-        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop)
+        let scheduler = ManualScheduler()
+        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop, scheduler: scheduler)
         h.desktop.currentOverride[1] = URL(fileURLWithPath: "/other.png")
         keeper.check(reason: "test")
-        try? await Task.sleep(for: .milliseconds(150))
+        #expect(scheduler.pendingCount == 1)
         h.preferences.keepApplied = false
-        try? await Task.sleep(for: .milliseconds(1000))
+        await waitUntil { scheduler.pendingCount == 0 }
         #expect(h.desktop.calls.count == 2 && keeper.lastReport == "off")
         // Back on: the pending check runs and re-applies.
         h.preferences.keepApplied = true
-        try? await Task.sleep(for: .milliseconds(1000))
+        await waitUntil { scheduler.pendingCount == 1 }
+        scheduler.fire()
         #expect(h.desktop.calls.count == 3 && h.desktop.calls.last?.display == 1)
     }
 
@@ -89,18 +100,23 @@ struct FixRound2Tests {
         h.model.apply()
         await h.settle()
         let first = h.model.appliedState.file(for: 1)
-        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop)
+        let scheduler = ManualScheduler()
+        let keeper = DesktopKeeper(model: h.model, preferences: h.preferences, desktop: h.desktop, scheduler: scheduler)
         h.desktop.currentOverride[1] = URL(fileURLWithPath: "/other.png")
         h.desktop.delay = 1.2
         h.model.load(h.model.draft.reseeded(7))
         h.model.apply()
         #expect(h.model.isApplying)
         keeper.check(reason: "space")
-        try? await Task.sleep(for: .milliseconds(900))
+        scheduler.fire()
         #expect(keeper.lastReport.contains("deferred"))
         await h.settle()
         h.desktop.delay = 0
-        try? await Task.sleep(for: .milliseconds(1000))
+        // The apply landing re-arms the keeper's check through
+        // `observeChanges` (a `DispatchQueue.main.async` hop): wait for it,
+        // then fire the re-armed debounce ourselves.
+        await waitUntil { scheduler.pendingCount == 1 }
+        scheduler.fire()
         let second = h.model.appliedState.file(for: 1)
         #expect(second != first)
         #expect(h.desktop.calls.filter { $0.url == first }.count == 1, "the old file was never put back")

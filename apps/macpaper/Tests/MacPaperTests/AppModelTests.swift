@@ -78,11 +78,7 @@ struct AppModelTests {
 
         /// The apply runs on a detached task; wait for it.
         func settle() async {
-            // A pixel-field document renders slower than a gradient in a
-            // debug build: up to thirty seconds, out as soon as it is done.
-            for _ in 0..<3000 where model.isApplying || model.isExporting {
-                try? await Task.sleep(for: .milliseconds(10))
-            }
+            await model.awaitIdle()
         }
     }
 
