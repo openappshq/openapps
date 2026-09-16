@@ -100,77 +100,11 @@ final class NoteStoreFixRound3StrandedTemporaryTests: XCTestCase {
     }
 }
 
-final class NoteStoreFixRound3RestoreSubprocessTests: XCTestCase {
-    /// Prebuilt against 8ecca95's core objects for this review round; not
-    /// repo files (scratch artefacts outside the worktree).
-    private static let probeDirectory = "/private/tmp/claude-501/-Users-traycer--traycer-worktrees-openappshq--openapps-opennotes-app/6a97cad9-9ad7-44e6-b59a-e674b5dd118c/scratchpad/probes3"
-
-    private func run(_ executable: String, extraEnvironment: [String: String]) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        var environment = ProcessInfo.processInfo.environment
-        for (key, value) in extraEnvironment { environment[key] = value }
-        process.environment = environment
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-
-    /// The scratch probe prints `root <path>` last; best-effort cleanup of
-    /// what it created under its own hardcoded `/tmp/opennotes-review3-probes/`
-    /// root (not under `FileManager.default.temporaryDirectory` — that root
-    /// is baked into the prebuilt binary, not something this test controls).
-    private func cleanUp(_ output: String) {
-        for line in output.split(separator: "\n") where line.hasPrefix("root ") {
-            try? FileManager.default.removeItem(atPath: String(line.dropFirst("root ".count)))
-        }
-    }
-
-    /// ENVIRONMENT-DEPENDENT: mirrors the reviewer's exact probe
-    /// (`restore.swift` + `fail-restore.c`, an renamex_np `DYLD_INSERT_LIBRARIES`
-    /// interposer) as a subprocess against prebuilt binaries linked to this
-    /// core's compiled objects at 8ecca95. Skips (does not fail the suite)
-    /// if those scratch binaries are not present — they are not checked
-    /// into the repo, and CI or a clean checkout will not have them.
-    ///
-    /// Plain run: the interposer fails only the second `RENAME_SWAP` (the
-    /// restoring swap-back in `settle`) — `settleIndeterminate` finds ours
-    /// under the note's name and theirs in the temporary, and gives theirs
-    /// a `(conflict …).md` name. `FAIL_CONFLICT=1` run: the interposer also
-    /// fails every `RENAME_EXCL` (the conflict-name move) — theirs is left
-    /// in the hidden temporary and the save throws. Both must keep the
-    /// outside text somewhere on disk; neither deletes it.
-    func testReviewerRenamexNpProbeSubprocessBothFaultModesKeepTheOutsideText() throws {
-        let restore = Self.probeDirectory + "/restore"
-        let dylib = Self.probeDirectory + "/fail-restore.dylib"
-        guard FileManager.default.fileExists(atPath: restore), FileManager.default.fileExists(atPath: dylib) else {
-            throw XCTSkip("reviewer probe binaries not present at \(Self.probeDirectory) — scratch artefacts, not repo files")
-        }
-
-        let plain = try run(restore, extraEnvironment: ["DYLD_INSERT_LIBRARIES": dylib])
-        defer { cleanUp(plain) }
-        XCTAssertTrue(plain.contains("outside survived true"), plain)
-        let plainLines = plain.split(separator: "\n").map(String.init)
-        XCTAssertTrue(
-            plainLines.contains { $0.contains("(conflict ") && $0.contains(".md ") && $0.hasSuffix("OUTSIDE UNIQUE TEXT") },
-            "expected a '… (conflict …).md OUTSIDE UNIQUE TEXT' line: \(plain)"
-        )
-
-        let failConflict = try run(restore, extraEnvironment: ["DYLD_INSERT_LIBRARIES": dylib, "FAIL_CONFLICT": "1"])
-        defer { cleanUp(failConflict) }
-        XCTAssertTrue(failConflict.contains("outside survived true"), failConflict)
-        let failLines = failConflict.split(separator: "\n").map(String.init)
-        XCTAssertTrue(
-            failLines.contains { $0.contains(".md.tmp-") && $0.hasSuffix("OUTSIDE UNIQUE TEXT") },
-            "expected a '.a.md.tmp-… OUTSIDE UNIQUE TEXT' line: \(failConflict)"
-        )
-        XCTAssertTrue(failLines.contains { $0.hasPrefix("save error") }, "expected a 'save error' line: \(failConflict)")
-    }
-}
+/// The two `renamex_np` fault modes (the restoring swap refused; that
+/// and the conflict move refused) were reproduced with the reviewer's
+/// interposition probe rebuilt against this core and are recorded in the
+/// implementation report; they need a syscall fault no XCTest can place
+/// deterministically, so no test here runs a binary outside the repository.
 
 // MARK: - P0-2: one retain per open, one release per close
 
