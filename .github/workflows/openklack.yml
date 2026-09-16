@@ -175,8 +175,11 @@ jobs:
       - name: Check release configuration
         # Everything the release needs is checked up front, so a missing
         # secret fails here with its name and never produces a signed build
-        # that cannot be published. Only public material is committed: the
-        # pinned requirement and update public key must have been generated.
+        # that cannot be published. The certificate and the tokens are
+        # repository secrets shared by every app; only the update key is the
+        # environment's own (RELEASES.md, "Signing material"). Only public
+        # material is committed: the pinned requirement and update public key
+        # must have been generated.
         env:
           RELEASE_SIGNING_P12: ${{ secrets.RELEASE_SIGNING_P12 }}
           RELEASE_SIGNING_P12_PASSWORD: ${{ secrets.RELEASE_SIGNING_P12_PASSWORD }}
@@ -189,12 +192,13 @@ jobs:
           OPENKLACK_BUY_URL: ${{ vars.OPENKLACK_BUY_URL }}
         run: |
           missing=0
-          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD TAURI_SIGNING_PRIVATE_KEY; do
-            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openklack-release environment."; missing=1; fi
+          for name in RELEASE_SIGNING_P12 RELEASE_SIGNING_P12_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set as a repository secret."; missing=1; fi
           done
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY is not set in the openklack-release environment."; missing=1; fi
           if [ "$PUBLISH" = true ]; then
             for name in RULESET_READ_TOKEN FEED_COMMIT_TOKEN HOMEBREW_TAP_DEPLOY_KEY; do
-              if [ -z "${!name}" ]; then echo "::error::Secret $name is not set in the openklack-release environment; publishing needs it."; missing=1; fi
+              if [ -z "${!name}" ]; then echo "::error::Secret $name is not set as a repository secret; publishing needs it."; missing=1; fi
             done
           fi
           for name in OPENKLACK_DODO_PAID_PRODUCT_ID OPENKLACK_BUY_URL; do
