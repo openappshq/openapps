@@ -5,13 +5,19 @@ import { Link } from "@heroui/react";
 import {
   Archive,
   BookOpen,
+  Calculator,
   ClipboardPaste,
+  Cloud,
+  EyeOff,
   FolderOpen,
   Keyboard,
+  Link2,
   ListChecks,
   LockKeyhole,
   PanelRight,
   Search,
+  Type,
+  Workflow,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { enter } from "@openapps/ui/transitions";
@@ -50,7 +56,7 @@ const states: [string, string][] = [
   ],
   [
     "Reach",
-    "move the pointer to the edge and the tabs fan out, each labelled with its note. Click one, or the + under them for a new note",
+    "move the pointer to the edge and the tabs fan out, a paper per note in its own colour, each leaning a little; what does not fit scrolls. Click one, or the + under them for a new note. Drag a tab up or down to reorder; drop text, a link or files on the deck and a note opens with them in it",
   ],
   [
     "Write",
@@ -79,12 +85,17 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
     title: "Files you can see.",
     body: (
       <>
-        Every note is a plain <code>.md</code> file in a folder you choose,{" "}
-        <code>~/Documents/OpenNotes</code> by default. Put the folder in iCloud Drive, Dropbox or an
-        Obsidian vault and that is your sync; edit a file from outside and the note updates. No
-        database, no account, nothing of ours in between.
+        Every note is a plain <code>.md</code> file in one folder: <code>~/Documents/OpenNotes</code>
+        , iCloud Drive with one click in Settings, or any folder you pick, an Obsidian vault
+        included. Edit a file from outside and the note updates; nothing is ever moved or deleted
+        by the app. No database, no account, nothing of ours in between.
       </>
     ),
+  },
+  {
+    icon: <Cloud size={20} />,
+    title: "iCloud Drive, as a folder.",
+    body: "Choose iCloud Drive and every Mac signed in to the same iCloud sees the same notes; an iOS Markdown app can open the folder too. A note not downloaded yet shows greyed until you open it, iCloud's own conflict versions become conflict copies beside the file, and switching copies your notes rather than moving them. No sync of ours, no account.",
   },
   {
     icon: <ClipboardPaste size={20} />,
@@ -98,19 +109,65 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
       <>
         <code>#</code> headings, <code>-</code> lists, <code>- [ ]</code> checklists,{" "}
         <code>**bold**</code>: styled as you type, no preview pane, still plain text on disk. A
-        handwriting-ish or a mono face, and a colour per note.
+        note with a checklist shows its count on its tab, <code>3/7</code>, and a thin line that
+        fills as the list gets done.
+      </>
+    ),
+  },
+  {
+    icon: <Type size={20} />,
+    title: "Any font. Thirteen papers.",
+    body: "Sans, Serif, Mono, or any font installed on your Mac, per note or as the default. Thirteen paper colours tuned for light and dark, or pick your own from the colour panel. New notes take a random paper unless you fix one. The font and colour live in the file's front matter, so they travel with it.",
+  },
+  {
+    icon: <Calculator size={20} />,
+    title: "Sums as you write.",
+    body: (
+      <>
+        End a line with <code>=</code> and the answer appears after it: <code>3 * $95 =</code>,{" "}
+        <code>12% of 80 =</code>, <code>sum =</code> over the lines above. Nothing is written to
+        the file until you press Tab on that line. Plain arithmetic in Swift, nothing sent
+        anywhere.
+      </>
+    ),
+  },
+  {
+    icon: <Link2 size={20} />,
+    title: "Links that open.",
+    body: (
+      <>
+        <code>https://</code>, <code>www.</code>, <code>mailto:</code> and <code>~/</code> paths
+        are underlined as you type; ⌘-click opens one, and a small chip names where it goes.
+        Nothing is fetched, so a link in a note is never a request.
       </>
     ),
   },
   {
     icon: <Archive size={20} />,
     title: "Archive, don't delete.",
-    body: "Done with a note? Archive it: it leaves the deck and stays searchable, with ten seconds to undo. OpenNotes never destroys a file; the archive is a folder you can open.",
+    body: "Done with a note? Archive it: it leaves the deck and stays in the folder and in search, with ten seconds to undo. Auto-archive can retire untouched notes after 7, 30 or 90 days. OpenNotes never deletes a file; that is the Finder's job.",
   },
   {
     icon: <Search size={20} />,
     title: "All Notes.",
-    body: "One window for everything: search titles and bodies, filter Active or Archived, open a note, archive it, reveal it in Finder, or export a selection as .md, .txt or one file.",
+    body: "One window for everything: search titles and bodies, filter Active or Archived, drag to reorder, open a note, pin or archive it, reveal it in Finder, or export it as .md or .txt.",
+  },
+  {
+    icon: <Workflow size={20} />,
+    title: "Shortcuts, and a link any app can open.",
+    body: (
+      <>
+        Four Shortcuts actions, Create Note, Append to Note, Get Note Text and Open Note, that
+        Spotlight and Siri answer to as well; and <code>opennotes://new?text=…</code>,{" "}
+        <code>open?title=…</code> and <code>append?title=…&amp;text=…</code> from anything that
+        can open a link.
+      </>
+    ),
+  },
+  {
+    icon: <EyeOff size={20} />,
+    title: "Out of your screen shares, on request.",
+    body: "Turn on “Keep notes out of screen sharing” (on by default on a fresh install) and OpenNotes asks macOS to leave the deck and All Notes out of screen captures while you see them as usual. It is a request, not a guarantee: some capture tools ignore it.",
   },
   {
     icon: <BookOpen size={20} />,
@@ -135,7 +192,7 @@ const questions = [
   ],
   [
     "Does it sync?",
-    "The folder does. Put it in iCloud Drive, Dropbox, Syncthing or a git repository and your notes go where the folder goes. OpenNotes runs no server and has no account, so there is nothing of ours to sign into and nothing of ours that can overwrite a newer note.",
+    "The folder does. Choose iCloud Drive in Settings and your notes go to every Mac signed in to the same iCloud (and to any iOS Markdown app that opens iCloud Drive); or put the folder in Dropbox, Syncthing or a git repository. OpenNotes runs no server and has no account, so there is nothing of ours to sign into, and a note that changed outside is never overwritten: it keeps that version and yours continues in a conflict copy beside it.",
   ],
   [
     "How do licenses and trials work?",
@@ -151,11 +208,19 @@ const questions = [
   ],
   [
     "Does it really show over full-screen apps?",
-    "Yes: the deck is a window that joins every Space and sits above full-screen windows on the same display, so it is there over a full-screen Keynote, a full-screen Zoom or a Stage Manager stage. If you would rather it stayed out of a full-screen app, turn that off in Settings.",
+    "Yes: the deck is a window that joins every Space and sits above full-screen windows on the same display, so it is there over a full-screen Keynote, a full-screen Zoom or a Stage Manager stage. A note opens only when you click its tab or press the hotkey; hovering fans the deck out and nothing more.",
+  ],
+  [
+    "Can I keep my notes out of a screen share?",
+    "You can ask. With “Keep notes out of screen sharing” on, the deck and All Notes carry the flag macOS offers for leaving a window out of screen captures, while they stay on your own screen as before. Apple documents that flag as a request, and some capture tools ignore it, so OpenNotes does not call it privacy: check what your sharing tool shows before you count on it.",
   ],
   [
     "What happens to a note I archive?",
-    "The file moves into an Archive folder beside the others. It leaves the deck, stays searchable in All Notes, and comes back with one click. Ten seconds after archiving, an undo puts it straight back. OpenNotes never deletes a file for you.",
+    "The file stays where it is with archived: true in its front matter. It leaves the deck, stays searchable in All Notes → Archived, and Restore brings it back. For ten seconds after archiving, an undo in the deck puts it straight back. OpenNotes never deletes a file for you.",
+  ],
+  [
+    "Can other apps make notes?",
+    "Yes. OpenNotes registers opennotes:// links (new, open, append) and four Shortcuts actions, so a Shortcut, a script or another app can add a note or read one. Every write goes through the same door the hotkey uses and asks the license first; nothing is created while the app is read-only.",
   ],
   [
     "What does the official build send anywhere?",
@@ -167,7 +232,7 @@ const questions = [
   ],
   [
     "Can I take my notes somewhere else?",
-    "They already are somewhere else: plain Markdown files in your folder. Copy them, open them in another app, or export a selection from All Notes as .md, .txt or one combined file. Uninstall OpenNotes and every note is still there.",
+    "They already are somewhere else: plain Markdown files in your folder. Copy them, open them in another app, or export one from All Notes as .md or .txt. Uninstall OpenNotes and every note is still there.",
   ],
 ];
 
