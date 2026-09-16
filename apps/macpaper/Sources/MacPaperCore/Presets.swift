@@ -163,6 +163,37 @@ public enum PresetPalettes {
     }
 }
 
+// MARK: - The menu bar reads
+
+extension Wallpaper {
+    /// The context readability is judged in without a display: a 14"
+    /// display at a fraction of its size (the strip scales along).
+    public static let readabilityContext = RenderContext(size: PixelSize(width: 3024, height: 1964), notch: .virtual, menuBarStrip: 74).scaled(by: 160.0 / 3024.0)
+
+    /// Whether the menu bar's text reads over this document's top strip
+    /// on a side (`MenuBarReadability`), rendered small.
+    public func menuBarReads(side: Side, context: RenderContext = readabilityContext, renderer: WallpaperRenderer = WallpaperRenderer()) -> Bool {
+        let raster = renderer.render(self, side: side, context: context)
+        return MenuBarReadability.assess(raster, stripHeight: context.menuBarStrip, side: side).reads
+    }
+
+    /// The document with the smallest top shade, in tenths from the one it
+    /// has, at which the menu bar reads on both sides; a full shade always
+    /// reads (the strip becomes the menu bar's own tone), so this ends. A
+    /// preset, a starter or a shuffle goes through here so no look lands
+    /// with an unreadable menu bar.
+    public func liftingMenuBar(context: RenderContext = readabilityContext, renderer: WallpaperRenderer = WallpaperRenderer()) -> Wallpaper {
+        var out = self
+        var shade = finish.topShade
+        while true {
+            out.finish.topShade = shade
+            if Side.allCases.allSatisfy({ out.menuBarReads(side: $0, context: context, renderer: renderer) }) { return out }
+            if shade >= 1 { return out }
+            shade = min(1, (shade * 10).rounded(.down) / 10 + 0.1)
+        }
+    }
+}
+
 /// A built-in recipe: a named document the Library offers to start from.
 public struct StarterRecipe: Hashable, Identifiable, Sendable {
     public let name: String
@@ -197,7 +228,10 @@ public enum StarterRecipes {
         ))
     }
 
-    public static let all: [StarterRecipe] = [
+    /// Every starter lifted so its menu bar reads on both sides.
+    public static let all: [StarterRecipe] = raw.map { StarterRecipe(name: $0.name, wallpaper: $0.wallpaper.liftingMenuBar()) }
+
+    static let raw: [StarterRecipe] = [
         mesh("Tangerine field", palette: "Tangerine", seed: 20_260_916, composition: .emerge),
         mesh("Midnight drift", palette: "Midnight", seed: 41, columns: 4, rows: 3, jitter: 0.7, softness: 0.7, grain: 0.1),
         mesh("Aurora", palette: "Aurora", seed: 7, columns: 3, rows: 2, jitter: 0.6, softness: 0.75, grain: 0.06),

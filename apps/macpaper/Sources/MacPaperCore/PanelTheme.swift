@@ -33,6 +33,8 @@ public enum PanelTheme {
     public static let textPrimary = RGBAColor(hex: 0xF8F8F8)
     public static let textSecondary = RGBAColor(hex: 0xBABABA)
     public static let border = RGBAColor(hex: 0x484848)
+    /// A slider's inactive track: neutral/500, a control at 3:1 on the ground.
+    public static let track = RGBAColor(hex: 0x858585)
     public static let accent = RGBAColor(hex: 0xFFB48A)
     public static let accentOn = RGBAColor(hex: 0x141414)
     public static let accentText = RGBAColor(hex: 0xFFCDB3)
@@ -64,6 +66,7 @@ public enum PanelTheme {
         Pair(name: "text on the accent", foreground: accentOn, background: accent, minimum: Contrast.aaText),
         Pair(name: "the accent as a control on the ground", foreground: accent, background: ground, minimum: Contrast.aaLarge),
         Pair(name: "the accent as a control on a row surface", foreground: accent, background: surface, minimum: Contrast.aaLarge),
+        Pair(name: "the inactive slider track on the ground", foreground: track, background: ground, minimum: Contrast.aaLarge),
         Pair(name: "danger on the ground", foreground: danger, background: ground, minimum: Contrast.aaText),
         Pair(name: "success on the ground", foreground: success, background: ground, minimum: Contrast.aaText),
     ]

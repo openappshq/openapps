@@ -142,6 +142,43 @@ struct PresetPaletteTests {
         }
     }
 
+    /// The documents a preset lands in: the looks the panel and Shuffle make.
+    static let contexts: [(String, @Sendable (PresetPalette) -> Wallpaper)] = [
+        ("mesh emerge", { Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 2, colors: $0.colors, jitter: 0.6, softness: 0.5)), seed: 42, grain: 0.08, pair: .lightDark, composition: .emerge) }),
+        ("mesh busy", { Wallpaper(generator: .mesh(MeshParameters(columns: 3, rows: 3, colors: $0.colors, jitter: 0.9, softness: 0.3)), seed: 7) }),
+        ("dots", { Wallpaper(generator: .pattern(PatternParameters(kind: .dots, foreground: $0.colors.last!, background: $0.colors[0], scale: 48)), seed: 3, grain: 0.1) }),
+        ("lines", { Wallpaper(generator: .pattern(PatternParameters(kind: .lines, foreground: $0.colors.last!, background: $0.colors[1], scale: 40, angle: 45)), seed: 5) }),
+    ]
+
+    @Test("Every preset, in every context, reads on both sides once lifted; the lift is the smallest shade that does")
+    func presetsRead() {
+        let renderer = WallpaperRenderer()
+        for preset in PresetPalettes.all {
+            for (name, make) in Self.contexts {
+                let lifted = make(preset).liftingMenuBar(renderer: renderer)
+                for side in Side.allCases {
+                    #expect(lifted.menuBarReads(side: side, renderer: renderer), "\(preset.name) · \(name) · \(side)")
+                }
+                if lifted.finish.topShade > 0 {
+                    var lower = lifted
+                    lower.finish.topShade = max(0, lifted.finish.topShade - 0.1)
+                    #expect(!Side.allCases.allSatisfy { lower.menuBarReads(side: $0, renderer: renderer) }, "\(preset.name) · \(name): a tenth less would not read")
+                }
+            }
+        }
+    }
+
+    @Test("Every starter reads on both sides as shipped")
+    func startersRead() {
+        let renderer = WallpaperRenderer()
+        for starter in StarterRecipes.all {
+            for side in Side.allCases {
+                #expect(starter.wallpaper.menuBarReads(side: side, renderer: renderer), "\(starter.name) · \(side)")
+            }
+        }
+        #expect(StarterRecipes.all.map(\.name) == StarterRecipes.raw.map(\.name))
+    }
+
     @Test("The panel lists the image and field generators; flat and gradient are the base layer; Shuffle never makes a base layer")
     func order() {
         #expect(GeneratorKind.panelOrder == [.dither, .mesh, .pattern, .pixelize])
@@ -207,6 +244,29 @@ struct PinTests {
         guard case .pixelize(let p) = out.generator else { Issue.record("not pixelize"); return }
         #expect(p.source == reference && p.fit == .fit && p.focus == Point(x: 0.2, y: 0.8))
         #expect(p.blockSize == 16, "unpinned: the default")
+    }
+
+    @Test("Pins carry per side: a value pinned on an edited dark side survives as the dark side's, the light side keeps its own")
+    func bothSides() {
+        var current = Self.mesh
+        // The light side at jitter 0.1, the dark side edited by hand to 0.9.
+        current.generator = .mesh(MeshParameters(columns: 3, rows: 3, colors: [.black, .white], jitter: 0.1, softness: 0.5))
+        current.darkGenerator = .mesh(MeshParameters(columns: 3, rows: 3, colors: [RGBAColor(hex: 0x102030), RGBAColor(hex: 0x405060)], jitter: 0.9, softness: 0.4))
+        let candidate = Wallpaper(generator: .mesh(MeshParameters(columns: 2, rows: 2, colors: PresetPalettes.named("Sea")!.colors, jitter: 0.5, softness: 0.5)), seed: 3)
+        let out = PinnedParameters([.meshJitter]).carry(from: current, into: candidate)
+        guard case .mesh(let light) = out.generator, case .mesh(let dark)? = out.darkGenerator else { Issue.record("sides missing"); return }
+        #expect(light.jitter == 0.1, "the light side keeps the light side's jitter")
+        #expect(dark.jitter == 0.9, "the dark side keeps the dark side's jitter")
+        #expect(dark.colors == candidate.generator.darkened().colors, "the dark side is the candidate's derived dark side otherwise")
+        #expect(out.generator(for: .dark) == out.darkGenerator)
+        // The palette pinned: each side's own colors.
+        let palette = PinnedParameters([.palette]).carry(from: current, into: candidate)
+        #expect(palette.generator.colors == [.black, .white])
+        #expect(palette.darkGenerator?.colors == [RGBAColor(hex: 0x102030), RGBAColor(hex: 0x405060)])
+        // No custom dark side: the candidate's stays derived from the carried light side.
+        let derived = PinnedParameters([.meshJitter]).carry(from: Self.mesh, into: candidate)
+        #expect(derived.darkGenerator == nil)
+        if case .mesh(let p) = derived.generator(for: .dark) { #expect(p.jitter == 0.9) } else { Issue.record("not a mesh") }
     }
 
     @Test("Pins round-trip as JSON and every pin has a title and a home")

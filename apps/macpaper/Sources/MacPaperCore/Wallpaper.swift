@@ -113,6 +113,17 @@ public struct Wallpaper: Codable, Hashable, Sendable {
     /// Whether the dark side was edited by hand (nil derives it).
     public var hasCustomDark: Bool { darkGenerator != nil }
 
+    /// The document with one side's generator replaced (the dark side
+    /// materialised as its own).
+    public func withSideGenerator(_ side: Side, _ generator: Generator) -> Wallpaper {
+        var copy = self
+        switch side {
+        case .light: copy.generator = generator
+        case .dark: copy.darkGenerator = generator
+        }
+        return copy
+    }
+
     /// Every finish off, grain off: the render is the generator's own pixels.
     public var isPlain: Bool { grain == 0 && finish.isEmpty }
 

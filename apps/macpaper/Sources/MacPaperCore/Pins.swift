@@ -89,7 +89,12 @@ public struct PinnedParameters: Hashable, Codable, Sendable {
     }
 
     /// The candidate with every pinned value copied over from the current
-    /// document. Nothing else about the candidate changes: a shuffle with
+    /// document, side by side: the light generator's pinned values into
+    /// the candidate's light side and, where the current dark side was
+    /// edited by hand, its pinned values into a dark side of its own (the
+    /// candidate's derived dark side, with the same values carried), so a
+    /// jitter pinned while editing the dark side survives as that side's
+    /// jitter. Nothing else about the candidate changes: a shuffle with
     /// the palette pinned is a new document in the same colors.
     public func carry(from current: Wallpaper, into candidate: Wallpaper) -> Wallpaper {
         guard !pins.isEmpty else { return candidate }
@@ -97,7 +102,6 @@ public struct PinnedParameters: Hashable, Codable, Sendable {
         if keepsGenerator(of: current), out.generator.kind != current.generator.kind {
             out.generator = .default(current.generator.kind, colors: out.generator.colors, source: current.generator.source)
         }
-        if pins.contains(.palette) { out.generator = out.generator.withPalette(current.generator.colors) }
         if pins.contains(.seed) { out.seed = current.seed }
         if pins.contains(.grain) { out.grain = current.grain }
         if pins.contains(.topShade) { out.finish.topShade = current.finish.topShade }
@@ -106,8 +110,22 @@ public struct PinnedParameters: Hashable, Codable, Sendable {
         if pins.contains(.gradientMap) { out.finish.gradientMap = current.finish.gradientMap }
         if pins.contains(.composition) { out.composition = current.composition }
         if pins.contains(.pair) { out.pair = current.pair }
-        out.generator = carryParameters(from: current.generator, into: out.generator)
+        out.generator = carry(from: current.generator, into: out.generator)
+        if let dark = current.darkGenerator {
+            // The candidate's dark side is derived from its (carried) light
+            // side; the current dark side's own pinned values go over it.
+            let derived = out.darkGenerator ?? out.generator.darkened()
+            let carried = carry(from: dark, into: derived)
+            out.darkGenerator = carried == derived && out.darkGenerator == nil ? nil : carried
+        }
         return out
+    }
+
+    /// One side: the palette and the generator's own parameters.
+    private func carry(from current: Generator, into candidate: Generator) -> Generator {
+        var out = candidate
+        if pins.contains(.palette) { out = out.withPalette(current.colors) }
+        return carryParameters(from: current, into: out)
     }
 
     private func carryParameters(from current: Generator, into candidate: Generator) -> Generator {
