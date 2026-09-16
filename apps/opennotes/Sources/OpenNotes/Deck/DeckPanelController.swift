@@ -160,7 +160,8 @@ final class DeckPanelController {
             removeMonitors()
             if panel.isKeyWindow { panel.resignKey() }
             model.clearConflictNotice()
-        case .openNote(_, let focus):
+        case .openNote(let id, let focus):
+            model.retain(id)
             installMonitors()
             if focus {
                 focusCounter += 1
@@ -171,7 +172,9 @@ final class DeckPanelController {
             }
         case .closeNote(let id):
             let id = current(id)
-            if model.closeNote(id) == nil {
+            let kept = model.closeNote(id)
+            model.release(kept ?? id)
+            if kept == nil {
                 _ = machine.handle(.notesChanged(model.deckOrder))
             }
         case .createNote:
@@ -189,7 +192,7 @@ final class DeckPanelController {
     private func render() {
         let state = machine.state
         let notes = model.active
-        let openNote = state.openNote.flatMap { model.note($0) }
+        let openNote = state.openNote.flatMap { model.body(of: $0) }
         let pending = model.pendingUndo
         layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: pending != nil)
         var content = DeckContent(

@@ -34,6 +34,8 @@ nonisolated public enum StoreError: Error, LocalizedError, Hashable {
     /// A flush (folder switch, quit) could not save these notes; they stay
     /// unsaved in memory and the operation was not performed.
     case unsaved([NoteID: String])
+    /// The system refused a file operation; the message names it.
+    case io(String)
 
     public var errorDescription: String? {
         switch self {
@@ -45,6 +47,7 @@ nonisolated public enum StoreError: Error, LocalizedError, Hashable {
         case .unsaved(let problems):
             let names = problems.keys.sorted().map(\.fileName).joined(separator: ", ")
             return "Couldn’t save \(names): \(problems.values.sorted().first ?? "")"
+        case .io(let message): return message
         }
     }
 }
@@ -62,24 +65,51 @@ nonisolated public enum SaveOutcome: Hashable, Sendable {
     case notWritten
 }
 
+/// Points inside the store's transactions where a test can interleave an
+/// outside writer deterministically.
+nonisolated public enum StoreInterleaving: Hashable, Sendable {
+    /// The existing file has been verified through its descriptor; the
+    /// replacement is about to be swapped in.
+    case beforeReplace(NoteID)
+    /// The provisional file has been verified through its descriptor; the
+    /// name is about to be unlinked.
+    case beforeUnlink(NoteID)
+    /// The destination was found absent; the exclusive create is next.
+    case beforeCreate(NoteID)
+}
+
 /// The notes folder: one `.md` file per note, read at launch and whenever
 /// the watcher or the app asks (`rescan`), written 250 ms after typing
 /// stops and at once for everything else.
 ///
-/// Every write is a transaction against what was last read or written:
-/// the file's size, date and content hash are compared right before the
-/// replacement, and a file that changed meanwhile is never overwritten —
-/// it keeps the outside version and the user's text becomes a conflict
-/// copy beside it. Nothing is ever deleted except a provisional empty
-/// note's own file, and only while that file still holds exactly what the
-/// app wrote (design/products/opennotes.md, "Notes"). Main-actor: the app
-/// calls it from its windows; the watcher hops over.
+/// Every write is a transaction: the existing file is opened (never
+/// through a link), hashed in full through that descriptor and compared
+/// with what was last read or written; the replacement is exclusively
+/// created when the file is absent, or swapped in atomically and the
+/// displaced file checked to be the very inode that was verified — an
+/// outside edit that lands at any point is never lost: the file keeps it
+/// and the user's text becomes a new note beside it. The only removal the
+/// store makes is a provisional empty note's own file, unlinked by name
+/// only after the file open under that name proved to be the one the app
+/// wrote (design/products/opennotes.md, "Notes").
+///
+/// Memory is bounded twice: a file is read up to `maximumFileSize` (a
+/// larger one is shown truncated and read-only), and note bodies are kept
+/// under `bodyBudget` bytes in total — beyond it the least recently used
+/// bodies fall back to a summary (the first kilobyte, enough for the title
+/// and the list) and are read again on demand; dirty and retained (open)
+/// notes are never evicted. Main-actor: the app calls it from its windows;
+/// the watcher hops over.
 public final class NoteStore {
     /// Files above this are shown truncated and never edited or written.
     /// A sticky is a few kilobytes; a megabyte is somebody's book.
     public static let maximumFileSize = 1_000_000
     /// How much of an oversized file is shown.
     public static let truncatedPreviewSize = 64_000
+    /// The default budget for retained bodies, all notes together.
+    public static let defaultBodyBudget = 8_000_000
+    /// What an evicted note keeps: enough for the title and the first lines.
+    public static let summarySize = 1_024
 
     public private(set) var folder: URL
     public private(set) var notes: [NoteID: Note] = [:]
@@ -89,36 +119,33 @@ public final class NoteStore {
     /// needed); reading, exporting, archiving and reordering still work.
     public var readOnly = false
     public var onEvent: (StoreEvent) -> Void = { _ in }
+    /// Tests only: an outside writer run at a chosen point of a transaction.
+    public var interleavingHook: ((StoreInterleaving) -> Void)?
+    /// The budget for retained bodies, in bytes of UTF-8.
+    public let bodyBudget: Int
+    /// Bytes of full bodies held right now.
+    public private(set) var retainedBodyBytes = 0
 
     private let fileManager: FileManager
     private let now: () -> Date
     /// What the file held when it was last read or written, to tell an
     /// outside edit from our own. Not touched by a rescan while the note is
     /// dirty: the write transaction compares against it.
-    private var fingerprints: [NoteID: Fingerprint] = [:]
+    private var identities: [NoteID: NoteFile.Identity] = [:]
     /// Notes with in-memory text not yet on disk.
     private var dirty: Set<NoteID> = []
     /// Notes created this session and not yet closed once: their file is
     /// provisional and takes the title's name when they close.
     private var provisional: Set<NoteID> = []
+    /// Notes whose full body is in memory, least recently used first.
+    private var loaded: [NoteID] = []
+    /// Notes the app holds open: never evicted.
+    private var retained: [NoteID: Int] = [:]
 
-    private struct Fingerprint: Equatable {
-        var size: Int
-        var modified: Date
-        var hash: Int
-    }
-
-    /// What is at a note's path right now.
-    private enum DiskEntry {
-        case absent
-        case notRegular
-        case unreadable(Fingerprint)
-        case file(contents: String, fingerprint: Fingerprint)
-    }
-
-    public init(folder: URL, fileManager: FileManager = .default, now: @escaping () -> Date = Date.init) {
+    public init(folder: URL, fileManager: FileManager = .default, bodyBudget: Int = NoteStore.defaultBodyBudget, now: @escaping () -> Date = Date.init) {
         self.folder = folder
         self.fileManager = fileManager
+        self.bodyBudget = max(bodyBudget, Self.maximumFileSize)
         self.now = now
     }
 
@@ -152,6 +179,58 @@ public final class NoteStore {
     /// The notes with unsaved text, for the flush before a quit or a switch.
     public var unsavedNotes: [NoteID] { dirty.sorted() }
 
+    /// The note with its full body in memory (read from disk if it had
+    /// been evicted), moved to the front of the budget's line.
+    public func body(of id: NoteID) -> Note? {
+        guard var note = notes[id] else { return nil }
+        if !note.bodyIsLoaded {
+            guard case .file(let fd, let info) = NoteFile.open(fileURL(for: id)) else { return note }
+            defer { NoteFile.close(fd) }
+            guard let contents = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info)), let text = contents.text else { return note }
+            let fresh = Self.parse(id: id, contents: text, fileDate: contents.identity.modified, fallbackCreated: contents.identity.modified, truncated: contents.truncated)
+            note.text = fresh.text
+            note.bodyIsLoaded = true
+            identities[id] = contents.identity
+            notes[id] = note
+        }
+        touch(id)
+        return note
+    }
+
+    /// The app holds the note open: its body stays whatever the budget.
+    public func retain(_ id: NoteID) {
+        retained[id, default: 0] += 1
+        _ = body(of: id)
+    }
+
+    public func release(_ id: NoteID) {
+        guard let count = retained[id] else { return }
+        if count <= 1 { retained[id] = nil } else { retained[id] = count - 1 }
+        enforceBudget()
+    }
+
+    /// Search over titles and text, case- and diacritic-insensitive,
+    /// every word somewhere in the note. Evicted bodies are read one at
+    /// a time and not retained.
+    public func search(_ query: String, archived: Bool) -> [Note] {
+        let candidates = archived ? self.archived : active
+        let words = query.split(whereSeparator: \.isWhitespace).map { Search.fold(String($0)) }.filter { !$0.isEmpty }
+        guard !words.isEmpty else { return candidates }
+        return candidates.filter { note in
+            let text: String
+            if note.bodyIsLoaded {
+                text = note.text
+            } else if case .file(let fd, let info) = NoteFile.open(fileURL(for: note.id)) {
+                defer { NoteFile.close(fd) }
+                text = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info))?.text ?? note.text
+            } else {
+                text = note.text
+            }
+            let haystack = Search.fold(text)
+            return words.allSatisfy { haystack.contains($0) }
+        }
+    }
+
     /// Reads the folder, creating it when `create` (the default folder is
     /// always created; a chosen one never is). Replaces everything in
     /// memory that is not dirty.
@@ -160,8 +239,10 @@ public final class NoteStore {
             try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
         }
         notes = notes.filter { dirty.contains($0.key) }
-        fingerprints = fingerprints.filter { dirty.contains($0.key) }
+        identities = identities.filter { dirty.contains($0.key) }
         provisional = provisional.intersection(dirty)
+        loaded = loaded.filter { dirty.contains($0) }
+        retainedBodyBytes = loaded.reduce(0) { $0 + (notes[$1]?.text.utf8.count ?? 0) }
         rescan(announce: false)
         onEvent(.reloaded)
     }
@@ -175,8 +256,11 @@ public final class NoteStore {
         folder = url
         dirty = []
         notes = [:]
-        fingerprints = [:]
+        identities = [:]
         provisional = []
+        loaded = []
+        retained = [:]
+        retainedBodyBytes = 0
         load(create: create)
     }
 
@@ -198,41 +282,136 @@ public final class NoteStore {
             return
         }
         folderIsMissing = false
-        let urls = (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey], options: [.skipsHiddenFiles])) ?? []
+        let urls = (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])) ?? []
         var seen: Set<NoteID> = []
         var updated: [NoteID] = []
         for url in urls where url.pathExtension.lowercased() == "md" {
-            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]), values.isRegularFile == true else { continue }
             let id = NoteID(url.deletingPathExtension().lastPathComponent)
+            guard case .file(let fd, let info) = NoteFile.open(url) else { continue }
             seen.insert(id)
-            if dirty.contains(id) { continue }
-            let size = values.fileSize ?? 0
-            let modified = values.contentModificationDate ?? .distantPast
-            if let known = fingerprints[id], known.size == size, known.modified == modified { continue }
-            guard case .file(let contents, let fingerprint) = read(url, size: size, modified: modified) else { continue }
-            if let known = fingerprints[id], known.hash == fingerprint.hash {
-                // Touched, not changed (a sync tool, a copy): remember the new stamp.
-                fingerprints[id] = fingerprint
+            if dirty.contains(id) {
+                NoteFile.close(fd)
                 continue
             }
-            fingerprints[id] = fingerprint
-            notes[id] = Self.parse(id: id, contents: contents, fileDate: modified, fallbackCreated: modified, truncated: size > Self.maximumFileSize)
+            // Same inode, size and date as last time: unchanged, no read.
+            if let known = identities[id], known.device == info.st_dev, known.inode == info.st_ino,
+               known.size == Int(info.st_size), known.modified == NoteFile.date(info.st_mtimespec) {
+                NoteFile.close(fd)
+                continue
+            }
+            let contents = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info))
+            NoteFile.close(fd)
+            guard let contents, let text = contents.text else { continue }
+            if let known = identities[id], known.hash == contents.identity.hash, known.size == contents.identity.size {
+                // Touched, not changed (a sync tool, a copy): remember the new stamp.
+                identities[id] = contents.identity
+                continue
+            }
+            identities[id] = contents.identity
+            store(Self.parse(id: id, contents: text, fileDate: contents.identity.modified, fallbackCreated: contents.identity.modified, truncated: contents.truncated))
             // A provisional note replaced from outside is somebody's note now.
             provisional.remove(id)
             updated.append(id)
         }
         var removed: [NoteID] = []
         for id in notes.keys where !seen.contains(id) && !dirty.contains(id) && !provisional.contains(id) {
-            notes[id] = nil
-            fingerprints[id] = nil
+            forget(id)
             removed.append(id)
         }
         // A dirty note whose file went away is written again on the next save.
-        for id in fingerprints.keys where !seen.contains(id) { fingerprints[id] = nil }
+        for id in identities.keys where !seen.contains(id) { identities[id] = nil }
         if announce {
             if !updated.isEmpty { onEvent(.updated(updated.sorted())) }
             if !removed.isEmpty { onEvent(.removed(removed.sorted())) }
         }
+    }
+
+    /// A file over the maximum is read to the preview size only; the hash
+    /// still covers every byte.
+    private static func readCap(for info: stat) -> Int {
+        Int(info.st_size) > maximumFileSize ? truncatedPreviewSize : maximumFileSize
+    }
+
+    // MARK: - The body budget
+
+    /// Puts a freshly parsed note in memory: with its body while the budget
+    /// allows, as a summary otherwise.
+    private func store(_ note: Note) {
+        var note = note
+        if let old = notes[note.id], old.bodyIsLoaded { unaccount(note.id) }
+        let bytes = note.text.utf8.count
+        if retainedBodyBytes + bytes <= bodyBudget || retained[note.id] != nil || dirty.contains(note.id) {
+            note.bodyIsLoaded = true
+            notes[note.id] = note
+            account(note.id, bytes: bytes)
+            enforceBudget()
+        } else {
+            enforceBudget(toFit: bytes)
+            if retainedBodyBytes + bytes <= bodyBudget {
+                note.bodyIsLoaded = true
+                notes[note.id] = note
+                account(note.id, bytes: bytes)
+            } else {
+                note.text = Self.summary(of: note.text)
+                note.bodyIsLoaded = false
+                notes[note.id] = note
+            }
+        }
+    }
+
+    private func forget(_ id: NoteID) {
+        if notes[id]?.bodyIsLoaded == true { unaccount(id) }
+        notes[id] = nil
+        identities[id] = nil
+        retained[id] = nil
+    }
+
+    private func account(_ id: NoteID, bytes: Int) {
+        loaded.removeAll { $0 == id }
+        loaded.append(id)
+        retainedBodyBytes += bytes
+    }
+
+    private func unaccount(_ id: NoteID) {
+        guard let index = loaded.firstIndex(of: id) else { return }
+        loaded.remove(at: index)
+        retainedBodyBytes -= notes[id]?.text.utf8.count ?? 0
+    }
+
+    private func touch(_ id: NoteID) {
+        guard let index = loaded.firstIndex(of: id) else { return }
+        loaded.remove(at: index)
+        loaded.append(id)
+    }
+
+    /// Evicts least recently used bodies (never dirty or retained ones)
+    /// until the budget, less `room`, holds.
+    private func enforceBudget(toFit room: Int = 0) {
+        var index = 0
+        while retainedBodyBytes + room > bodyBudget, index < loaded.count {
+            let id = loaded[index]
+            if dirty.contains(id) || retained[id] != nil {
+                index += 1
+                continue
+            }
+            guard var note = notes[id] else { loaded.remove(at: index); continue }
+            loaded.remove(at: index)
+            retainedBodyBytes -= note.text.utf8.count
+            note.text = Self.summary(of: note.text)
+            note.bodyIsLoaded = false
+            notes[id] = note
+        }
+    }
+
+    /// The first kilobyte, cut at a character boundary.
+    static func summary(of text: String) -> String {
+        guard text.utf8.count > summarySize else { return text }
+        var length = summarySize
+        while length > 0 {
+            if let prefix = String(text.utf8.prefix(length)) { return prefix }
+            length -= 1
+        }
+        return ""
     }
 
     // MARK: - Writing
@@ -246,8 +425,10 @@ public final class NoteStore {
         guard !folderIsMissing else { throw StoreError.folderMissing(folder) }
         let created = now()
         let id = NoteFileName.id(for: "", created: created) { self.notes[$0] != nil || self.fileManager.fileExists(atPath: self.fileURL(for: $0).path) }
-        let note = Note(id: id, text: "", color: color, face: face, order: nextTopOrder(), created: created)
+        var note = Note(id: id, text: "", color: color, face: face, order: nextTopOrder(), created: created)
+        note.bodyIsLoaded = true
         notes[id] = note
+        account(id, bytes: 0)
         provisional.insert(id)
         dirty.insert(id)
         onEvent(.updated([id]))
@@ -272,12 +453,15 @@ public final class NoteStore {
     /// The text as the user has it now; the app saves it after the debounce.
     public func setText(_ text: String, for id: NoteID) throws {
         guard !readOnly else { throw StoreError.readOnly }
-        guard var note = notes[id] else { throw StoreError.noSuchNote(id) }
+        guard var note = body(of: id) else { throw StoreError.noSuchNote(id) }
         guard !note.truncated else { throw StoreError.oversized(id) }
         guard note.text != text else { return }
+        unaccount(id)
         note.text = text
         note.modified = now()
+        note.bodyIsLoaded = true
         notes[id] = note
+        account(id, bytes: text.utf8.count)
         dirty.insert(id)
     }
 
@@ -310,8 +494,9 @@ public final class NoteStore {
         var position = 0
         var changed: [NoteID] = []
         for id in ids {
-            guard var note = notes[id], !note.archived, !note.truncated else { continue }
-            if note.order != position {
+            guard let existing = notes[id], !existing.archived, !existing.truncated else { continue }
+            if existing.order != position {
+                guard var note = body(of: id) else { continue }
                 note.order = position
                 note.modified = now()
                 notes[id] = note
@@ -330,14 +515,15 @@ public final class NoteStore {
 
     private func change(_ id: NoteID, whileReadOnly: Bool = false, _ mutate: (inout Note) -> Void) throws {
         guard !readOnly || whileReadOnly else { throw StoreError.readOnly }
-        guard var note = notes[id] else { throw StoreError.noSuchNote(id) }
+        guard notes[id] != nil else { throw StoreError.noSuchNote(id) }
+        guard var note = body(of: id), note.bodyIsLoaded else { throw StoreError.entryChanged(id) }
         guard !note.truncated else { throw StoreError.oversized(id) }
         mutate(&note)
         note.modified = now()
         notes[id] = note
         dirty.insert(id)
         // A provisional note that has no file yet keeps its change in memory.
-        if provisional.contains(id), fingerprints[id] == nil, note.isEmpty {
+        if provisional.contains(id), identities[id] == nil, note.isEmpty {
             onEvent(.updated([id]))
             return
         }
@@ -372,35 +558,46 @@ public final class NoteStore {
     }
 
     /// A new note the user left empty: gone, with its provisional file if
-    /// the debounce had written one. The only file removal the app makes,
-    /// and only while the file still holds exactly what the app last wrote
-    /// (same size, date and content); anything else at that path is left
-    /// where it is and the note becomes an ordinary one on the next rescan.
+    /// the debounce had written one. The only file removal the app makes:
+    /// the entry under the provisional name is opened (never through a
+    /// link), must be a regular file on the very inode the app wrote, with
+    /// the very content, and only then is the name unlinked — never
+    /// recursively, and anything else at that path is left where it is.
     @discardableResult
     public func discardIfEmpty(_ id: NoteID) -> Bool {
         guard let note = notes[id], provisional.contains(id), note.isEmpty else { return false }
-        if let known = fingerprints[id] {
-            switch read(fileURL(for: id)) {
-            case .file(_, let current) where current == known:
-                try? fileManager.removeItem(at: fileURL(for: id))
+        if let known = identities[id] {
+            switch NoteFile.open(fileURL(for: id)) {
             case .absent:
                 break
-            default:
-                // Replaced, touched or unreadable: not ours to remove.
-                provisional.remove(id)
-                dirty.remove(id)
-                fingerprints[id] = nil
-                notes[id] = nil
-                rescan(announce: true)
-                return false
+            case .notRegular:
+                return keepAsForeign(id)
+            case .file(let fd, let info):
+                defer { NoteFile.close(fd) }
+                guard (info.st_dev, info.st_ino) == known.sameInode,
+                      let contents = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info)),
+                      contents.identity.hash == known.hash, contents.identity.size == known.size else {
+                    return keepAsForeign(id)
+                }
+                interleavingHook?(.beforeUnlink(id))
+                guard (try? NoteFile.unlink(fileURL(for: id), verified: fd)) != nil else { return keepAsForeign(id) }
             }
         }
-        notes[id] = nil
-        fingerprints[id] = nil
+        forget(id)
         dirty.remove(id)
         provisional.remove(id)
         onEvent(.removed([id]))
         return true
+    }
+
+    /// Whatever is under a provisional name is not ours to remove: the note
+    /// leaves memory and the next rescan reads what is there.
+    private func keepAsForeign(_ id: NoteID) -> Bool {
+        provisional.remove(id)
+        dirty.remove(id)
+        forget(id)
+        rescan(announce: true)
+        return false
     }
 
     /// A new note closing for the first time: saved, and moved to the file
@@ -414,47 +611,40 @@ public final class NoteStore {
         if case .keptAsConflictCopy(let copy) = try save(id) { current = copy }
         provisional.remove(id)
         provisional.remove(current)
-        guard let note = notes[current], let known = fingerprints[current] else { return current }
+        guard let note = notes[current], let known = identities[current] else { return current }
         let wanted = NoteFileName.id(for: note.title, created: note.created) { candidate in
             candidate != current && (self.notes[candidate] != nil || self.fileManager.fileExists(atPath: self.fileURL(for: candidate).path))
         }
         guard wanted != current, !wanted.rawValue.hasPrefix("note-") else { return current }
-        // Only the file the app wrote is renamed; anything changed meanwhile
-        // waits for the next write transaction.
-        guard case .file(_, let onDisk) = read(fileURL(for: current)), onDisk == known else { return current }
+        // Only the file the app wrote is renamed, and never over another.
+        guard let onDisk = NoteFile.identity(at: fileURL(for: current)), onDisk == known.sameInode else { return current }
         do {
-            try fileManager.moveItem(at: fileURL(for: current), to: fileURL(for: wanted))
+            try NoteFile.moveExclusively(fileURL(for: current), to: fileURL(for: wanted))
         } catch {
             return current
         }
         var moved = note
         moved.id = wanted
+        let wasLoaded = notes[current]?.bodyIsLoaded == true
+        if wasLoaded { unaccount(current) }
         notes[current] = nil
+        identities[wanted] = identities.removeValue(forKey: current)
+        if let count = retained.removeValue(forKey: current) { retained[wanted] = count }
+        moved.bodyIsLoaded = wasLoaded
         notes[wanted] = moved
-        fingerprints[wanted] = fingerprints.removeValue(forKey: current)
-        if let values = try? fileURL(for: wanted).resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) {
-            fingerprints[wanted]?.modified = values.contentModificationDate ?? fingerprints[wanted]?.modified ?? .distantPast
-            fingerprints[wanted]?.size = values.fileSize ?? fingerprints[wanted]?.size ?? 0
-        }
+        if wasLoaded { account(wanted, bytes: moved.text.utf8.count) }
         onEvent(.renamed(from: current, to: wanted))
         return wanted
     }
 
-    /// The write transaction. The entry at the note's path is compared with
-    /// what was last read or written:
-    /// - absent: written (a first write, or a file removed outside);
-    /// - the same file (size, date, or content hash): replaced atomically;
-    /// - changed outside: left alone; the user's text goes to a new note
-    ///   beside it under a unique conflict name, the outside version is
-    ///   read back under the original id, and `.keptAsConflictCopy` names
-    ///   the copy (a provisional note that never reached disk simply moves
-    ///   to the next free provisional name);
-    /// - not a regular file, or the file unreadable: refused
-    ///   (`entryChanged`); the note stays dirty.
+    /// The write transaction (see the type's note). Returns `.saved`, or
+    /// `.keptAsConflictCopy` when the file had changed outside — before the
+    /// check, or between the check and the swap.
     private func write(_ id: NoteID) throws -> SaveOutcome {
         guard let note = notes[id] else { throw StoreError.noSuchNote(id) }
         if note.truncated { throw StoreError.oversized(id) }
-        if provisional.contains(id), fingerprints[id] == nil, note.isEmpty { return .notWritten }
+        guard note.bodyIsLoaded else { throw StoreError.entryChanged(id) }
+        if provisional.contains(id), identities[id] == nil, note.isEmpty { return .notWritten }
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             folderIsMissing = true
@@ -462,121 +652,148 @@ public final class NoteStore {
             throw StoreError.folderMissing(folder)
         }
         let url = fileURL(for: id)
-        let known = fingerprints[id]
-        switch read(url) {
-        case .absent:
-            break
-        case .notRegular:
-            throw StoreError.entryChanged(id)
-        case .unreadable(let onDisk):
-            // Ours cannot replace what cannot be read; it goes beside it.
-            if let known, onDisk == known { break }
-            return try divert(id, note: note, theirs: nil)
-        case .file(let contents, let onDisk):
-            if let known, onDisk == known || onDisk.hash == known.hash { break }
-            return try divert(id, note: note, theirs: contents)
+        let contents = FrontMatter.serialize(note)
+        var attempts = 0
+        while true {
+            attempts += 1
+            switch NoteFile.open(url) {
+            case .absent:
+                interleavingHook?(.beforeCreate(id))
+                do {
+                    identities[id] = try NoteFile.createExclusively(url, contents: contents)
+                    dirty.remove(id)
+                    return .saved
+                } catch NoteFile.Failure.exists {
+                    // Somebody made the file meanwhile: look again, at most a few times.
+                    guard attempts < 3 else { return try divert(id, note: note) }
+                    continue
+                } catch {
+                    throw StoreError.io("\(url.lastPathComponent): \(error)")
+                }
+            case .notRegular:
+                throw StoreError.entryChanged(id)
+            case .file(let fd, let info):
+                defer { NoteFile.close(fd) }
+                guard let known = identities[id], (info.st_dev, info.st_ino) == known.sameInode,
+                      let onDisk = NoteFile.read(fd: fd, stat: info, cap: 0),
+                      onDisk.identity.hash == known.hash, onDisk.identity.size == known.size,
+                      onDisk.identity.size <= Self.maximumFileSize else {
+                    return try divert(id, note: note)
+                }
+                interleavingHook?(.beforeReplace(id))
+                let temporary: (url: URL, identity: NoteFile.Identity)
+                do {
+                    temporary = try NoteFile.writeTemporary(beside: url, contents: contents)
+                } catch {
+                    throw StoreError.io("\(url.lastPathComponent): \(error)")
+                }
+                do {
+                    try NoteFile.swap(temporary.url, url)
+                } catch {
+                    NoteFile.removeTemporary(temporary.url)
+                    throw StoreError.io("\(url.lastPathComponent): \(error)")
+                }
+                // The displaced file must be the very one that was verified.
+                if let displaced = NoteFile.identity(at: temporary.url), displaced == known.sameInode {
+                    NoteFile.removeTemporary(temporary.url)
+                    identities[id] = temporary.identity
+                    dirty.remove(id)
+                    return .saved
+                }
+                // An outside edit landed between the check and the swap: put
+                // it back, and ours goes beside it.
+                try? NoteFile.swap(temporary.url, url)
+                return try divert(id, note: note, ours: temporary.url)
+            }
         }
-        try replace(url, with: note, id: id)
-        return .saved
     }
 
-    /// Ours to a new note beside the original; theirs read back.
-    private func divert(_ id: NoteID, note: Note, theirs: String?) throws -> SaveOutcome {
-        let wasProvisional = provisional.contains(id) && fingerprints[id] == nil
+    /// Ours to a new note beside the original (from the already-written
+    /// temporary when there is one); theirs read back.
+    private func divert(_ id: NoteID, note: Note, ours temporary: URL? = nil) throws -> SaveOutcome {
+        let wasProvisional = provisional.contains(id) && identities[id] == nil
+        var copy = note
         let copyID: NoteID
+        var identity: NoteFile.Identity?
         if wasProvisional {
             copyID = NoteFileName.id(for: "", created: note.created) { candidate in
                 candidate == id || self.notes[candidate] != nil || self.fileManager.fileExists(atPath: self.fileURL(for: candidate).path)
             }
+            copy.id = copyID
+            do {
+                identity = try NoteFile.createExclusively(fileURL(for: copyID), contents: FrontMatter.serialize(copy))
+            } catch {
+                identity = nil
+            }
         } else {
-            copyID = try reserveConflictName(for: id)
+            let placed = try placeConflictCopy(for: id, note: note, temporary: temporary)
+            copyID = placed.id
+            copy.id = copyID
+            identity = placed.identity
         }
-        var copy = note
-        copy.id = copyID
+        let wasLoaded = notes[id]?.bodyIsLoaded == true
+        if wasLoaded { unaccount(id) }
+        copy.bodyIsLoaded = true
         notes[copyID] = copy
-        dirty.insert(copyID)
+        account(copyID, bytes: copy.text.utf8.count)
+        if let identity {
+            identities[copyID] = identity
+        } else {
+            dirty.insert(copyID)
+        }
         if wasProvisional { provisional.insert(copyID) }
+        if let count = retained.removeValue(forKey: id) { retained[copyID] = count }
         provisional.remove(id)
         dirty.remove(id)
-        fingerprints[id] = nil
-        if let theirs, let values = try? fileURL(for: id).resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) {
-            let modified = values.contentModificationDate ?? now()
-            let size = values.fileSize ?? theirs.utf8.count
-            fingerprints[id] = Fingerprint(size: size, modified: modified, hash: Self.hash(theirs))
-            notes[id] = Self.parse(id: id, contents: theirs, fileDate: modified, fallbackCreated: modified, truncated: size > Self.maximumFileSize)
+        identities[id] = nil
+        // Theirs, under the original id.
+        if case .file(let fd, let info) = NoteFile.open(fileURL(for: id)) {
+            defer { NoteFile.close(fd) }
+            if let theirs = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info)), let text = theirs.text {
+                identities[id] = theirs.identity
+                notes[id] = nil
+                store(Self.parse(id: id, contents: text, fileDate: theirs.identity.modified, fallbackCreated: theirs.identity.modified, truncated: theirs.truncated))
+            } else {
+                notes[id] = nil
+            }
         } else {
             notes[id] = nil
         }
-        do {
-            try replace(fileURL(for: copyID), with: copy, id: copyID)
-        } catch {
-            // Ours is still in memory under the new id, dirty; the next save retries.
-            onEvent(.renamed(from: id, to: copyID))
-            throw error
-        }
         onEvent(.renamed(from: id, to: copyID))
         if !wasProvisional { onEvent(.conflict(id, copy: fileURL(for: copyID))) }
+        if identity == nil { throw StoreError.io("\(copyID.fileName) could not be written; the text is kept and retried.") }
         return .keptAsConflictCopy(copyID)
     }
 
-    /// `<name> (conflict <time>).md`, then `-2`, `-3`… — a name nothing else
-    /// holds, reserved by creating the file without overwriting.
-    private func reserveConflictName(for id: NoteID) throws -> NoteID {
+    /// `<name> (conflict <time>).md`, then `-2`, `-3`… — created
+    /// exclusively with the contents, or the already-written temporary
+    /// moved there without replacing anything.
+    private func placeConflictCopy(for id: NoteID, note: Note, temporary: URL?) throws -> (id: NoteID, identity: NoteFile.Identity?) {
         let base = NoteFileName.conflictStem(for: id, at: now())
         var candidate = NoteID(base)
         var counter = 2
-        while true {
+        while counter < 1000 {
             if notes[candidate] == nil {
+                var copy = note
+                copy.id = candidate
                 do {
-                    try Data().write(to: fileURL(for: candidate), options: .withoutOverwriting)
-                    return candidate
-                } catch let error as CocoaError where error.code == .fileWriteFileExists {
+                    if let temporary {
+                        try NoteFile.moveExclusively(temporary, to: fileURL(for: candidate))
+                        return (candidate, NoteFile.open(fileURL(for: candidate)).identity(cap: 0))
+                    }
+                    return (candidate, try NoteFile.createExclusively(fileURL(for: candidate), contents: FrontMatter.serialize(copy)))
+                } catch NoteFile.Failure.exists {
                     // Taken: the next suffix.
+                } catch {
+                    if let temporary { NoteFile.removeTemporary(temporary) }
+                    throw StoreError.io("\(candidate.fileName): \(error)")
                 }
             }
             candidate = NoteID("\(base)-\(counter)")
             counter += 1
-            if counter > 1000 { throw StoreError.entryChanged(id) }
         }
-    }
-
-    private func replace(_ url: URL, with note: Note, id: NoteID) throws {
-        let contents = FrontMatter.serialize(note)
-        try Data(contents.utf8).write(to: url, options: .atomic)
-        let values = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        fingerprints[id] = Fingerprint(size: values.fileSize ?? contents.utf8.count, modified: values.contentModificationDate ?? now(), hash: Self.hash(contents))
-        dirty.remove(id)
-    }
-
-    // MARK: - Disk
-
-    private func read(_ url: URL) -> DiskEntry {
-        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]) else { return .absent }
-        guard values.isRegularFile == true else { return .notRegular }
-        return read(url, size: values.fileSize ?? 0, modified: values.contentModificationDate ?? .distantPast)
-    }
-
-    /// Reads at most `maximumFileSize` bytes; a larger file is read to
-    /// `truncatedPreviewSize` and its fingerprint covers what was read.
-    private func read(_ url: URL, size: Int, modified: Date) -> DiskEntry {
-        let limit = size > Self.maximumFileSize ? Self.truncatedPreviewSize : Self.maximumFileSize
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return .unreadable(Fingerprint(size: size, modified: modified, hash: 0)) }
-        defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: limit) else { return .unreadable(Fingerprint(size: size, modified: modified, hash: 0)) }
-        guard let contents = Self.decode(data, truncated: size > limit) else { return .unreadable(Fingerprint(size: size, modified: modified, hash: 0)) }
-        return .file(contents: contents, fingerprint: Fingerprint(size: size, modified: modified, hash: Self.hash(contents)))
-    }
-
-    /// UTF-8, or nil; a truncated read drops a split character at the end.
-    private static func decode(_ data: Data, truncated: Bool) -> String? {
-        if let text = String(data: data, encoding: .utf8) { return text }
-        guard truncated else { return nil }
-        var bytes = data
-        for _ in 0..<3 {
-            bytes.removeLast()
-            if let text = String(data: bytes, encoding: .utf8) { return text }
-        }
-        return nil
+        if let temporary { NoteFile.removeTemporary(temporary) }
+        throw StoreError.io("No free name for a copy of \(id.fileName).")
     }
 
     // MARK: - Export
@@ -584,7 +801,7 @@ public final class NoteStore {
     /// `.md` is the text as saved without the front matter; `.txt` strips
     /// the markers too. Works while read-only.
     public func export(_ id: NoteID, as format: ExportFormat) throws -> (name: String, data: Data) {
-        guard let note = notes[id] else { throw StoreError.noSuchNote(id) }
+        guard let note = body(of: id) else { throw StoreError.noSuchNote(id) }
         return Export.file(for: note, as: format)
     }
 
@@ -601,12 +818,16 @@ public final class NoteStore {
             created: parsed.created ?? fallbackCreated, modified: max(parsed.modified ?? fileDate, fileDate)
         )
         note.truncated = truncated
+        note.bodyIsLoaded = true
         return note
     }
+}
 
-    private static func hash(_ contents: String) -> Int {
-        var hasher = Hasher()
-        hasher.combine(contents)
-        return hasher.finalize()
+private extension NoteFile.Entry {
+    /// The identity of an open entry (closing it), hashing the whole file.
+    func identity(cap: Int) -> NoteFile.Identity? {
+        guard case .file(let fd, let info) = self else { return nil }
+        defer { NoteFile.close(fd) }
+        return NoteFile.read(fd: fd, stat: info, cap: cap)?.identity
     }
 }

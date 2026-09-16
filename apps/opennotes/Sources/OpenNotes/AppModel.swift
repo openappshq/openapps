@@ -100,6 +100,22 @@ final class AppModel {
         return store.note(id)
     }
 
+    /// The note with its whole body (read back if the budget had evicted it).
+    func body(of id: NoteID) -> Note? {
+        _ = revision
+        return store.body(of: id)
+    }
+
+    /// The deck holds a note open: its body stays whatever the budget.
+    func retain(_ id: NoteID) { store.retain(id) }
+    func release(_ id: NoteID) { store.release(id) }
+
+    /// Search over titles and text; evicted bodies are read one at a time.
+    func search(_ query: String, archived: Bool) -> [Note] {
+        _ = revision
+        return store.search(query, archived: archived)
+    }
+
     /// A new note with the default face and color; nil (and a footer
     /// problem) when the store refuses.
     func createNote() -> Note? {
@@ -304,6 +320,10 @@ final class AppModel {
             onRedirect(from, to)
         case .conflict(let original, let copy):
             lastConflict = (NoteID(copy.deletingPathExtension().lastPathComponent), original)
+        case .reloaded, .updated:
+            // A note that could fall due may have appeared or changed: the
+            // next wake follows it (nothing runs now, nothing while off).
+            if preferences.autoArchiveDays > 0 { scheduleAutoArchive(runNow: false) }
         default:
             break
         }

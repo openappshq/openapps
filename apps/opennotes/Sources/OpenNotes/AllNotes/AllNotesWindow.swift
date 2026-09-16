@@ -60,11 +60,11 @@ struct AllNotesView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var notes: [Note] {
-        Search.matches(query, in: showsArchived ? model.archived : model.active)
+        model.search(query, archived: showsArchived)
     }
 
     private var selected: Note? {
-        selection.flatMap { model.note($0) } ?? notes.first
+        (selection.flatMap { model.note($0) } ?? notes.first).flatMap { model.body(of: $0.id) }
     }
 
     var body: some View {

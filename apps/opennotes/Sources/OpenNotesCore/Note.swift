@@ -80,6 +80,10 @@ nonisolated public struct Note: Hashable, Sendable, Identifiable {
     /// The file is larger than the store reads: `text` is its beginning,
     /// and the note is shown but never edited or written. Not persisted.
     public var truncated = false
+    /// `text` is the whole body (as far as the read cap goes). False once
+    /// the store's body budget evicted it: `text` is then the first
+    /// kilobyte, and `NoteStore.body(of:)` reads the rest back. Not persisted.
+    public var bodyIsLoaded = true
 
     public init(id: NoteID, text: String = "", color: NoteColor = .coral, face: NoteFace = .sans, pinned: Bool = false, archived: Bool = false, order: Int = 0, created: Date, modified: Date? = nil) {
         self.id = id
