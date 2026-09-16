@@ -577,14 +577,22 @@ public final class LicenseManager {
 
     /// Retries whatever the store or journal refused; with no write owed, a
     /// store that could not be read is read again (merging in unread cleanups).
+    /// A pending write or cleanup that lands durable here is announced once
+    /// (a grant confirming, a storage error clearing); a retry that fails
+    /// again changes nothing published, so it stays silent.
     private func retryStorage() {
         retryJournal()
         guard pendingDurableWrite != nil || cleanupsDirty || !pendingJournalOps.isEmpty else {
             if storageError != nil || journalUnreadable { reloadFromStore() }
             return
         }
+        let hadPendingWrite = pendingDurableWrite != nil
+        let hadDirtyCleanups = cleanupsDirty
         flushRecord()
         flushCleanups()
+        if hadPendingWrite != (pendingDurableWrite != nil) || hadDirtyCleanups != cleanupsDirty {
+            notify()
+        }
     }
 
     /// A removed activation: answers about the old one are stale. The
