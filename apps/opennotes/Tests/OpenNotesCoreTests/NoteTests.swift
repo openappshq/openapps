@@ -32,7 +32,7 @@ final class NoteTests: XCTestCase {
     // MARK: - Front matter
 
     @MainActor func testSerializeThenParseRoundTrips() {
-        let note = Note(id: NoteID("g"), text: "Groceries\n- [ ] milk\n", color: .mint, face: .mono, pinned: true, archived: false, order: -3, created: date, modified: date.addingTimeInterval(5))
+        let note = Note(id: NoteID("g"), text: "Groceries\n- [ ] milk\n", color: .mint, typeface: .face(.mono), pinned: true, archived: false, order: -3, created: date, modified: date.addingTimeInterval(5))
         let contents = FrontMatter.serialize(note)
         XCTAssertTrue(contents.hasPrefix("---\ncolor: mint\nface: mono\npinned: true\narchived: false\norder: -3\ncreated: 2026-"))
         XCTAssertTrue(contents.hasSuffix("---\n\nGroceries\n- [ ] milk\n"))

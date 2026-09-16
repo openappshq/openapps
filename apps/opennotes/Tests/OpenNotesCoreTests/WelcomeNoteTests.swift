@@ -49,7 +49,7 @@ final class WelcomeNoteTests: XCTestCase {
         let note = WelcomeNote.note(created: created)
         XCTAssertEqual(note.id, WelcomeNote.id)
         XCTAssertEqual(note.color, .yellow)
-        XCTAssertEqual(note.face, .sans)
+        XCTAssertEqual(note.typeface, .face(.sans))
         XCTAssertFalse(note.pinned)
         XCTAssertEqual(note.order, 0)
         XCTAssertEqual(note.created, created)

@@ -34,8 +34,8 @@ enum Diagnostics {
             activeCount: model.active.count,
             archivedCount: model.archived.count,
             unsavedCount: model.store.notes.keys.filter { model.store.hasUnsavedChanges($0) }.count,
-            defaultFace: preferences.face,
-            defaultColor: preferences.color,
+            defaultFont: preferences.defaultFontDescription,
+            defaultColor: preferences.newNoteColor.title,
             autoArchiveDays: preferences.autoArchiveDays,
             deckState: deck?.stateDescription ?? "hidden",
             hostedDisplays: deck?.hostedDisplayNames ?? []

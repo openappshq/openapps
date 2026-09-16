@@ -39,6 +39,10 @@ final class DeckPanelController {
     /// The note whose body the deck holds retained: taken once per open,
     /// released once per close, moved with a redirect.
     private var held: NoteID?
+    /// The note the colour panel is picking for, followed through a
+    /// rename; a pick is written to it whatever the deck's state, as long
+    /// as the note still exists and the license allows.
+    private var colorPanelNote: NoteID?
     private var layout: DeckLayout
     /// While a tab is lifted: Escape reaches the deck through this, the
     /// panel made key for the duration (given back on the drop when it
@@ -149,6 +153,7 @@ final class DeckPanelController {
         redirects[from] = to
         if held == from { held = to }
         if keep == from { keep = to }
+        if colorPanelNote == from { colorPanelNote = to }
         _ = machine.handle(.noteRenamed(from: from, to: to))
         render()
     }
@@ -211,7 +216,16 @@ final class DeckPanelController {
             if panel.isKeyWindow { panel.resignKey() }
             model.clearConflictNotice()
             if effect == .showFan { revealPending = true }
+            // The colour panel opened for the note that just closed goes too.
+            NoteColorPanel.shared.dismiss(ownersStartingWith: "note:")
+            colorPanelNote = nil
         case .openNote(let id, let focus):
+            // Another note takes the deck: the panel picking for the
+            // previous one closes with its last pick delivered.
+            if let colorPanelNote, colorPanelNote != id {
+                NoteColorPanel.shared.dismiss(ownersStartingWith: "note:")
+                self.colorPanelNote = nil
+            }
             if let held, held != id { model.release(held) }
             if held != id { model.retain(id) }
             held = id
@@ -231,6 +245,9 @@ final class DeckPanelController {
             panel.makeKey()
         case .closeNote(let id):
             let id = current(id)
+            // A pick still settling is written before the note is saved
+            // and renamed.
+            NoteColorPanel.shared.settle(ownersStartingWith: "note:")
             let kept = model.closeNote(id)
             if let held, held == id || held == kept {
                 model.release(kept ?? held)
@@ -317,7 +334,7 @@ final class DeckPanelController {
             readOnly: model.readOnly, readOnlyNotice: model.readOnlyNotice,
             statusLine: openNote.map { model.statusLine(for: $0.id) } ?? "",
             pendingUndo: pending, folderMissing: model.store.folderIsMissing, focusToken: focusToken,
-            license: model.license
+            license: model.license, defaults: NoteAppearance.Defaults(preferences)
         )
         // Every keystroke, paste and checkbox click asks the license as it
         // happens, not the `readOnly` this render captured — and that the
@@ -356,7 +373,7 @@ final class DeckPanelController {
             case .togglePin:
                 if let id = self.machine.state.openNote, let note = self.model.note(id) { self.model.setPinned(!note.pinned, for: id) }
             case .toggleFace:
-                if let id = self.machine.state.openNote, let note = self.model.note(id) { self.model.setFace(note.face.toggled, for: id) }
+                if let id = self.machine.state.openNote, let note = self.model.note(id) { self.model.setTypeface(self.nextTypeface(for: note), for: id) }
             case .moveUp:
                 if let id = self.machine.state.openNote { self.move(id, by: -1) }
             case .moveDown:
@@ -368,9 +385,29 @@ final class DeckPanelController {
             guard let self, let id = self.machine.state.openNote else { return }
             self.model.setColor(color, for: id)
         }
+        content.onCustomColor = { [weak self] in
+            guard let self, let id = self.machine.state.openNote, let note = self.model.note(id) else { return }
+            // Each pick is a write: the model asks the license at every one.
+            // The target follows the note through a rename and outlives
+            // the deck's state, so a pick settling while the note closes
+            // still lands in its file.
+            self.colorPanelNote = id
+            NoteColorPanel.shared.present(for: "note:\(id.rawValue)", current: note.color) { [weak self] color in
+                guard let self, let target = self.colorPanelNote, self.model.note(target) != nil else { return }
+                self.model.setColor(color, for: target)
+            }
+        }
         content.onFace = { [weak self] in
             guard let self, let id = self.machine.state.openNote, let note = self.model.note(id) else { return }
-            self.model.setFace(note.face.toggled, for: id)
+            self.model.setTypeface(self.nextTypeface(for: note), for: id)
+        }
+        content.onTypeface = { [weak self] typeface in
+            guard let self, let id = self.machine.state.openNote else { return }
+            self.model.setTypeface(typeface, for: id)
+        }
+        content.onFontSize = { [weak self] size in
+            guard let self, let id = self.machine.state.openNote else { return }
+            self.model.setFontSize(size, for: id)
         }
         content.onPin = { [weak self] in
             guard let self, let id = self.machine.state.openNote, let note = self.model.note(id) else { return }
@@ -412,6 +449,12 @@ final class DeckPanelController {
         let width = metrics.tabWidth + metrics.tiltInset + 6
         let x = preferences.side == .right ? layout.panelFrame.width - width : 0
         return CGRect(x: x, y: layout.fan.minY, width: width, height: layout.fan.height)
+    }
+
+    /// ⌘⇧M: the face after the one the note is in now (the default's when
+    /// the note has none), written as the note's own.
+    private func nextTypeface(for note: Note) -> NoteTypeface {
+        (note.typeface ?? preferences.typeface).toggled
     }
 
     /// Only the content changed (typing): no new layout, no window move.
@@ -457,10 +500,21 @@ final class DeckPanelController {
         }
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
-                if let self, event.window !== self.panel { self.handle(.clickedOutside) }
+                if let self, !self.isDeckSurface(event.window) { self.handle(.clickedOutside) }
             }
             return event
         }
+    }
+
+    /// The panel itself, the popovers it opens (its child windows: the
+    /// colour and font menus), the system colour panel and a menu: a click
+    /// in any of these is part of using the note, not a click outside it.
+    private func isDeckSurface(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        if window === panel || window.parent === panel { return true }
+        if window is NSColorPanel { return true }
+        if window.level == .popUpMenu || window.className.contains("Menu") { return true }
+        return false
     }
 
     private func removeMonitors() {

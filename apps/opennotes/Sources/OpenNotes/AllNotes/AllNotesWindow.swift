@@ -236,18 +236,19 @@ struct AllNotesView: View {
     }
 
     /// The color as the deck's pill dash, the title with the pin, the age,
-    /// the first line in the note's own face.
+    /// the title and the first line in the note's own font.
     private func row(_ note: Note) -> some View {
-        HStack(alignment: .center, spacing: 10) {
+        let look = model.appearance(of: note)
+        return HStack(alignment: .center, spacing: 10) {
             Capsule()
-                .fill(Brand.tab(note.color))
+                .fill(look.swatch)
                 .overlay(Capsule().strokeBorder(Color.black.opacity(0.12), lineWidth: 1))
                 .frame(width: 4, height: 24)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(note.title)
-                        .font(Brand.body(13, weight: 600))
+                        .font(Font(look.nsFont(size: 13, weight: 600)))
                         .foregroundStyle(Brand.textPrimary)
                         .lineLimit(1)
                     if note.pinned {
@@ -265,7 +266,7 @@ struct AllNotesView: View {
                         .fixedSize()
                 }
                 Text(note.preview.isEmpty ? " " : note.preview)
-                    .font(note.face == .mono ? Brand.mono(11) : Brand.body(12))
+                    .font(Font(look.nsFont(size: 12)))
                     .foregroundStyle(Brand.textSecondary)
                     .lineLimit(1)
             }
@@ -285,7 +286,7 @@ struct AllNotesView: View {
             HStack(spacing: Brand.Space.s8) {
                 if let note = selected {
                     Circle()
-                        .fill(Brand.tab(note.color))
+                        .fill(model.appearance(of: note).swatch)
                         .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 1))
                         .frame(width: 8, height: 8)
                         .accessibilityHidden(true)
@@ -392,33 +393,34 @@ struct AllNotesView: View {
         }
     }
 
-    /// The note as the deck shows it: the same face, ink, corner and
-    /// contact shadow as the docked card, with what the file knows in the
-    /// footer band.
+    /// The note as the deck shows it: the same paper, ink, font, corner
+    /// and contact shadow as the docked card (`model.appearance(of:)`),
+    /// with what the file knows in the footer band.
     private func paper(_ note: Note) -> some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         let dark = colorScheme == .dark
+        let look = model.appearance(of: note)
         return VStack(alignment: .leading, spacing: 0) {
-            PreviewText(text: note.text, face: note.face, dark: dark)
+            PreviewText(text: note.text, look: look, dark: dark)
                 .padding(Brand.Space.s16)
                 .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
             HStack(spacing: Brand.Space.s8) {
-                Text(AllNotesText.footer(note))
+                Text(AllNotesText.footer(note, missingFamily: look.missingFamily))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
-                Text(note.face.title)
+                Text(AllNotesText.faceLabel(look))
                     .fixedSize()
             }
             .font(Brand.body(11))
-            .foregroundStyle(Brand.noteInkSecondary)
+            .foregroundStyle(look.inkSecondary)
             .padding(.horizontal, Brand.Space.s16)
             .padding(.vertical, 9)
             .background(Color.black.opacity(0.05))
         }
-        .background(Brand.face(note.color))
+        .background(look.paper)
         .clipShape(shape)
-        .overlay(shape.strokeBorder(dark ? Brand.tab(note.color).opacity(0.28) : Color.black.opacity(0.1), lineWidth: 1))
+        .overlay(shape.strokeBorder(dark ? look.swatch.opacity(0.28) : Color.black.opacity(0.1), lineWidth: 1))
         .shadow(color: .black.opacity(dark ? 0.4 : 0.12), radius: 12, x: 0, y: 5)
         .frame(maxWidth: 600, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -510,14 +512,23 @@ enum AllNotesText {
 
     /// The paper's footer: when it was created and edited, its file, and
     /// whether what is shown is the whole of it.
-    static func footer(_ note: Note, now: Date = Date()) -> String {
+    static func footer(_ note: Note, missingFamily: String? = nil, now: Date = Date()) -> String {
         var parts = ["Created \(note.created.formatted(date: .abbreviated, time: .omitted))", edited(note.modified, now: now), note.id.fileName]
         if note.truncated {
             parts.append("over 1 MB; shown from the start, read-only")
         } else if !note.bodyIsLoaded {
             parts.append("can’t read the file right now; shown in part")
         }
+        if let missingFamily {
+            parts.append("“\(missingFamily)” isn’t installed here")
+        }
         return parts.joined(separator: " · ")
+    }
+
+    /// The footer's end: the font the note is shown in, with its own size
+    /// when the file names one ("Sans", "Georgia 14 pt").
+    static func faceLabel(_ look: NoteAppearance) -> String {
+        look.fontSize.map { "\(look.fontTitle) \($0) pt" } ?? look.fontTitle
     }
 
     /// What the pane says while there is nothing to show.

@@ -44,8 +44,18 @@ struct DeckContent {
     var onTextChange: (String) -> Void = { _ in }
     var onCommand: (EditorCommand) -> Void = { _ in }
     var onFocus: () -> Void = {}
+    /// What notes without their own font read (Settings → Notes); every
+    /// note's look is `NoteAppearance.resolve(note, defaults:)`.
+    var defaults = NoteAppearance.Defaults()
     var onColor: (NoteColor) -> Void = { _ in }
+    /// Custom…: the system colour panel for the open note.
+    var onCustomColor: () -> Void = {}
+    /// ⌘⇧M: the next face.
     var onFace: () -> Void = {}
+    /// The font menu's pick: a face, a family, or nil for the default.
+    var onTypeface: (NoteTypeface?) -> Void = { _ in }
+    /// The font menu's size: nil for the default.
+    var onFontSize: (Int?) -> Void = { _ in }
     var onPin: () -> Void = {}
     var onArchive: () -> Void = {}
     var onUndo: () -> Void = {}
@@ -309,7 +319,10 @@ struct DeckView: View {
         let straight = isOpen || lifted
         let inward: CGFloat = (straight ? 0 : tilt.inset) + (isHovered ? 3 : 0) + (lifted ? 4 : 0)
         let towardsScreen: CGFloat = content.side == .right ? -1 : 1
-        return TabCard(note: note, title: note?.title ?? tab.id.rawValue, side: content.side, isOpen: isOpen, lifted: lifted, hovered: isHovered, width: tab.frame.width, height: tab.frame.height)
+        // The tab is the note's paper in this appearance, its title in the
+        // paper's ink and the note's own font.
+        let look = note.map { NoteAppearance.resolve($0, defaults: content.defaults) }
+        return TabCard(note: note, look: look, title: note?.title ?? tab.id.rawValue, side: content.side, isOpen: isOpen, lifted: lifted, hovered: isHovered, width: tab.frame.width, height: tab.frame.height)
             .rotationEffect(.degrees(straight ? 0 : tilt.degrees))
             .scaleEffect(lifted ? 1.05 : 1, anchor: content.side == .right ? .trailing : .leading)
             .position(center(placement.frame))
@@ -430,13 +443,14 @@ struct DeckView: View {
     }
 }
 
-/// One tab as a paper card: the note's face with a hairline edge and a
+/// One tab as a paper card: the note's paper in this appearance with a hairline edge and a
 /// soft shadow, a bar of the note's colour along its outer edge, the pin
 /// when pinned, and the title along the tab — reading down on the right
 /// edge, up on the left — cut with an ellipsis. Hover lifts it a little,
 /// a drag lifts it more.
 private struct TabCard: View {
     let note: Note?
+    let look: NoteAppearance?
     let title: String
     let side: DeckSide
     let isOpen: Bool
@@ -446,11 +460,11 @@ private struct TabCard: View {
     let height: CGFloat
 
     var body: some View {
-        let ink = Color(nsColor: NSColor(hex: 0x141414))
+        let ink = look?.tabInk ?? Brand.textPrimary
         let shadowOpacity = lifted ? 0.3 : hovered ? 0.2 : 0.14
         let shadowRadius: CGFloat = lifted ? 10 : hovered ? 6 : 4
         ZStack {
-            shape.fill(note.map { Brand.tab($0.color) } ?? Brand.surface)
+            shape.fill(look?.tab ?? Brand.surface)
             // The colour bar, on the edge away from the screen's.
             HStack(spacing: 0) {
                 if side == .right { bar }
@@ -468,7 +482,7 @@ private struct TabCard: View {
                     Image(systemName: "pin.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(ink.opacity(0.7))
                 }
                 Text(title)
-                    .font(Brand.body(12.5, weight: 600))
+                    .font(look.map { Font($0.nsFont(size: 12.5, weight: 600)) } ?? Brand.body(12.5, weight: 600))
                     .foregroundStyle(ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -497,15 +511,20 @@ private struct TabCard: View {
     }
 }
 
-/// One note slid out: the editor on the note's face, the footer with the
-/// colors, the face, pin, archive and the status line.
+/// One note slid out: the editor on the note's paper, the footer with the
+/// colour and font menus, pin, archive and the status line.
 struct NoteCard: View {
     let note: Note
     let content: DeckContent
+    @State private var showsColors = false
+    @State private var showsFonts = false
     @Environment(\.previewRendering) private var previewRendering
     @Environment(\.colorScheme) private var colorScheme
 
+    private var look: NoteAppearance { NoteAppearance.resolve(note, defaults: content.defaults) }
+
     var body: some View {
+        let look = look
         VStack(spacing: 0) {
             // The trial's remaining time, or why the note is read-only,
             // while there is something to say (official builds).
@@ -519,60 +538,79 @@ struct NoteCard: View {
                 // instead of stretching the card.
                 Color.clear
                     .overlay(alignment: .topLeading) {
-                        PreviewText(text: note.text, face: note.face, dark: colorScheme == .dark)
+                        PreviewText(text: note.text, look: look, dark: colorScheme == .dark)
                             .padding(12)
                     }
                     .clipped()
             } else {
                 NoteEditor(
-                    text: note.text, face: note.face, isEditable: !content.readOnly && !note.truncated && note.bodyIsLoaded, focusToken: content.focusToken,
+                    text: note.text, look: look, isEditable: !content.readOnly && !note.truncated && note.bodyIsLoaded, focusToken: content.focusToken,
                     onTextChange: content.onTextChange, onCommand: content.onCommand, onFocus: content.onFocus, mayEdit: content.mayEdit
                 )
             }
-            footer
+            footer(look)
         }
-        .background(Brand.face(note.color), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(look.paper, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.black.opacity(0.1), lineWidth: 1))
         .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Note: \(note.title)")
     }
 
-    private var footer: some View {
+    private func footer(_ look: NoteAppearance) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                ForEach(NoteColor.allCases, id: \.self) { color in
-                    Button { content.onColor(color) } label: {
+                // The paper: the swatch opens the grid and Custom….
+                Button { showsColors.toggle() } label: {
+                    HStack(spacing: 4) {
                         Circle()
-                            .fill(Brand.tab(color))
-                            .overlay(Circle().strokeBorder(Color.black.opacity(note.color == color ? 0.7 : 0.15), lineWidth: note.color == color ? 2 : 1))
+                            .fill(look.swatch)
+                            .overlay(Circle().strokeBorder(Color.black.opacity(0.35), lineWidth: 1))
                             .frame(width: 14, height: 14)
+                        Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold)).foregroundStyle(look.inkSecondary)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(content.readOnly)
-                    .help(color.title)
-                    .accessibilityLabel(color.title)
-                    .accessibilityAddTraits(note.color == color ? .isSelected : [])
+                }
+                .buttonStyle(FooterActionStyle(wide: true))
+                .disabled(content.readOnly)
+                .help(content.readOnly ? content.readOnlyNotice : "Colour: \(note.color.title)")
+                .accessibilityLabel("Colour: \(note.color.title)")
+                .popover(isPresented: $showsColors, arrowEdge: .bottom) {
+                    ColorChooser(selected: note.color, readOnly: content.readOnly, onPick: { color in
+                        content.onColor(color)
+                    }, onCustom: {
+                        showsColors = false
+                        content.onCustomColor()
+                    })
+                }
+                // The font: the faces, any installed family, the size.
+                Button { showsFonts.toggle() } label: {
+                    HStack(spacing: 4) {
+                        Text("Aa")
+                            .font(Font(look.nsFont(size: 12, weight: 600)))
+                            .foregroundStyle(look.ink)
+                        Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold)).foregroundStyle(look.inkSecondary)
+                    }
+                }
+                .buttonStyle(FooterActionStyle(wide: true))
+                .disabled(content.readOnly)
+                .help(content.readOnly ? content.readOnlyNotice : "Font: \(look.fontTitle) \(Int(look.size)) pt (⌘⇧M switches the face)")
+                .accessibilityLabel("Font: \(look.fontTitle)")
+                .popover(isPresented: $showsFonts, arrowEdge: .bottom) {
+                    FontChooser(
+                        selection: note.typeface, size: Int(look.size), ownSize: note.fontSize != nil, readOnly: content.readOnly, offersDefault: true,
+                        onPick: { content.onTypeface($0) }, onSize: { content.onFontSize($0) }
+                    )
                 }
                 Spacer(minLength: 4)
-                Button(action: content.onFace) {
-                    Text(note.face == .sans ? "Aa" : "{}")
-                        .font(note.face == .sans ? Brand.body(12, weight: 600) : Brand.mono(11, medium: true))
-                        .foregroundStyle(Brand.noteInk)
-                }
-                .buttonStyle(FooterActionStyle())
-                .disabled(content.readOnly)
-                .help(note.face == .sans ? "Switch to Mono (⌘⇧M)" : "Switch to Sans (⌘⇧M)")
-                .accessibilityLabel("Face: \(note.face.title)")
                 Button(action: content.onPin) {
-                    Image(systemName: note.pinned ? "pin.fill" : "pin").foregroundStyle(Brand.noteInk)
+                    Image(systemName: note.pinned ? "pin.fill" : "pin").foregroundStyle(look.ink)
                 }
                 .buttonStyle(FooterActionStyle())
                 .disabled(content.readOnly)
                 .help(note.pinned ? "Unpin (⌘⇧P)" : "Pin to the top (⌘⇧P)")
                 .accessibilityLabel(note.pinned ? "Unpin" : "Pin")
                 Button(action: content.onArchive) {
-                    Image(systemName: "archivebox").foregroundStyle(Brand.noteInk)
+                    Image(systemName: "archivebox").foregroundStyle(look.ink)
                 }
                 .buttonStyle(FooterActionStyle())
                 .disabled(content.readOnly)
@@ -590,7 +628,7 @@ struct NoteCard: View {
                             .multilineTextAlignment(.leading)
                     }
                     .font(Brand.mono(10))
-                    .foregroundStyle(Brand.noteInkSecondary)
+                    .foregroundStyle(look.inkSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
@@ -601,10 +639,23 @@ struct NoteCard: View {
             } else {
                 Text(content.statusLine)
                     .font(Brand.mono(10))
-                    .foregroundStyle(Brand.noteInkSecondary)
+                    .foregroundStyle(look.inkSecondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let notice = look.missingFontNotice {
+                // The file names a font this Mac does not have.
+                HStack(alignment: .top, spacing: 4) {
+                    Image(systemName: "textformat").font(.system(size: 9, weight: .semibold))
+                    Text(notice)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(Brand.mono(10))
+                .foregroundStyle(look.inkSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(notice)
             }
         }
         .padding(.horizontal, 12)
@@ -613,10 +664,11 @@ struct NoteCard: View {
     }
 }
 
-/// The styler's runs as SwiftUI text, for the preview harness only.
+/// The styler's runs as SwiftUI text, for the preview harness and All
+/// Notes' preview card.
 struct PreviewText: View {
     let text: String
-    let face: NoteFace
+    let look: NoteAppearance
     let dark: Bool
 
     var body: some View {
@@ -626,7 +678,7 @@ struct PreviewText: View {
     }
 
     private var attributed: AttributedString {
-        let styler = NoteStyler(face: face, appearance: NSAppearance(named: dark ? .darkAqua : .aqua))
+        let styler = NoteStyler(look: look, appearance: NSAppearance(named: dark ? .darkAqua : .aqua))
         let storage = NSTextStorage(string: text)
         styler.apply(to: storage)
         return AttributedString(storage)

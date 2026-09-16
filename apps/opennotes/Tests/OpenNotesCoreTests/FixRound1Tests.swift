@@ -60,7 +60,7 @@ final class NoteStoreFixRound1Tests: XCTestCase {
     /// here. Verified against the current NoteStore only (see report).
     @MainActor func testDiscardIfEmptyPreservesAnExternallyReplacedFileWithoutARescan() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("x", for: note.id)
         try store.save(note.id)
         XCTAssertEqual(try files(), [note.id.fileName])
@@ -75,7 +75,7 @@ final class NoteStoreFixRound1Tests: XCTestCase {
 
     @MainActor func testDiscardIfEmptyPreservesAnExternallyReplacedFileAfterARescan() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("x", for: note.id)
         try store.save(note.id)
         try store.setText("", for: note.id)
@@ -92,7 +92,7 @@ final class NoteStoreFixRound1Tests: XCTestCase {
     /// The entry replaced by a directory before Escape: nothing is removed.
     @MainActor func testDiscardIfEmptyLeavesADirectoryThatReplacedTheFile() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("x", for: note.id)
         try store.save(note.id)
         try FileManager.default.removeItem(at: folder.appendingPathComponent(note.id.fileName))
@@ -107,7 +107,7 @@ final class NoteStoreFixRound1Tests: XCTestCase {
     /// wrote is removed and the note is gone.
     @MainActor func testDiscardIfEmptyStillRemovesItsOwnUntouchedFile() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("x", for: note.id)
         try store.save(note.id)
         try store.setText("", for: note.id)
@@ -186,7 +186,7 @@ final class NoteStoreFixRound1Tests: XCTestCase {
     /// against a file we never owned.
     @MainActor func testProvisionalFirstWriteCollisionMovesToANewProvisionalName() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try write(note.id.fileName, "taken")
         try store.setText("Mine", for: note.id)
         let outcome = try store.save(note.id)
@@ -279,10 +279,10 @@ final class NoteStoreFixRound1Tests: XCTestCase {
     /// leaves them dirty.
     @MainActor func testSaveAllReportsFailuresAndKeepsNotesDirty() throws {
         let store = makeStore()
-        let first = try store.create(color: .coral, face: .sans)
+        let first = try store.create(color: .coral)
         try store.setText("one", for: first.id)
         clock.addTimeInterval(1)
-        let second = try store.create(color: .coral, face: .sans)
+        let second = try store.create(color: .coral)
         try store.setText("two", for: second.id)
         try FileManager.default.removeItem(at: folder)
         let problems = store.saveAll()
@@ -296,7 +296,7 @@ final class NoteStoreFixRound1Tests: XCTestCase {
     /// through.
     @MainActor func testSwitchFolderIsRefusedWhenTheOldFolderCannotBeSaved() throws {
         let store = makeStore()
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         try store.setText("pending", for: note.id)
         let originalFolder = folder!
         try FileManager.default.removeItem(at: originalFolder)
@@ -328,7 +328,7 @@ final class NoteStoreFixRound1Tests: XCTestCase {
         XCTAssertEqual(store.note(NoteID("hi"))?.order, Note.orderRange.upperBound)
         // No trap here is the assertion: create() used to do `lowest - 1`
         // unchecked, which overflows when lowest is already Int.min.
-        let note = try store.create(color: .coral, face: .sans)
+        let note = try store.create(color: .coral)
         XCTAssertEqual(store.active.first?.id, note.id)
         XCTAssertNoThrow(try store.reorder([note.id, NoteID("lo"), NoteID("hi")]))
         XCTAssertEqual(store.active.map(\.id.rawValue), [note.id.rawValue, "lo", "hi"])

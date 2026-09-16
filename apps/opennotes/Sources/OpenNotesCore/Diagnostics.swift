@@ -20,13 +20,15 @@ nonisolated public struct DiagnosticsSnapshot: Hashable, Sendable {
     public var activeCount: Int
     public var archivedCount: Int
     public var unsavedCount: Int
-    public var defaultFace: NoteFace
-    public var defaultColor: NoteColor
+    /// The default font as Settings shows it ("Sans", "Georgia 16").
+    public var defaultFont: String
+    /// "Random", or the fixed colour's name.
+    public var defaultColor: String
     public var autoArchiveDays: Int
     public var deckState: String
     public var hostedDisplays: [String]
 
-    public init(appVersion: String, macOSVersion: String, loginStatus: String, licensing: String, readOnly: Bool, side: DeckSide, display: DeckDisplay, hotkey: Hotkey?, hotkeyProblem: String?, folder: String, folderIsMissing: Bool, watching: Bool, activeCount: Int, archivedCount: Int, unsavedCount: Int, defaultFace: NoteFace, defaultColor: NoteColor, autoArchiveDays: Int, deckState: String, hostedDisplays: [String]) {
+    public init(appVersion: String, macOSVersion: String, loginStatus: String, licensing: String, readOnly: Bool, side: DeckSide, display: DeckDisplay, hotkey: Hotkey?, hotkeyProblem: String?, folder: String, folderIsMissing: Bool, watching: Bool, activeCount: Int, archivedCount: Int, unsavedCount: Int, defaultFont: String, defaultColor: String, autoArchiveDays: Int, deckState: String, hostedDisplays: [String]) {
         self.appVersion = appVersion
         self.macOSVersion = macOSVersion
         self.loginStatus = loginStatus
@@ -42,7 +44,7 @@ nonisolated public struct DiagnosticsSnapshot: Hashable, Sendable {
         self.activeCount = activeCount
         self.archivedCount = archivedCount
         self.unsavedCount = unsavedCount
-        self.defaultFace = defaultFace
+        self.defaultFont = defaultFont
         self.defaultColor = defaultColor
         self.autoArchiveDays = autoArchiveDays
         self.deckState = deckState
@@ -61,7 +63,7 @@ nonisolated public struct DiagnosticsSnapshot: Hashable, Sendable {
         lines.append(hotkeyLine)
         lines.append("Folder: \(folder)" + (folderIsMissing ? " (missing)" : "") + " · watcher \(watching ? "on" : "off")")
         lines.append("Notes: \(activeCount) active · \(archivedCount) archived · \(unsavedCount) unsaved")
-        lines.append("Defaults: \(defaultFace.title) · \(defaultColor.title) · auto-archive \(AutoArchive.title(days: autoArchiveDays).lowercased())")
+        lines.append("Defaults: \(defaultFont) · new notes \(defaultColor) · auto-archive \(AutoArchive.title(days: autoArchiveDays).lowercased())")
         return lines.joined(separator: "\n")
     }
 }

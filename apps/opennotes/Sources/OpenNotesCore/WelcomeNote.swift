@@ -50,7 +50,7 @@ nonisolated public enum WelcomeNote {
     /// The note as first written: order 0 and unpinned, so it sits on top
     /// until the user makes a note (which takes one below the lowest order).
     public static func note(created: Date) -> Note {
-        Note(id: id, text: text, color: color, face: .sans, pinned: false, order: 0, created: created)
+        Note(id: id, text: text, color: color, typeface: .face(.sans), pinned: false, order: 0, created: created)
     }
 
     /// Whether the folder just read is one to welcome into: empty of notes

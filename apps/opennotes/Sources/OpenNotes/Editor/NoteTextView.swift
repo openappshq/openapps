@@ -207,7 +207,8 @@ final class NoteTextView: NSTextView {
 /// pushed in when the note changes elsewhere, edits reported up.
 struct NoteEditor: NSViewRepresentable {
     let text: String
-    let face: NoteFace
+    /// The note's resolved paper, ink and font (`NoteAppearance.resolve`).
+    let look: NoteAppearance
     let isEditable: Bool
     /// A token for "put the caret in the text": a new value focuses, nil
     /// leaves the focus where it is. Set per open, so a note opened with
@@ -227,7 +228,7 @@ struct NoteEditor: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         guard let textView = scrollView.documentView as? NoteTextView else { return scrollView }
-        textView.styler = NoteStyler(face: face, appearance: textView.effectiveAppearance)
+        textView.styler = NoteStyler(look: look, appearance: textView.effectiveAppearance)
         textView.setText(text)
         textView.isEditable = isEditable
         textView.onTextChange = onTextChange
@@ -243,8 +244,8 @@ struct NoteEditor: NSViewRepresentable {
         textView.onCommand = onCommand
         textView.onFocus = onFocus
         textView.mayEdit = mayEdit
-        if textView.styler.face != face || context.coordinator.appearance != textView.effectiveAppearance.name {
-            textView.styler = NoteStyler(face: face, appearance: textView.effectiveAppearance)
+        if textView.styler.look != look || context.coordinator.appearance != textView.effectiveAppearance.name {
+            textView.styler = NoteStyler(look: look, appearance: textView.effectiveAppearance)
             context.coordinator.appearance = textView.effectiveAppearance.name
         }
         textView.setText(text)

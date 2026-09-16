@@ -173,12 +173,15 @@ final class AppModel {
         return store.search(query, archived: archived)
     }
 
-    /// A new note with the default face and color; nil (and a footer
-    /// problem) when the store refuses. Asked at the hotkey and at `+`.
+    /// A new note in the colour Settings → Notes gives new notes (random
+    /// away from its neighbours, or the fixed one) and no font of its own
+    /// (it follows the default); nil (and a footer problem) when the
+    /// store refuses. Asked at the hotkey and at `+`.
     func createNote() -> Note? {
         guard allowed() else { return nil }
         do {
-            let note = try store.create(color: preferences.color, face: preferences.face)
+            let color = preferences.colorForNewNote(active: store.active, lastCreated: store.notes.values.max { $0.created < $1.created }, seed: store.notes.count)
+            let note = try store.create(color: color)
             saveProblem = nil
             return note
         } catch {
@@ -258,7 +261,15 @@ final class AppModel {
     }
 
     func setColor(_ color: NoteColor, for id: NoteID) { attempt { try store.setColor(color, for: id) } }
-    func setFace(_ face: NoteFace, for id: NoteID) { attempt { try store.setFace(face, for: id) } }
+    /// The note's own font, or nil for the default in Settings.
+    func setTypeface(_ typeface: NoteTypeface?, for id: NoteID) { attempt { try store.setTypeface(typeface, for: id) } }
+    func setFace(_ face: NoteFace, for id: NoteID) { setTypeface(.face(face), for: id) }
+    /// The note's own size, or nil for the default.
+    func setFontSize(_ size: Int?, for id: NoteID) { attempt { try store.setFontSize(size, for: id) } }
+    /// How a note looks now: its paper and ink, its font after the default
+    /// and the not-installed fallback. The deck, All Notes and the harness
+    /// all read this one answer.
+    func appearance(of note: Note) -> NoteAppearance { NoteAppearance.resolve(note, preferences: preferences) }
     func setPinned(_ pinned: Bool, for id: NoteID) { attempt { try store.setPinned(pinned, for: id) } }
 
     // MARK: - Folder

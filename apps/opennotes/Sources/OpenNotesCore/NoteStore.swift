@@ -491,12 +491,12 @@ public final class NoteStore {
     /// the first save (250 ms after the first keystroke) under a provisional
     /// name, and takes the title's name when the note first closes
     /// (`finishProvisional`). Refused while read-only.
-    public func create(color: NoteColor, face: NoteFace) throws -> Note {
+    public func create(color: NoteColor, typeface: NoteTypeface? = nil) throws -> Note {
         guard !readOnly else { throw StoreError.readOnly }
         guard !folderIsMissing else { throw StoreError.folderMissing(folder) }
         let created = now()
         let id = NoteFileName.id(for: "", created: created) { self.notes[$0] != nil || self.fileManager.fileExists(atPath: self.fileURL(for: $0).path) }
-        var note = Note(id: id, text: "", color: color, face: face, order: nextTopOrder(), created: created)
+        var note = Note(id: id, text: "", color: color, typeface: typeface, order: nextTopOrder(), created: created)
         note.bodyIsLoaded = true
         notes[id] = note
         account(id, bytes: 0)
@@ -571,8 +571,19 @@ public final class NoteStore {
         try change(id) { $0.color = color }
     }
 
+    /// The note's own font; nil goes back to the default in Settings.
+    public func setTypeface(_ typeface: NoteTypeface?, for id: NoteID) throws {
+        try change(id) { $0.typeface = typeface }
+    }
+
     public func setFace(_ face: NoteFace, for id: NoteID) throws {
-        try change(id) { $0.face = face }
+        try setTypeface(.face(face), for: id)
+    }
+
+    /// The note's own point size (clamped to `NoteTypeface.sizeRange`);
+    /// nil goes back to the default.
+    public func setFontSize(_ size: Int?, for id: NoteID) throws {
+        try change(id) { $0.fontSize = size.map(NoteTypeface.clampSize) }
     }
 
     public func setPinned(_ pinned: Bool, for id: NoteID) throws {
@@ -1023,7 +1034,7 @@ public final class NoteStore {
     static func parse(id: NoteID, contents: String, fileDate: Date, fallbackCreated: Date, truncated: Bool = false) -> Note {
         let parsed = FrontMatter.parse(contents)
         var note = Note(
-            id: id, text: parsed.text, color: parsed.color ?? .coral, face: parsed.face ?? .sans,
+            id: id, text: parsed.text, color: parsed.color ?? .coral, typeface: parsed.typeface, fontSize: parsed.size.map(NoteTypeface.clampSize),
             pinned: parsed.pinned ?? false, archived: parsed.archived ?? false, order: Note.clampOrder(parsed.order ?? 0),
             created: parsed.created ?? fallbackCreated, modified: max(parsed.modified ?? fileDate, fileDate)
         )

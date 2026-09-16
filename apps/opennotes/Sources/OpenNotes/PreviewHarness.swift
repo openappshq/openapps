@@ -7,8 +7,11 @@ import SwiftUI
 
 /// Renders the deck (pill, fan, open, editing, read-only) on a drawn
 /// desktop, All Notes (and read-only with the license card), the license
-/// card, the setup guide and Settings to PNGs, in light and dark
-/// appearance: `OpenNotes --preview <directory>`. Debug builds only.
+/// card, the setup guide, Settings, the paper sheet (every preset with its
+/// ink), a custom-coloured note, three fonts (a serif family, a monospaced
+/// family, a family that is not installed) and the two menus to PNGs, in
+/// light and dark appearance: `OpenNotes --preview <directory>`. Debug
+/// builds only.
 ///
 /// Nothing real is touched: no status item, no hotkey, a throwaway
 /// defaults suite and a temporary notes folder (both removed at the end),
@@ -197,26 +200,50 @@ final class PreviewHarness {
             let settings = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: { "" })
                 .background(Brand.canvas)
             if await !write(settings, scheme: scheme, appearance: appearance, to: "settings-\(suffix).png") { failures += 1 }
+            // Every preset paper with its ink, and the contrast each reads at.
+            let papers = PaperSheet(dark: scheme == .dark).background(Brand.canvas)
+            if await !write(papers, scheme: scheme, appearance: appearance, to: "papers-\(suffix).png") { failures += 1 }
+            // Over the ten samples: a note in a picked colour (the derived
+            // dark paper and ink), open and editing; then three notes side
+            // by side: a serif family, a monospaced family (its checkboxes
+            // on its own grid), and a family this Mac does not have, shown
+            // in the default with the footer's hint.
+            let ten = allNotesModel(notes: 10)
+            if let custom = ten.model.active.first(where: { $0.color.isCustom })?.id {
+                let stage = DeckStage(content: content(state: .open(custom, editing: true), toast: false, model: ten.model), side: preferences.side, dark: scheme == .dark)
+                if await !write(stage, scheme: scheme, appearance: appearance, to: "custom-color-\(suffix).png") { failures += 1 }
+            }
+            let fonts = FontsStage(notes: ten.model.active.filter { $0.typeface?.family != nil }, content: content(state: .fan, toast: false, model: ten.model), dark: scheme == .dark)
+            if await !write(fonts, scheme: scheme, appearance: appearance, to: "fonts-\(suffix).png") { failures += 1 }
+            try? FileManager.default.removeItem(at: ten.folder)
+            let fontChooser = FontChooser(selection: .family("Menlo"), size: 14, ownSize: true, offersDefault: true, onPick: { _ in })
+                .background(Brand.canvas)
+            if await !write(fontChooser, scheme: scheme, appearance: appearance, to: "font-chooser-\(suffix).png") { failures += 1 }
+            let colorChooser = ColorChooser(selected: .custom(0x7BAF9E), onPick: { _ in }, onCustom: {})
+                .background(Brand.canvas)
+            if await !write(colorChooser, scheme: scheme, appearance: appearance, to: "color-chooser-\(suffix).png") { failures += 1 }
         }
         print("PREVIEW_RENDERED \(outputDirectory.path)")
         return failures == 0
     }
 
-    private typealias Sample = (text: String, color: NoteColor, face: NoteFace, pinned: Bool, order: Int, age: TimeInterval)
+    private typealias Sample = (text: String, color: NoteColor, typeface: NoteTypeface?, pinned: Bool, order: Int, age: TimeInterval)
 
-    /// The deck's five notes, then five more for All Notes' ten: every
-    /// color, both faces, a second pinned one, a long one, a bare title.
+    /// The deck's five notes, then five more for All Notes' ten: a picked
+    /// colour, three families (an installed serif and mono, and one this
+    /// Mac does not have), a second pinned one, a long one. Every note
+    /// without a typeface follows the default.
     private static let samples: [Sample] = [
-        ("Groceries\n- [x] milk\n- [ ] eggs\n- [ ] sourdough from **Bread Ahead**\n- [ ] coffee beans\n\nAsk about the _oat_ one.", .coral, .sans, true, 0, -3600),
-        ("Standup 16 Sep\n- feed key rotation\n- reply re ⌘W focus\n- release notes: paste as plain text", .yellow, .sans, false, 1, -7200),
-        ("# Snippets\n`brew upgrade --cask opennotes`\nsee https://openapps.space/opennotes/", .sky, .mono, false, 2, -86_400),
-        ("Side project\nName ideas, none good yet.", .mint, .sans, false, 3, -3 * 86_400),
-        ("Call mum\nSunday, after lunch.", .lilac, .sans, false, 4, -9 * 86_400),
-        ("Reading list\n- _Piranesi_\n- **The Dispossessed**\n- The Overstory, again", .paper, .sans, true, 5, -20 * 60),
-        ("Server notes\n```\nssh deploy@10.0.0.4\nsudo systemctl restart hertz\n```\nrotate the key on the 1st", .mint, .mono, false, 6, -5 * 3600),
-        ("Ideas for the talk\nStart with the folder, not the app. Show the file in Finder first, then the deck, then the same note in Obsidian. The point is that nothing is locked in: the notes were always theirs.\n\n## Demo order\n1. hotkey\n2. edge\n3. All Notes\n4. iCloud Drive", .yellow, .sans, false, 7, -2 * 86_400),
-        ("Untitled", .lilac, .sans, false, 8, -5 * 86_400),
-        ("Passport renewal\n- [ ] photos\n- [ ] form\n- [x] old passport found", .sky, .sans, false, 9, -12 * 86_400),
+        ("Groceries\n- [x] milk\n- [ ] eggs\n- [ ] sourdough from **Bread Ahead**\n- [ ] coffee beans\n\nAsk about the _oat_ one.", .coral, .face(.sans), true, 0, -3600),
+        ("Standup 16 Sep\n- feed key rotation\n- reply re ⌘W focus\n- release notes: paste as plain text", .yellow, nil, false, 1, -7200),
+        ("# Snippets\n`brew upgrade --cask opennotes`\nsee https://openapps.space/opennotes/", .sky, .face(.mono), false, 2, -86_400),
+        ("Side project\nName ideas, none good yet.", .mint, nil, false, 3, -3 * 86_400),
+        ("Call mum\nSunday, after lunch.", .lilac, nil, false, 4, -9 * 86_400),
+        ("Garden\n- [ ] repot the **fig**\n- [x] order seeds\nWater the _basil_ daily.", .custom(0x7BAF9E), nil, false, 5, -12 * 86_400),
+        ("Reading list\n**Piranesi**, _Susanna Clarke_\n- [ ] The Overstory\n- [x] Bewilderment", .sand, .family("Georgia"), true, 6, -20 * 60),
+        ("Deploy\n- [x] `git tag v0.1.1`\n- [ ] make-appcast.sh\n- [ ] verify-release.sh", .slate, .family("Menlo"), false, 7, -15 * 86_400),
+        ("Letter\nDear **Ada**, the font this was written in lives on the other Mac.", .butter, .family("Bodoni Ornamental Twelve"), false, 8, -16 * 86_400),
+        ("Ideas for the talk\nStart with the folder, not the app. Show the file in Finder first, then the deck, then the same note in Obsidian. The point is that nothing is locked in: the notes were always theirs.\n\n## Demo order\n1. hotkey\n2. edge\n3. All Notes\n4. iCloud Drive", .paper, nil, false, 9, -2 * 86_400),
     ]
 
     private func seedNotes() {
@@ -229,7 +256,7 @@ final class PreviewHarness {
     private static func write(_ samples: [Sample], into folder: URL, base: Date) {
         for sample in samples {
             let id = NoteFileName.id(for: Note.title(of: sample.text), created: base) { _ in false }
-            let note = Note(id: id, text: sample.text, color: sample.color, face: sample.face, pinned: sample.pinned, order: sample.order, created: base.addingTimeInterval(sample.age - 86_400), modified: base.addingTimeInterval(sample.age))
+            let note = Note(id: id, text: sample.text, color: sample.color, typeface: sample.typeface, pinned: sample.pinned, order: sample.order, created: base.addingTimeInterval(sample.age - 86_400), modified: base.addingTimeInterval(sample.age))
             let url = folder.appendingPathComponent(id.fileName)
             try? Data(FrontMatter.serialize(note).utf8).write(to: url)
             try? FileManager.default.setAttributes([.modificationDate: note.modified], ofItemAtPath: url.path)
@@ -274,7 +301,7 @@ final class PreviewHarness {
         for index in 0..<count {
             let title = titles[index % titles.count]
             let id = NoteFileName.id(for: title, created: base) { candidate in FileManager.default.fileExists(atPath: folder.appendingPathComponent(candidate.fileName).path) }
-            let note = Note(id: id, text: "\(title)\nA line or two of text.", color: colors[index % colors.count], face: .sans, pinned: index == 0, order: index, created: base.addingTimeInterval(-Double(index) * 3600), modified: base.addingTimeInterval(-Double(index) * 3600))
+            let note = Note(id: id, text: "\(title)\nA line or two of text.", color: colors[index % colors.count], pinned: index == 0, order: index, created: base.addingTimeInterval(-Double(index) * 3600), modified: base.addingTimeInterval(-Double(index) * 3600))
             try? Data(FrontMatter.serialize(note).utf8).write(to: folder.appendingPathComponent(id.fileName))
         }
         let store = NoteStore(folder: folder)
@@ -295,7 +322,7 @@ final class PreviewHarness {
         let status: String
         if model.readOnly { status = model.readOnlyNotice } else if state.isEditing { status = "Editing…" } else { status = open.map { "Saved · \(Age.text($0.modified))" } ?? "" }
         let pending = toast ? ArchiveUndo.Pending(id: NoteID("x"), title: "Call mum", deadline: .distantFuture) : nil
-        return DeckContent(layout: layout, state: state, side: preferences.side, notes: notes, openNote: open, readOnly: model.readOnly, readOnlyNotice: model.readOnlyNotice, statusLine: status, pendingUndo: pending, folderMissing: false, license: license)
+        return DeckContent(layout: layout, state: state, side: preferences.side, notes: notes, openNote: open, readOnly: model.readOnly, readOnlyNotice: model.readOnlyNotice, statusLine: status, pendingUndo: pending, folderMissing: false, license: license, defaults: NoteAppearance.Defaults(preferences))
     }
 
     /// Draws the view with `ImageRenderer`, no window: the shared Mac's
@@ -322,6 +349,76 @@ final class PreviewHarness {
             print("PREVIEW_WRITE_FAILED \(name) \(error)")
             return false
         }
+    }
+}
+
+/// Every preset as its fanned tab beside a small open note, with the
+/// ink's contrast ratio: what the colour menu offers, in one appearance,
+/// tab and paper judged side by side.
+private struct PaperSheet: View {
+    let dark: Bool
+
+    var body: some View {
+        let columns = Array(repeating: GridItem(.fixed(196), spacing: 12), count: 4)
+        VStack(alignment: .leading, spacing: Brand.Space.s12) {
+            Text("Papers · \(dark ? "Dark" : "Light") Mode").font(Brand.display(18)).foregroundStyle(Brand.textPrimary)
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(NoteColor.allCases, id: \.self) { color in
+                    let look = NoteAppearance(color: color)
+                    HStack(spacing: 6) {
+                        // The tab, as the fan draws it.
+                        ZStack(alignment: .top) {
+                            UnevenRoundedRectangle(topLeadingRadius: 10, bottomLeadingRadius: 10, bottomTrailingRadius: 0, topTrailingRadius: 0, style: .continuous)
+                                .fill(look.tab)
+                            UnevenRoundedRectangle(topLeadingRadius: 10, bottomLeadingRadius: 10, bottomTrailingRadius: 0, topTrailingRadius: 0, style: .continuous)
+                                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+                            Text(color.title)
+                                .font(Brand.body(11, weight: 600))
+                                .foregroundStyle(look.tabInk)
+                                .fixedSize()
+                                .rotationEffect(.degrees(90))
+                                .frame(width: 32, height: 90)
+                                .padding(.top, 8)
+                        }
+                        .frame(width: 40, height: 112)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(color.title).font(Font(look.nsFont(size: 15, weight: 600))).foregroundStyle(look.ink)
+                            Text("Milk, eggs, bread").font(Font(look.nsFont(size: 12))).foregroundStyle(look.ink)
+                            Text("Saved · 2 min ago").font(Brand.mono(9)).foregroundStyle(look.inkSecondary)
+                            Spacer(minLength: 0)
+                            HStack {
+                                Text(NoteColor.hex(color.face(dark: dark))).font(Brand.mono(9)).foregroundStyle(look.inkSecondary)
+                                Spacer()
+                                Text(String(format: "%.1f:1", NotePaper.contrast(color.ink(dark: dark), color.face(dark: dark)))).font(Brand.mono(9)).foregroundStyle(look.inkSecondary)
+                            }
+                        }
+                        .padding(10)
+                        .frame(width: 150, height: 112, alignment: .topLeading)
+                        .background(look.paper, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.black.opacity(0.1), lineWidth: 1))
+                    }
+                }
+            }
+        }
+        .padding(Brand.Space.s24)
+    }
+}
+
+/// Three open notes side by side, each in its own family.
+private struct FontsStage: View {
+    let notes: [Note]
+    let content: DeckContent
+    let dark: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Brand.Space.s16) {
+            ForEach(notes) { note in
+                NoteCard(note: note, content: content)
+                    .frame(width: DeckMetrics().noteWidth, height: DeckMetrics().noteHeight)
+            }
+        }
+        .padding(Brand.Space.s24)
+        .background(dark ? Color(nsColor: NSColor(hex: 0x242B55)) : Color(nsColor: NSColor(hex: 0xC1C9FF)))
     }
 }
 

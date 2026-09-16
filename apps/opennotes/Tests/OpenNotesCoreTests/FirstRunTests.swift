@@ -145,7 +145,7 @@ final class FreshInstallDefaultTests: XCTestCase {
         // decision, both defaults' flags and the updater's (Updater.Key in
         // packages/openapps-updater).
         let expected: Set<String> = [
-            "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.color", "notes.autoArchiveDays",
+            "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.font", "notes.size", "notes.color", "notes.autoArchiveDays",
             OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step, WelcomeNote.Key.decided,
             FreshInstallDefault.Key.loginItemApplied, FreshInstallDefault.Key.updateChecksApplied,
             "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
