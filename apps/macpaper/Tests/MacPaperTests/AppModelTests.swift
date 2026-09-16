@@ -26,7 +26,8 @@ struct AppModelTests {
     @MainActor
     struct Harness {
         let directory: URL
-        let defaults: UserDefaults
+        let temporaryDefaults: TemporaryDefaults
+        var defaults: UserDefaults { temporaryDefaults.defaults }
         let preferences: Preferences
         let license = LicenseStatus()
         let desktop = RecordingApplier()
@@ -40,19 +41,22 @@ struct AppModelTests {
 
         init() {
             directory = FileManager.default.temporaryDirectory.appendingPathComponent("macpaper-app-tests-\(UUID().uuidString)", isDirectory: true)
-            let suite = "space.openapps.macpaper.tests.\(UUID().uuidString)"
-            defaults = UserDefaults(suiteName: suite)!
-            defaults.removePersistentDomain(forName: suite)
-            preferences = Preferences(defaults: defaults)
+            temporaryDefaults = try! TemporaryDefaults()
+            preferences = Preferences(defaults: temporaryDefaults.defaults)
             model = AppModel(
                 preferences: preferences, license: license, paths: AppPaths(root: directory), desktop: desktop,
                 exporter: exporter, imagePicker: picker, displays: { Harness.displays }
             )
             model.setExportReveal { _ in }
+            // Deterministic: the light side, a fixed accent, no pasteboard.
+            model.systemAppearance = { .light }
+            model.accentColor = { RGBAColor(hex: 0x304BFF) }
+            model.copyToPasteboard = { _ in }
         }
 
         func tearDown() {
             try? FileManager.default.removeItem(at: directory)
+            temporaryDefaults.remove()
         }
 
         /// The apply runs on a detached task; wait for it.
@@ -93,13 +97,13 @@ struct AppModelTests {
         #expect(h.model.status?.text == "Applied.")
         let raster = try #require(Raster.decode(try Data(contentsOf: h.desktop.calls[0].url)))
         #expect(raster.size == PixelSize(width: 40, height: 20))
-        h.model.draft = .starter.reseeded(2)
-        h.model.apply(.allDisplays)
+        h.model.load(.starter.reseeded(2))
+        h.model.apply(ApplyTarget(scope: .allDisplays))
         await h.settle()
         #expect(h.desktop.calls.count == 3)
         #expect(h.model.displaysDiffer == false)
         h.preferences.sameOnAllDisplays = true
-        h.model.draft = .starter.reseeded(3)
+        h.model.load(.starter.reseeded(3))
         h.model.apply()
         await h.settle()
         #expect(Set(h.desktop.calls.suffix(2).map(\.display)) == [1, 2])
@@ -135,14 +139,14 @@ struct AppModelTests {
         #expect(h.model.appliedState.wallpaper(for: 1) == h.model.draft)
         #expect(h.model.appliedState.wallpaper(for: 2) == h.model.draft)
         // Editing the draft, then a scheduled shuffle: the desktop changes, the draft stays.
-        h.model.draft = before.reseeded(99)
+        h.model.load(before.reseeded(99))
         let edited = h.model.draft
         h.model.scheduledShuffle()
         await h.settle()
         #expect(h.model.draft == edited)
         #expect(h.model.appliedState.wallpaper(for: 1) != edited)
         // A draft that is the applied one follows the scheduled shuffle.
-        h.model.draft = h.model.appliedState.wallpaper(for: 1)!
+        h.model.load(h.model.appliedState.wallpaper(for: 1)!)
         h.model.scheduledShuffle()
         await h.settle()
         #expect(h.model.draft == h.model.appliedState.wallpaper(for: 1))
@@ -155,7 +159,7 @@ struct AppModelTests {
         h.model.toggleFavorite()
         #expect(h.model.isFavorite)
         #expect(h.model.favoriteList.map(\.wallpaper) == [.starter])
-        h.model.draft = .starter.reseeded(5)
+        h.model.load(.starter.reseeded(5))
         #expect(!h.model.isFavorite)
         h.model.load(h.model.favoriteList[0])
         #expect(h.model.draft == .starter && h.model.isFavorite)

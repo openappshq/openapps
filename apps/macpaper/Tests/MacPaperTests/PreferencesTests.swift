@@ -5,16 +5,11 @@ import Testing
 
 @MainActor
 struct PreferencesTests {
-    private func suite() -> UserDefaults {
-        let name = "space.openapps.macpaper.tests.prefs.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defaults.removePersistentDomain(forName: name)
-        return defaults
-    }
-
-    @Test("Defaults are the contract's: on, the notch display, hover or click, down, regular, hide in fullscreen, ⌃⌥⌘W, shuffle off, same on all displays")
-    func defaults() {
-        let preferences = Preferences(defaults: suite())
+    @Test("Defaults are the contract's: on, the notch display, hover or click, down, regular, hide in fullscreen, ⌃⌥⌘W, shuffle off, same on all displays, kept, clock off")
+    func defaults() throws {
+        let temporary = try TemporaryDefaults()
+        defer { temporary.remove() }
+        let preferences = Preferences(defaults: temporary.defaults)
         #expect(preferences.notchEnabled)
         #expect(preferences.hostDisplay == .notchDisplay)
         #expect(preferences.trigger == .both)
@@ -27,11 +22,14 @@ struct PreferencesTests {
         #expect(preferences.sameOnAllDisplays)
         #expect(preferences.exportFolder.lastPathComponent == "macPaper")
         #expect(preferences.panelSettings == PanelSettings())
+        #expect(preferences.keepApplied && preferences.clockStyle == .off && preferences.clockPosition == .bottomRight && preferences.clockSize == .medium)
     }
 
     @Test("Every setting round-trips through its key, and a cleared hotkey stays cleared")
-    func roundTrip() {
-        let defaults = suite()
+    func roundTrip() throws {
+        let temporary = try TemporaryDefaults()
+        defer { temporary.remove() }
+        let defaults = temporary.defaults
         let preferences = Preferences(defaults: defaults)
         preferences.notchEnabled = false
         preferences.hostDisplay = .everyNotchedDisplay
@@ -44,7 +42,12 @@ struct PreferencesTests {
         preferences.favoritesOnly = true
         preferences.sameOnAllDisplays = false
         preferences.exportFolder = URL(fileURLWithPath: "/tmp/exports", isDirectory: true)
+        preferences.keepApplied = false
+        preferences.clockStyle = .analog
+        preferences.clockPosition = .topLeft
+        preferences.clockSize = .large
         let reloaded = Preferences(defaults: defaults)
+        #expect(!reloaded.keepApplied && reloaded.clockStyle == .analog && reloaded.clockPosition == .topLeft && reloaded.clockSize == .large)
         #expect(!reloaded.notchEnabled && reloaded.hostDisplay == .everyNotchedDisplay && reloaded.trigger == .hover)
         #expect(reloaded.direction == .left && reloaded.width == .wide && !reloaded.hideInFullscreen)
         #expect(reloaded.hotkey == Hotkey(keyCode: 49, modifiers: [.command, .shift]))
@@ -60,8 +63,10 @@ struct PreferencesTests {
     }
 
     @Test("A stored value that is not a case falls back to the default")
-    func badValues() {
-        let defaults = suite()
+    func badValues() throws {
+        let temporary = try TemporaryDefaults()
+        defer { temporary.remove() }
+        let defaults = temporary.defaults
         defaults.set("sideways", forKey: PreferenceKey.direction)
         defaults.set(Data("junk".utf8), forKey: PreferenceKey.hotkey)
         let preferences = Preferences(defaults: defaults)
