@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+.swiftpm/
+build/
+dist/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.vscode/*
+.idea
+*.local
+Sources/MacPaper/Licensing/LicensingConfig.swift
+Package.resolved
