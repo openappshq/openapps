@@ -59,7 +59,7 @@ export function Updates({
         <>
           <Toggle
             label="Check for updates automatically"
-            description="Once a day and when OpenKlack opens. Off by default."
+            description="Once a day and when OpenKlack opens. OpenKlack only checks and tells you; installing is your call unless the next switch is on."
             selected={settings.checkAutomatically}
             disabled={disabled}
             onChange={(checkAutomatically) => changeSettings({ checkAutomatically })}

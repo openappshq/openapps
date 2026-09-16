@@ -11,7 +11,7 @@ pnpm openklack:build   # local app bundle
 
 Build requirements, signing, releases and the licensed build flavour are in the [development guide](../../docs/development.md#desktop-application-in-development); the release process follows [RELEASES.md](../../RELEASES.md).
 
-Install the official build with Homebrew: `brew install --cask openappshq/tap/openklack`. Update with `brew upgrade --cask openklack`, or turn on automatic updates under Settings → About & help (off by default).
+Install the official build with Homebrew: `brew install --cask openappshq/tap/openklack`. It checks for updates once a day and tells you when one is available (on by default; installing is your call, or turn on "Download and install automatically" under Settings → About & help, off by default). `brew upgrade --cask openklack` always works too.
 
 ## Source builds are unrestricted
 

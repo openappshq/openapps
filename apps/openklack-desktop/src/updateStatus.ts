@@ -57,7 +57,7 @@ export function updateMessage(status: UpdateStatus | undefined): string {
       return status.available ? "Could not download the update." : "Could not check for updates.";
     default:
       return status.settings.checkAutomatically
-        ? "OpenKlack checks for updates once a day."
-        : `Automatic updates are off. Update with ${BREW_UPGRADE}, or check now.`;
+        ? "OpenKlack checks for updates once a day and tells you when one is available."
+        : `Automatic checks are off. Update with ${BREW_UPGRADE}, or check now.`;
   }
 }
