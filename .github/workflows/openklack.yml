@@ -330,7 +330,31 @@ jobs:
             throw new Error(`dist/feed/latest.json names ${feed.version} ${feed.sha256}, not ${VERSION} ${EXPECTED_SHA256}`);
           }
           JS
+      - name: Never move the stable feed backwards
+        # The feed, the install script and the cask only ever advance. A
+        # back-port (allow_older) is published as a GitHub Release and nothing
+        # else: installed apps never downgrade anyway, and the cask and the
+        # install script refuse lower versions.
+        id: order
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          ALLOW_OLDER: ${{ inputs.allow_older == true }}
+        run: |
+          current=""
+          if [ -f apps/website/public/updates/openklack/latest.json ]; then
+            current="$(node -e 'const feed = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String(feed.version ?? ""))' apps/website/public/updates/openklack/latest.json)"
+          fi
+          if [ -n "$current" ] && [ "$current" != "$VERSION" ] && [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)" = "$current" ]; then
+            if [ "$ALLOW_OLDER" != true ]; then
+              echo "::error::The live feed is at $current, newer than $VERSION; a lower version is never promoted."; exit 1
+            fi
+            echo "::notice::$VERSION is a back-port below the live feed's $current: the release is published, the feed, the install script and the cask stay at $current."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Commit the feed to main
+        if: steps.order.outputs.promote == 'true'
         env:
           FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
@@ -354,6 +378,7 @@ jobs:
           done
           echo "::error::Could not push the feed to main after 3 attempts."; exit 1
       - name: Verify the live feed and download
+        if: steps.order.outputs.promote == 'true'
         env:
           VERSION: ${{ needs.release.outputs.version }}
           EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
@@ -361,11 +386,13 @@ jobs:
           WAIT_SECONDS: "1500"
         run: apps/openklack-desktop/release/verify-live.sh "$VERSION" "$EXPECTED_SHA256"
       - name: Verify the live install script
+        if: steps.order.outputs.promote == 'true'
         env:
           VERSION: ${{ needs.release.outputs.version }}
           EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
         run: scripts/release/verify-live-install-script.sh openklack "$VERSION" "$EXPECTED_SHA256"
       - name: Bump the cask
+        if: steps.order.outputs.promote == 'true'
         env:
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           VERSION: ${{ needs.release.outputs.version }}
