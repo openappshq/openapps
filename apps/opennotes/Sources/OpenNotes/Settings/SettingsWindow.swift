@@ -1,4 +1,5 @@
 import AppKit
+import OpenAppsLicensing
 import OpenNotesCore
 import SwiftUI
 
@@ -9,9 +10,18 @@ final class SettingsWindowController: NSObject {
     private let hotkeys: HotkeyCenter
     private let diagnostics: () -> String
     private var window: NSWindow?
-    /// Sections other wiring appends before About: the parity ticket's
-    /// License and Updates. Set before the window first shows.
+    /// Scroll requests (Settings → License); the sections the licensing
+    /// wiring appends read it.
+    let navigation = SettingsNavigation()
+    /// Sections other wiring appends before About: the licensing wiring's
+    /// License and Updates (Licensing/LicensingLaunch.swift). Set before the
+    /// window first shows.
     var extraSections: [AnyView] = []
+    /// "Show setup guide" under About.
+    var showGuide: () -> Void = {}
+    /// The trial pill at the trailing end of the title bar, while there is
+    /// something to say; nil (a build without licensing) adds nothing.
+    var titleBarBadge: (() -> LicenseBadge.Label?)?
 
     init(model: AppModel, preferences: Preferences, loginItem: LoginItem, hotkeys: HotkeyCenter, diagnostics: @escaping () -> String) {
         self.model = model
@@ -23,7 +33,9 @@ final class SettingsWindowController: NSObject {
 
     func show() {
         if window == nil {
-            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: diagnostics, extraSections: extraSections)
+            var root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: diagnostics, extraSections: extraSections)
+            root.navigation = navigation
+            root.showGuide = showGuide
             let hostingView = NSHostingView(rootView: root)
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
@@ -34,12 +46,24 @@ final class SettingsWindowController: NSObject {
             window.title = "OpenNotes Settings"
             window.isReleasedWhenClosed = false
             window.contentView = hostingView
+            if let titleBarBadge {
+                window.addTitlebarAccessoryViewController(LicensePillAccessory(badge: titleBarBadge) { [weak self] in
+                    self?.showLicense()
+                })
+            }
             window.center()
             self.window = window
         }
         loginItem.refresh()
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Settings → License: the pill, All Notes' card, the note's footer and
+    /// the setup guide land here. `keyField` puts the cursor in the key field.
+    func showLicense(keyField: Bool = false) {
+        show()
+        navigation.reveal(.license, keyField: keyField)
     }
 }
 
@@ -50,8 +74,12 @@ struct SettingsView: View {
     let hotkeys: HotkeyCenter
     let diagnostics: () -> String
     var extraSections: [AnyView] = []
+    /// Scroll requests (Settings → License); the preview harness never scrolls.
+    var navigation = SettingsNavigation()
+    var showGuide: () -> Void = {}
     @State private var copied = false
     @Environment(\.previewRendering) private var previewRendering
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if previewRendering {
@@ -66,14 +94,22 @@ struct SettingsView: View {
             .toggleStyle(.checkbox)
             .frame(width: 540)
         } else {
-            Form {
-                general
-                notes
-                ForEach(Array(extraSections.enumerated()), id: \.offset) { _, section in section }
-                about
+            ScrollViewReader { proxy in
+                Form {
+                    general
+                    notes
+                    ForEach(Array(extraSections.enumerated()), id: \.offset) { _, section in section }
+                    about
+                }
+                .onChange(of: navigation.request) {
+                    guard let anchor = navigation.anchor else { return }
+                    withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                }
             }
             .formStyle(.grouped)
-            .frame(width: 540, height: 640)
+            .frame(width: 540, height: 720)
         }
     }
 
@@ -123,7 +159,7 @@ struct SettingsView: View {
                 }
                 Spacer()
                 if !preferences.usesDefaultFolder {
-                    Button("Use Default") { preferences.resetFolder() }
+                    Button("Use Default") { model.useDefaultFolder() }
                 }
                 Button("Choose…") { chooseFolder() }
             }
@@ -136,10 +172,15 @@ struct SettingsView: View {
         var text = preferences.folderDisplayPath
         if model.store.folderIsMissing { text += " — can’t find this folder; nothing is read or written until it is back or another is chosen." }
         else { text += " · one .md file per note; iCloud Drive and an Obsidian vault work as well." }
+        if model.readOnly { text += " Changing the folder waits for a license (read-only)." }
         return text
     }
 
+    /// The folder change is a mutation: the license is asked at the click
+    /// (`AppModel.mayChangeFolder`) and again when the panel returns
+    /// (`setFolder`), since it may have stayed open across a deadline.
     private func chooseFolder() {
+        guard model.mayChangeFolder() else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -147,7 +188,7 @@ struct SettingsView: View {
         panel.directoryURL = preferences.folder
         panel.prompt = "Use this folder"
         panel.message = "Notes are read from and written to this folder as .md files. Files are never moved."
-        if panel.runModal() == .OK, let url = panel.url { preferences.folder = url }
+        if panel.runModal() == .OK, let url = panel.url { model.setFolder(url) }
     }
 
     // MARK: - Notes
@@ -190,7 +231,7 @@ struct SettingsView: View {
 
     private var about: some View {
         Section {
-            Text("OpenNotes reads and writes the notes folder above and nothing else. This build from source makes no network calls at all.")
+            Text(LicensingCopy.network)
                 .font(Brand.body(12))
                 .foregroundStyle(Brand.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -199,6 +240,7 @@ struct SettingsView: View {
                     .font(Brand.body(12))
                     .foregroundStyle(Brand.textSecondary)
                 Spacer()
+                Button("Show setup guide", action: showGuide)
                 Button(copied ? "Copied" : "Copy Diagnostics") {
                     let pasteboard = NSPasteboard.general
                     pasteboard.clearContents()

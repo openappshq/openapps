@@ -21,7 +21,7 @@ final class AppModelFixRound2Tests: XCTestCase {
     override func setUpWithError() throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-fix2-model-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        temporary = TemporaryDefaults()
+        temporary = try TemporaryDefaults()
     }
 
     override func tearDownWithError() throws {

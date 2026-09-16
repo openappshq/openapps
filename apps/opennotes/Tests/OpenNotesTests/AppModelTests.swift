@@ -3,27 +3,6 @@ import XCTest
 @testable import OpenNotes
 @testable import OpenNotesCore
 
-/// A throwaway defaults suite under the temporary directory, removed at
-/// the end, so no test touches ~/Library/Preferences.
-final class TemporaryDefaults {
-    let defaults: UserDefaults
-    private let directory: URL
-    private let suite: String
-
-    init() {
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-tests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        suite = directory.appendingPathComponent("defaults").path
-        defaults = UserDefaults(suiteName: suite)!
-    }
-
-    deinit {
-        defaults.removePersistentDomain(forName: suite)
-        defaults.removeSuite(named: suite)
-        try? FileManager.default.removeItem(at: directory)
-    }
-}
-
 /// The model over a temporary folder: the debounce, closing, archive and
 /// undo, the status line. No watcher is started, no window opened.
 final class AppModelTests: XCTestCase {
@@ -34,7 +13,7 @@ final class AppModelTests: XCTestCase {
     override func setUpWithError() throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-model-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        temporary = TemporaryDefaults()
+        temporary = try TemporaryDefaults()
     }
 
     override func tearDownWithError() throws {
@@ -107,12 +86,22 @@ final class AppModelTests: XCTestCase {
         let note = try XCTUnwrap(model.createNote())
         model.setText("x", for: note.id)
         _ = model.closeNote(note.id)
-        model.readOnly = true
+        // The license the model reads, moved by hand: read-only is derived
+        // from it at every read, never stored.
+        var allowed = false
+        model.license.bind(access: { allowed }, restriction: { allowed ? nil : LicenseRestriction.trialEndedSample }, canBuy: true)
+        XCTAssertTrue(model.readOnly)
         XCTAssertNil(model.createNote())
         XCTAssertTrue(model.store.readOnly)
         XCTAssertEqual(model.statusLine(for: NoteID("x")), model.readOnlyNotice)
+        XCTAssertEqual(model.readOnlyNotice, LicenseRestriction.trialEndedSample.notice)
         model.setText("changed", for: NoteID("x"))
         XCTAssertEqual(model.note(NoteID("x"))?.text, "x")
+        model.archive(NoteID("x"))
+        XCTAssertEqual(model.archived.count, 0, "archiving is a file change: refused while read-only")
+        XCTAssertEqual(try files(), ["x.md"])
+        allowed = true
+        XCTAssertFalse(model.readOnly)
         model.archive(NoteID("x"))
         XCTAssertEqual(model.archived.count, 1)
     }
@@ -151,8 +140,8 @@ final class AppModelTests: XCTestCase {
 
 /// The preferences round trip, the fresh-install evidence, the folder default.
 final class PreferencesTests: XCTestCase {
-    @MainActor func testDefaultsAndRoundTrip() {
-        let temporary = TemporaryDefaults()
+    @MainActor func testDefaultsAndRoundTrip() throws {
+        let temporary = try TemporaryDefaults()
         let preferences = Preferences(defaults: temporary.defaults)
         XCTAssertEqual(preferences.side, .right)
         XCTAssertEqual(preferences.display, .main)
@@ -184,8 +173,8 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(Preferences(defaults: temporary.defaults).folder.lastPathComponent, "OpenNotes")
     }
 
-    @MainActor func testEveryKeyWrittenIsFreshInstallEvidence() {
-        let temporary = TemporaryDefaults()
+    @MainActor func testEveryKeyWrittenIsFreshInstallEvidence() throws {
+        let temporary = try TemporaryDefaults()
         let preferences = Preferences(defaults: temporary.defaults)
         preferences.side = .left
         preferences.display = .pointer
@@ -267,7 +256,7 @@ final class NoteStylerTests: XCTestCase {
 /// The diagnostics line and the deck host's display choice.
 final class WiringTests: XCTestCase {
     @MainActor func testDiagnosticsNameTheBuildAndTheFolder() throws {
-        let temporary = TemporaryDefaults()
+        let temporary = try TemporaryDefaults()
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-diag-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }

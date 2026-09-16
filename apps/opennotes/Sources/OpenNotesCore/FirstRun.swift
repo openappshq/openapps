@@ -17,15 +17,17 @@ extension UserDefaults: FlagStore {
     public func hasValue(forKey key: String) -> Bool { object(forKey: key) != nil }
 }
 
-/// The setup guide's steps, in order (the guide itself arrives with the
-/// parity ticket; the flags are here so the fresh-install evidence list is
-/// complete from the first launch). OpenNotes asks for no permission, so
-/// the guide never waits on the system: the step shown is the user's own
-/// progress, kept so "Show setup guide" resumes where they left off.
+/// The setup guide's steps, in order (Onboarding/OnboardingView.swift).
+/// OpenNotes asks for no permission, so the guide never waits on the
+/// system: the step shown is the user's own progress, kept so "Show setup
+/// guide" resumes where they left off.
 nonisolated public enum GuideStep: Int, CaseIterable, Comparable, Sendable {
     case welcome
-    /// "Nothing to grant": what OpenNotes reads, and that no permission is needed.
+    /// "Nothing to grant": what OpenNotes touches, and that no permission is needed.
     case permissions
+    /// "Your notes are files": the folder, and that iCloud Drive or an
+    /// Obsidian vault can be it.
+    case files
     /// "Starts with your Mac": the login item, from its real state.
     case loginItem
     case tips

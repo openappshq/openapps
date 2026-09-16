@@ -6,10 +6,24 @@ import OpenNotesCore
 /// save debounce and its retries, archive's undo, auto-archive, read-only.
 /// The deck controllers, All Notes and Settings all read it; every window
 /// change comes through observation.
+///
+/// Read-only (LICENSING.md): `license` is the projected entitlement, asked
+/// afresh at every mutation here (`allowed()`), again by the store at the
+/// file (`NoteStore.access`), and never stored. A keystroke, the save
+/// debounce, a flush, a close, a folder panel left open, auto-archive —
+/// each asks at its own moment, so a deadline that passed between two
+/// renders refuses the very next action, and no write transaction (and so
+/// no conflict copy) starts while restricted.
 @Observable
 final class AppModel {
     let store: NoteStore
     let preferences: Preferences
+    /// What the views and the store read about licensing; bound by the
+    /// launch path in an official build, always on from source.
+    let license: LicenseStatus
+    /// What All Notes' footer and the status menu read about an update;
+    /// bound by an official build, never from source.
+    let updates = UpdateStatus()
     @ObservationIgnored let watcher: FolderWatcher
     /// Bumped on every store event so views re-read the store.
     private(set) var revision = 0
@@ -20,17 +34,15 @@ final class AppModel {
     private(set) var lastConflict: (id: NoteID, original: NoteID)?
     /// The pending Undo for the deck's toast.
     private(set) var undo = ArchiveUndo()
-    /// The trial ended or a license is needed (the parity ticket drives
-    /// it): the store refuses creating and editing, the deck says why.
-    var readOnly = false {
-        didSet {
-            store.readOnly = readOnly
-            revision += 1
-        }
+    /// The trial ended or a license is needed: the store refuses every
+    /// change, the deck and All Notes say why. Never stored: the license's
+    /// projection at the moment it is read (observers re-read when the
+    /// status publishes).
+    var readOnly: Bool { !license.hasAccess() }
+    /// What the open note's footer and the status menu say while read-only.
+    var readOnlyNotice: String {
+        license.restriction()?.notice ?? "Read-only: a license is needed to write notes. Your notes stay readable; Settings → License."
     }
-    /// What the open note's footer says while read-only; the licensing
-    /// wiring supplies the real line.
-    var readOnlyNotice = "Read-only: a license is needed to write notes."
     /// A note's identity moved (its file took its title's name, or the
     /// user's text went to a conflict copy): the deck follows.
     @ObservationIgnored var onRedirect: (NoteID, NoteID) -> Void = { _, _ in }
@@ -47,13 +59,23 @@ final class AppModel {
     /// A failed write is tried again this often while it keeps failing.
     static let retryInterval: TimeInterval = 5
 
-    init(preferences: Preferences, store: NoteStore? = nil, watcher: FolderWatcher = FolderWatcher(), now: @escaping () -> Date = Date.init) {
+    init(preferences: Preferences, license: LicenseStatus = LicenseStatus(), store: NoteStore? = nil, watcher: FolderWatcher = FolderWatcher(), now: @escaping () -> Date = Date.init) {
         self.preferences = preferences
+        self.license = license
         self.store = store ?? NoteStore(folder: preferences.folder, now: now)
         self.watcher = watcher
         self.now = now
+        // The store asks the same projection at every write, so no
+        // continuation reaches the file after the license lapsed.
+        self.store.access = { [license] in license.hasAccess() }
         self.store.onEvent = { [weak self] in self?.handle($0) }
         watcher.onChange = { [weak self] in self?.scheduleRescan() }
+    }
+
+    /// The license, asked at the action. Refused, nothing changes; the
+    /// footer and All Notes already say why (`readOnlyNotice`, the card).
+    func allowed() -> Bool {
+        license.hasAccess()
     }
 
     deinit {
@@ -87,6 +109,16 @@ final class AppModel {
         scheduleAutoArchive(runNow: true)
         observeChanges({ [preferences] in _ = preferences.folder }, onChange: { [weak self] in self?.folderChanged() })
         observeChanges({ [preferences] in _ = preferences.autoArchiveDays }, onChange: { [weak self] in self?.scheduleAutoArchive(runNow: true) })
+        // The license published a change: once writing is allowed again,
+        // text held in memory while read-only reaches the disk and the
+        // auto-archive that was refused runs.
+        observeChanges({ [license] in _ = license.revision }, onChange: { [weak self] in self?.licenseChanged() })
+    }
+
+    private func licenseChanged() {
+        guard allowed() else { return }
+        _ = flush()
+        scheduleAutoArchive(runNow: true)
     }
 
     // MARK: - Notes
@@ -117,8 +149,9 @@ final class AppModel {
     }
 
     /// A new note with the default face and color; nil (and a footer
-    /// problem) when the store refuses.
+    /// problem) when the store refuses. Asked at the hotkey and at `+`.
     func createNote() -> Note? {
+        guard allowed() else { return nil }
         do {
             let note = try store.create(color: preferences.color, face: preferences.face)
             saveProblem = nil
@@ -129,12 +162,14 @@ final class AppModel {
         }
     }
 
-    /// The editor's text as typed; written after the debounce.
+    /// The editor's text as typed; written after the debounce. Asked at
+    /// the keystroke; the debounced save asks again at the file.
     func setText(_ text: String, for id: NoteID) {
+        guard allowed() else { return }
         do {
             try store.setText(text, for: id)
         } catch {
-            saveProblem = error.localizedDescription
+            if !Self.isRefusal(error) { saveProblem = error.localizedDescription }
             return
         }
         saveTimers[id]?.invalidate()
@@ -146,7 +181,10 @@ final class AppModel {
     /// Writes now; the footer shows a failure until the next success, and
     /// the write is retried every few seconds while it fails. Returns the
     /// id the note has now (its conflict copy's when the file had changed
-    /// outside), or nil when the write failed.
+    /// outside), or nil when the write failed. A save refused by the
+    /// license (the debounce or a close after the deadline) is not a
+    /// failure to report or retry: the text stays in memory, unsaved, the
+    /// footer's read-only line says why, and it is written once allowed.
     @discardableResult
     func save(_ id: NoteID) -> NoteID? {
         saveTimers[id]?.invalidate()
@@ -159,7 +197,7 @@ final class AppModel {
             if case .keptAsConflictCopy(let copy) = outcome { return copy }
             return id
         } catch {
-            saveProblem = "Couldn’t save: \(error.localizedDescription)"
+            if !Self.isRefusal(error) { saveProblem = "Couldn’t save: \(error.localizedDescription)" }
             revision += 1
             scheduleRetryIfNeeded()
             return nil
@@ -167,11 +205,17 @@ final class AppModel {
     }
 
     /// Every unsaved note, now: what could not be written, with why. Used
-    /// before a folder switch, sleep, resign and quit.
+    /// before a folder switch, sleep, resign and quit. Asked at the flush:
+    /// while read-only nothing is written and nothing is retried; the notes
+    /// stay dirty for the flush that follows the license.
     @discardableResult
     func flush() -> [NoteID: String] {
         for timer in saveTimers.values { timer.invalidate() }
         saveTimers = [:]
+        guard allowed() else {
+            revision += 1
+            return [:]
+        }
         let problems = store.saveAll()
         saveProblem = problems.isEmpty ? nil : "Couldn’t save: \(problems.values.sorted().first ?? "")"
         revision += 1
@@ -187,7 +231,7 @@ final class AppModel {
         do {
             return try store.finishProvisional(saved)
         } catch {
-            saveProblem = "Couldn’t save: \(error.localizedDescription)"
+            if !Self.isRefusal(error) { saveProblem = "Couldn’t save: \(error.localizedDescription)" }
             return saved
         }
     }
@@ -196,10 +240,37 @@ final class AppModel {
     func setFace(_ face: NoteFace, for id: NoteID) { attempt { try store.setFace(face, for: id) } }
     func setPinned(_ pinned: Bool, for id: NoteID) { attempt { try store.setPinned(pinned, for: id) } }
 
+    // MARK: - Folder
+
+    /// Whether the notes folder may be changed now: asked at "Choose…" and
+    /// "Use Default", before any panel opens.
+    func mayChangeFolder() -> Bool {
+        allowed()
+    }
+
+    /// The folder the open panel returned: asked again here, since the
+    /// panel may have stayed open across a deadline. Refused, the
+    /// preference and the store are left as they are.
+    @discardableResult
+    func setFolder(_ url: URL) -> Bool {
+        guard allowed() else { return false }
+        preferences.folder = url
+        return true
+    }
+
+    /// Back to `~/Documents/OpenNotes`; the same rule.
+    @discardableResult
+    func useDefaultFolder() -> Bool {
+        guard allowed() else { return false }
+        preferences.resetFolder()
+        return true
+    }
+
     /// Out of the deck, with a 10-second Undo. The id is resolved through
-    /// any redirect a save made meanwhile.
+    /// any redirect a save made meanwhile. Refused while read-only: the
+    /// archived flag is written to the file.
     func archive(_ id: NoteID) {
-        guard let note = store.note(id) else { return }
+        guard allowed(), let note = store.note(id) else { return }
         let current = save(id) ?? id
         attempt { try store.archive(current) }
         guard store.note(current)?.archived == true else { return }
@@ -214,18 +285,24 @@ final class AppModel {
         }
     }
 
-    /// The toast's Undo: the latest archive comes back.
+    /// The toast's Undo: the latest archive comes back. Asked at the
+    /// click: a toast can outlive the trial by ten seconds.
     func undoArchive() {
-        guard let id = undo.undo(at: now()) else { return }
+        guard allowed(), let id = undo.undo(at: now()) else { return }
         attempt { try store.unarchive(id) }
     }
 
     func unarchive(_ id: NoteID) {
+        guard allowed() else { return }
         undo.forget(id)
         attempt { try store.unarchive(id) }
     }
 
-    func reorder(_ ids: [NoteID]) { attempt { try store.reorder(ids) } }
+    /// All Notes' drag: asked when the drop lands.
+    func reorder(_ ids: [NoteID]) {
+        guard allowed() else { return }
+        attempt { try store.reorder(ids) }
+    }
 
     var pendingUndo: ArchiveUndo.Pending? {
         _ = revision
@@ -296,12 +373,14 @@ final class AppModel {
 
     /// Auto-archive runs now (when asked) and then once, at the moment the
     /// next note falls due; nothing is scheduled while it is off or no
-    /// note can fall due.
+    /// note can fall due. The sweep asks the license and, refused, does
+    /// nothing and schedules nothing (`licenseChanged` runs it again once
+    /// writing is allowed): nothing the user did, so nothing to report.
     private func scheduleAutoArchive(runNow: Bool) {
         autoArchiveTimer?.invalidate()
         autoArchiveTimer = nil
         let days = preferences.autoArchiveDays
-        guard days > 0 else { return }
+        guard days > 0, allowed() else { return }
         if runNow {
             for id in AutoArchive.candidates(in: store.active, days: days, now: now()) {
                 attempt { try store.archive(id) }
@@ -330,14 +409,22 @@ final class AppModel {
         revision += 1
     }
 
+    /// A change: asked at the action; a refusal is not a save problem
+    /// (the read-only line covers it), any other failure is.
     private func attempt(_ work: () throws -> Void) {
+        guard allowed() else { return }
         do {
             try work()
             saveProblem = nil
         } catch {
-            saveProblem = error.localizedDescription
+            if !Self.isRefusal(error) { saveProblem = error.localizedDescription }
             revision += 1
         }
         scheduleRetryIfNeeded()
+    }
+
+    /// The store refused because the license does not allow writing.
+    static func isRefusal(_ error: any Error) -> Bool {
+        (error as? StoreError) == .readOnly
     }
 }

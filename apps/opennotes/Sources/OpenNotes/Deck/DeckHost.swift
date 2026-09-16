@@ -23,11 +23,19 @@ final class DeckHost {
             MainActor.assumeIsolated { self?.rebuild() }
         })
         observeChanges({ [preferences] in _ = preferences.side; _ = preferences.display }, onChange: { [weak self] in self?.settingsChanged() })
-        observeChanges({ [model] in _ = model.revision; _ = model.readOnly }, onChange: { [weak self] in self?.notesChanged() })
+        observeChanges({ [model] in _ = model.revision }, onChange: { [weak self] in self?.notesChanged() })
         model.onRedirect = { [weak self] from, to in
             guard let self else { return }
             for controller in self.controllers.values { controller.noteRedirected(from: from, to: to) }
         }
+        // The license published a change: the machines take the new
+        // read-only flag (the hotkey and `+` ask it again at the click
+        // regardless) and the decks re-render the lock, the pill and the
+        // footer's line.
+        observeChanges({ [model] in _ = model.readOnly }, onChange: { [weak self] in
+            guard let self else { return }
+            for controller in self.controllers.values { controller.settingsChanged() }
+        })
         rebuild()
     }
 

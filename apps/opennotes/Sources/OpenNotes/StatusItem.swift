@@ -11,6 +11,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var newNote: () -> Void = {}
     var showAllNotes: () -> Void = {}
     var showSettings: () -> Void = {}
+    /// Settings → License, from the license line.
+    var showLicense: () -> Void = {}
     var toggleDeck: () -> Void = {}
     var deckIsShown: () -> Bool = { true }
     var quit: () -> Void = {}
@@ -31,6 +33,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        // The license, asked as the menu opens: the trial's remaining time
+        // or why the notes are read-only (LicenseBadge); nothing while
+        // simply licensed or without licensing. Opens Settings → License.
+        if let badge = model.license.badge() {
+            let line = NSMenuItem(title: badge.text, action: #selector(licenseAction), keyEquivalent: "")
+            line.target = self
+            if badge.tone == .attention {
+                line.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: nil)
+            }
+            menu.addItem(line)
+            menu.addItem(.separator())
+        }
         let new = NSMenuItem(title: model.readOnly ? "New Note (read-only)" : "New Note", action: #selector(newNoteAction), keyEquivalent: "")
         new.target = self
         new.isEnabled = !model.readOnly
@@ -51,12 +65,32 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         settings.target = self
         menu.addItem(settings)
         menu.addItem(.separator())
+        // An update asking for something (official builds; RELEASES.md,
+        // "In-app updater"): "OpenNotes X.Y.Z available — Install",
+        // "Downloading…", "Update ready — Restart". Nothing otherwise.
+        if let hint = model.updates.hint() {
+            let title = [UpdateCopy.line(for: hint), UpdateCopy.action(for: hint)].compactMap { $0 }.joined(separator: " — ")
+            let update = NSMenuItem(title: title, action: #selector(updateAction), keyEquivalent: "")
+            update.target = self
+            update.isEnabled = UpdateCopy.action(for: hint) != nil
+            update.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+            menu.addItem(update)
+            menu.addItem(.separator())
+        }
         let quit = NSMenuItem(title: "Quit OpenNotes", action: #selector(quitAction), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
     }
 
     @objc private func newNoteAction() { newNote() }
+    @objc private func licenseAction() { showLicense() }
+    @objc private func updateAction() {
+        switch model.updates.hint() {
+        case .ready: model.updates.restart()
+        case .available: model.updates.install()
+        case .downloading, nil: break
+        }
+    }
     @objc private func toggleDeckAction() { toggleDeck() }
     @objc private func allNotesAction() { showAllNotes() }
     @objc private func settingsAction() { showSettings() }

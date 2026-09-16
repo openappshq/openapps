@@ -1,12 +1,14 @@
 #if DEBUG
 import AppKit
+import OpenAppsLicensing
 import OpenNotesCore
 import ServiceManagement
 import SwiftUI
 
 /// Renders the deck (pill, fan, open, editing, read-only) on a drawn
-/// desktop, All Notes and Settings to PNGs, in light and dark appearance:
-/// `OpenNotes --preview <directory>`. Debug builds only.
+/// desktop, All Notes (and read-only with the license card), the license
+/// card, the setup guide and Settings to PNGs, in light and dark
+/// appearance: `OpenNotes --preview <directory>`. Debug builds only.
 ///
 /// Nothing real is touched: no status item, no hotkey, a throwaway
 /// defaults suite and a temporary notes folder (both removed at the end),
@@ -25,6 +27,10 @@ final class PreviewHarness {
     private let model: AppModel
     private let loginItem: LoginItem
     private let hotkeys = HotkeyCenter()
+    /// The license the model reads: bound to an ended trial for the
+    /// read-only stages, to nothing (always on) for the rest.
+    private let license = LicenseStatus()
+    private var restricted = false
 
     private final class MemoryFlags: FlagStore {
         var values: [String: Any] = [:]
@@ -53,8 +59,25 @@ final class PreviewHarness {
         preferences = Preferences(defaults: defaults)
         preferences.folder = folder
         loginItem = LoginItem(flags: MemoryFlags(), service: PreviewLoginItemService())
-        model = AppModel(preferences: preferences, store: NoteStore(folder: folder), watcher: FolderWatcher())
+        model = AppModel(preferences: preferences, license: license, store: NoteStore(folder: folder), watcher: FolderWatcher())
         AppResources.registerFonts()
+        if let icon = AppResources.appIcon() { NSApp.applicationIconImage = icon }
+        license.openLicense = { print("PREVIEW_OPEN_LICENSE") }
+        setRestricted(false)
+    }
+
+    /// An ended trial, as the controller would project it (the card, the
+    /// pill, no access), or everything on.
+    private func setRestricted(_ restricted: Bool) {
+        self.restricted = restricted
+        let state: LicenseState? = restricted ? .trialEnded : nil
+        license.bind(
+            access: { !restricted },
+            state: { state },
+            restriction: { state.flatMap { LicenseRestriction.card(for: $0) } },
+            badge: { state.flatMap { LicenseBadge.label(for: $0, appName: Licensing.appName) } },
+            canBuy: true
+        )
     }
 
     /// Every surface in both appearances; true when every PNG was written.
@@ -89,11 +112,11 @@ final class PreviewHarness {
                 ("toast", .fan, false, true),
             ]
             for (name, state, readOnly, toast) in stages {
-                model.readOnly = readOnly
+                setRestricted(readOnly)
                 let stage = DeckStage(content: content(state: state, toast: toast), side: preferences.side, dark: scheme == .dark)
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-\(name)-\(suffix).png") { failures += 1 }
             }
-            model.readOnly = false
+            setRestricted(false)
             // The left edge, once.
             preferences.side = .left
             let left = DeckStage(content: content(state: .open(groceries, editing: true), toast: false), side: .left, dark: scheme == .dark)
@@ -103,6 +126,27 @@ final class PreviewHarness {
                 .frame(width: 760, height: 520)
                 .background(Brand.canvas)
             if await !write(allNotes, scheme: scheme, appearance: appearance, to: "allnotes-\(suffix).png") { failures += 1 }
+            // All Notes read-only: the card above the list, the pill in the
+            // toolbar, Pin / Archive disabled; then the card on its own.
+            setRestricted(true)
+            let allNotesReadOnly = AllNotesView(model: model, openNote: { _ in }, export: { _, _ in })
+                .frame(width: 760, height: 560)
+                .background(Brand.canvas)
+            if await !write(allNotesReadOnly, scheme: scheme, appearance: appearance, to: "allnotes-readonly-\(suffix).png") { failures += 1 }
+            let card = LicenseCard(license: license)
+                .padding(Brand.Space.s24)
+                .frame(width: 520)
+                .background(Brand.canvas)
+            if await !write(card, scheme: scheme, appearance: appearance, to: "license-card-\(suffix).png") { failures += 1 }
+            // The setup guide, every step, with the trial line and the
+            // pill the ended trial gives the welcome step.
+            let guide = OnboardingModel(loginItem: loginItem, license: license, preferences: preferences, defaults: MemoryFlags())
+            for step in GuideStep.allCases {
+                let view = OnboardingView(model: guide)
+                if await !write(view, scheme: scheme, appearance: appearance, to: "guide-\(step)-\(suffix).png") { failures += 1 }
+                guide.advance()
+            }
+            setRestricted(false)
             let settings = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: { "" })
                 .background(Brand.canvas)
             if await !write(settings, scheme: scheme, appearance: appearance, to: "settings-\(suffix).png") { failures += 1 }
@@ -142,7 +186,7 @@ final class PreviewHarness {
         let status: String
         if model.readOnly { status = model.readOnlyNotice } else if state.isEditing { status = "Editing…" } else { status = open.map { "Saved · \(Age.text($0.modified))" } ?? "" }
         let pending = toast ? ArchiveUndo.Pending(id: NoteID("x"), title: "Call mum", deadline: .distantFuture) : nil
-        return DeckContent(layout: layout, state: state, side: preferences.side, notes: notes, openNote: open, readOnly: model.readOnly, readOnlyNotice: model.readOnlyNotice, statusLine: status, pendingUndo: pending, folderMissing: false)
+        return DeckContent(layout: layout, state: state, side: preferences.side, notes: notes, openNote: open, readOnly: model.readOnly, readOnlyNotice: model.readOnlyNotice, statusLine: status, pendingUndo: pending, folderMissing: false, license: license)
     }
 
     /// Draws the view with `ImageRenderer`, no window: the shared Mac's

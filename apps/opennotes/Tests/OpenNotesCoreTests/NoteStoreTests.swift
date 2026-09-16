@@ -159,20 +159,29 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertEqual(try files(), ["keep.md"])
     }
 
-    @MainActor func testReadOnlyRefusesCreatingAndEditingButNotArchiving() throws {
+    @MainActor func testReadOnlyRefusesEveryChangeButNotReadingOrExporting() throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try write("a.md", "A")
         let store = makeStore()
-        store.readOnly = true
+        // The access is asked at every mutation, never stored.
+        var allowed = false
+        store.access = { allowed }
+        XCTAssertTrue(store.readOnly)
         XCTAssertThrowsError(try store.create(color: .coral, face: .sans)) { XCTAssertEqual($0 as? StoreError, .readOnly) }
         XCTAssertThrowsError(try store.setText("B", for: NoteID("a"))) { XCTAssertEqual($0 as? StoreError, .readOnly) }
         XCTAssertThrowsError(try store.setColor(.mint, for: NoteID("a"))) { XCTAssertEqual($0 as? StoreError, .readOnly) }
-        XCTAssertNoThrow(try store.archive(NoteID("a")))
-        XCTAssertEqual(store.note(NoteID("a"))?.archived, true)
-        XCTAssertNoThrow(try store.unarchive(NoteID("a")))
-        XCTAssertNoThrow(try store.reorder([NoteID("a")]))
+        XCTAssertThrowsError(try store.archive(NoteID("a"))) { XCTAssertEqual($0 as? StoreError, .readOnly) }
+        XCTAssertEqual(store.note(NoteID("a"))?.archived, false)
+        XCTAssertThrowsError(try store.unarchive(NoteID("a"))) { XCTAssertEqual($0 as? StoreError, .readOnly) }
+        XCTAssertThrowsError(try store.reorder([NoteID("a")])) { XCTAssertEqual($0 as? StoreError, .readOnly) }
         XCTAssertNoThrow(try store.export(NoteID("a"), as: .markdown))
-        XCTAssertEqual(try read("a.md").contains("archived: false"), true)
+        XCTAssertEqual(try read("a.md"), "A", "nothing written while read-only")
+        store.rescan()
+        XCTAssertEqual(store.note(NoteID("a"))?.text, "A")
+        allowed = true
+        XCTAssertFalse(store.readOnly)
+        XCTAssertNoThrow(try store.archive(NoteID("a")))
+        XCTAssertEqual(try read("a.md").contains("archived: true"), true)
     }
 
     // MARK: - Outside edits

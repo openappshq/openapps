@@ -16,21 +16,13 @@ enum Diagnostics {
         return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
-    /// The build's licensing line; the parity ticket replaces it with the state.
-    static var licensingLine: String {
-        #if OPENAPPS_LICENSING
-        "compiled in (not wired yet)"
-        #else
-        "off (source build: no trial, no license network calls)"
-        #endif
-    }
-
     static func snapshot(model: AppModel, preferences: Preferences, loginItem: LoginItem, hotkeys: HotkeyCenter, deck: DeckHost?) -> DiagnosticsSnapshot {
         DiagnosticsSnapshot(
             appVersion: versionString,
             macOSVersion: macOSVersion,
             loginStatus: loginItem.statusDescription,
-            licensing: licensingLine,
+            // The flavour and where the license stands (never the key).
+            licensing: Licensing.diagnosticsLine(model.license),
             readOnly: model.readOnly,
             side: preferences.side,
             display: preferences.display,

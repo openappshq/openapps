@@ -3,25 +3,29 @@ import OpenNotesCore
 import SwiftUI
 
 /// Owns the long-lived objects: the model, preferences, the login item,
-/// the status item, the decks, the hotkey, All Notes and Settings.
-/// Menu-bar only: no Dock icon, no main window.
+/// the status item, the decks, the hotkey, All Notes, Settings, the setup
+/// guide, licensing and the updater. Menu-bar only: no Dock icon, no main
+/// window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var preferences: Preferences!
     private(set) var model: AppModel!
     private(set) var loginItem: LoginItem!
+    private(set) var licenseStatus: LicenseStatus!
     private var statusItem: StatusItemController?
     private var deck: DeckHost?
     private var hotkeys: HotkeyCenter?
     private var settingsWindow: SettingsWindowController?
     private var allNotesWindow: AllNotesWindowController?
+    var onboarding: OnboardingWindowController?
     #if OPENAPPS_LICENSING
-    // The parity ticket: the record store, the manager and the controller
-    // bound to the model's `readOnly` (LICENSING.md), the trial pill, the
-    // License section in Settings, the first-run guide.
+    /// The record store, the manager and the controller bound to
+    /// `licenseStatus` (Licensing/LicensingLaunch.swift).
+    var licenseController: LicenseController?
     #endif
     #if OPENAPPS_OFFICIAL
-    // The parity ticket: the shared updater (RELEASES.md), created before
-    // this launch writes any preferences.
+    /// The shared updater (Updates/UpdatesLaunch.swift), created before
+    /// this launch writes any preferences.
+    var updates: Updates?
     #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -35,8 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.loginItem = loginItem
         let preferences = Preferences()
         self.preferences = preferences
-        let model = AppModel(preferences: preferences)
+        let license = LicenseStatus()
+        licenseStatus = license
+        let model = AppModel(preferences: preferences, license: license)
         self.model = model
+        // Official builds: the updater, before this launch writes any
+        // preferences (Updates/UpdatesLaunch.swift).
+        startUpdates()
         model.start()
 
         let statusItem = StatusItemController(model: model, preferences: preferences)
@@ -44,9 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.newNote = { [weak self] in self?.deck?.hotkey() }
         statusItem.showAllNotes = { [weak self] in self?.showAllNotes() }
         statusItem.showSettings = { [weak self] in self?.showSettings() }
+        statusItem.showLicense = { [weak self] in self?.showLicense() }
         statusItem.toggleDeck = { [weak self] in self?.toggleDeck() }
         statusItem.deckIsShown = { [weak self] in self?.deck != nil }
         statusItem.quit = { NSApp.terminate(nil) }
+        registerURLHandler()
 
         deck = DeckHost(model: model, preferences: preferences, showAllNotes: { [weak self] in self?.showAllNotes() })
 
@@ -60,13 +71,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.register(preferences.hotkey)
         observeChanges({ [preferences] in _ = preferences.hotkey }, onChange: { [weak self, preferences] in self?.hotkeys?.register(preferences.hotkey) })
 
-        // No record store to wait for in this build: the install is fresh
-        // when no earlier launch left preferences behind. The parity ticket
-        // makes storage the judge (LICENSING.md) and adds the setup guide.
-        // An update-test build never registers a login item.
-        if !UpdateTesting.isCompiledIn {
-            loginItem.applyDefaultIfNeeded(storageIsFresh: true)
-        }
+        // Licensing (Licensing/LicensingLaunch.swift): in an official build
+        // the record store, the manager and the controller bound to
+        // `licenseStatus`, and the fresh-install defaults decided once
+        // storage says whether the install is fresh; from source, everything
+        // on and the defaults decided now. Then the updater's schedule and,
+        // once, the setup guide.
+        startLicensing()
+        startUpdaterSchedule()
+        showGuideOnFirstLaunchIfNeeded()
     }
 
     /// Quit flushes every open and pending note first. If any cannot be
@@ -104,6 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings().show()
     }
 
+    func showLicense(keyField: Bool = false) {
+        settings().showLicense(keyField: keyField)
+    }
+
     func showAllNotes() {
         if allNotesWindow == nil {
             allNotesWindow = AllNotesWindowController(model: model) { [weak self] id in self?.deck?.open(id) }
@@ -131,6 +148,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return Diagnostics.text(model: self.model, preferences: self.preferences, loginItem: self.loginItem, hotkeys: hotkeys, deck: self.deck)
             }
         )
+        // License and Updates before About (Licensing/LicensingLaunch.swift),
+        // the guide from About, the trial pill in the title bar.
+        controller.extraSections = licensingSettingsSections(navigation: controller.navigation)
+        controller.showGuide = { [weak self] in self?.showGuide() }
+        controller.titleBarBadge = { [weak self] in self?.licenseStatus.badge() }
         settingsWindow = controller
         return controller
     }
@@ -144,8 +166,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// The update-test build variant (`scripts/update-e2e.sh`, the parity
-/// ticket): present in every build so the launch path can ask without `#if`.
+/// The update-test build variant (`scripts/update-e2e.sh`): present in every
+/// build so the launch path can ask without `#if`; its hooks are in
+/// Updates/UpdateTesting.swift.
 nonisolated enum UpdateTesting {
     #if OPENNOTES_UPDATE_TESTING
     static let isCompiledIn = true

@@ -16,6 +16,12 @@ struct DeckContent {
     var folderMissing: Bool
     /// A new value puts the caret in the open note; nil leaves it.
     var focusToken: Int?
+    /// The pill at the top of the open note reads it on every body; the
+    /// footer's read-only line opens Settings → License through it.
+    var license = LicenseStatus()
+    /// Asked by the editor at every keystroke, paste and checkbox click:
+    /// the license now, not `readOnly` as rendered.
+    var mayEdit: () -> Bool = { true }
     var onTab: (NoteID) -> Void = { _ in }
     var onPlus: () -> Void = {}
     var onMore: () -> Void = {}
@@ -210,6 +216,11 @@ struct NoteCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // The trial's remaining time, or why the note is read-only,
+            // while there is something to say (official builds).
+            LicensePillHeader(license: content.license)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
             if previewRendering {
                 // `ImageRenderer` draws no NSTextView: the styled text, static.
                 PreviewText(text: note.text, face: note.face, dark: colorScheme == .dark)
@@ -218,7 +229,7 @@ struct NoteCard: View {
             } else {
                 NoteEditor(
                     text: note.text, face: note.face, isEditable: !content.readOnly && !note.truncated, focusToken: content.focusToken,
-                    onTextChange: content.onTextChange, onCommand: content.onCommand, onFocus: content.onFocus
+                    onTextChange: content.onTextChange, onCommand: content.onCommand, onFocus: content.onFocus, mayEdit: content.mayEdit
                 )
             }
             footer
@@ -267,15 +278,37 @@ struct NoteCard: View {
                     Image(systemName: "archivebox").foregroundStyle(Brand.noteInk)
                 }
                 .buttonStyle(FooterActionStyle())
+                .disabled(content.readOnly)
                 .help("Archive (⌘⇧A)")
                 .accessibilityLabel("Archive")
             }
-            Text(content.statusLine)
-                .font(Brand.mono(10))
-                .foregroundStyle(Brand.noteInkSecondary)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if content.readOnly {
+                // The read-only line, and the way to the License section.
+                Button(action: content.license.openLicense) {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "lock.fill").font(.system(size: 9, weight: .semibold))
+                        Text(content.statusLine)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .font(Brand.mono(10))
+                    .foregroundStyle(Brand.noteInkSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Opens License settings")
+                .accessibilityLabel("Read-only: \(content.statusLine)")
+                .accessibilityHint("Opens License settings")
+            } else {
+                Text(content.statusLine)
+                    .font(Brand.mono(10))
+                    .foregroundStyle(Brand.noteInkSecondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

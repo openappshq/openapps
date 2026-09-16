@@ -21,7 +21,7 @@ env_name="${OPENAPPS_DODO_ENV:-}"
 paid="${OPENAPPS_DODO_PAID_PRODUCT_ID:-}"
 registry_base="${OPENAPPS_TRIAL_REGISTRY_BASE_URL:-https://openapps.space}"
 buy_url="${OPENAPPS_BUY_URL:-https://openapps.space/opennotes/}"
-support_url="${OPENAPPS_SUPPORT_URL:-}"
+support_url="${OPENAPPS_SUPPORT_URL-https://openapps.space/opennotes/#questions}"
 
 case "$env_name" in
     test) host="https://test.dodopayments.com" ;;

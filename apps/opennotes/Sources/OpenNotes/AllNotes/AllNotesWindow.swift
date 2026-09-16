@@ -68,19 +68,41 @@ struct AllNotesView: View {
     }
 
     var body: some View {
-        Group {
-            if previewRendering {
-                // `ImageRenderer` draws no split view: a fixed split.
-                HStack(spacing: 0) {
-                    list.frame(width: 320)
-                    Divider()
-                    preview.frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 0) {
+            // The trial's remaining time, or why the notes are read-only,
+            // as a pill over the toolbar (official builds; nothing while
+            // licensed), and while read-only the license card in
+            // LICENSING.md's words with the way out. Asked on every body.
+            if model.license.badge() != nil || model.license.restriction() != nil {
+                VStack(spacing: Brand.Space.s8) {
+                    LicensePillHeader(license: model.license)
+                    LicenseCard(license: model.license)
                 }
-            } else {
-                HSplitView {
-                    list.frame(minWidth: 280, idealWidth: 320)
-                    preview.frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, Brand.Space.s12)
+                .padding(.top, Brand.Space.s12)
+            }
+            Group {
+                if previewRendering {
+                    // `ImageRenderer` draws no split view: a fixed split.
+                    HStack(spacing: 0) {
+                        list.frame(width: 320)
+                        Divider()
+                        preview.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else {
+                    HSplitView {
+                        list.frame(minWidth: 280, idealWidth: 320)
+                        preview.frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
+            }
+            // An update asking for something (official builds): one line
+            // under the split, nothing otherwise.
+            if model.updates.hint() != nil {
+                Divider()
+                UpdateHintRow(updates: model.updates)
+                    .padding(.horizontal, Brand.Space.s12)
+                    .padding(.vertical, Brand.Space.s8)
             }
         }
         .background(Brand.canvas)
@@ -151,7 +173,9 @@ struct AllNotesView: View {
                         row(note).tag(note.id)
                     }
                     .onMove { source, destination in
-                        guard !showsArchived, query.isEmpty else { return }
+                        // The drop asks the license (`AppModel.reorder`); the
+                        // list is not moveable while read-only regardless.
+                        guard !showsArchived, query.isEmpty, !model.readOnly else { return }
                         var ids = notes.map(\.id)
                         ids.move(fromOffsets: source, toOffset: destination)
                         model.reorder(ids)
@@ -198,11 +222,11 @@ struct AllNotesView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: Brand.Space.s8) {
                         if note.archived {
-                            Button("Restore") { model.unarchive(note.id) }
+                            Button("Restore") { model.unarchive(note.id) }.disabled(model.readOnly)
                         } else {
                             Button("Open") { openNote(note.id) }.keyboardShortcut(.defaultAction)
                             Button(note.pinned ? "Unpin" : "Pin") { model.setPinned(!note.pinned, for: note.id) }.disabled(model.readOnly)
-                            Button("Archive") { model.archive(note.id) }
+                            Button("Archive") { model.archive(note.id) }.disabled(model.readOnly)
                         }
                         Spacer()
                         if previewRendering {

@@ -65,7 +65,7 @@ final class Preferences {
         } else {
             hotkey = .default
         }
-        folder = defaults.string(forKey: Key.folder).map { URL(fileURLWithPath: $0, isDirectory: true) } ?? NoteStore.defaultFolder()
+        folder = defaults.string(forKey: Key.folder).map { URL(fileURLWithPath: $0, isDirectory: true) } ?? Self.defaultFolder
         face = defaults.string(forKey: Key.face).flatMap(NoteFace.init(rawValue:)) ?? .sans
         color = defaults.string(forKey: Key.color).flatMap(NoteColor.init(rawValue:)) ?? .coral
         autoArchiveDays = defaults.object(forKey: Key.autoArchiveDays) as? Int ?? 0
@@ -74,8 +74,20 @@ final class Preferences {
     /// Back to `~/Documents/OpenNotes`, which the app creates when missing.
     func resetFolder() {
         defaults.removeObject(forKey: Key.folder)
-        folder = NoteStore.defaultFolder()
+        folder = Self.defaultFolder
         defaults.removeObject(forKey: Key.folder)
+    }
+
+    /// `~/Documents/OpenNotes`; the update-test variant (scripts/update-e2e.sh)
+    /// keeps its notes in its own Application Support folder instead, so a
+    /// throwaway copy never reads or creates the user's.
+    static var defaultFolder: URL {
+        if UpdateTesting.isCompiledIn {
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+            return support.appendingPathComponent("OpenApps/opennotes-updatetest/Notes", isDirectory: true)
+        }
+        return NoteStore.defaultFolder()
     }
 
     /// The folder's path with the home folder as `~`.

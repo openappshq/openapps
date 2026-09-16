@@ -30,6 +30,11 @@ final class NoteTextView: NSTextView {
     var onTextChange: (String) -> Void = { _ in }
     var onCommand: (EditorCommand) -> Void = { _ in }
     var onFocus: () -> Void = {}
+    /// Asked before every change TextKit is about to make (a keystroke, a
+    /// paste, a checkbox click, a drop): the license now, not the
+    /// `isEditable` the last render set. Refused, the text stays as it is
+    /// (LICENSING.md, read-only).
+    var mayEdit: () -> Bool = { true }
     /// Set while the owner pushes text in, so the change is not reported back.
     private var isReplacingProgrammatically = false
 
@@ -90,6 +95,12 @@ final class NoteTextView: NSTextView {
         super.didChangeText()
         restyle()
         if !isReplacingProgrammatically { onTextChange(string) }
+    }
+
+    /// Every user edit passes here first; a programmatic `setText` does not.
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard isReplacingProgrammatically || mayEdit() else { return false }
+        return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
     }
 
     // MARK: - Plain text only
@@ -192,6 +203,8 @@ struct NoteEditor: NSViewRepresentable {
     var onTextChange: (String) -> Void
     var onCommand: (EditorCommand) -> Void
     var onFocus: () -> Void = {}
+    /// The license at the moment of an edit (`NoteTextView.mayEdit`).
+    var mayEdit: () -> Bool = { true }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NoteTextView.makeScrollableTextView()
@@ -206,6 +219,7 @@ struct NoteEditor: NSViewRepresentable {
         textView.onTextChange = onTextChange
         textView.onCommand = onCommand
         textView.onFocus = onFocus
+        textView.mayEdit = mayEdit
         return scrollView
     }
 
@@ -214,6 +228,7 @@ struct NoteEditor: NSViewRepresentable {
         textView.onTextChange = onTextChange
         textView.onCommand = onCommand
         textView.onFocus = onFocus
+        textView.mayEdit = mayEdit
         if textView.styler.face != face || context.coordinator.appearance != textView.effectiveAppearance.name {
             textView.styler = NoteStyler(face: face, appearance: textView.effectiveAppearance)
             context.coordinator.appearance = textView.effectiveAppearance.name

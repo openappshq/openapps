@@ -53,8 +53,9 @@ final class OnboardingLaunchTests: XCTestCase {
     }
 
     @MainActor func testStepsAreInGuideOrder() {
-        XCTAssertEqual(GuideStep.allCases, [.welcome, .permissions, .loginItem, .tips])
+        XCTAssertEqual(GuideStep.allCases, [.welcome, .permissions, .files, .loginItem, .tips])
         XCTAssertEqual(GuideStep.welcome.next, .permissions)
+        XCTAssertEqual(GuideStep.permissions.next, .files)
         XCTAssertEqual(GuideStep.tips.previous, .loginItem)
         XCTAssertNil(GuideStep.welcome.previous)
         XCTAssertNil(GuideStep.tips.next)

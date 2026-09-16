@@ -96,6 +96,13 @@ final class DeckPanelController {
     // MARK: - Events
 
     func handle(_ event: DeckEvent) {
+        // The hotkey and `+` decide between a new note and a fanned deck by
+        // the license: asked at the click, never the copy the machine
+        // took at the last settings change (LICENSING.md, read-only).
+        switch event {
+        case .hotkey, .plusClicked: _ = machine.handle(.settingsChanged(DeckSettings(readOnly: model.readOnly)))
+        default: break
+        }
         let effects = machine.handle(event)
         for effect in effects { perform(effect) }
         redirects = [:]
@@ -212,8 +219,12 @@ final class DeckPanelController {
             layout: layout, state: state, side: preferences.side, notes: notes, openNote: openNote,
             readOnly: model.readOnly, readOnlyNotice: model.readOnlyNotice,
             statusLine: openNote.map { model.statusLine(for: $0.id) } ?? "",
-            pendingUndo: pending, folderMissing: model.store.folderIsMissing, focusToken: focusToken
+            pendingUndo: pending, folderMissing: model.store.folderIsMissing, focusToken: focusToken,
+            license: model.license
         )
+        // Every keystroke, paste and checkbox click asks the license as it
+        // happens, not the `readOnly` this render captured.
+        content.mayEdit = { [weak model] in model.map { !$0.readOnly } ?? false }
         content.onTab = { [weak self] in self?.handle(.tabClicked($0)) }
         content.onPlus = { [weak self] in self?.handle(.plusClicked) }
         content.onMore = { [weak self] in self?.showAllNotes() }
@@ -228,7 +239,9 @@ final class DeckPanelController {
             switch command {
             case .escape: self.handle(.escape)
             case .next: self.handle(.closeRequested)
-            case .archive: self.handle(.archiveRequested)
+            // Archive writes the file: asked at the key, so a refused
+            // archive never closes the note either.
+            case .archive: if !self.model.readOnly { self.handle(.archiveRequested) }
             case .togglePin:
                 if let id = self.machine.state.openNote, let note = self.model.note(id) { self.model.setPinned(!note.pinned, for: id) }
             case .toggleFace:
@@ -248,7 +261,10 @@ final class DeckPanelController {
             guard let self, let id = self.machine.state.openNote, let note = self.model.note(id) else { return }
             self.model.setPinned(!note.pinned, for: id)
         }
-        content.onArchive = { [weak self] in self?.handle(.archiveRequested) }
+        content.onArchive = { [weak self] in
+            guard let self, !self.model.readOnly else { return }
+            self.handle(.archiveRequested)
+        }
         content.onUndo = { [weak self] in
             self?.model.undoArchive()
             self?.notesChanged()

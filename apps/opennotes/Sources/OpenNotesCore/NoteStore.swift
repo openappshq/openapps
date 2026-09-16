@@ -27,7 +27,7 @@ nonisolated public enum StoreEvent: Hashable, Sendable {
 }
 
 nonisolated public enum StoreError: Error, LocalizedError, Hashable {
-    /// The trial ended or a license is needed: creating and editing refused.
+    /// The trial ended or a license is needed: every change refused.
     case readOnly
     case folderMissing(URL)
     case noSuchNote(NoteID)
@@ -124,9 +124,16 @@ public final class NoteStore {
     public private(set) var notes: [NoteID: Note] = [:]
     /// The folder could not be found on the last read or write.
     public private(set) var folderIsMissing = false
-    /// Creating and editing are refused (the trial ended, a license is
-    /// needed); reading, exporting, archiving and reordering still work.
-    public var readOnly = false
+    /// Whether the store may change anything right now: asked afresh at
+    /// every mutation and again at the file boundary (`write`), never
+    /// stored. The app binds the license's projected access (LICENSING.md);
+    /// a build without licensing, and a store on its own, is always allowed.
+    public var access: () -> Bool = { true }
+    /// The trial ended or a license is needed: creating, editing, renaming,
+    /// archiving, unarchiving and reordering are refused and no file is
+    /// written or removed; reading, rescanning and exporting still work.
+    /// Derived from `access` at the moment it is read.
+    public var readOnly: Bool { !access() }
     public var onEvent: (StoreEvent) -> Void = { _ in }
     #if DEBUG
     /// Tests only: an outside writer run at a chosen point of a transaction.
@@ -267,6 +274,9 @@ public final class NoteStore {
     /// one first, and the switch is refused (`StoreError.unsaved`, nothing
     /// changed) if any of them cannot be. Files are never moved.
     public func switchFolder(to url: URL, create: Bool) throws {
+        // A folder change is a mutation the license decides (the app asks
+        // before the panel and after it; this is the last word).
+        guard !readOnly else { throw StoreError.readOnly }
         let problems = saveAll()
         guard problems.isEmpty else { throw StoreError.unsaved(problems) }
         folder = url
@@ -521,19 +531,20 @@ public final class NoteStore {
     }
 
     /// Out of the deck, into the folder's Archived view; the file stays.
-    /// Allowed while read-only (nothing the user wrote changes).
+    /// Refused while read-only: the flag is written to the file.
     public func archive(_ id: NoteID) throws {
-        try change(id, whileReadOnly: true) { $0.archived = true }
+        try change(id) { $0.archived = true }
     }
 
     public func unarchive(_ id: NoteID) throws {
-        try change(id, whileReadOnly: true) { $0.archived = false }
+        try change(id) { $0.archived = false }
     }
 
     /// The active notes in this order; `order` is rewritten for every note
     /// whose position changed. Pinned notes keep coming first whatever the
-    /// order asked for. Allowed while read-only.
+    /// order asked for. Refused while read-only.
     public func reorder(_ ids: [NoteID]) throws {
+        guard !readOnly else { throw StoreError.readOnly }
         var position = 0
         var changed: [NoteID] = []
         for id in ids {
@@ -556,8 +567,8 @@ public final class NoteStore {
         if !problems.isEmpty { throw StoreError.unsaved(problems) }
     }
 
-    private func change(_ id: NoteID, whileReadOnly: Bool = false, _ mutate: (inout Note) -> Void) throws {
-        guard !readOnly || whileReadOnly else { throw StoreError.readOnly }
+    private func change(_ id: NoteID, _ mutate: (inout Note) -> Void) throws {
+        guard !readOnly else { throw StoreError.readOnly }
         guard notes[id] != nil else { throw StoreError.noSuchNote(id) }
         guard var note = body(of: id), note.bodyIsLoaded else { throw StoreError.entryChanged(id) }
         guard !note.truncated else { throw StoreError.oversized(id) }
@@ -581,7 +592,10 @@ public final class NoteStore {
     /// Writes the note if it has unsaved changes. A new note with no text
     /// is not written (Escape on it removes it, `discardIfEmpty`). A file
     /// that changed outside since it was last read is never overwritten:
-    /// see `write`. A failed write keeps the note dirty.
+    /// see `write`. A failed write keeps the note dirty. Refused while
+    /// read-only, before the transaction: the debounce, a close and quit
+    /// are continuations of an edit, and the access is asked again here,
+    /// at the file; the text stays in memory, unsaved, until it is allowed.
     @discardableResult
     public func save(_ id: NoteID) throws -> SaveOutcome {
         guard notes[id] != nil else { throw StoreError.noSuchNote(id) }
@@ -606,10 +620,13 @@ public final class NoteStore {
     /// link), must be a regular file on the very inode the app wrote, with
     /// the very content, and only then is the name unlinked — never
     /// recursively, and anything else at that path is left where it is.
+    /// While read-only a file is never removed: a note whose file exists
+    /// stays (as "Untitled"); one that was never written is only forgotten.
     @discardableResult
     public func discardIfEmpty(_ id: NoteID) -> Bool {
         guard let note = notes[id], provisional.contains(id), note.isEmpty else { return false }
         if let known = identities[id] {
+            guard !readOnly else { return false }
             switch NoteFile.open(fileURL(for: id)) {
             case .absent:
                 break
@@ -648,10 +665,13 @@ public final class NoteStore {
     /// A new note closing for the first time: saved, and moved to the file
     /// name its title gives when that name is free and the file is still
     /// the one the app wrote. Returns the id the note has now (a conflict
-    /// copy's when the save found an outside edit).
+    /// copy's when the save found an outside edit). Refused while read-only
+    /// (the rename is a file change): the note stays provisional and is
+    /// named when it next closes allowed.
     public func finishProvisional(_ id: NoteID) throws -> NoteID {
         guard notes[id] != nil else { throw StoreError.noSuchNote(id) }
         guard provisional.contains(id) else { return id }
+        guard !readOnly else { throw StoreError.readOnly }
         var current = id
         if case .keptAsConflictCopy(let copy) = try save(id) { current = copy }
         provisional.remove(id)
@@ -682,10 +702,14 @@ public final class NoteStore {
         return wanted
     }
 
-    /// The write transaction (see the type's note). Returns `.saved`, or
+    /// The write transaction (see the type's note), and the one place bytes
+    /// reach the folder: the access is asked here first, so no continuation
+    /// (the debounce, a close, quit, a folder switch) writes — or diverts to
+    /// a conflict copy — after the license lapsed. Returns `.saved`, or
     /// `.keptAsConflictCopy` when the file had changed outside — before the
     /// check, or between the check and the swap.
     private func write(_ id: NoteID) throws -> SaveOutcome {
+        guard !readOnly else { throw StoreError.readOnly }
         guard let note = notes[id] else { throw StoreError.noSuchNote(id) }
         if note.truncated { throw StoreError.oversized(id) }
         guard note.bodyIsLoaded else { throw StoreError.entryChanged(id) }
