@@ -9,11 +9,13 @@ import OpenNotesCore
 ///
 /// Read-only (LICENSING.md): `license` is the projected entitlement, asked
 /// afresh at every mutation here (`allowed()`), again by the store at the
-/// file (`NoteStore.access`), and never stored. A keystroke, the save
-/// debounce, a flush, a close, a folder panel left open, auto-archive —
-/// each asks at its own moment, so a deadline that passed between two
-/// renders refuses the very next action, and no write transaction (and so
-/// no conflict copy) starts while restricted.
+/// file (`NoteStore.access`), and never stored. A keystroke, a close, a
+/// folder panel left open, auto-archive — each asks at its own moment, so
+/// a deadline that passed between two renders refuses the very next
+/// action. The one thing a deadline never takes is text already typed
+/// while it was allowed: the store stamps that buffer and its flush (the
+/// debounce, a close, sleep, quit) is written whatever the license says
+/// then; the restriction applies to new edits only.
 @Observable
 final class AppModel {
     let store: NoteStore
@@ -110,8 +112,8 @@ final class AppModel {
         observeChanges({ [preferences] in _ = preferences.folder }, onChange: { [weak self] in self?.folderChanged() })
         observeChanges({ [preferences] in _ = preferences.autoArchiveDays }, onChange: { [weak self] in self?.scheduleAutoArchive(runNow: true) })
         // The license published a change: once writing is allowed again,
-        // text held in memory while read-only reaches the disk and the
-        // auto-archive that was refused runs.
+        // any change held in memory while read-only reaches the disk and
+        // the auto-archive that was refused runs.
         observeChanges({ [license] in _ = license.revision }, onChange: { [weak self] in self?.licenseChanged() })
     }
 
@@ -181,10 +183,10 @@ final class AppModel {
     /// Writes now; the footer shows a failure until the next success, and
     /// the write is retried every few seconds while it fails. Returns the
     /// id the note has now (its conflict copy's when the file had changed
-    /// outside), or nil when the write failed. A save refused by the
-    /// license (the debounce or a close after the deadline) is not a
-    /// failure to report or retry: the text stays in memory, unsaved, the
-    /// footer's read-only line says why, and it is written once allowed.
+    /// outside), or nil when the write failed. Text typed while allowed is
+    /// written even after the deadline; a save the license refuses (a
+    /// pending change that is not such text) is not a failure to report or
+    /// retry: it stays in memory and is written once allowed.
     @discardableResult
     func save(_ id: NoteID) -> NoteID? {
         saveTimers[id]?.invalidate()
@@ -205,17 +207,13 @@ final class AppModel {
     }
 
     /// Every unsaved note, now: what could not be written, with why. Used
-    /// before a folder switch, sleep, resign and quit. Asked at the flush:
-    /// while read-only nothing is written and nothing is retried; the notes
-    /// stay dirty for the flush that follows the license.
+    /// before a folder switch, sleep, resign and quit. While read-only the
+    /// store writes the text typed under access and silently skips the
+    /// rest, so the quit is never held by the license.
     @discardableResult
     func flush() -> [NoteID: String] {
         for timer in saveTimers.values { timer.invalidate() }
         saveTimers = [:]
-        guard allowed() else {
-            revision += 1
-            return [:]
-        }
         let problems = store.saveAll()
         saveProblem = problems.isEmpty ? nil : "Couldn’t save: \(problems.values.sorted().first ?? "")"
         revision += 1

@@ -131,8 +131,10 @@ public final class NoteStore {
     public var access: () -> Bool = { true }
     /// The trial ended or a license is needed: creating, editing, renaming,
     /// archiving, unarchiving and reordering are refused and no file is
-    /// written or removed; reading, rescanning and exporting still work.
-    /// Derived from `access` at the moment it is read.
+    /// written or removed — except the flush of text the user typed while
+    /// it was allowed (`accepted`), which is never lost. Reading,
+    /// rescanning and exporting still work. Derived from `access` at the
+    /// moment it is read.
     public var readOnly: Bool { !access() }
     public var onEvent: (StoreEvent) -> Void = { _ in }
     #if DEBUG
@@ -152,6 +154,12 @@ public final class NoteStore {
     private var identities: [NoteID: NoteFile.Identity] = [:]
     /// Notes with in-memory text not yet on disk.
     private var dirty: Set<NoteID> = []
+    /// Dirty notes whose text was accepted while writing was allowed (every
+    /// keystroke asks; a refused one never reaches the buffer): the stamp
+    /// that lets `write` flush them after a deadline — on the debounce, a
+    /// close, sleep or quit — so nothing typed under access is lost. The
+    /// restriction applies to new edits only. Cleared by the write.
+    private var accepted: Set<NoteID> = []
     /// Notes created this session and not yet closed once: their file is
     /// provisional and takes the title's name when they close.
     private var provisional: Set<NoteID> = []
@@ -266,6 +274,7 @@ public final class NoteStore {
         provisional = provisional.intersection(dirty)
         loaded = loaded.filter { dirty.contains($0) }
         retainedBodyBytes = loaded.reduce(0) { $0 + (notes[$1]?.text.utf8.count ?? 0) }
+        accepted = accepted.intersection(dirty)
         rescan(announce: false)
         onEvent(.reloaded)
     }
@@ -281,6 +290,7 @@ public final class NoteStore {
         guard problems.isEmpty else { throw StoreError.unsaved(problems) }
         folder = url
         dirty = []
+        accepted = []
         notes = [:]
         identities = [:]
         provisional = []
@@ -504,6 +514,8 @@ public final class NoteStore {
     }
 
     /// The text as the user has it now; the app saves it after the debounce.
+    /// Refused while read-only; accepted, the buffer is stamped as typed
+    /// under access, so its flush is allowed whatever the license says then.
     public func setText(_ text: String, for id: NoteID) throws {
         guard !readOnly else { throw StoreError.readOnly }
         guard var note = body(of: id) else { throw StoreError.noSuchNote(id) }
@@ -516,6 +528,7 @@ public final class NoteStore {
         notes[id] = note
         account(id, bytes: text.utf8.count)
         dirty.insert(id)
+        accepted.insert(id)
     }
 
     public func setColor(_ color: NoteColor, for id: NoteID) throws {
@@ -592,10 +605,10 @@ public final class NoteStore {
     /// Writes the note if it has unsaved changes. A new note with no text
     /// is not written (Escape on it removes it, `discardIfEmpty`). A file
     /// that changed outside since it was last read is never overwritten:
-    /// see `write`. A failed write keeps the note dirty. Refused while
-    /// read-only, before the transaction: the debounce, a close and quit
-    /// are continuations of an edit, and the access is asked again here,
-    /// at the file; the text stays in memory, unsaved, until it is allowed.
+    /// see `write`. A failed write keeps the note dirty. While read-only
+    /// only a buffer stamped `accepted` (text typed while it was allowed)
+    /// is written; any other pending change is refused before the
+    /// transaction and stays in memory until writing is allowed.
     @discardableResult
     public func save(_ id: NoteID) throws -> SaveOutcome {
         guard notes[id] != nil else { throw StoreError.noSuchNote(id) }
@@ -604,12 +617,20 @@ public final class NoteStore {
     }
 
     /// Every unsaved note; the ones that could not be written, with why.
-    /// They stay dirty.
+    /// They stay dirty. A note the license refuses (a pending change that
+    /// is not accepted text) is skipped silently, not reported: it is no
+    /// failure, and quit is never held by the license (LICENSING.md).
     @discardableResult
     public func saveAll() -> [NoteID: String] {
         var problems: [NoteID: String] = [:]
         for id in dirty.sorted() {
-            do { _ = try save(id) } catch { problems[id] = error.localizedDescription }
+            do {
+                _ = try save(id)
+            } catch StoreError.readOnly {
+                continue
+            } catch {
+                problems[id] = error.localizedDescription
+            }
         }
         return problems
     }
@@ -647,6 +668,7 @@ public final class NoteStore {
         }
         forget(id)
         dirty.remove(id)
+        accepted.remove(id)
         provisional.remove(id)
         onEvent(.removed([id]))
         return true
@@ -657,6 +679,7 @@ public final class NoteStore {
     private func keepAsForeign(_ id: NoteID) -> Bool {
         provisional.remove(id)
         dirty.remove(id)
+        accepted.remove(id)
         forget(id)
         rescan(announce: true)
         return false
@@ -705,15 +728,17 @@ public final class NoteStore {
     /// The write transaction (see the type's note), and the one place bytes
     /// reach the folder: the access is asked here first, so no continuation
     /// (the debounce, a close, quit, a folder switch) writes — or diverts to
-    /// a conflict copy — after the license lapsed. Returns `.saved`, or
+    /// a conflict copy — after the license lapsed, unless the buffer is
+    /// `accepted` text the user typed while it was allowed, which is always
+    /// flushed (and may divert like any other write). Returns `.saved`, or
     /// `.keptAsConflictCopy` when the file had changed outside — before the
     /// check, or between the check and the swap.
     private func write(_ id: NoteID) throws -> SaveOutcome {
-        guard !readOnly else { throw StoreError.readOnly }
         guard let note = notes[id] else { throw StoreError.noSuchNote(id) }
         if note.truncated { throw StoreError.oversized(id) }
         guard note.bodyIsLoaded else { throw StoreError.entryChanged(id) }
         if provisional.contains(id), identities[id] == nil, note.isEmpty { return .notWritten }
+        guard !readOnly || accepted.contains(id) else { throw StoreError.readOnly }
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             folderIsMissing = true
@@ -733,6 +758,7 @@ public final class NoteStore {
                 do {
                     identities[id] = try NoteFile.createExclusively(url, contents: contents)
                     dirty.remove(id)
+                    accepted.remove(id)
                     return .saved
                 } catch NoteFile.Failure.exists {
                     // Somebody made the file meanwhile: look again, at most a few times.
@@ -785,6 +811,7 @@ public final class NoteStore {
             NoteFile.removeTemporary(temporary.url)
             identities[id] = temporary.identity
             dirty.remove(id)
+            accepted.remove(id)
             return .saved
         }
         // An outside edit landed between the check and the swap: put it
@@ -817,6 +844,7 @@ public final class NoteStore {
                         try NoteFile.moveExclusively(temporary.url, to: fileURL(for: candidate))
                         identities[id] = temporary.identity
                         dirty.remove(id)
+                        accepted.remove(id)
                         if case .file(let fd, let info) = NoteFile.open(fileURL(for: candidate)) {
                             defer { NoteFile.close(fd) }
                             if let contents = NoteFile.read(fd: fd, stat: info, cap: Self.readCap(for: info)), let text = contents.text {
@@ -841,6 +869,7 @@ public final class NoteStore {
             // name, and memory matches it. Any later write diverts.
             identities[id] = nil
             dirty.remove(id)
+            accepted.remove(id)
             let message = "\(url.lastPathComponent): an outside edit could not be given a name (\(cause)); it is kept as \(temporary.url.lastPathComponent) until the folder is read again."
             onEvent(.storageProblem(message))
             throw StoreError.io(message)
@@ -882,8 +911,10 @@ public final class NoteStore {
         account(copyID, bytes: copy.text.utf8.count)
         if let identity {
             identities[copyID] = identity
+            accepted.remove(id)
         } else {
             dirty.insert(copyID)
+            if accepted.remove(id) != nil { accepted.insert(copyID) }
         }
         if wasProvisional { provisional.insert(copyID) }
         if let count = retained.removeValue(forKey: id) { retained[copyID] = count }
