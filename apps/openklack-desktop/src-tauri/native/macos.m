@@ -14,6 +14,8 @@
 //   105 secure input: 1 active
 //   106 default output route: 1 built-in speakers, 0 anything else (headphones jack,
 //       Bluetooth, USB, HDMI, DisplayPort, AirPlay, virtual devices, no device)
+//   107 drag-to-grant helper panel: 1 shown, 0 hidden (closed by the user, or by itself once
+//       the permission is granted)
 typedef void (*OKCallback)(int kind, unsigned short key, const char *value);
 static OKCallback callback;
 static CFMachPortRef keyTap;
@@ -26,6 +28,7 @@ static bool dataSourceWatched;
 static int lastPermission = -1, lastSecure = -1, lastMic = -1, lastRoute = -1;
 static dispatch_source_t permissionTimer;
 static unsigned int suspensionReasons;
+static void hideHelper(void);
 
 char *ok_application_id(const char *path) {
     @autoreleasepool {
@@ -162,6 +165,7 @@ static CGEventRef keyEvent(CGEventTapProxy proxy, CGEventType type, CGEventRef e
 static void ensureTap(void) {
     int allowed = CGPreflightListenEventAccess();
     if (allowed != lastPermission) { lastPermission = allowed; sendState(100, allowed); }
+    if (allowed) hideHelper();
     int secure = IsSecureEventInputEnabled();
     if (secure != lastSecure) { lastSecure = secure; sendState(105, secure); sendState(2, 0); }
     if (!allowed) return;
@@ -274,6 +278,193 @@ void ok_request_permission(void) {
     if (!CGPreflightListenEventAccess())
         [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"]];
 }
+
+// The drag-to-grant helper: a small floating panel beside System Settings that offers the app
+// icon to drag into the Input Monitoring list, for when OpenKlack is not listed there yet.
+// A non-activating utility panel, so a drag out of it never brings OpenKlack to the front and
+// System Settings stays where it is. The panel is made once and reused; hiding is `close`
+// with `releasedWhenClosed` off, and every way it disappears (Close, the title bar, the
+// permission arriving) passes through `windowWillClose:`, which reports kind 107.
+
+// The icon view is the drag source. The pasteboard carries the app bundle's file URL
+// (`public.file-url`), which is what Finder puts there when an app is dragged into the list.
+@interface OKDragIconView : NSView <NSDraggingSource>
+@property(nonatomic, strong) NSImage *icon;
+@property(nonatomic, strong) NSURL *bundleURL;
+@property(nonatomic) BOOL dragging;
+@end
+@implementation OKDragIconView
+- (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
+- (BOOL)mouseDownCanMoveWindow { return NO; }
+- (void)drawRect:(NSRect)rect {
+    (void)rect;
+    [self.icon drawInRect:self.bounds fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1];
+}
+- (void)mouseDragged:(NSEvent *)event {
+    if (self.dragging || !self.bundleURL) return;
+    self.dragging = YES;
+    NSPasteboardItem *item = [NSPasteboardItem new];
+    [item setString:self.bundleURL.absoluteString forType:NSPasteboardTypeFileURL];
+    NSDraggingItem *drag = [[NSDraggingItem alloc] initWithPasteboardWriter:item];
+    [drag setDraggingFrame:self.bounds contents:self.icon];
+    [self beginDraggingSessionWithItems:@[drag] event:event source:self];
+}
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    (void)session;
+    // Only other apps (System Settings) are a destination; the drop there is a copy of the
+    // reference, never a move of the bundle.
+    return context == NSDraggingContextOutsideApplication ? NSDragOperationCopy | NSDragOperationGeneric : NSDragOperationNone;
+}
+- (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)point operation:(NSDragOperation)operation {
+    (void)session; (void)point; (void)operation;
+    self.dragging = NO;
+}
+- (BOOL)isAccessibilityElement { return YES; }
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityImageRole; }
+@end
+
+@interface OKHelperController : NSObject <NSWindowDelegate>
+@property(nonatomic, strong) NSTextField *status;
+@property(nonatomic, strong) NSButton *reset;
+@end
+
+static NSPanel *helperPanel;
+static OKHelperController *helperController;
+
+// The screen showing System Settings (by the bounds of its windows, which need no permission),
+// or the main screen.
+static NSScreen *helperScreen(void) {
+    NSScreen *fallback = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
+    NSArray<NSRunningApplication *> *settings =
+        [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.systempreferences"];
+    if (settings.count == 0) return fallback;
+    pid_t pid = settings.firstObject.processIdentifier;
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    if (!list) return fallback;
+    NSScreen *found = nil;
+    for (NSDictionary *window in (__bridge NSArray *)list) {
+        if ([window[(__bridge NSString *)kCGWindowOwnerPID] intValue] != pid
+            || [window[(__bridge NSString *)kCGWindowLayer] intValue] != 0) continue;
+        CGRect bounds;
+        if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)window[(__bridge NSString *)kCGWindowBounds], &bounds)) continue;
+        // Window-list bounds count from the top-left of the main display; AppKit from its bottom-left.
+        CGFloat height = NSScreen.screens.firstObject.frame.size.height;
+        NSPoint center = NSMakePoint(CGRectGetMidX(bounds), height - CGRectGetMidY(bounds));
+        for (NSScreen *screen in NSScreen.screens)
+            if (NSPointInRect(center, screen.frame)) { found = screen; break; }
+        if (found) break;
+    }
+    CFRelease(list);
+    return found ?: fallback;
+}
+
+@implementation OKHelperController
+- (void)windowWillClose:(NSNotification *)note { (void)note; sendState(107, 0); }
+- (void)close:(id)sender { (void)sender; hideHelper(); }
+// Removes OpenKlack's own Input Monitoring entry with `tccutil reset ListenEvent <bundle id>`
+// (no shell, this bundle id only), then asks again: with the entry gone, macOS shows its
+// permission prompt once more and a fresh entry matching this build appears in the list. For
+// a stale entry left by an earlier build or signature, which the switch in the list cannot fix.
+- (void)resetPermission:(id)sender {
+    (void)sender;
+    NSString *identifier = NSBundle.mainBundle.bundleIdentifier;
+    if (!identifier) return;
+    self.reset.enabled = NO;
+    self.status.stringValue = @"Resetting…";
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/tccutil"];
+    task.arguments = @[@"reset", @"ListenEvent", identifier];
+    task.standardOutput = NSFileHandle.fileHandleWithNullDevice;
+    NSPipe *errors = [NSPipe pipe];
+    task.standardError = errors;
+    task.terminationHandler = ^(NSTask *finished) {
+        NSString *output = [[[NSString alloc] initWithData:errors.fileHandleForReading.readDataToEndOfFile encoding:NSUTF8StringEncoding]
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        int code = finished.terminationStatus;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.reset.enabled = YES;
+            if (code == 0) {
+                self.status.stringValue = @"Reset. macOS asks again; allow it, then find OpenKlack in the list.";
+                ok_request_permission();
+            } else {
+                self.status.stringValue = output.length ? output : [NSString stringWithFormat:@"tccutil failed (%d).", code];
+            }
+        });
+    };
+    NSError *error;
+    if (![task launchAndReturnError:&error]) {
+        self.reset.enabled = YES;
+        self.status.stringValue = [NSString stringWithFormat:@"Couldn’t run tccutil: %@", error.localizedDescription];
+    }
+}
+@end
+
+static NSPanel *makeHelper(void) {
+    helperController = [OKHelperController new];
+    NSPanel *panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 300, 180)
+        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow | NSWindowStyleMaskNonactivatingPanel
+        backing:NSBackingStoreBuffered defer:NO];
+    panel.title = @"Allow keyboard access";
+    panel.releasedWhenClosed = NO;
+    panel.level = NSFloatingWindowLevel;
+    panel.hidesOnDeactivate = NO;
+    panel.becomesKeyOnlyIfNeeded = YES;
+    panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
+    panel.delegate = helperController;
+    NSView *content = panel.contentView;
+
+    NSString *bundlePath = NSBundle.mainBundle.bundlePath;
+    OKDragIconView *icon = [[OKDragIconView alloc] initWithFrame:NSMakeRect(20, 96, 64, 64)];
+    icon.icon = [NSWorkspace.sharedWorkspace iconForFile:bundlePath];
+    icon.bundleURL = NSBundle.mainBundle.bundleURL;
+    icon.toolTip = @"Drag into the Input Monitoring list";
+    icon.accessibilityLabel = @"OpenKlack app icon. Drag it into the Input Monitoring list.";
+    [content addSubview:icon];
+
+    NSTextField *instruction = [NSTextField wrappingLabelWithString:@"Drag this icon into the Input Monitoring list, then turn it on"];
+    instruction.frame = NSMakeRect(100, 96, 180, 64);
+    instruction.font = [NSFont systemFontOfSize:13];
+    [content addSubview:instruction];
+
+    NSTextField *status = [NSTextField wrappingLabelWithString:@""];
+    status.frame = NSMakeRect(20, 52, 260, 34);
+    status.font = [NSFont systemFontOfSize:11];
+    status.textColor = NSColor.secondaryLabelColor;
+    [content addSubview:status];
+    helperController.status = status;
+
+    NSButton *reset = [NSButton buttonWithTitle:@"Not working? Reset" target:helperController action:@selector(resetPermission:)];
+    reset.frame = NSMakeRect(14, 12, 150, 32);
+    reset.toolTip = @"Removes OpenKlack from the Input Monitoring list so macOS asks again";
+    // Only an app bundle has an entry to reset; a bare development binary has none.
+    reset.enabled = NSBundle.mainBundle.bundleIdentifier != nil;
+    [content addSubview:reset];
+    helperController.reset = reset;
+
+    NSButton *close = [NSButton buttonWithTitle:@"Close" target:helperController action:@selector(close:)];
+    close.frame = NSMakeRect(214, 12, 72, 32);
+    [content addSubview:close];
+    return panel;
+}
+
+// Shows the panel at the bottom-right of the screen with System Settings, or brings it back
+// there. Ordered front without becoming key: OpenKlack stays in the background.
+void ok_show_permission_helper(void) {
+    if (!helperPanel) helperPanel = makeHelper();
+    NSRect visible = helperScreen().visibleFrame;
+    NSRect frame = helperPanel.frame;
+    [helperPanel setFrameOrigin:NSMakePoint(NSMaxX(visible) - frame.size.width - 24, NSMinY(visible) + 24)];
+    helperController.status.stringValue = @"";
+    BOOL wasVisible = helperPanel.visible;
+    [helperPanel orderFront:nil];
+    if (!wasVisible) sendState(107, 1);
+}
+
+static void hideHelper(void) {
+    if (helperPanel && helperPanel.visible) [helperPanel close];
+}
+
+void ok_hide_permission_helper(void) { hideHelper(); }
 
 void ok_start(OKCallback receive) {
     callback = receive;

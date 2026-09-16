@@ -235,6 +235,12 @@ impl Controller {
                                 drop(output.take());
                                 output = worker.reopen_output();
                             }
+                            // Granted: the drag-to-grant helper has nothing left to offer. The
+                            // bridge hides it in the same breath; this keeps the rule on the
+                            // Rust side too, where the state lives.
+                            if kind == 100 && value != 0 {
+                                let _ = worker.app.run_on_main_thread(hide_permission_helper);
+                            }
                             worker.publish();
                             #[cfg(feature = "licensing")]
                             if kind == 102 && value == 0 {
@@ -576,6 +582,8 @@ extern "C" fn receive(kind: i32, key: u16, value: *const c_char) {
 unsafe extern "C" {
     fn ok_start(callback: extern "C" fn(i32, u16, *const c_char));
     fn ok_request_permission();
+    fn ok_show_permission_helper();
+    fn ok_hide_permission_helper();
 }
 
 pub fn start_input() {
@@ -588,6 +596,21 @@ pub fn request_permission() {
     #[cfg(target_os = "macos")]
     unsafe {
         ok_request_permission()
+    }
+}
+/// Shows the floating drag-to-grant helper beside System Settings. Main thread only, like
+/// every AppKit call; the panel reports itself as kind 107.
+pub fn show_permission_helper() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        ok_show_permission_helper()
+    }
+}
+/// Hides the helper if it is showing. Main thread only.
+pub fn hide_permission_helper() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        ok_hide_permission_helper()
     }
 }
 

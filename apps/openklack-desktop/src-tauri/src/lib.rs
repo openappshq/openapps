@@ -425,6 +425,26 @@ fn request_input_permission(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Shows the floating drag-to-grant helper, for when OpenKlack is missing from the Input
+/// Monitoring list. Nothing to show once the permission is granted.
+#[tauri::command]
+fn show_permission_helper(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<Controller>>,
+) -> Result<(), String> {
+    if !state.snapshot().runtime.wants_permission_helper() {
+        return Ok(());
+    }
+    app.run_on_main_thread(engine::show_permission_helper)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn hide_permission_helper(app: tauri::AppHandle) -> Result<(), String> {
+    app.run_on_main_thread(engine::hide_permission_helper)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn resume_temporarily(state: tauri::State<'_, Arc<Controller>>) -> Snapshot {
     state.resume_temporarily()
@@ -603,6 +623,8 @@ pub fn run() {
             stop_preview,
             preview_key,
             request_input_permission,
+            show_permission_helper,
+            hide_permission_helper,
             resume_temporarily,
             end_temporary_resume,
             import_sounds,
@@ -764,8 +786,10 @@ pub fn run() {
                     let _ = show_settings(app);
                 }
             }
-            // The trial's `last_seen_at` is saved on quit, then a staged update is installed.
+            // The drag-to-grant helper goes first, then the trial's `last_seen_at` is saved on
+            // quit and a staged update is installed.
             tauri::RunEvent::Exit => {
+                engine::hide_permission_helper();
                 #[cfg(feature = "licensing")]
                 licensing::runtime::quit(app);
                 updates::install_on_exit(app);

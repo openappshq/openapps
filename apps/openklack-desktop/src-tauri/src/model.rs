@@ -445,10 +445,32 @@ pub enum OutputRoute {
     Other,
 }
 
+/// The floating drag-to-grant helper (`macos.m`): the app icon to drag into System Settings'
+/// Input Monitoring list, for when OpenKlack is not listed there. The panel is native and
+/// reports itself shown or hidden; this is what Rust and the settings window know of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionHelper {
+    pub visible: bool,
+}
+
+impl PermissionHelper {
+    /// The bridge reported the panel shown or hidden (kind 107).
+    pub fn reported(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    /// The permission arrived: the panel hides itself, there is nothing left to drag for.
+    pub fn granted(&mut self) {
+        self.visible = false;
+    }
+}
+
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Runtime {
     pub input_permission: bool,
+    pub permission_helper: PermissionHelper,
     pub secure_input: bool,
     pub microphone: u16,
     pub output_route: OutputRoute,
@@ -541,13 +563,25 @@ impl Runtime {
         self.resume_app = None;
     }
 
+    /// Whether the drag-to-grant helper has anything to offer: the permission is still missing.
+    pub fn wants_permission_helper(&self) -> bool {
+        !self.input_permission
+    }
+
     /// Applies a state message from the native bridge (the kinds are listed in `macos.m`).
     /// A temporary resume for the microphone ends once there is nothing to override: the
     /// microphone goes idle or unwatched, or the output leaves the speakers. One for an app
-    /// ends when another app comes to the front.
+    /// ends when another app comes to the front. The drag-to-grant helper is gone once the
+    /// permission is granted.
     pub fn apply_native(&mut self, kind: i32, value: u16, text: String) {
         match kind {
-            100 => self.input_permission = value != 0,
+            100 => {
+                self.input_permission = value != 0;
+                if self.input_permission {
+                    self.permission_helper.granted();
+                }
+            }
+            107 => self.permission_helper.reported(value != 0),
             101 => {
                 if self.resume_app.is_none() && matches!(value, 0 | 3) {
                     self.temporary_resume = false;
@@ -936,5 +970,43 @@ mod tests {
         runtime.end_temporary_resume();
         assert!(!runtime.temporary_resume && runtime.resume_app.is_none());
         assert_eq!(runtime.pause_reason(&prefs), Some("Microphone in use"));
+    }
+
+    #[test]
+    fn the_drag_to_grant_helper_follows_the_panel_and_leaves_with_the_permission() {
+        let mut runtime = Runtime::default();
+        assert!(
+            !runtime.permission_helper.visible,
+            "hidden until the bridge shows it"
+        );
+        assert!(
+            runtime.wants_permission_helper(),
+            "worth showing while the permission is missing"
+        );
+        // The panel reports itself shown, then closed by the user.
+        runtime.apply_native(107, 1, String::new());
+        assert!(runtime.permission_helper.visible);
+        runtime.apply_native(107, 0, String::new());
+        assert!(!runtime.permission_helper.visible);
+        // Shown again; the permission still missing changes nothing about it.
+        runtime.apply_native(107, 1, String::new());
+        runtime.apply_native(100, 0, String::new());
+        assert!(runtime.permission_helper.visible);
+        assert!(runtime.wants_permission_helper());
+        // The permission arrives: the helper is gone and has nothing more to offer.
+        runtime.apply_native(100, 1, String::new());
+        assert!(runtime.input_permission);
+        assert!(!runtime.permission_helper.visible);
+        assert!(!runtime.wants_permission_helper());
+        // The bridge's own report of that hide is consistent, and a later revocation does
+        // not bring the panel back on its own.
+        runtime.apply_native(107, 0, String::new());
+        runtime.apply_native(100, 0, String::new());
+        assert!(!runtime.permission_helper.visible);
+        assert!(runtime.wants_permission_helper());
+        assert_eq!(
+            serde_json::to_value(runtime.permission_helper).unwrap(),
+            serde_json::json!({"visible": false})
+        );
     }
 }
