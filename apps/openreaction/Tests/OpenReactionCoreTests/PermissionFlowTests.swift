@@ -305,9 +305,16 @@ struct GuidePlacementTests {
         #expect(frame.minY == screen.maxY - 900)
     }
 
-    @Test func fallsBackToCenterRight() {
+    @Test func fallsBackToBottomRight() {
         let frame = GuidePlacement.frame(size: size, beside: nil, visibleFrames: [screen])
         #expect(frame.maxX == screen.maxX - 24)
-        #expect(frame.midY == screen.midY)
+        #expect(frame.minY == screen.minY + 24)
+    }
+
+    @Test func fallsBackToBottomRightOfTheFirstScreen() {
+        let second = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+        let frame = GuidePlacement.frame(size: size, beside: nil, visibleFrames: [screen, second])
+        #expect(screen.contains(frame))
+        #expect(frame.minY == screen.minY + 24)
     }
 }

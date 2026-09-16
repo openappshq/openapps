@@ -46,7 +46,12 @@ final class OnboardingModel {
     }
     @ObservationIgnored private let defaults: UserDefaults
 
+    /// System Settings was opened for a permission: the drag-to-grant helper
+    /// goes up beside it.
     @ObservationIgnored var onRequest: ((PermissionKind) -> Void)?
+    /// "Show the floating window" from the troubleshooting: the helper alone,
+    /// without opening System Settings again.
+    @ObservationIgnored var onShowHelper: ((PermissionKind) -> Void)?
     /// Opens Settings → License: from the trial pill on the welcome step,
     /// and from the practice step when the license keeps the picker off.
     @ObservationIgnored var onOpenLicense: (() -> Void)?
@@ -114,6 +119,10 @@ final class OnboardingModel {
             guard await permissions.reset(kind), isVisible else { return }
             OnboardingLaunch.markAwaitingPermission(store: defaults)
         }
+    }
+
+    func showHelper(_ kind: PermissionKind) {
+        onShowHelper?(kind)
     }
 
     func relaunch() {
@@ -208,7 +217,7 @@ final class OnboardingModel {
 @MainActor
 final class OnboardingWindowController: NSObject, NSWindowDelegate {
     let model: OnboardingModel
-    private let guide: GuidePanelController
+    private let helper: PermissionHelperController
     private let menuBarHint = MenuBarHintController()
     private let statusItemFrame: () -> CGRect?
     private let defaults: UserDefaults
@@ -217,18 +226,19 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     init(controller: AppController, loginItem: LoginItem, defaults: UserDefaults = .standard, statusItemFrame: @escaping () -> CGRect?) {
         self.defaults = defaults
         model = OnboardingModel(controller: controller, loginItem: loginItem, defaults: defaults)
-        guide = GuidePanelController(permissions: controller.permissions)
+        helper = PermissionHelperController(permissions: controller.permissions)
         self.statusItemFrame = statusItemFrame
         super.init()
         model.onClose = { [weak self] in self?.window?.close() }
-        model.onRequest = { [weak self] kind in self?.guide.show(kind) }
+        model.onRequest = { [weak self] kind in self?.helper.show(kind) }
+        model.onShowHelper = { [weak self] kind in self?.helper.show(kind) }
         model.onStepChange = { [weak self] step in self?.stepChanged(step) }
-        guide.onNotListed = { [weak self] _ in
-            guard let self else { return }
-            self.show()
-            self.model.expandedTrouble = .notListed
-        }
+        helper.onReset = { [weak self] kind in self?.model.reset(kind) }
     }
+
+    /// The preview harness: the helper stays put without System Settings,
+    /// and reports a drag instead of nothing.
+    var permissionHelper: PermissionHelperController { helper }
 
     /// The first launch, a relaunch started from onboarding, or macOS
     /// reopening the app after a permission the window asked for was
@@ -280,9 +290,11 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         model.didHide()
         model.permissions.setFastPolling(false, reason: "onboarding")
         menuBarHint.hide()
+        helper.close()
     }
 
     private func stepChanged(_ step: OnboardingStep) {
+        helper.guideMoved(to: step)
         if step == .done, isVisible || model.isVisible, let frame = statusItemFrame() {
             menuBarHint.show(below: frame)
         } else {

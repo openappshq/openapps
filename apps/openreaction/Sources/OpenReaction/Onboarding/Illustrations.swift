@@ -278,37 +278,6 @@ struct MiniSwitch: View {
     }
 }
 
-/// The OpenReaction row from the permission list, its switch turning on
-/// repeatedly. Static and on with Reduce Motion.
-struct ToggleRowIllustration: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: Brand.Space.s8) {
-            if let icon = NSApp.applicationIconImage {
-                Image(nsImage: icon).resizable().frame(width: 22, height: 22)
-            }
-            Text("OpenReaction")
-                .font(.system(size: 13, weight: .medium))
-            Spacer(minLength: 0)
-            if reduceMotion {
-                MiniSwitch(isOn: true)
-            } else {
-                PhaseAnimator([false, true]) { on in
-                    MiniSwitch(isOn: on)
-                } animation: { on in
-                    on ? .spring(duration: Brand.Motion.expressive, bounce: 0.2).delay(0.8) : .easeOut(duration: Brand.Motion.standard).delay(1.6)
-                }
-            }
-        }
-        .padding(.horizontal, Brand.Space.s12)
-        .frame(height: 40)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
-        .accessibilityElement()
-        .accessibilityLabel("OpenReaction switch turned on")
-    }
-}
-
 /// A slice of the menu bar with the OpenReaction icon and an arrow pointing at it.
 struct MenuBarIllustration: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

@@ -190,6 +190,11 @@ private struct PermissionStep: View {
 
                 if status != .granted {
                     actions
+                    Label("In System Settings, turn on OpenReaction in the list. Not in the list? Drag the icon from the floating window into it.", systemImage: "hand.point.up.left")
+                        .font(Brand.body(14))
+                        .lineSpacing(3)
+                        .foregroundStyle(Brand.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     if model.showHow.contains(kind) {
                         SettingsPaneIllustration(kind: kind)
                             .padding(Brand.Space.s16)
@@ -323,8 +328,12 @@ private struct TroubleshootingList: View {
                     errorText(model.controller.relaunchError)
                 }
             case .notListed:
-                paragraph("Click the + button under the list, choose OpenReaction and switch it on. If you're not sure where OpenReaction is, reveal it in Finder, then drag it into the list.")
+                paragraph("Drag the OpenReaction icon from the floating window into the list, then switch it on. The window appears beside System Settings when you open it from here. Or click the + button under the list, choose OpenReaction and switch it on; Reveal in Finder shows where it is.")
                 HStack(spacing: Brand.Space.s12) {
+                    if let kind {
+                        Button("Show floating window") { model.showHelper(kind) }
+                            .secondaryAction()
+                    }
                     Button("Reveal app in Finder") { model.permissions.revealAppInFinder() }
                         .secondaryAction()
                     if let kind {

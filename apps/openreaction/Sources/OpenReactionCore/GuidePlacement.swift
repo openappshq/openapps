@@ -1,11 +1,11 @@
 import CoreGraphics
 
-/// Where the floating permission guide sits next to System Settings. AppKit
+/// Where the floating permission helper sits next to System Settings. AppKit
 /// global coordinates throughout.
 public enum GuidePlacement {
     /// Beside `window` on the screen that holds most of it: right side first,
     /// then left, otherwise inside the window's bottom-right corner. Without a
-    /// window, vertically centered near the right edge of the first screen.
+    /// window, the bottom-right corner of the first (main) screen.
     public static func frame(
         size: CGSize,
         beside window: CGRect?,
@@ -16,7 +16,7 @@ public enum GuidePlacement {
             return CGRect(origin: .zero, size: size)
         }
         guard let window, !window.isEmpty else {
-            let origin = CGPoint(x: screen.maxX - size.width - gap * 2, y: screen.midY - size.height / 2)
+            let origin = CGPoint(x: screen.maxX - size.width - gap * 2, y: screen.minY + gap * 2)
             return clamp(CGRect(origin: origin, size: size), in: screen)
         }
         let host = visibleFrames.max { overlap($0, window) < overlap($1, window) } ?? screen
