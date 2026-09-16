@@ -71,6 +71,36 @@ if grep -Eq 'api\.github\.com|/updates/hertz/|SUFeedURL' "$STRINGS"; then
     echo "error: the binary references an update feed; Hertz updates through Homebrew only" >&2; exit 1
 fi
 
+echo "==> Licensing"
+# The compiled-in configuration (LICENSING.md, "Build flavours"): a release
+# talks to Dodo's live host and the trial registry with the real product ID.
+# A test-mode build (the CI checks job, a local rehearsal) is reported; a
+# source build has none of it. The placeholder ID the checks job compiles
+# with must never be in a release, nor may a release name the test host.
+has() { grep -Fq "$1" "$STRINGS"; }
+if has 'dodopayments.com'; then
+    if has 'live.dodopayments.com'; then env_name="live"; elif has 'test.dodopayments.com'; then env_name="test"; else env_name="unknown"; fi
+    has 'openapps.space/api/trial' || { echo "error: licensing is compiled in but the trial registry URL is missing" >&2; exit 1; }
+    has 'pdt_' || { echo "error: licensing is compiled in but no Dodo product ID is" >&2; exit 1; }
+    echo "licensing: on (Dodo ${env_name}, trial registry https://openapps.space/api/trial)"
+    if grep -Eiq 'pdt_[A-Za-z0-9_-]*(placeholder|todo|example|dummy)' "$STRINGS"; then
+        [[ "$REQUIRE_RELEASE" == 0 ]] || { echo "error: the release binary contains a placeholder Dodo product ID" >&2; exit 1; }
+        echo "note: placeholder product ID (a checks build; never a release)"
+    fi
+    if [[ "$REQUIRE_RELEASE" == 1 ]]; then
+        [[ "$env_name" == live ]] || { echo "error: a release must be built with OPENAPPS_DODO_ENV=live (found ${env_name})" >&2; exit 1; }
+        if has 'test.dodopayments.com'; then echo "error: the release binary names Dodo's test host" >&2; exit 1; fi
+        if grep -Eq 'http://(127\.0\.0\.1|localhost)' "$STRINGS"; then echo "error: the release binary names a local trial registry" >&2; exit 1; fi
+    fi
+    [[ -n "$(info CFBundleURLTypes)" ]] || { echo "error: the hertz:// URL scheme is missing" >&2; exit 1; }
+else
+    for needle in 'licenses/activate' 'openapps.space/api/trial' 'IOPlatformExpertDevice'; do
+        if has "$needle"; then echo "error: licensing is compiled out but the binary contains '${needle}'" >&2; exit 1; fi
+    done
+    [[ "$REQUIRE_RELEASE" == 0 ]] || { echo "error: a release must have licensing compiled in (OPENAPPS_LICENSING=1)" >&2; exit 1; }
+    echo "licensing: off (source build: no trial, no license network calls)"
+fi
+
 echo "==> Signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
 # Captured once: piping codesign straight into `grep -q` lets grep close the

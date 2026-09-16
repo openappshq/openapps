@@ -1,14 +1,18 @@
 import AppKit
 import HertzCore
+import OpenAppsLicensing
 import SwiftUI
 
 /// The menu-bar dropdown: a scrolling stack of glass cards, one per reading,
 /// with the health score first and the app's own controls in a fixed footer.
+/// While the license keeps the readings off, the stack is one card saying
+/// why (`LicenseCard`); the footer stays.
 struct DashboardView: View {
     static let width: CGFloat = 400
 
     let model: MetricsModel
     let preferences: Preferences
+    let license: LicenseStatus
     let showSettings: () -> Void
     @State private var cleanup = CleanupModel()
 
@@ -24,49 +28,69 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView(.vertical) {
-                VStack(spacing: Brand.Space.s8) {
-                    HealthCard(hardware: model.hardware, health: model.health)
-                    if preferences.showsDiagnosis {
-                        DiagnosisCard(insights: model.diagnostics,
-                                      records: model.flightRecorder,
-                                      report: model.diagnosticReport)
-                    }
-                    if preferences.showsSleepBlockers, model.powerAssertions.hasBlockers {
-                        SleepBlockersCard(snapshot: model.powerAssertions)
-                    }
-                    CPUCard(cpu: model.cpu, history: model.cpuHistory, sensors: model.sensors)
-                    MemoryCard(memory: model.memory, history: model.memoryHistory)
-                    HStack(alignment: .top, spacing: Brand.Space.s8) {
-                        DiskCard(disk: model.disk)
-                        NetworkCard(network: model.network, history: model.networkHistory)
-                    }
-                    if model.battery.present || !model.deviceBatteries.isEmpty {
-                        BatteryCard(battery: model.battery, devices: model.deviceBatteries)
-                    }
-                    if preferences.showsProcesses {
-                        ProcessCard(roots: model.processTree)
-                    }
-                    if preferences.showsCleanupScout {
-                        CleanupCard(model: cleanup)
-                    }
-                }
-                .padding(Brand.Space.s12)
+        if let restriction = license.restriction {
+            // One card, as tall as it needs: nothing to scroll.
+            VStack(spacing: 0) {
+                LicenseCard(restriction: restriction, status: license)
+                    .padding(Brand.Space.s12)
+                Divider()
+                FooterBar(showSettings: showSettings)
             }
-            Divider()
-            FooterBar(showSettings: showSettings)
+            .frame(width: Self.width)
+        } else {
+            VStack(spacing: 0) {
+                ScrollView(.vertical) {
+                    VStack(spacing: Brand.Space.s8) {
+                        readings
+                    }
+                    .padding(Brand.Space.s12)
+                }
+                Divider()
+                FooterBar(showSettings: showSettings)
+            }
+            .frame(width: Self.width, height: menuHeight)
         }
-        .frame(width: Self.width, height: menuHeight)
+    }
+
+    @ViewBuilder private var readings: some View {
+        HealthCard(hardware: model.hardware, health: model.health, badge: license.badge, openLicense: license.openLicense)
+        if preferences.showsDiagnosis {
+            DiagnosisCard(insights: model.diagnostics,
+                          records: model.flightRecorder,
+                          report: model.diagnosticReport)
+        }
+        if preferences.showsSleepBlockers, model.powerAssertions.hasBlockers {
+            SleepBlockersCard(snapshot: model.powerAssertions)
+        }
+        CPUCard(cpu: model.cpu, history: model.cpuHistory, sensors: model.sensors)
+        MemoryCard(memory: model.memory, history: model.memoryHistory)
+        HStack(alignment: .top, spacing: Brand.Space.s8) {
+            DiskCard(disk: model.disk)
+            NetworkCard(network: model.network, history: model.networkHistory)
+        }
+        if model.battery.present || !model.deviceBatteries.isEmpty {
+            BatteryCard(battery: model.battery, devices: model.deviceBatteries)
+        }
+        if preferences.showsProcesses {
+            ProcessCard(roots: model.processTree)
+        }
+        if preferences.showsCleanupScout {
+            CleanupCard(model: cleanup)
+        }
     }
 }
 
 // MARK: - Health
 
 /// The score in display type, its word beside it, and the machine underneath.
+/// In official builds the license pill sits above the score while there is
+/// something to say (the trial's remaining time); licensed, the card is as
+/// it always was.
 private struct HealthCard: View {
     let hardware: HardwareInfo
     let health: HealthSummary
+    let badge: LicenseBadge.Label?
+    let openLicense: () -> Void
 
     private var uptime: String {
         Format.duration(seconds: Int(Date().timeIntervalSince(hardware.bootTime)))
@@ -85,6 +109,12 @@ private struct HealthCard: View {
 
     var body: some View {
         Card {
+            if let badge {
+                HStack {
+                    LicensePill(label: badge, action: openLicense)
+                    Spacer(minLength: 0)
+                }
+            }
             HStack(alignment: .firstTextBaseline, spacing: Brand.Space.s8) {
                 Text("\(health.score)")
                     .font(Brand.display(34))

@@ -9,3 +9,6 @@ xcuserdata/
 .vscode/*
 .idea
 *.local
+Sources/Hertz/Licensing/LicensingConfig.swift
+# Every build resolves the local OpenAppsLicensing package.
+Package.resolved

@@ -3,7 +3,10 @@ import HertzCore
 import Observation
 
 /// The few settings Hertz has, saved as they change. Everything else the app
-/// shows is read live from the system.
+/// shows is read live from the system. The first-run flags (the setup
+/// guide, the login-item default) live in `HertzCore`'s `OnboardingLaunch`
+/// and `FreshInstallDefault`, on the same defaults domain; every key written
+/// here is listed in `FreshInstallDefault.Key.earlierPreferenceEvidence`.
 @Observable
 final class Preferences {
     private enum Key {
@@ -12,8 +15,6 @@ final class Preferences {
         static let sleepBlockers = "showsSleepBlockers"
         static let processes = "showsProcesses"
         static let cleanup = "showsCleanupScout"
-        static let welcomed = "didShowWelcome"
-        static let loginDefaulted = "didDefaultOpenAtLogin"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -33,16 +34,6 @@ final class Preferences {
     var showsCleanupScout: Bool {
         didSet { defaults.set(showsCleanupScout, forKey: Key.cleanup) }
     }
-    /// The welcome window is shown once, on the first launch of a packaged app.
-    var didShowWelcome: Bool {
-        didSet { defaults.set(didShowWelcome, forKey: Key.welcomed) }
-    }
-    /// "Open at login" is turned on once, on the first launch of a packaged
-    /// app; after that the user's own choice in Settings (or in System
-    /// Settings → Login Items) is never overridden.
-    var didDefaultOpenAtLogin: Bool {
-        didSet { defaults.set(didDefaultOpenAtLogin, forKey: Key.loginDefaulted) }
-    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -51,7 +42,5 @@ final class Preferences {
         showsSleepBlockers = defaults.object(forKey: Key.sleepBlockers) as? Bool ?? true
         showsProcesses = defaults.object(forKey: Key.processes) as? Bool ?? true
         showsCleanupScout = defaults.object(forKey: Key.cleanup) as? Bool ?? true
-        didShowWelcome = defaults.bool(forKey: Key.welcomed)
-        didDefaultOpenAtLogin = defaults.bool(forKey: Key.loginDefaulted)
     }
 }

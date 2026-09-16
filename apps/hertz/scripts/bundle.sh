@@ -28,6 +28,24 @@
 #                 Default: the host architecture only.
 #   SCRATCH_PATH  SwiftPM's scratch path (default .build).
 #
+# Licensing (LICENSING.md) is compiled out by default. Official builds opt in:
+#
+#   OPENAPPS_LICENSING=1 OPENAPPS_DODO_ENV=test \
+#   OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… scripts/bundle.sh
+#
+# OPENAPPS_DODO_ENV is `test` (test.dodopayments.com, trial registry
+# env "test") or `live`. Optional: OPENAPPS_TRIAL_REGISTRY_BASE_URL (default
+# https://openapps.space; a test build may use a local `wrangler dev` such as
+# http://127.0.0.1:8787), OPENAPPS_BUY_URL (default https://openapps.space/hertz/,
+# the website page that states the price; the thanks page deep-links the key
+# back as hertz://activate?key=…) and OPENAPPS_SUPPORT_URL. The script
+# generates Sources/Hertz/Licensing/LicensingConfig.swift (gitignored) and
+# refuses to build a licensed app without the paid product ID.
+#
+# OPENAPPS_OFFICIAL=1 marks the official flavour; official releases set both
+# OPENAPPS_LICENSING and OPENAPPS_OFFICIAL. It adds nothing yet: the in-app
+# updater is a separate step (RELEASES.md, "Hertz, for now").
+#
 # Signing uses the hardened runtime, no sandbox (libproc, IOKit and the SMC
 # user client are unavailable to a sandboxed process) and
 # scripts/Hertz.entitlements. There is no in-app updater: updates come from
@@ -82,6 +100,40 @@ if [[ -n "$SIGNING_IDENTITY" || -n "$SIGNING_KEYCHAIN" ]]; then
     fi
 fi
 
+CONFIG_FILE="Sources/Hertz/Licensing/LicensingConfig.swift"
+rm -f "$CONFIG_FILE"
+# A local registry over plain http (test builds only; the config generator
+# enforces that) needs App Transport Security's local-networking exception.
+NEEDS_LOCAL_NETWORKING=0
+if [[ "${OPENAPPS_LICENSING:-0}" == "1" ]]; then
+    scripts/generate-licensing-config.sh "$CONFIG_FILE"
+    echo "==> Licensing on (${OPENAPPS_DODO_ENV})"
+    if [[ "${OPENAPPS_TRIAL_REGISTRY_BASE_URL:-}" == http://* ]]; then NEEDS_LOCAL_NETWORKING=1; fi
+else
+    echo "==> Licensing off (source build: no License UI, no trial, no license network calls)"
+fi
+ATS_PLIST=""
+if [[ "$NEEDS_LOCAL_NETWORKING" == 1 ]]; then
+    ATS_PLIST="<key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>"
+fi
+# The website's thanks page opens hertz://activate?key=… to pre-fill the key;
+# a build without licensing registers the scheme too and ignores the link.
+URL_TYPES_PLIST="<key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>${BUNDLE_ID}.activate</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>hertz</string>
+            </array>
+        </dict>
+    </array>"
+
 ARCH_FLAGS=()
 if [[ "${UNIVERSAL:-0}" == "1" ]]; then
     ARCH_FLAGS=(--arch arm64 --arch x86_64)
@@ -89,6 +141,8 @@ if [[ "${UNIVERSAL:-0}" == "1" ]]; then
 else
     echo "==> Building release binary (${VERSION}, build ${BUILD_NUMBER})"
 fi
+export OPENAPPS_LICENSING="${OPENAPPS_LICENSING:-0}"
+export OPENAPPS_OFFICIAL="${OPENAPPS_OFFICIAL:-0}"
 swift build -c release --scratch-path "$SCRATCH_PATH" --product "$APP_NAME" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
 BIN_DIR="$(swift build -c release --scratch-path "$SCRATCH_PATH" --show-bin-path ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"})"
 
@@ -132,6 +186,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <array>
         <string>MacOSX</string>
     </array>
+    ${URL_TYPES_PLIST}
+    ${ATS_PLIST}
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key>

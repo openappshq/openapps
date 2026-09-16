@@ -1,9 +1,11 @@
 # Releasing Hertz
 
-The official build is a universal (Apple silicon + Intel) `Hertz.app`, signed
-with the stable OpenApps HQ Release certificate and zipped, as
-[RELEASES.md](../../RELEASES.md) specifies. It is installed and updated with
-Homebrew; Hertz has no in-app updater (see "Updates" below).
+The official build is a universal (Apple silicon + Intel) `Hertz.app` with
+licensing compiled in ([LICENSING.md](../../LICENSING.md): the 3-day trial,
+Dodo live mode, the live product ID), signed with the stable OpenApps HQ
+Release certificate and zipped, as [RELEASES.md](../../RELEASES.md)
+specifies. It is installed and updated with Homebrew; Hertz has no in-app
+updater (see "Updates" below).
 [`.github/workflows/hertz.yml`](../../.github/workflows/hertz.yml) builds it
 on GitHub's `macos-26` runner, publishes it as a GitHub Release, verifies the
 public download and bumps the Homebrew cask. Nothing about a release is
@@ -18,9 +20,10 @@ The scripts the workflow runs are the ones you can run locally:
 
 | Script | Does |
 | --- | --- |
-| `scripts/bundle.sh` | `swift build -c release`, assembles and signs `build/Hertz.app` (hardened runtime, no sandbox, `scripts/Hertz.entitlements`) |
+| `scripts/generate-licensing-config.sh <out.swift>` | Writes the licensing configuration an official build compiles in (Dodo host and environment, paid product ID, trial registry URL, buy URL) from `OPENAPPS_*` variables; refuses placeholders for a live build. `bundle.sh` runs it; the file is gitignored and never committed |
+| `scripts/bundle.sh` | `swift build -c release` (with `OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1` for the official flavour), assembles and signs `build/Hertz.app` (hardened runtime, no sandbox, `scripts/Hertz.entitlements`, the `hertz://` URL scheme) |
 | `scripts/make-zip.sh` | `ditto -c -k --keepParent` into `dist/Hertz-<version>.zip`, prints its SHA-256 |
-| `scripts/verify-release.sh [--release] <zip>` | Unpacks the zip and runs the checks a user's Mac runs; `--release` requires the pinned designated requirement and the release certificate |
+| `scripts/verify-release.sh [--release] <zip>` | Unpacks the zip and runs the checks a user's Mac runs; `--release` requires the pinned designated requirement, the release certificate, licensing compiled in against Dodo's live host with the trial registry, and no placeholder product ID or test host in the binary |
 | `scripts/publish-release.sh [--dry-run]` | Creates the GitHub Release for a tag, only once the tag provably names the built commit |
 | `scripts/make-icons.sh` | Renders `design/assets/*.svg` into the committed `AppIcon.icns` and menu-bar images |
 
@@ -124,8 +127,20 @@ all run in this environment, so any required reviewers approve each.
 
 `HOMEBREW_TAP_DEPLOY_KEY` is a deploy key on the tap repository; the
 commits it pushes are authored `openapps-release <release@openapps.space>`.
-Hertz has no licensing and no feed, so there are no variables and no
-`FEED_COMMIT_TOKEN`.
+Hertz has no feed, so there is no `FEED_COMMIT_TOKEN`.
+
+Environment **variables** (public configuration, not secrets):
+
+| Variable | Value |
+| --- | --- |
+| `OPENAPPS_DODO_PAID_PRODUCT_ID` | Hertz's **live** Dodo product (`pdt_…`, LICENSING.md "Dodo Payments setup"). The release job fails before building when it is unset or not a product ID; `generate-licensing-config.sh` refuses a placeholder for a live build |
+| `OPENAPPS_BUY_URL` | Optional. Where "Buy a license" opens; the app's default is `https://openapps.space/hertz/` |
+| `OPENAPPS_SUPPORT_URL` | Optional. "Contact support" on a revoked license; nothing is shown without it |
+
+The checks job never sees these: it compiles the licensed flavour against
+Dodo **test** mode with the placeholder `pdt_placeholder_hertz`, and
+`verify-release.sh --release` refuses any binary that contains a placeholder
+ID or the test host.
 
 The release job checks every secret and the committed requirement before it
 touches the certificate, and fails naming what is missing. There is no
@@ -153,12 +168,17 @@ the zip, the upload or the publish run.
    ```
 
 4. The workflow runs four jobs, following RELEASES.md step by step:
-   - `checks`, as on every change: `swift test`, shellcheck, the cask
-     template, and an ad-hoc signed universal development zip.
-   - `release` (read-only token): imports the certificate into a temporary
-     keychain, builds the universal app, signs it with the pinned designated
-     requirement and verifies that, deletes the keychain, zips with `ditto`,
-     verifies the zip as a release, records its SHA-256 as a job output and
+   - `checks`, as on every change: `swift test` in the source flavour and,
+     with a generated test-mode configuration, in the licensed flavour; the
+     licensing package's tests; shellcheck and actionlint; the cask
+     template; and an ad-hoc signed universal development zip of the
+     official flavour against Dodo test mode.
+   - `release` (read-only token): checks the secrets and the product ID
+     variable, imports the certificate into a temporary keychain, generates
+     the live licensing configuration and builds the universal app, signs it
+     with the pinned designated requirement and verifies that, deletes the
+     keychain, zips with `ditto`, verifies the zip as a release (signature,
+     live host, no placeholder), records its SHA-256 as a job output and
      uploads it as a workflow artifact.
    - `publish` (the only job that can write releases): downloads that exact
      artifact by id, checks the zip against the SHA-256 the release job
@@ -191,6 +211,7 @@ cd apps/hertz
 cp /tmp/hertz-rehearsal/requirement.txt release/designated-requirement.txt    # temporarily; do not commit
 UNIVERSAL=1 VERSION=0.2.0 RELEASE_SIGNING_P12_FILE=/tmp/hertz-rehearsal/release-signing.p12 \
   RELEASE_SIGNING_P12_PASSWORD="$(cat /tmp/hertz-rehearsal/release-signing.p12.password)" \
+  OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1 OPENAPPS_DODO_ENV=live OPENAPPS_DODO_PAID_PRODUCT_ID=pdt_… \
   ../../scripts/release/with-signing-keychain.sh scripts/bundle.sh
 git checkout release/designated-requirement.txt
 scripts/make-zip.sh
@@ -198,7 +219,15 @@ PINNED_REQUIREMENT_FILE=/tmp/hertz-rehearsal/requirement.txt scripts/verify-rele
 ```
 
 `with-signing-keychain.sh` fails if the throwaway identity can still be
-found afterwards, so the rehearsal leaves nothing behind.
+found afterwards, so the rehearsal leaves nothing behind. A rehearsal
+against Dodo test mode (`OPENAPPS_DODO_ENV=test` with the test product ID)
+verifies without `--release`; the release check requires the live host.
+
+Before the first licensed release, run LICENSING.md's end-to-end checks in
+Dodo test mode with a test-mode build: the trial starts and ends on its own
+(a debug build shortens it with `HERTZ_DEBUG_TRIAL_DAY_SECONDS=60`), a test
+checkout issues a key that activates on 3 Macs and is refused on the 4th, a
+refund revokes, Remove this Mac frees a slot.
 
 ## Pulling a bad release
 

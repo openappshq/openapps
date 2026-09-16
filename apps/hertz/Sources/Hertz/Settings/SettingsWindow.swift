@@ -2,23 +2,62 @@ import AppKit
 import HertzCore
 import SwiftUI
 
+/// A request to bring one part of the settings form into view.
+@MainActor
+@Observable
+final class SettingsNavigation {
+    enum Anchor: Hashable {
+        case license
+    }
+
+    /// Incremented per request, so asking for the same anchor twice scrolls twice.
+    private(set) var request = 0
+    private(set) var anchor: Anchor?
+    /// The request came from "Enter a key": the key field takes focus.
+    private(set) var wantsKeyField = false
+
+    func reveal(_ anchor: Anchor, keyField: Bool = false) {
+        self.anchor = anchor
+        wantsKeyField = keyField
+        request += 1
+    }
+}
+
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let model: MetricsModel
     private let preferences: Preferences
     private let loginItem: LoginItem
-    private let showWelcome: () -> Void
+    private let showGuide: () -> Void
+    private let navigation = SettingsNavigation()
     private var window: NSWindow?
+    #if OPENAPPS_LICENSING
+    private let license: LicenseController?
+    #endif
 
-    init(model: MetricsModel, preferences: Preferences, loginItem: LoginItem, showWelcome: @escaping () -> Void) {
+    #if OPENAPPS_LICENSING
+    init(model: MetricsModel, preferences: Preferences, loginItem: LoginItem, license: LicenseController?, showGuide: @escaping () -> Void) {
         self.model = model
         self.preferences = preferences
         self.loginItem = loginItem
-        self.showWelcome = showWelcome
+        self.license = license
+        self.showGuide = showGuide
     }
+    #else
+    init(model: MetricsModel, preferences: Preferences, loginItem: LoginItem, showGuide: @escaping () -> Void) {
+        self.model = model
+        self.preferences = preferences
+        self.loginItem = loginItem
+        self.showGuide = showGuide
+    }
+    #endif
 
     func show() {
         if window == nil {
-            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, showWelcome: showWelcome)
+            #if OPENAPPS_LICENSING
+            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, license: license, navigation: navigation, showGuide: showGuide)
+            #else
+            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, navigation: navigation, showGuide: showGuide)
+            #endif
             let hostingView = NSHostingView(rootView: root)
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
@@ -29,6 +68,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.title = "Hertz Settings"
             window.isReleasedWhenClosed = false
             window.contentView = hostingView
+            #if OPENAPPS_LICENSING
+            // The trial pill, at the trailing end of the title bar.
+            if let license {
+                window.addTitlebarAccessoryViewController(LicensePillAccessory(badge: { [license] in license.badge }) { [weak self] in
+                    self?.showLicense()
+                })
+            }
+            #endif
             window.center()
             self.window = window
         }
@@ -36,17 +83,43 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
     }
+
+    /// Settings → License: the pill, the dashboard's card and the setup
+    /// guide land here. `keyField` puts the cursor in the key field.
+    func showLicense(keyField: Bool = false) {
+        show()
+        navigation.reveal(.license, keyField: keyField)
+    }
 }
 
 private struct SettingsView: View {
     let model: MetricsModel
     @Bindable var preferences: Preferences
     let loginItem: LoginItem
-    let showWelcome: () -> Void
+    #if OPENAPPS_LICENSING
+    let license: LicenseController?
+    #endif
+    let navigation: SettingsNavigation
+    let showGuide: () -> Void
     @State private var copied = false
     @State private var copiedCommand = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        ScrollViewReader { proxy in
+            form
+                .onChange(of: navigation.request) {
+                    guard let anchor = navigation.anchor else { return }
+                    withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                }
+        }
+        .formStyle(.grouped)
+        .frame(width: 520, height: Licensing.isCompiledIn ? 640 : 560)
+    }
+
+    private var form: some View {
         Form {
             Section {
                 LoginItemToggle(loginItem: loginItem)
@@ -81,9 +154,16 @@ private struct SettingsView: View {
                 MonoLabel("Dashboard")
             }
 
+            #if OPENAPPS_LICENSING
+            if let license {
+                LicenseSection(license: license, navigation: navigation)
+            }
+            #endif
+
             // TODO: adopt packages/openapps-updater (the shared signed-feed
-            // updater with "Check now" and opt-in automatic checks) once it is
-            // on main; until then Homebrew is the update path (RELEASES.md).
+            // updater with "Check now" and automatic checks on by default)
+            // once Hertz has a feed; until then Homebrew is the update path
+            // (RELEASES.md).
             Section {
                 LabeledContent("Version") {
                     Text(Diagnostics.versionString).font(Brand.mono(12)).textSelection(.enabled)
@@ -110,12 +190,12 @@ private struct SettingsView: View {
 
             Section {
                 HStack(alignment: .top) {
-                    Text("Everything is read from this Mac's kernel and shown here. Nothing is stored or sent anywhere.")
+                    Text(LicensingCopy.readings)
                         .font(Brand.body(12))
                         .foregroundStyle(Brand.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    Button("Welcome Window…", action: showWelcome)
+                    Button("Show setup guide", action: showGuide)
                 }
                 HStack {
                     Text("MIT License. An OpenApps HQ original.")
@@ -131,8 +211,6 @@ private struct SettingsView: View {
                 MonoLabel("About")
             }
         }
-        .formStyle(.grouped)
-        .frame(width: 520, height: 560)
     }
 }
 
@@ -188,6 +266,7 @@ enum Diagnostics {
         [
             "Hertz \(versionString)",
             "Open at login: \(loginItem.status.rawValue)",
+            "Licensing: \(Licensing.isCompiledIn ? "official build" : "compiled out (source build)")",
             "",
             model.diagnosticReport,
         ].joined(separator: "\n")

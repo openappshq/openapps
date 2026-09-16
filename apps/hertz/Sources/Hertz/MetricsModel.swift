@@ -46,10 +46,33 @@ final class MetricsModel {
     @ObservationIgnored private let collector = ProcessCollector()
     @ObservationIgnored private let smc = SMCReader()
     @ObservationIgnored private var timer: Timer?
+    /// Whether the readings are collected. Off while the license keeps the
+    /// core feature off (LICENSING.md): the timer stops and the last
+    /// snapshot is left as is, out of sight behind the license card.
+    private(set) var isMonitoring = true
 
     init() {
         hardware = system.hardware() // static: read once
         refresh() // first read; CPU and network rates show 0 until the second tick
+        startTimer()
+    }
+
+    /// Turning the readings back on reads at once, so the dashboard has a
+    /// current snapshot instead of the one from before the pause.
+    func setMonitoring(_ on: Bool) {
+        guard on != isMonitoring else { return }
+        isMonitoring = on
+        if on {
+            refresh()
+            startTimer()
+        } else {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             // The timer fires on the main run loop.
             MainActor.assumeIsolated { self?.refresh() }

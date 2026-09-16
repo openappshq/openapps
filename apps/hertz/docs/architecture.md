@@ -37,9 +37,21 @@ flowchart LR
   compares against `df`, `vm_stat`, `top`, `ps`, `pmset` and `ioreg`. It
   never lands in the app bundle.
 - **HertzCoreTests** cover the health score, diagnosis, the process tree,
-  formatting, the menu-bar readout and the Cleanup Scout's path rules
-  (against a temporary home directory). Nothing in it needs a permission,
-  so it runs in CI.
+  formatting, the menu-bar readout, the Cleanup Scout's path rules
+  (against a temporary home directory) and the first-run flags
+  (`OnboardingLaunch`, `FreshInstallDefault`). Nothing in it needs a
+  permission, so it runs in CI.
+- **HertzTests** drive the licensing package's `LicenseManager` with
+  Hertz's values and in-memory fakes for the Dodo client, the trial
+  registry and the record stores: the restriction mapping (state → menu
+  bar / dashboard), the badge, and a few of LICENSING.md's shared cases.
+  They run in both flavours; the licensed flavour adds the controller.
+- **Licensing** (official builds, `OPENAPPS_LICENSING`) comes from the
+  shared [`packages/openapps-licensing`](../../../packages/openapps-licensing):
+  every build links `OpenAppsLicensing` (the rules, the badge type the UI
+  carries), only a licensed build `OpenAppsLicensingClients` (Dodo, the
+  trial registry, the hardware UUID, the preferences journal). A source
+  build's binary contains none of the client strings.
 - App and library targets are `MainActor`-isolated by default
   (`defaultIsolation`, Swift 6.2); pure helpers such as `Format` are
   `nonisolated`. Collectors are plain synchronous code.
@@ -74,8 +86,12 @@ flowchart TB
 `MetricsModel` runs a 2-second timer on the main actor, calls every collector,
 stores the snapshots, derives diagnosis rows, and records a small ring buffer
 of recent pressure changes. The SwiftUI views observe the model and re-render.
-There is no background work besides that timer: Hertz never contacts the
-network.
+There is no other background work besides that timer, except in official
+builds the licensing controller's daily check and the trial's one-time
+registration (LICENSING.md); the readings themselves never touch the network.
+While the license keeps the core feature off, `MetricsModel.setMonitoring(false)`
+stops the timer and the dashboard shows the license card instead of the
+metric cards.
 
 ### The refresh cycle
 
@@ -138,19 +154,23 @@ command and must report `ALL CHECKS PASSED`.
 
 | File | Role |
 | --- | --- |
-| `HertzApp.swift` | `@main` App — `MenuBarExtra` (`.window` style) with the symbol-and-readout label; `AppDelegate` owns the model, preferences, login item and windows |
+| `HertzApp.swift` | `@main` App — `MenuBarExtra` (`.window` style) with the symbol-and-readout label (the symbol alone while restricted); `AppDelegate` owns the model, preferences, login item, licensing and windows, and the `hertz://activate` deep link |
 | `Brand.swift` | Tactile Studio tokens: colours (light/dark), spacing, radii, motion, the three typefaces; bundled resources |
 | `Surfaces.swift` | `cardSurface()` (glass / material / opaque), button styles, `MonoLabel` |
-| `Preferences.swift` | the saved settings: readout, visible cards, welcome shown |
+| `Preferences.swift` | the saved settings: readout, visible cards (the first-run flags are `HertzCore`'s `OnboardingLaunch` and `FreshInstallDefault`) |
+| `LoginItem.swift` | `SMAppService`; the fresh-install default, decided once storage has answered |
 | `MetricsModel.swift` | `@Observable` state + the 2s refresh timer |
-| `Dashboard/DashboardView.swift` | the dropdown: health card, the reading cards, the footer |
+| `Dashboard/DashboardView.swift` | the dropdown: health card (with the license pill), the reading cards, the footer; or the license card while the readings are off |
 | `Dashboard/Cards.swift`, `Charts.swift` | `Card`, `CardHeader`, `Readout`, `StatePill`, sparkline, core bars, ring, bar |
 | `Dashboard/VitalsCards.swift` | CPU, memory, disk, network, battery |
 | `Dashboard/DiagnosisCards.swift` | diagnosis with recent events; sleep blockers |
 | `Dashboard/ProcessCard.swift` | the process tree, sorting, context-menu actions |
 | `Dashboard/CleanupCard.swift`, `CleanupModel.swift` | Cleanup Scout: scan, sizes, reveal in the Finder, copy the report |
-| `Settings/SettingsWindow.swift` | Settings: Open at login, readout, visible cards, the Homebrew update note, diagnostics |
-| `Onboarding/WelcomeWindow.swift` | the one-screen welcome shown after install |
+| `Settings/SettingsWindow.swift` | Settings: Open at login, readout, visible cards, License, the Homebrew update note, diagnostics; `SettingsNavigation` scrolls to License |
+| `Licensing/Licensing.swift` | `Licensing` (app id, name, journal suite, debug trial timing), `LicensingCopy`, `LicenseStatus` (what the views read in every build), `LicenseRestriction` (state → card) |
+| `Licensing/LicenseController.swift` | official builds: owns the package's `LicenseManager`; timers, wake, network, the snapshot → state on the main actor |
+| `Licensing/LicensePill.swift`, `LicenseCard.swift`, `LicenseSection.swift` | the trial pill (dashboard header, settings title bar, the guide), the dashboard's restricted card, Settings → License |
+| `Onboarding/OnboardingWindow.swift`, `OnboardingView.swift` | the setup guide shown once after install: welcome, nothing to grant, starts with your Mac, tips |
 | `ProcessActions.swift`, `PowerAssertionActions.swift` | copy / reveal / Activity Monitor actions; nothing that signals a process |
 
 ### Dropdown layout
