@@ -64,12 +64,18 @@ public enum CaretVerification {
     ///     with room for it, or `(0, 0)` for the zero-caret case.
     ///
     /// Rules, in order:
-    /// - A positively secure subrole → `refused`: never touch a password field.
+    /// - The subrole must be *positively* non-secure — a readable value other
+    ///   than `AXSecureTextField`, or genuinely absent. A secure subrole, or one
+    ///   that could not be read (error, timeout, malformed), → `refused` for
+    ///   every outcome that would post, the verified path included: readable
+    ///   text is not proof a field is non-secure, and a field can change secure
+    ///   state without changing its AX identity, so the classification must
+    ///   complete before anything is typed.
     /// - Otherwise the reads decide the *shape* (verified / real mismatch /
     ///   fallback candidate); a fallback candidate becomes `unverifiable` only
-    ///   when the field positively classifies as an editable, non-secure text
-    ///   field, and `refused` otherwise. So an unreadable or non-text role, or
-    ///   an unreadable subrole, never authorizes typing into an opaque field.
+    ///   when the role positively classifies as an editable text role, and
+    ///   `refused` otherwise. So a non-text role never authorizes typing into an
+    ///   opaque field, while the verified path stays role-independent.
     ///
     /// Shape from the reads:
     /// - No readable selection → fallback candidate: the tree exposes nothing.
@@ -90,11 +96,14 @@ public enum CaretVerification {
         typed: String,
         textBeforeCaret: (_ location: Int, _ length: Int) -> String?
     ) -> VerifyDecision {
-        if isSecure(subrole: subrole) == true { return .refused }
+        // The subrole must be positively non-secure (readable non-secure, or
+        // genuinely absent) before any outcome that posts — the verified path
+        // included. Unreadable (nil) or secure (true) → refuse.
+        guard isSecure(subrole: subrole) == false else { return .refused }
         switch shape(typedCount: typedCount, selection: selection, typed: typed, textBeforeCaret: textBeforeCaret) {
         case .keystrokes: return .keystrokes
         case .refused: return .refused
-        case .fallbackCandidate: return canFallBack(role: role, subrole: subrole) ? .unverifiable : .refused
+        case .fallbackCandidate: return isEditableTextRole(role) ? .unverifiable : .refused
         }
     }
 
@@ -121,16 +130,12 @@ public enum CaretVerification {
         }
     }
 
-    /// Whether the fallback may type into a field it cannot read back: the role
-    /// must positively be an editable text role, and the subrole must be a
-    /// readable non-secure value or genuinely absent. Any unreadable answer, or
-    /// a non-text role, refuses.
-    private static func canFallBack(role: AXStringAnswer, subrole: AXStringAnswer) -> Bool {
-        guard case .value(let role) = role, editableTextRoles.contains(role) else { return false }
-        switch subrole {
-        case .value(let value): return value != secureTextFieldSubrole
-        case .absent: return true
-        case .unreadable: return false
-        }
+    /// Whether the role positively classifies as an editable text role. Only
+    /// then may the fallback type into a field it cannot read back. The subrole
+    /// is already required non-secure by `decide` before this is consulted, so
+    /// only the role is checked here; an unreadable or non-text role refuses.
+    private static func isEditableTextRole(_ role: AXStringAnswer) -> Bool {
+        guard case .value(let role) = role else { return false }
+        return editableTextRoles.contains(role)
     }
 }

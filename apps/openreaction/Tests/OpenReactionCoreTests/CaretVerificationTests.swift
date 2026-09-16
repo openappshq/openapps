@@ -3,7 +3,7 @@ import Testing
 
 @Suite("Caret verification")
 struct CaretVerificationTests {
-    private let textField = AXStringAnswer.value("AXTextField")
+    // MARK: - Named sanity cases
 
     private func decide(
         role: AXStringAnswer = .value("AXTextField"),
@@ -18,95 +18,160 @@ struct CaretVerificationTests {
         )
     }
 
-    // MARK: Secure
-
     @Test func aPositivelySecureSubroleRefusesEvenIfTextMatches() {
-        // A password field never gets typed into, whatever else reads back.
         let decision = decide(subrole: .value("AXSecureTextField"), selection: (5, 0)) { _, _ in ":tada" }
         #expect(decision == .refused)
     }
 
-    // MARK: Verified path (role/subrole not required — the text is read back)
-
-    @Test func matchingTextBeforeTheCaretIsVerifiedRegardlessOfRole() {
-        let decision = decide(role: .unreadable, subrole: .unreadable, selection: (5, 0)) { loc, len in
-            loc == 0 && len == 5 ? ":tada" : nil
-        }
-        #expect(decision == .keystrokes)
-    }
-
-    // MARK: Real mismatches → refused
-
-    @Test func aRealSelectionRefuses() {
-        #expect(decide(selection: (5, 3)) { _, _ in ":tada" } == .refused)
-    }
-
-    @Test func tooLittleRoomBeforeTheCaretRefuses() {
-        // Caret at 2, a 5-unit token cannot fit: a real mismatch.
-        #expect(decide(selection: (2, 0)) { _, _ in "ab" } == .refused)
-    }
-
-    @Test func differingTextBeforeTheCaretRefuses() {
-        #expect(decide(selection: (5, 0)) { _, _ in "hello" } == .refused)
-    }
-
-    // MARK: Fallback candidates need a positively readable text field
-
-    @Test func opaqueSelectionFallsBackForAReadableTextField() {
-        #expect(decide(role: textField, subrole: .absent, selection: nil) == .unverifiable)
-        #expect(decide(role: textField, subrole: .value("AXSearchField"), selection: nil) == .unverifiable)
-    }
-
-    @Test func opaqueSelectionRefusesWhenTheSubroleIsUnreadable() {
-        // The P0: an unreadable subrole must not authorize typing into an
-        // opaque field (it could be a password field that hides its subrole).
-        #expect(decide(role: textField, subrole: .unreadable, selection: nil) == .refused)
-    }
-
-    @Test func opaqueSelectionRefusesWhenTheRoleIsUnreadable() {
-        #expect(decide(role: .unreadable, subrole: .absent, selection: nil) == .refused)
-    }
-
-    @Test func opaqueSelectionRefusesForANonTextRole() {
-        #expect(decide(role: .value("AXButton"), subrole: .absent, selection: nil) == .refused)
-    }
-
-    @Test func unreadableTextBeforeAReadableCaretFallsBackForATextField() {
-        // Selection readable with room, but the text opaque.
-        #expect(decide(role: textField, subrole: .absent, selection: (5, 0)) { _, _ in nil } == .unverifiable)
-        // …and refuses when the field is not a positively readable text field.
-        #expect(decide(role: .unreadable, subrole: .absent, selection: (5, 0)) { _, _ in nil } == .refused)
-    }
-
-    // MARK: The bogus {0,0} case
-
-    @Test func bogusZeroCaretWithReadableEmptyBeforeTextFallsBack() {
-        let decision = decide(role: textField, subrole: .absent, selection: (0, 0)) { loc, len in
-            loc == 0 && len == 0 ? "" : nil
-        }
-        #expect(decision == .unverifiable)
-    }
-
-    @Test func bogusZeroCaretWithUnreadableBeforeTextFallsBackConservatively() {
-        // Unreadable before-text at caret 0 is still opaque → fallback, but only
-        // because the role/subrole positively classify it as a text field.
-        #expect(decide(role: textField, subrole: .absent, selection: (0, 0)) { _, _ in nil } == .unverifiable)
-        #expect(decide(role: .unreadable, subrole: .absent, selection: (0, 0)) { _, _ in nil } == .refused)
-    }
-
-    @Test func zeroCaretWithMalformedNonEmptyZeroRangeRefuses() {
-        // A non-empty answer for a zero-length range is malformed, not the
-        // bogus-zero case.
-        let decision = decide(role: textField, subrole: .absent, selection: (0, 0)) { _, _ in "x" }
+    @Test func anUnreadableSubroleRefusesEvenWhenTextMatches() {
+        // The verified path must not post into a field whose secure status could
+        // not be confirmed, even though the text reads back equal to the token.
+        let decision = decide(role: .value("AXTextField"), subrole: .unreadable, selection: (5, 0)) { _, _ in ":tada" }
         #expect(decision == .refused)
     }
 
-    // MARK: Probe secure mapping (shared with CaretLocator's fail-closed probe)
+    @Test func theVerifiedPathIsRoleIndependentWithAnAcceptableSubrole() {
+        // Any role is fine once the subrole is positively non-secure (here
+        // genuinely absent) and the text reads back equal to the token.
+        for role in [AXStringAnswer.value("AXButton"), .absent, .unreadable] {
+            #expect(decide(role: role, subrole: .absent, selection: (5, 0)) { _, _ in ":tada" } == .keystrokes)
+        }
+    }
 
     @Test func isSecureMapsEveryAnswerState() {
         #expect(CaretVerification.isSecure(subrole: .value("AXSecureTextField")) == true)
         #expect(CaretVerification.isSecure(subrole: .value("AXTextField")) == false)
         #expect(CaretVerification.isSecure(subrole: .absent) == false)
         #expect(CaretVerification.isSecure(subrole: .unreadable) == nil) // fail-closed
+    }
+
+    // MARK: - Full Cartesian matrix
+
+    private final class ReadRecorder {
+        private(set) var ranges: [(location: Int, length: Int)] = []
+        private let answer: (Int, Int) -> String?
+        init(_ answer: @escaping (Int, Int) -> String?) { self.answer = answer }
+        func read(_ location: Int, _ length: Int) -> String? {
+            ranges.append((location, length))
+            return answer(location, length)
+        }
+    }
+
+    private enum Component { case candidate, matching, mismatch }
+
+    private struct Scenario {
+        let name: String
+        let selection: (location: Int, length: Int)?
+        let answer: (Int, Int) -> String?
+        let component: Component
+        /// The range `decide` should read from the field, or nil for no read.
+        let expectedRead: (location: Int, length: Int)?
+    }
+
+    /// The complete matrix (review 2), fixed so an unreadable subrole refuses
+    /// every posting outcome. Each entry is (candidate, matching, mismatch);
+    /// `R`efused / `V`erified keystrokes / `F`allback unverifiable.
+    private typealias Triple = (candidate: VerifyDecision, matching: VerifyDecision, mismatch: VerifyDecision)
+
+    private enum RoleGroup: CaseIterable {
+        case textRole, otherValue, absent, unreadable
+        var answers: [AXStringAnswer] {
+            switch self {
+            case .textRole: [.value("AXTextField"), .value("AXTextArea"), .value("AXComboBox"), .value("AXSearchField")]
+            case .otherValue: [.value("AXButton"), .value("")]
+            case .absent: [.absent]
+            case .unreadable: [.unreadable]
+            }
+        }
+    }
+
+    private enum SubroleColumn: CaseIterable {
+        case secure, nonSecure, absent, unreadable
+        var answers: [AXStringAnswer] {
+            switch self {
+            case .secure: [.value("AXSecureTextField")]
+            case .nonSecure: [.value("AXInlineTextField"), .value("")] // empty string is non-secure
+            case .absent: [.absent]
+            case .unreadable: [.unreadable]
+            }
+        }
+    }
+
+    private func triple(_ role: RoleGroup, _ subrole: SubroleColumn) -> Triple {
+        let R = VerifyDecision.refused, V = VerifyDecision.keystrokes, F = VerifyDecision.unverifiable
+        switch subrole {
+        case .secure, .unreadable:
+            return (R, R, R) // subrole not positively non-secure: nothing posts
+        case .nonSecure, .absent:
+            // Matching text verifies for any role; mismatch refuses; a candidate
+            // falls back only for a positively text role.
+            return role == .textRole ? (F, V, R) : (R, V, R)
+        }
+    }
+
+    private var scenarios: [Scenario] {
+        [
+            Scenario(name: "unreadable selection", selection: nil, answer: { _, _ in nil },
+                     component: .candidate, expectedRead: nil),
+            Scenario(name: "{0,0} unreadable before-text", selection: (0, 0), answer: { _, _ in nil },
+                     component: .candidate, expectedRead: (0, 0)),
+            Scenario(name: "{0,0} readable-empty before-text", selection: (0, 0),
+                     answer: { location, length in location == 0 && length == 0 ? "" : "unexpected" },
+                     component: .candidate, expectedRead: (0, 0)),
+            Scenario(name: "location >= N, unreadable before-text", selection: (5, 0), answer: { _, _ in nil },
+                     component: .candidate, expectedRead: (0, 5)),
+            Scenario(name: "location >= N, matching before-text", selection: (5, 0),
+                     answer: { location, length in location == 0 && length == 5 ? ":tada" : "unexpected" },
+                     component: .matching, expectedRead: (0, 5)),
+            Scenario(name: "real selection", selection: (5, 3), answer: { _, _ in nil },
+                     component: .mismatch, expectedRead: nil),
+            Scenario(name: "0 < location < N", selection: (2, 0), answer: { _, _ in nil },
+                     component: .mismatch, expectedRead: nil),
+            Scenario(name: "{0,0} readable-nonempty before-text", selection: (0, 0), answer: { _, _ in "x" },
+                     component: .mismatch, expectedRead: (0, 0)),
+            Scenario(name: "location >= N, differing before-text", selection: (5, 0), answer: { _, _ in "hello" },
+                     component: .mismatch, expectedRead: (0, 5)),
+        ]
+    }
+
+    @Test func everyMatrixCellDecidesAsExpectedAndReadsTheRightRange() {
+        for roleGroup in RoleGroup.allCases {
+            for subroleColumn in SubroleColumn.allCases {
+                let expected = triple(roleGroup, subroleColumn)
+                for role in roleGroup.answers {
+                    for subrole in subroleColumn.answers {
+                        for scenario in scenarios {
+                            let recorder = ReadRecorder(scenario.answer)
+                            let decision = CaretVerification.decide(
+                                role: role, subrole: subrole, typedCount: 5,
+                                selection: scenario.selection, typed: ":tada",
+                                textBeforeCaret: { recorder.read($0, $1) }
+                            )
+                            let want: VerifyDecision = switch scenario.component {
+                            case .candidate: expected.candidate
+                            case .matching: expected.matching
+                            case .mismatch: expected.mismatch
+                            }
+                            let label = "\(roleGroup)/\(subroleColumn) role=\(role) subrole=\(subrole) — \(scenario.name)"
+                            #expect(decision == want, "\(label): got \(decision), want \(want)")
+
+                            // A secure or unreadable subrole short-circuits before
+                            // any read; otherwise the scenario's range is read once.
+                            let subrolePasses = CaretVerification.isSecure(subrole: subrole) == false
+                            let performed = subrolePasses ? scenario.expectedRead : nil
+                            if let performed {
+                                #expect(recorder.ranges.count == 1, "\(label): expected one read")
+                                #expect(
+                                    recorder.ranges.first.map { $0 == performed } ?? false,
+                                    "\(label): read \(String(describing: recorder.ranges.first)), want \(performed)"
+                                )
+                            } else {
+                                #expect(recorder.ranges.isEmpty, "\(label): expected no read, got \(recorder.ranges)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
