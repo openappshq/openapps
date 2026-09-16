@@ -23,6 +23,10 @@ describe("classifyPath", () => {
       "/macpaper",
       "/macpaper/download/",
       "/macpaper/thanks/",
+      "/opennotes/",
+      "/opennotes",
+      "/opennotes/download/",
+      "/opennotes/thanks/",
       "/thanks/",
       "/thanks",
     ]) {
@@ -43,6 +47,7 @@ describe("classifyPath", () => {
       "/assets/home-abc123.css",
       "/install/openklack",
       "/install/hertz",
+      "/install/opennotes",
     ]) {
       expect(classifyPath(path), path).toBe("asset");
     }
@@ -66,6 +71,8 @@ describe("classifyPath", () => {
       "/install/openklack/",
       "/macpaper/thanks/trial/",
       "/macpaper/nope",
+      "/opennotes/thanks/trial/",
+      "/opennotes/nope",
     ]) {
       expect(classifyPath(path), path).toBe("unknown");
     }

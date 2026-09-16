@@ -9,12 +9,14 @@ const dodo = dodoConfigFrom({
   VITE_OPENREACTION_DODO_PAID_PRODUCT_ID: "pdt_orPaid",
   VITE_HERTZ_DODO_PAID_PRODUCT_ID: "pdt_hzPaid",
   VITE_MACPAPER_DODO_PAID_PRODUCT_ID: "pdt_mpPaid",
+  VITE_OPENNOTES_DODO_PAID_PRODUCT_ID: "pdt_onPaid",
 });
 const casks = brewCasksFrom({
   VITE_OPENKLACK_BREW_CASK: "openappshq/tap/openklack",
   VITE_OPENREACTION_BREW_CASK: "openappshq/tap/openreaction",
   VITE_HERTZ_BREW_CASK: "openappshq/tap/hertz",
   VITE_MACPAPER_BREW_CASK: "openappshq/tap/macpaper",
+  VITE_OPENNOTES_BREW_CASK: "openappshq/tap/opennotes",
 });
 
 /**
@@ -98,7 +100,7 @@ test("OpenReaction's guide names both of its permissions", () => {
   expect(html).not.toContain("OpenKlack");
 });
 
-test.each(["hertz", "macpaper"])(
+test.each(["hertz", "macpaper", "opennotes"])(
   "%s asks for nothing, so its guide has no permission step",
   (app) => {
     const html = guideFor(app);

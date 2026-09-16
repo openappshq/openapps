@@ -21,13 +21,16 @@ test("each product owns its routes and adding another product cannot shadow Open
     "/macpaper/",
     "/macpaper/download/",
     "/macpaper/thanks/",
+    "/opennotes/",
+    "/opennotes/download/",
+    "/opennotes/thanks/",
     "/another_route/",
     "/another_route/download/",
     "/another_route/thanks/",
   ]);
-  expect(combined[12]?.productId).toBe("another-app");
+  expect(combined[15]?.productId).toBe("another-app");
   expect(findPage("/openklack/download/")?.productId).toBe("openklack");
-  expect(combined[12]?.module).toBe("./apps/another-app/pages/Home.tsx");
+  expect(combined[15]?.module).toBe("./apps/another-app/pages/Home.tsx");
   expect(findPage("/openklack/thanks/trial/")).toBeUndefined();
   expect(findPage("/openreaction/")?.module).toBe("./apps/openreaction/pages/Home.tsx");
   for (const path of ["/openklack", "/openklack/", "/openklack/index.html"])
@@ -47,6 +50,7 @@ test("every app is sold on the same terms: a price, a download page and a checko
     "openreaction",
     "hertz",
     "macpaper",
+    "opennotes",
   ]);
   for (const product of products) {
     expect(product.free, product.id).toBeUndefined();
@@ -106,6 +110,7 @@ test("catalog routes emit separate static HTML entries with product metadata", (
       "openklack/thanks",
       "hertz/thanks",
       "macpaper/thanks",
+      "opennotes/thanks",
     ]) {
       const html = readFileSync(join(root, `${file}/index.html`), "utf8");
       const head = html.slice(html.indexOf("<head>") + 6);
@@ -158,6 +163,17 @@ test("catalog routes emit separate static HTML entries with product metadata", (
     );
     expect(readFileSync(join(root, "macpaper/thanks/index.html"), "utf8")).toContain(
       'property="og:site_name" content="macPaper"',
+    );
+    const opennotes = readFileSync(join(root, "opennotes/index.html"), "utf8");
+    expect(opennotes).toContain('property="og:site_name" content="OpenNotes"');
+    expect(opennotes).toContain('rel="icon" href="/brand/opennotes/app-icon.svg"');
+    expect(opennotes).not.toContain("__openappsCheckout");
+    expect(opennotes).not.toContain("noindex");
+    expect(readFileSync(join(root, "opennotes/download/index.html"), "utf8")).toContain(
+      "Install · OpenNotes",
+    );
+    expect(readFileSync(join(root, "opennotes/thanks/index.html"), "utf8")).toContain(
+      'property="og:site_name" content="OpenNotes"',
     );
     expect(inputs).toHaveLength(pages.length + 1);
   } finally {
