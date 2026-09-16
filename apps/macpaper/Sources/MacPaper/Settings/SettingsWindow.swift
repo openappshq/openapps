@@ -8,7 +8,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let loginItem: LoginItem
     private let hotkeys: HotkeyCenter
     private let diagnostics: () -> String
+    private let navigation = SettingsNavigation()
     private var window: NSWindow?
+    /// "Show setup guide" under About.
+    var showGuide: () -> Void = {}
+    #if OPENAPPS_LICENSING
+    /// Settings → License and the title-bar pill; set before the window is made.
+    var license: LicenseController?
+    #endif
+    #if OPENAPPS_OFFICIAL
+    /// The updater's wiring (RELEASES.md); nil when the official build has
+    /// no feed or key in its Info.plist. Independent of the license.
+    var updates: Updates?
+    #endif
 
     init(model: AppModel, preferences: Preferences, loginItem: LoginItem, hotkeys: HotkeyCenter, diagnostics: @escaping () -> String) {
         self.model = model
@@ -20,7 +32,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func show() {
         if window == nil {
-            let root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: diagnostics)
+            var root = SettingsView(model: model, preferences: preferences, loginItem: loginItem, hotkeys: hotkeys, diagnostics: diagnostics)
+            root.navigation = navigation
+            root.showGuide = showGuide
+            #if OPENAPPS_LICENSING
+            root.license = license
+            #endif
+            #if OPENAPPS_OFFICIAL
+            root.updates = updates
+            #endif
             let hostingView = NSHostingView(rootView: root)
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
@@ -32,7 +52,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.isReleasedWhenClosed = false
             window.contentView = hostingView
             #if OPENAPPS_LICENSING
-            // The trial pill goes in the title bar here (the licensing ticket).
+            // The trial pill, at the trailing end of the title bar.
+            if let license {
+                window.addTitlebarAccessoryViewController(LicensePillAccessory(badge: { [license] in license.badge }) { [weak self] in
+                    self?.showLicense()
+                })
+            }
             #endif
             window.center()
             self.window = window
@@ -42,9 +67,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    /// Settings → License: the licensing ticket scrolls to the section.
+    /// Settings → License: the pill, the panel's card and the setup guide
+    /// land here. `keyField` puts the cursor in the key field.
     func showLicense(keyField: Bool = false) {
         show()
+        navigation.reveal(.license, keyField: keyField)
     }
 }
 
@@ -54,8 +81,18 @@ struct SettingsView: View {
     let loginItem: LoginItem
     let hotkeys: HotkeyCenter
     let diagnostics: () -> String
+    /// Scroll requests (Settings → License); the preview harness never scrolls.
+    var navigation = SettingsNavigation()
+    var showGuide: () -> Void = {}
+    #if OPENAPPS_LICENSING
+    var license: LicenseController? = nil
+    #endif
+    #if OPENAPPS_OFFICIAL
+    var updates: Updates? = nil
+    #endif
     @State private var copied = false
     @Environment(\.previewRendering) private var previewRendering
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if previewRendering {
@@ -71,13 +108,30 @@ struct SettingsView: View {
             .toggleStyle(.checkbox)
             .frame(width: 540)
         } else {
-            Form {
-                general
-                wallpapers
-                #if OPENAPPS_LICENSING
-                // LicenseSection(license:navigation:) — the licensing ticket.
-                #endif
-                about
+            ScrollViewReader { proxy in
+                Form {
+                    general
+                    wallpapers
+                    #if OPENAPPS_LICENSING
+                    if let license {
+                        LicenseSection(license: license, navigation: navigation)
+                    }
+                    #endif
+                    // The shared updater in official builds (RELEASES.md,
+                    // "In-app updater"); a build from source has none and says so.
+                    #if OPENAPPS_OFFICIAL
+                    UpdatesSection(updates: updates)
+                    #else
+                    UpdatesSection()
+                    #endif
+                    about
+                }
+                .onChange(of: navigation.request) {
+                    guard let anchor = navigation.anchor else { return }
+                    withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                }
             }
             .formStyle(.grouped)
             .frame(width: 540, height: 760)
@@ -226,10 +280,14 @@ struct SettingsView: View {
 
     private var about: some View {
         Section {
-            Text(LicensingCopy.network)
-                .font(Brand.body(12))
-                .foregroundStyle(Brand.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top) {
+                Text(LicensingCopy.network)
+                    .font(Brand.body(12))
+                    .foregroundStyle(Brand.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Show setup guide", action: showGuide)
+            }
             HStack {
                 Text("MIT License. An OpenApps HQ original.")
                     .font(Brand.body(12))

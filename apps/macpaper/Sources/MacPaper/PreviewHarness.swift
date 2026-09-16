@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import MacPaperCore
+import OpenAppsLicensing
 import ServiceManagement
 import SwiftUI
 
@@ -130,7 +131,10 @@ final class PreviewHarness {
             await waitForPreview()
             if await !write(PopoverStage(model: model), scheme: scheme, appearance: appearance, to: "popover-\(suffix).png") { failures += 1 }
             // Restricted: the license card in the generator's place.
-            license.bind(access: { false }, restriction: { .trialEndedSample }, canBuy: true)
+            license.bind(
+                access: { false }, state: { .trialEnded }, restriction: { .trialEndedSample },
+                badge: { LicenseBadge.label(for: .trialEnded, appName: Licensing.appName) }, canBuy: true
+            )
             let restricted = NotchStage(backdrop: backdrop, content: PanelContent(model: model, width: preferences.width.points, showSettings: {}, quit: {}))
             if await !write(restricted, scheme: scheme, appearance: appearance, to: "panel-restricted-\(suffix).png") { failures += 1 }
             license.bind(access: { true }, restriction: { nil }, canBuy: false)

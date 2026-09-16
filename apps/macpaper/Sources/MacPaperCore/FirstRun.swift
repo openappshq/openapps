@@ -40,12 +40,32 @@ public enum PreferenceKey {
     ]
 }
 
+/// The setup guide's steps, in order. macPaper asks for no permission, so
+/// the guide never waits on the system: the step shown is the user's own
+/// progress, kept so "Show setup guide" resumes where they left off.
+public enum GuideStep: Int, CaseIterable, Comparable, Sendable {
+    case welcome
+    /// "Nothing to grant": what macPaper touches, and that no permission is needed.
+    case permissions
+    /// "Starts with your Mac": the login item, from its real state.
+    case loginItem
+    case tips
+
+    public static func < (lhs: GuideStep, rhs: GuideStep) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    public var next: GuideStep? { GuideStep(rawValue: rawValue + 1) }
+    public var previous: GuideStep? { GuideStep(rawValue: rawValue - 1) }
+    public var isLast: Bool { next == nil }
+}
+
 /// When the setup guide opens on its own: once, on the first launch of a
-/// packaged app. The guide itself is a later ticket; the flag is here so
-/// the fresh-install rule already counts it.
+/// packaged app. Afterwards it is reached from Settings ("Show setup
+/// guide"); a guide the user closed never opens by itself again, and
+/// reopening it resumes at the step they left.
 public enum OnboardingLaunch {
     public enum Key {
         public static let shown = "onboarding.shown"
+        /// The furthest step the user reached; the guide resumes there.
         public static let step = "onboarding.step"
     }
 
@@ -53,8 +73,22 @@ public enum OnboardingLaunch {
         !store.bool(forKey: Key.shown)
     }
 
+    /// The guide was shown (by anyone): it no longer opens on launch.
     public static func markShown(store: any FlagStore) {
         store.set(true, forKey: Key.shown)
+    }
+
+    /// The step to open at: the saved one, the first when nothing is saved
+    /// or the saved value is not a step. Finishing the guide saves nothing
+    /// past the last step, so a finished guide reopens at its tips.
+    public static func resumeStep(store: any FlagStore) -> GuideStep {
+        GuideStep(rawValue: store.integer(forKey: Key.step)) ?? .welcome
+    }
+
+    /// Only ever moves forward: going back to re-read a step does not lose
+    /// the progress made.
+    public static func markReached(_ step: GuideStep, store: any FlagStore) {
+        if step > resumeStep(store: store) { store.set(step.rawValue, forKey: Key.step) }
     }
 }
 

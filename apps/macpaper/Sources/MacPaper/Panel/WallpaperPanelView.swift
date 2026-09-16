@@ -17,6 +17,14 @@ struct WallpaperPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Brand.Space.s12) {
+            // The trial pill while there is something to say (official
+            // builds, not simply licensed): asked on every body.
+            if let badge = model.license.badge() {
+                HStack {
+                    Spacer()
+                    LicensePill(label: badge, action: model.license.openLicense)
+                }
+            }
             PreviewCard(model: model)
             if let restriction = model.license.restriction() {
                 LicenseCard(restriction: restriction, license: model.license)
@@ -30,6 +38,7 @@ struct WallpaperPanelView: View {
                 StatusText(status: status)
                     .transition(.opacity)
             }
+            UpdateHintRow(updates: model.updates)
             Footer(model: model, showSettings: showSettings, quit: quit)
         }
         .padding(Brand.Space.s16)
@@ -286,7 +295,8 @@ private struct Footer: View {
 // MARK: - License card
 
 /// The feature is off: the state in LICENSING.md's words and a way out,
-/// never a price. Wired to the controller by the licensing ticket.
+/// never a price. The actions go through `LicenseStatus`, which the
+/// official build binds to the license controller (LicensingLaunch.swift).
 struct LicenseCard: View {
     let restriction: LicenseRestriction
     let license: LicenseStatus
@@ -304,12 +314,16 @@ struct LicenseCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: Brand.Space.s8) {
                 ForEach(Array(restriction.actions.enumerated()), id: \.offset) { index, action in
+                    // The website states the price; the button never does.
+                    let title = action == .buy && !license.canBuy ? "Buy a license — coming soon" : action.title
                     if index == 0 {
-                        Button(action.title) { license.perform(action) }
+                        Button(title) { license.perform(action) }
                             .buttonStyle(PrimaryButtonStyle())
+                            .disabled(action == .buy && !license.canBuy)
                     } else {
-                        Button(action.title) { license.perform(action) }
+                        Button(title) { license.perform(action) }
                             .secondaryAction()
+                            .disabled(action == .buy && !license.canBuy)
                     }
                 }
             }

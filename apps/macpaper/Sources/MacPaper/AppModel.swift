@@ -66,6 +66,9 @@ struct StatusLine: Equatable {
 final class AppModel {
     @ObservationIgnored let preferences: Preferences
     @ObservationIgnored let license: LicenseStatus
+    /// What the panel says about an update; an official build binds the
+    /// updater to it (UpdatesLaunch.swift), every other build leaves it silent.
+    @ObservationIgnored let updates = UpdateStatus()
     @ObservationIgnored let favorites: FavoritesStore
     @ObservationIgnored let applied: AppliedStore
     @ObservationIgnored let imports: ImportStore
@@ -201,11 +204,13 @@ final class AppModel {
 
     /// A new seed, same generator and parameters.
     func reseed() {
+        guard allowed() else { return }
         draft = draft.reseeded()
     }
 
     /// Sets the seed the user typed, if it is one.
     func setSeed(_ text: String) -> Bool {
+        guard allowed() else { return false }
         guard let seed = UInt64(text.trimmingCharacters(in: .whitespaces)) else { return false }
         draft = draft.reseeded(seed)
         return true
@@ -213,6 +218,7 @@ final class AppModel {
 
     /// Imports an image for Pixelize, switching the generator to it.
     func importImage() async {
+        guard allowed() else { return }
         guard let url = await imagePicker.pickImage() else { return }
         await importImage(at: url)
     }
@@ -283,13 +289,26 @@ final class AppModel {
     // MARK: - Apply and shuffle
 
     /// Whether Apply, Shuffle and Export may run now (the license, and no
-    /// apply in flight).
+    /// apply in flight). What a view reads to draw its buttons; every action
+    /// asks `allowed()` again at the click.
     var canAct: Bool { license.hasAccess() && !isApplying }
+
+    /// What a refused action says.
+    static let restrictedMessage = "Not done: the license doesn’t allow making wallpapers right now."
+
+    /// The license, asked at the moment of the action — never a value a
+    /// view captured when it was built — so a click after a deadline that
+    /// no timer has delivered yet does nothing but say why.
+    private func allowed() -> Bool {
+        if license.hasAccess() { return true }
+        show(Self.restrictedMessage, tone: .error)
+        return false
+    }
 
     /// Applies the draft to this display, or to every display; "same on all
     /// displays" makes both the same.
     func apply(_ scope: ApplyScope? = nil) {
-        guard license.hasAccess() else { return }
+        guard allowed() else { return }
         let scope = scope ?? currentDisplay.map { .display($0.id) } ?? .allDisplays
         let plan = ApplyScope.plan(draft, scope: scope, displays: displays, sameOnAllDisplays: preferences.sameOnAllDisplays)
         run(plan, verb: "Applied")
@@ -298,7 +317,7 @@ final class AppModel {
     /// A random document, applied at once (this display, or all of them
     /// while "same on all displays" is on), and shown as the draft.
     func shuffle() {
-        guard license.hasAccess() else { return }
+        guard allowed() else { return }
         var generator = SeededGenerator(seed: .randomSeed())
         let targets = preferences.sameOnAllDisplays ? displays : currentDisplay.map { [$0] } ?? displays
         let plan = ShufflePlanner.plan(
@@ -375,7 +394,7 @@ final class AppModel {
     // MARK: - Export
 
     func export(_ format: WallpaperExport.Format) {
-        guard license.hasAccess(), !isExporting else { return }
+        guard allowed(), !isExporting else { return }
         let wallpaper = draft
         let size = currentDisplay?.pixelSize ?? PixelSize(width: 3024, height: 1964)
         let renderer = renderer

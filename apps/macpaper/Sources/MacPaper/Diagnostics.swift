@@ -15,7 +15,7 @@ enum Diagnostics {
         DiagnosticsSnapshot(
             appVersion: versionString,
             loginStatus: loginItem.statusDescription,
-            licensing: Licensing.flavourDescription,
+            licensing: Licensing.diagnosticsLine(model.license),
             displays: model.displays,
             panelSettings: preferences.panelSettings,
             hostDisplay: preferences.hostDisplay,
