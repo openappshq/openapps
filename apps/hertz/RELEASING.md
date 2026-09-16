@@ -350,8 +350,11 @@ scripts/update-e2e.sh
 With no secrets and no network beyond `127.0.0.1`, it creates a throwaway
 certificate and update key in a temporary folder, builds versions 1.0.0 and
 1.0.1 of the update-test variant (bundle id
-`com.openappshq.hertz.updatetest`, no URL scheme, no login item and no setup
-guide, so it leaves nothing behind on any Mac), both signed with that
+`com.openappshq.hertz.updatetest`, no URL scheme, no login item, no setup
+guide and no licensing — `bundle.sh` and `Package.swift` refuse
+`HERTZ_UPDATE_TEST=1` with `OPENAPPS_LICENSING=1`, so it can never reach
+the record store, the registry or Dodo, and leaves nothing behind on any
+Mac), both signed with that
 certificate inside `with-signing-keychain.sh`, checks the keychain search
 list is unchanged and the identity gone afterwards, verifies both carry the
 same designated requirement and an ad-hoc re-signed copy does not, zips and

@@ -58,12 +58,14 @@
 # UPDATE_PUBLIC_ED_KEY (the CI checks job does); a release-signed build
 # always pins the committed key.
 #
-# HERTZ_UPDATE_TEST=1 (with OPENAPPS_OFFICIAL=1) builds the variant
-# scripts/update-e2e.sh runs: bundle identifier com.openappshq.hertz.updatetest,
-# no URL scheme, no login item and no setup guide
-# (Sources/Hertz/Updates/UpdateTesting.swift), and UPDATE_FEED_URL (an
-# http://127.0.0.1 feed is allowed) overriding the pinned feed. None of that
-# is accepted for any other build, and scripts/verify-release.sh refuses it.
+# HERTZ_UPDATE_TEST=1 (with OPENAPPS_OFFICIAL=1, never with
+# OPENAPPS_LICENSING=1) builds the variant scripts/update-e2e.sh runs: bundle
+# identifier com.openappshq.hertz.updatetest, no URL scheme, no login item,
+# no setup guide and no licensing (so no record store, registry or Dodo
+# client; Sources/Hertz/Updates/UpdateTesting.swift), and UPDATE_FEED_URL
+# (an http://127.0.0.1 feed is allowed) overriding the pinned feed. None of
+# that is accepted for any other build, and scripts/verify-release.sh
+# refuses it.
 #
 # Signing uses the hardened runtime, no sandbox (libproc, IOKit and the SMC
 # user client are unavailable to a sandboxed process) and
@@ -81,6 +83,10 @@ OFFICIAL="${OPENAPPS_OFFICIAL:-0}"
 UPDATE_TEST="${HERTZ_UPDATE_TEST:-0}"
 if [[ "$UPDATE_TEST" == "1" && "$OFFICIAL" != "1" ]]; then
     echo "error: HERTZ_UPDATE_TEST=1 needs OPENAPPS_OFFICIAL=1 (the updater is what it tests)" >&2
+    exit 1
+fi
+if [[ "$UPDATE_TEST" == "1" && "${OPENAPPS_LICENSING:-0}" == "1" ]]; then
+    echo "error: HERTZ_UPDATE_TEST=1 cannot be combined with OPENAPPS_LICENSING=1: the update-test variant must not reach licensing services or register a login item" >&2
     exit 1
 fi
 if [[ "$UPDATE_TEST" == "1" ]]; then

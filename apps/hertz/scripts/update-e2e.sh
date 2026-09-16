@@ -18,7 +18,8 @@
 #   4. A is installed into a temporary Applications folder, B's zip and the
 #      appcast are served from 127.0.0.1;
 #   5. A runs with nothing stored, as a fresh install: the update-test variant
-#      compiles licensing out, so there is no record store to wait for and
+#      compiles licensing out (always; the E2E sets OPENAPPS_LICENSING=0 and
+#      bundle.sh refuses the combination), so there is no record store to wait for and
 #      the fresh-install default applies at once — "Check for updates
 #      automatically" turns on and is recorded as decided, the launch check
 #      finds B and reports it available, and nothing is downloaded (installing
@@ -48,7 +49,11 @@ if [[ "${1:-}" == "--build-signed" ]]; then
     TMP="${2:?tmp dir}"; FEED_URL="${3:?feed url}"; PUBLIC_KEY="${4:?public key}"
     build() { # <version> <destination>
         echo "==> Building ${1}"
-        VERSION="$1" OPENAPPS_OFFICIAL=1 HERTZ_UPDATE_TEST=1 \
+        # Licensing explicitly off, whatever the shell inherited from an
+        # earlier rehearsal: the test variant must never link the record
+        # store, the registry or Dodo's client (bundle.sh refuses the
+        # combination anyway).
+        VERSION="$1" OPENAPPS_LICENSING=0 OPENAPPS_OFFICIAL=1 HERTZ_UPDATE_TEST=1 \
             UPDATE_FEED_URL="$FEED_URL" UPDATE_PUBLIC_ED_KEY="$PUBLIC_KEY" \
             scripts/bundle.sh > "$TMP/build-$1.log" 2>&1 || { tail -n 30 "$TMP/build-$1.log" >&2; return 1; }
         rm -rf "$2"

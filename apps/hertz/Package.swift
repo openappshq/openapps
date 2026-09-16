@@ -14,8 +14,14 @@ let licensing = environment["OPENAPPS_LICENSING"] == "1"
 let official = environment["OPENAPPS_OFFICIAL"] == "1"
 // Local update tests only (scripts/update-e2e.sh): the login-item default
 // and the setup guide stay off and test hooks are compiled in. Never set for
-// a release; verify-release.sh checks.
+// a release; verify-release.sh checks. Never with licensing: the test
+// variant must not link the record store, the registry or Dodo's client,
+// and its licensing-off launch path is the one that knows to skip the
+// login item.
 let updateTesting = official && environment["HERTZ_UPDATE_TEST"] == "1"
+if updateTesting && licensing {
+    fatalError("HERTZ_UPDATE_TEST=1 cannot be combined with OPENAPPS_LICENSING=1 (scripts/bundle.sh, scripts/update-e2e.sh)")
+}
 
 // Every target is main-actor isolated by default: the collectors are plain
 // synchronous code and the app reads them from a main-run-loop timer.

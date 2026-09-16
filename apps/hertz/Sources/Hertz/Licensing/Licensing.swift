@@ -42,14 +42,16 @@ nonisolated enum LicensingCopy {
     /// What Hertz reads and where it goes: the readings never leave the Mac.
     /// The official build adds the two calls above and the update check
     /// (a plain GET of the signed feed, RELEASES.md); a source build makes
-    /// none.
+    /// none. Each flavour names exactly the calls it can make.
     static var readings: String {
         switch (Licensing.isCompiledIn, Updating.isCompiledIn) {
         case (true, true):
             "Every reading comes from this Mac’s kernel and stays here. The only network calls are the license check and the trial registry, described under License, and the update check, described under Updates."
         case (true, false):
             "Every reading comes from this Mac’s kernel and stays here. The only network calls are the license check and the trial registry, described under License."
-        case (false, _):
+        case (false, true):
+            "Every reading comes from this Mac’s kernel and stays here. The only network call is the update check, described under Updates."
+        case (false, false):
             "Every reading comes from this Mac’s kernel and stays here. This build from source makes no network calls at all."
         }
     }
