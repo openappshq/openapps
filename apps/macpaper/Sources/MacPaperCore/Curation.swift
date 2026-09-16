@@ -280,7 +280,10 @@ public struct RecipeFamily: Sendable {
             p[.reach] = g.nextDouble(in: 0.55...1); p[.balance] = g.nextDouble(in: 0.3...0.7); p[.offset] = g.nextUnit()
             p[.cellSize] = Draw.pick([8, 10, 12, 14, 16, 20, 24], using: &g)
             p[.toneSteps] = Double(min(5, max(3, p.tones.count + Int(g.next() % 2))))
-            p[.dither] = Double(g.nextUnit() < 0.8 ? ToneDitherMode.none.rawValue : ToneDitherMode.bayer.rawValue)
+            // No screen in Shuffle: a Bayer-dithered atlas reads as a
+            // textile from across the room (the dither knob stays a pick).
+            _ = g.nextUnit()
+            p[.dither] = Double(ToneDitherMode.none.rawValue)
             p[.depth] = g.nextDouble(in: 0.2...0.5)
             return Draw.document(.field(p), palette: palette, base: Draw.base(palette, kinds: [.solid, .gradient, .gradient], using: &g), finish: Draw.finish(palette, fringe: 0.2...0.4, vignette: 0...0, using: &g), grain: g.nextDouble(in: 0.03...0.05), using: &g)
         },
@@ -341,7 +344,8 @@ public struct RecipeFamily: Sendable {
             p[.loops] = g.nextDouble(in: 0...0.25); p[.accent] = g.nextDouble(in: 0.05...0.12)
             p[.toneSteps] = Double(p.tones.count)
             p[.cellSize] = Draw.pick([6, 8, 10, 12], using: &g)
-            p[.dither] = Double(g.nextUnit() < 0.7 ? ToneDitherMode.none.rawValue : ToneDitherMode.bayer.rawValue)
+            _ = g.nextUnit()
+            p[.dither] = Double(ToneDitherMode.none.rawValue)
             return Draw.document(.field(p), palette: palette, base: Draw.base(palette, kinds: [.solid, .gradient], using: &g), finish: Draw.finish(palette, fringe: 0.15...0.3, vignette: 0...0, using: &g), grain: g.nextDouble(in: 0.03...0.05), using: &g)
         },
         RecipeFamily(name: "Memory sky", kind: .field, field: .sky, weight: 2, quiet: 0.05...0.9, textureFloor: 0.0025) { palette, g in

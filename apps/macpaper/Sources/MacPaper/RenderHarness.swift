@@ -157,16 +157,21 @@ enum RenderHarness {
     /// Curation: for every taste-set entry, the first eight seeds from its
     /// own that pass the gate, as tiles, so the seed can be chosen by eye.
     /// Prints `RENDERS_PICK <family> <palette> <seeds…>`.
+    /// `RENDERS_PICK_ENTRIES=14,20` limits it to those entries (1-based)
+    /// and `RENDERS_PICK_COUNT` sets how many passing seeds to show.
     static func pick(into directory: URL) -> Bool {
         var ok = true
         let context = displays[0].1
-        for (index, entry) in TasteSet.entries.enumerated() {
+        let environment = ProcessInfo.processInfo.environment
+        let only = Set((environment["RENDERS_PICK_ENTRIES"] ?? "").split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) })
+        let wanted = environment["RENDERS_PICK_COUNT"].flatMap(Int.init) ?? 8
+        for (index, entry) in TasteSet.entries.enumerated() where only.isEmpty || only.contains(index + 1) {
             guard let family = RecipeFamily.named(entry.family), let palette = Palettes.preset(named: entry.palette) else { continue }
             var tiles: [Tile] = []
             var passing: [UInt64] = []
             var seed = entry.seed
             var tried = 0
-            while passing.count < 8, tried < 60 {
+            while passing.count < wanted, tried < wanted * 8 {
                 var generator = SeededGenerator(seed: seed)
                 var wallpaper = family.draw(palette, &generator)
                 wallpaper.seed = seed
