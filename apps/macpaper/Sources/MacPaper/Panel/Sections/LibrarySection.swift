@@ -1,0 +1,180 @@
+import MacPaperCore
+import SwiftUI
+
+/// Library: a name and Save for the current look, then the saved recipes
+/// (the favorites, with names) and, under them, the built-in starters. A
+/// recipe is the whole document; clicking one loads it, and live apply
+/// takes it to the desktop.
+struct LibrarySection: View {
+    @Bindable var model: AppModel
+    @State private var name = ""
+    @State private var seeded = false
+    @Environment(\.previewRendering) private var previewRendering
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Brand.Space.s16) {
+            HStack(spacing: Brand.Space.s8) {
+                if previewRendering {
+                    // The field is AppKit-backed and draws nothing under `ImageRenderer`.
+                    Text(name.isEmpty ? model.recipeTitle : name)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .panelField()
+                } else {
+                    TextField("Name this look", text: $name)
+                        .panelField()
+                        .onSubmit { save() }
+                        .accessibilityLabel("Recipe name")
+                }
+                Button("Save") { save() }
+                    .buttonStyle(PanelPrimaryButtonStyle())
+                    .disabled(model.license.restriction() != nil && !model.isFavorite)
+                    .help("Keep the look on the desktop as a recipe")
+            }
+            Text("A recipe is the whole document: generator, palette, seed and finishes. It renders again on any display.")
+                .font(Brand.body(11))
+                .foregroundStyle(Brand.Panel.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if model.favoriteList.isEmpty {
+                Text("Nothing saved yet.")
+                    .font(Brand.body(13))
+                    .foregroundStyle(Brand.Panel.textSecondary)
+                    .padding(.vertical, Brand.Space.s8)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(model.favoriteList) { favorite in
+                        RecipeRow(model: model, favorite: favorite)
+                        if favorite.id != model.favoriteList.last?.id {
+                            Rectangle().fill(Brand.Panel.hairline).frame(height: 1)
+                        }
+                    }
+                }
+            }
+            PanelMonoLabel("Starters")
+            VStack(spacing: 0) {
+                ForEach(StarterRecipes.all) { starter in
+                    StarterRow(model: model, starter: starter)
+                    if starter.id != StarterRecipes.all.last?.id {
+                        Rectangle().fill(Brand.Panel.hairline).frame(height: 1)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            if !seeded {
+                name = model.recipeTitle
+                seeded = true
+            }
+        }
+        .onChange(of: model.recipeTitle) { _, next in
+            name = next
+        }
+    }
+
+    private func save() {
+        model.saveRecipe(named: name)
+    }
+}
+
+/// One saved recipe: thumbnail, title and what it is, the star, and the
+/// menu with everything else. Separate sibling controls, never nested
+/// (design/components.md).
+private struct RecipeRow: View {
+    let model: AppModel
+    let favorite: Favorite
+
+    var body: some View {
+        HStack(spacing: Brand.Space.s12) {
+            Button {
+                model.load(favorite)
+            } label: {
+                HStack(spacing: Brand.Space.s12) {
+                    DocumentThumbnail(model: model, wallpaper: favorite.wallpaper, selected: favorite.wallpaper == model.draft)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(favorite.title)
+                            .font(Brand.body(13, weight: 600))
+                            .foregroundStyle(Brand.Panel.textPrimary)
+                            .lineLimit(1)
+                        Text(favorite.subtitle)
+                            .font(Brand.mono(11))
+                            .foregroundStyle(Brand.Panel.textSecondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(favorite.title), \(favorite.subtitle)")
+            .accessibilityHint("Loads the recipe and applies it")
+            .help("Load \(favorite.title)")
+            Button {
+                model.removeFavorite(favorite)
+            } label: {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Brand.Panel.accent)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove from the library")
+            .help("Remove from the library")
+            Menu {
+                Button("Apply") { model.load(favorite) }
+                Button("Copy link") { model.shareLink(for: favorite.wallpaper) }
+                Section("Export") {
+                    ForEach(ExportKind.allCases, id: \.self) { kind in
+                        Button("Export as \(kind.title)") { model.export(kind, of: favorite.wallpaper) }
+                    }
+                }
+                Divider()
+                Button("Never show this") { model.neverShow(favorite) }
+                Button("Remove") { model.removeFavorite(favorite) }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Brand.Panel.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .accessibilityLabel("More: apply, share, export, never show, remove")
+        }
+        .frame(height: PanelLayout.listRowHeight)
+    }
+}
+
+/// A built-in starter: a thumbnail, its name and its palette; click loads.
+private struct StarterRow: View {
+    let model: AppModel
+    let starter: StarterRecipe
+
+    var body: some View {
+        Button {
+            model.load(starter.wallpaper)
+        } label: {
+            HStack(spacing: Brand.Space.s12) {
+                DocumentThumbnail(model: model, wallpaper: starter.wallpaper, selected: starter.wallpaper == model.draft)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(starter.name)
+                        .font(Brand.body(13, weight: 600))
+                        .foregroundStyle(Brand.Panel.textPrimary)
+                        .lineLimit(1)
+                    Text(Favorite.defaultTitle(for: starter.wallpaper))
+                        .font(Brand.mono(11))
+                        .foregroundStyle(Brand.Panel.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(height: PanelLayout.listRowHeight)
+        .accessibilityLabel("Starter: \(starter.name)")
+        .accessibilityHint("Loads the starter and applies it")
+        .help("Load \(starter.name)")
+    }
+}

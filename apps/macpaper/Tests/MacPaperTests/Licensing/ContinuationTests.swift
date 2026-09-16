@@ -140,6 +140,7 @@ struct ContinuationTests {
             exporter: exporter, imagePicker: picker, displays: { AppModelTests.Harness.displays }
         )
         model.setExportReveal { _ in }
+        model.appliesLive = false
         #expect(license.hasAccess())
         return model
     }

@@ -173,10 +173,13 @@ struct SettingsView: View {
             .disabled(!preferences.notchEnabled)
             Picker(selection: $preferences.width) {
                 ForEach(PanelWidth.allCases, id: \.self) { width in
-                    Text("\(width.title) · \(Int(width.points)) pt").tag(width)
+                    Text("\(width.title) · \(Int(PanelMetrics.width(for: width))) pt").tag(width)
                 }
             } label: {
-                Text("Width").font(Brand.body(14))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Width").font(Brand.body(14))
+                    note("The column is as tall as the display allows; a width grows to fit its longest label.")
+                }
             }
             .disabled(!preferences.notchEnabled)
             Toggle(isOn: $preferences.hideInFullscreen) {

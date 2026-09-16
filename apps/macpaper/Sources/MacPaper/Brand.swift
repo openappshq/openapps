@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import MacPaperCore
 import SwiftUI
 
 /// Bundled resources. A packaged app reads `Contents/Resources`; `swift run`
@@ -77,6 +78,28 @@ enum Brand {
         })
     }
 
+    // MARK: The notch column
+
+    /// The column's colors are the core's `PanelTheme` (dark in both
+    /// appearances, opaque; the tests assert their contrast), so the views
+    /// and the assertion read one source.
+    enum Panel {
+        static let ground = Color(PanelTheme.ground)
+        static let surface = Color(PanelTheme.surface)
+        static let hover = Color(PanelTheme.hover)
+        static let textPrimary = Color(PanelTheme.textPrimary)
+        static let textSecondary = Color(PanelTheme.textSecondary)
+        static let border = Color(PanelTheme.border)
+        static let rim = Color(PanelTheme.border).opacity(PanelTheme.rimAlpha)
+        static let accent = Color(PanelTheme.accent)
+        static let accentOn = Color(PanelTheme.accentOn)
+        static let accentText = Color(PanelTheme.accentText)
+        static let danger = Color(PanelTheme.danger)
+        static let success = Color(PanelTheme.success)
+        /// The hairline between the rail and the pane, and between rows.
+        static let hairline = Color.white.opacity(0.08)
+    }
+
     // MARK: Metrics
 
     nonisolated enum Space {
@@ -130,6 +153,48 @@ enum Brand {
 
     private static func fourCharCode(_ tag: String) -> UInt32 {
         tag.utf8.reduce(0) { ($0 << 8) | UInt32($1) }
+    }
+
+    /// The NSFont behind `body`, for measuring labels.
+    static func bodyFont(_ size: CGFloat, weight: CGFloat = 400) -> NSFont {
+        let fallbackWeight: NSFont.Weight = weight >= 600 ? .semibold : .regular
+        return variableFont(family: "Instrument Sans", size: size, weight: weight) ?? .systemFont(ofSize: size, weight: fallbackWeight)
+    }
+}
+
+/// Text measured the way it will be drawn, so a control can be sized from
+/// its longest label instead of a guess (design/products/macpaper.md, the
+/// panel: segments never wrap).
+enum LabelMeasure {
+    /// The width of `text` in `font`, on one line.
+    static func width(of text: String, font: NSFont) -> CGFloat {
+        let attributed = NSAttributedString(string: text, attributes: [.font: font])
+        return ceil(attributed.size().width)
+    }
+
+    /// The widths of every label of a segmented control at the panel's
+    /// segment font (the selected segment is semibold; measured as such,
+    /// since any of them can be).
+    static func segmentWidths(_ labels: [String]) -> [CGFloat] {
+        let font = Brand.bodyFont(SegmentMetrics.fontSize, weight: 600)
+        return labels.map { width(of: $0, font: font) }
+    }
+
+    /// The width a segmented control with these labels takes.
+    static func segmentedWidth(_ labels: [String]) -> CGFloat {
+        PanelLayout.segmentedWidth(labelWidths: segmentWidths(labels))
+    }
+}
+
+/// The segmented control's type size, shared by the view and the measure.
+enum SegmentMetrics {
+    static let fontSize: CGFloat = 12
+    static let height: CGFloat = 28
+}
+
+extension Color {
+    init(_ color: RGBAColor) {
+        self.init(nsColor: NSColor(srgbRed: color.red, green: color.green, blue: color.blue, alpha: color.alpha))
     }
 }
 

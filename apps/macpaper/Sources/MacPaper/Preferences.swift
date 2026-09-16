@@ -67,6 +67,13 @@ final class Preferences {
     var clockSize: ClockSize {
         didSet { defaults.set(clockSize.rawValue, forKey: PreferenceKey.clockSize) }
     }
+    /// The parameters pinned in the panel: Shuffle keeps them.
+    var pins: PinnedParameters {
+        didSet {
+            guard pins != oldValue else { return }
+            defaults.set((try? JSONEncoder().encode(pins.pins.map(\.rawValue).sorted())) ?? Data(), forKey: PreferenceKey.pins)
+        }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -89,6 +96,8 @@ final class Preferences {
         clockStyle = defaults.string(forKey: PreferenceKey.clockStyle).flatMap(ClockStyle.init(rawValue:)) ?? .off
         clockPosition = defaults.string(forKey: PreferenceKey.clockPosition).flatMap(ClockPosition.init(rawValue:)) ?? .bottomRight
         clockSize = defaults.string(forKey: PreferenceKey.clockSize).flatMap(ClockSize.init(rawValue:)) ?? .medium
+        let pinNames = defaults.data(forKey: PreferenceKey.pins).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+        pins = PinnedParameters(Set(pinNames.compactMap(ParameterPin.init(rawValue:))))
     }
 
     /// The panel rules' view of the settings.

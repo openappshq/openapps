@@ -13,9 +13,9 @@ struct UpdateHintRow: View {
             HStack(spacing: Brand.Space.s8) {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(Brand.accentText)
+                    .foregroundStyle(Brand.Panel.accentText)
                     .accessibilityHidden(true)
-                MonoLabel(UpdateCopy.line(for: hint))
+                PanelMonoLabel(UpdateCopy.line(for: hint))
                 if let action = UpdateCopy.action(for: hint) {
                     Button(action) {
                         switch hint {
@@ -23,10 +23,11 @@ struct UpdateHintRow: View {
                         default: updates.install()
                         }
                     }
-                    .buttonStyle(LinkButtonStyle())
+                    .buttonStyle(PanelLinkButtonStyle())
                 }
                 Spacer()
             }
+            .frame(height: 28)
             .accessibilityElement(children: .combine)
         }
     }

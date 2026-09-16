@@ -13,6 +13,9 @@ final class NotchHost {
     private let quit: () -> Void
     /// The licensing wiring's header (the trial pill); nil draws nothing.
     var header: (() -> AnyView)?
+    /// The menu-bar item's frame in screen coordinates: on a display
+    /// without a notch the column opens under it.
+    var statusItemFrame: () -> CGRect? = { nil }
     private(set) var controllers: [DisplayID: NotchPanelController] = [:]
     private let fullscreen = FullscreenWatcher()
     private var observers: [NSObjectProtocol] = []
@@ -83,6 +86,7 @@ final class NotchHost {
             } else {
                 controllers[id] = NotchPanelController(
                     display: display, screen: screen, model: model, preferences: preferences, header: header,
+                    statusItemFrame: { [weak self] in self?.statusItemFrame() },
                     onOpenPopover: onOpenPopover, showSettings: showSettings, quit: quit
                 )
                 controllers[id]?.handle(.settingsChanged(preferences.panelSettings))

@@ -30,10 +30,16 @@ final class NotchPanelController {
     private let onOpenPopover: () -> Void
     private let showSettings: () -> Void
     private let quit: () -> Void
+    /// The menu-bar item's frame in screen coordinates, when it has one:
+    /// on a display without a notch the column opens under it.
+    private let statusItemFrame: () -> CGRect?
 
     private(set) var machine: PanelStateMachine
     private let hoverWindow: NSPanel
     private let panel: NSPanel
+    /// The click-through strip that shades the menu-bar row above a
+    /// notch-anchored column.
+    private let shade: NSPanel
     private let hosting: NSHostingView<PanelContent>
     private var timers: [PanelTimer: Timer] = [:]
     private var outsideClickMonitor: Any?
@@ -45,12 +51,13 @@ final class NotchPanelController {
     /// The licensing wiring's header (the trial pill); nil draws nothing.
     let header: (() -> AnyView)?
 
-    init(display: DisplayInfo, screen: NSScreen, model: AppModel, preferences: Preferences, header: (() -> AnyView)? = nil, onOpenPopover: @escaping () -> Void, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
+    init(display: DisplayInfo, screen: NSScreen, model: AppModel, preferences: Preferences, header: (() -> AnyView)? = nil, statusItemFrame: @escaping () -> CGRect? = { nil }, onOpenPopover: @escaping () -> Void, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.display = display
         self.header = header
         self.screen = screen
         self.model = model
         self.preferences = preferences
+        self.statusItemFrame = statusItemFrame
         self.onOpenPopover = onOpenPopover
         self.showSettings = showSettings
         self.quit = quit
@@ -80,8 +87,26 @@ final class NotchPanelController {
         panel.becomesKeyOnlyIfNeeded = true
         panel.isMovableByWindowBackground = false
         panel.animationBehavior = .none
-        let content = PanelContent(model: model, width: preferences.width.points, header: header?(), showSettings: showSettings, quit: quit)
+        // The column is dark in both appearances (PanelTheme).
+        panel.appearance = NSAppearance(named: .darkAqua)
+
+        shade = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        shade.isOpaque = false
+        shade.backgroundColor = .clear
+        shade.hasShadow = false
+        shade.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+        shade.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        shade.isReleasedWhenClosed = false
+        shade.hidesOnDeactivate = false
+        shade.isFloatingPanel = true
+        // Visual only: the menu bar under it keeps every click.
+        shade.ignoresMouseEvents = true
+        shade.animationBehavior = .none
+        shade.contentView = NSHostingView(rootView: MenuBarShade())
+
+        let content = PanelContent(model: model, width: PanelMetrics.width(for: preferences.width), header: header?(), showSettings: showSettings, quit: quit)
         hosting = NSHostingView(rootView: content)
+        hosting.appearance = NSAppearance(named: .darkAqua)
         let container = PanelContainerView(hosting: hosting)
         container.onContentHeightChange = { [weak self] in self?.contentGrew() }
         panel.contentView = container
@@ -104,6 +129,7 @@ final class NotchPanelController {
             removeMonitors()
             hoverWindow.orderOut(nil)
             panel.orderOut(nil)
+            shade.orderOut(nil)
         }
     }
 
@@ -156,27 +182,48 @@ final class NotchPanelController {
         hoverWindow.setFrame(zone, display: false)
     }
 
-    /// The content changed height (a taller generator, a status line): the
-    /// panel keeps its top against the menu bar and grows or shrinks down.
+    /// What the column hangs from on this screen: the notch, the menu-bar
+    /// item when it sits on this screen, else the top center.
+    var anchor: PanelAnchor {
+        let menuBar = ScreenCatalog.menuBarHeight(of: screen)
+        if let notch = ScreenCatalog.notch(of: screen) { return .notch(notch, menuBarHeight: menuBar) }
+        if let item = statusItemFrame(), screen.frame.intersects(item) { return .statusItem(item, menuBarHeight: menuBar) }
+        return .topCenter(menuBarHeight: menuBar)
+    }
+
+    /// The column is a fixed height for the screen (most of it): sections
+    /// switch without the window jumping. The content scrolls inside.
+    private var columnHeight: CGFloat {
+        PanelLayout.columnHeight(screenHeight: screen.frame.height, topInset: NotchGeometry.topInset(for: anchor))
+    }
+
+    /// The content wants another height: the column's height is the
+    /// screen's, so nothing moves; kept for a screen too short for the
+    /// cap, where the column follows the content down to it.
     private func contentGrew() {
         guard machine.isOpen else { return }
-        let size = hosting.fittingSize
-        guard abs(size.height - panel.frame.height) > 0.5 else { return }
-        let frame = NotchGeometry.panelFrame(
-            screenFrame: screen.frame, menuBarHeight: ScreenCatalog.menuBarHeight(of: screen), notch: ScreenCatalog.notch(of: screen),
-            width: preferences.width, contentHeight: size.height
-        )
-        panel.setFrame(frame, display: true)
+        let wanted = min(columnHeight, max(hosting.fittingSize.height, 0))
+        guard abs(wanted - panel.frame.height) > 0.5, wanted < columnHeight else { return }
+        layoutPanel()
     }
 
     private func layoutPanel() {
-        hosting.rootView = PanelContent(model: model, width: preferences.width.points, header: header?(), showSettings: showSettings, quit: quit)
-        let size = hosting.fittingSize
-        let frame = NotchGeometry.panelFrame(
-            screenFrame: screen.frame, menuBarHeight: ScreenCatalog.menuBarHeight(of: screen), notch: ScreenCatalog.notch(of: screen),
-            width: preferences.width, contentHeight: size.height
+        let anchor = anchor
+        let height = columnHeight
+        let width = PanelMetrics.width(for: preferences.width)
+        hosting.rootView = PanelContent(
+            model: model, width: width, height: height, anchoredToNotch: anchor.isNotch, header: header?(),
+            showSettings: showSettings, quit: quit, dismiss: { [weak self] in self?.handle(.escape) }
         )
+        let frame = NotchGeometry.panelFrame(screenFrame: screen.frame, anchor: anchor, width: width, contentHeight: height)
         panel.setFrame(frame, display: true)
+        if let strip = NotchGeometry.menuBarShadeFrame(screenFrame: screen.frame, anchor: anchor, panelFrame: frame) {
+            shade.setFrame(strip, display: true)
+        }
+    }
+
+    private var shadesMenuBar: Bool {
+        NotchGeometry.menuBarShadeFrame(screenFrame: screen.frame, anchor: anchor, panelFrame: panel.frame) != nil
     }
 
     private func show() {
@@ -185,18 +232,28 @@ final class NotchPanelController {
         layoutPanel()
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let final = panel.frame
+        let shades = shadesMenuBar
         if reduceMotion {
             panel.alphaValue = 1
             panel.orderFrontRegardless()
+            if shades {
+                shade.alphaValue = 1
+                shade.orderFrontRegardless()
+            }
         } else {
             panel.alphaValue = 0
             panel.setFrame(final.offsetBy(dx: 0, dy: 10), display: false)
             panel.orderFrontRegardless()
+            if shades {
+                shade.alphaValue = 0
+                shade.orderFrontRegardless()
+            }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = Brand.Motion.standard
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().alphaValue = 1
                 panel.animator().setFrame(final, display: true)
+                if shades { shade.animator().alphaValue = 1 }
             }
         }
         installMonitors()
@@ -208,14 +265,17 @@ final class NotchPanelController {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if reduceMotion {
             panel.orderOut(nil)
+            shade.orderOut(nil)
         } else {
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = Brand.Motion.fast
                 panel.animator().alphaValue = 0
+                shade.animator().alphaValue = 0
             }, completionHandler: { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self, !self.machine.isOpen else { return }
                     self.panel.orderOut(nil)
+                    self.shade.orderOut(nil)
                 }
             })
         }
@@ -253,56 +313,75 @@ final class NotchPanelController {
     }
 }
 
-/// The panel's SwiftUI content in its card: glass, the top squared off
-/// where it meets the menu bar, the bottom corners rounded.
+/// The column in its shape: the opaque dark ground, the top squared off
+/// where it hangs from the notch (rounded all round under a menu-bar
+/// item), the rim the design system specifies.
 struct PanelContent: View {
     let model: AppModel
     let width: CGFloat
+    var height: CGFloat? = nil
+    /// Squared top corners: the column meets the notch.
+    var anchoredToNotch = true
     var header: AnyView? = nil
     let showSettings: () -> Void
     let quit: () -> Void
-    var expandFinishes = false
-    var expandFavorites = false
+    var dismiss: () -> Void = {}
 
     var body: some View {
-        WallpaperPanelView(model: model, attachedToNotch: true, width: width, header: header, showSettings: showSettings, quit: quit, expandFinishes: expandFinishes, expandFavorites: expandFavorites)
-            .background(PanelBackdrop())
-            .clipShape(NotchPanelShape())
+        let shape = NotchPanelShape(squaredTop: anchoredToNotch)
+        WallpaperPanelView(model: model, width: width, height: height, header: header, showSettings: showSettings, quit: quit, dismiss: dismiss)
+            .background(PanelBackdrop(shape: shape))
+            .clipShape(shape)
+            .overlay(PanelRim(shape: shape))
     }
 }
 
-/// Glass or material behind the panel, with the notch panel's shape.
+/// The ground behind the column: `PanelTheme.ground`, opaque in every
+/// case (Reduce Transparency changes nothing, there is nothing to
+/// reduce); under Increase Contrast the rim brightens.
 struct PanelBackdrop: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.previewRendering) private var previewRendering
+    let shape: NotchPanelShape
 
     var body: some View {
-        let style = SurfaceStyle(reduceTransparency: reduceTransparency, increasedContrast: contrast == .increased)
-        let shape = NotchPanelShape()
-        Group {
-            if previewRendering {
-                // `ImageRenderer` draws no material: a translucent flat stands in.
-                shape.fill(Brand.canvas.opacity(0.88))
-            } else if #available(macOS 26, *), style.usesGlass {
-                Color.clear.glassEffect(.regular, in: shape)
-            } else if style.reduceTransparency {
-                shape.fill(Brand.canvas)
-            } else {
-                shape.fill(.regularMaterial)
-            }
-        }
-        .overlay(shape.strokeBorder(style.increasedContrast ? Brand.textPrimary.opacity(0.6) : Brand.borderSubtle.opacity(0.6), lineWidth: 1))
+        shape.fill(Brand.Panel.ground)
     }
 }
 
-/// Squared at the top, rounded at the bottom.
+/// The 1-point rim: neutral/700 on the ground, brighter under Increase
+/// Contrast, and a hairline of light along the top edge where the column
+/// meets the menu bar.
+struct PanelRim: View {
+    let shape: NotchPanelShape
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        shape.strokeBorder(contrast == .increased ? Brand.Panel.textPrimary.opacity(0.6) : Brand.Panel.rim, lineWidth: 1)
+    }
+}
+
+/// The click-through strip over the menu-bar row above the column: the
+/// column's black, at `PanelTheme.menuBarShadeAlpha`, so the row reads as
+/// part of it while the menu bar keeps every click.
+struct MenuBarShade: View {
+    var body: some View {
+        Rectangle().fill(Brand.Panel.ground.opacity(PanelTheme.menuBarShadeAlpha))
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
+    }
+}
+
+/// Squared at the top and rounded at the bottom on a notch; rounded all
+/// round under a menu-bar item.
 struct NotchPanelShape: InsettableShape {
+    var squaredTop = true
     var inset: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
         let r = rect.insetBy(dx: inset, dy: inset)
         let radius = min(Brand.Radius.panel, r.width / 2, r.height / 2)
+        guard squaredTop else {
+            return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: r)
+        }
         var path = Path()
         path.move(to: CGPoint(x: r.minX, y: r.minY))
         path.addLine(to: CGPoint(x: r.maxX, y: r.minY))
