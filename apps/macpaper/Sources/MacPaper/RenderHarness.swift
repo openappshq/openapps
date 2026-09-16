@@ -98,14 +98,14 @@ enum RenderHarness {
         let palettes = ["Mint Circuit", "Neon Night", "Blueprint", "Magma", "Paper White"].compactMap(Palettes.preset(named:))
         for palette in palettes {
             for cell in [8, 12, 20] {
-                var generator = SeededGenerator(seed: 7)
+                var generator = SeededGenerator(seed: 6001)
                 var wallpaper = RecipeFamily.named("Moiré atlas")!.draw(palette, &generator)
-                if case .field(var p) = wallpaper.generator { p[.cellSize] = Double(cell); wallpaper.generator = .field(p) }
+                if case .field(var p) = wallpaper.generator { p[.cellSize] = Double(cell); p[.dither] = 0; wallpaper.generator = .field(p) }
                 let context = displays[0].1
                 let full = renderer.render(wallpaper, side: .light, context: context)
                 // A 480×300 crop at native pixels from the middle.
                 tiles.append(Tile(image: crop(full, width: 480, height: 300), label: "\(palette.name) cell \(cell) · native crop"))
-                tiles.append(Tile(image: full.cgImage.map { downscale($0, width: 480) } ?? crop(full, width: 480, height: 300), label: "   whole"))
+                tiles.append(Tile(image: full.areaResampled(to: PixelSize(width: 480, height: 480 * full.height / full.width)).cgImage, label: "   whole"))
             }
         }
         return sheet(tiles, columns: 6, tileWidth: 480, to: directory.appendingPathComponent("cells-sheet.png"))
