@@ -216,9 +216,7 @@ export const products: Product[] = [
     icon: "/brand/opennotes/app-icon.svg",
     accent: "coral",
     wordmark: false,
-    // Placeholders until the app lands; then `apps/opennotes/design/assets`
-    // (see src/apps/opennotes/brand/README.md).
-    brandSource: "apps/website/src/apps/opennotes/brand",
+    brandSource: "apps/opennotes/design/assets",
     assets: [],
     pages: [
       {
