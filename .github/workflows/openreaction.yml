@@ -100,9 +100,12 @@ jobs:
         run: |
           brew install shellcheck actionlint
           shellcheck scripts/*.sh scripts/tests/*.sh ../../scripts/release/*.sh ../../scripts/release/tests/*.sh ../../packaging/homebrew/*.sh ../../packaging/homebrew/tests/*.sh
+          # The served install scripts are plain POSIX sh (RELEASES.md, "Install script").
+          shellcheck -s sh ../../apps/website/public/install/*
           actionlint ../../.github/workflows/openreaction.yml
           scripts/tests/scan-binary.test.sh
           ../../scripts/release/tests/with-signing-keychain.test.sh
+          ../../scripts/release/tests/install-script.test.sh
           ../../packaging/homebrew/tests/bump-cask.test.sh
       # The official flavour (licensing and the updater) as an ad-hoc signed
       # development app, pinning a throwaway update key so the build does not
@@ -327,8 +330,9 @@ jobs:
           ALLOW_OLDER: ${{ inputs.allow_older == true }}
         run: scripts/publish-release.sh
 
-  # Once the release is public: commit the signed feed to main (the website
-  # deploy serves it), verify the live feed and zip, then bump the cask.
+  # Once the release is public: commit the signed feed and the install script
+  # to main (the website deploy serves both), verify the live feed, zip and
+  # script, then bump the cask.
   # No build runs here and no signing material is present; the feed was
   # signed by the release job and is only checked again here.
   feed:
@@ -394,15 +398,19 @@ jobs:
         env:
           FEED_COMMIT_TOKEN: ${{ secrets.FEED_COMMIT_TOKEN }}
           VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
           REPO: ${{ github.repository }}
         run: |
           mkdir -p apps/website/public/updates/openreaction
           cp apps/openreaction/dist/appcast.xml apps/website/public/updates/openreaction/appcast.xml
+          # The install script pins the same release as the feed (RELEASES.md,
+          # "Install script"); write-install-script.sh refuses to move it backwards.
+          scripts/release/write-install-script.sh openreaction OpenReaction "$VERSION" "$SHA256" apps/website/public/install/openreaction
           git config user.name "openapps-release"
           git config user.email "release@openapps.space"
-          git add apps/website/public/updates/openreaction/appcast.xml
-          if git diff --cached --quiet; then echo "The feed already names $VERSION."; exit 0; fi
-          git commit -m "Point OpenReaction's update feed at $VERSION"
+          git add apps/website/public/updates/openreaction/appcast.xml apps/website/public/install/openreaction
+          if git diff --cached --quiet; then echo "The feed and the install script already name $VERSION."; exit 0; fi
+          git commit -m "Point OpenReaction's update feed and install script at $VERSION"
           # The token is passed per command and never written to .git/config.
           for _ in 1 2 3; do
             if git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$FEED_COMMIT_TOKEN" | base64 | tr -d '\n')" push "https://github.com/$REPO.git" HEAD:main; then exit 0; fi
@@ -417,6 +425,12 @@ jobs:
           # The website deploys from main after the commit above.
           WAIT_SECONDS: "1500"
         run: apps/openreaction/scripts/verify-live.sh "$VERSION" "$EXPECTED_SHA256"
+      - name: Verify the live install script
+        if: steps.order.outputs.promote == 'true'
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.release.outputs.sha256 }}
+        run: scripts/release/verify-live-install-script.sh openreaction "$VERSION" "$EXPECTED_SHA256"
       - name: Bump the cask
         if: steps.order.outputs.promote == 'true'
         env:
