@@ -505,6 +505,164 @@ struct RecipeTests {
         #expect(messy.fileName.hasSuffix(".macpaper") && !messy.fileName.contains("/") && !messy.fileName.contains(":"))
         #expect(RecipeDocument(name: "", wallpaper: .starter).name == Recipe.defaultName(for: .starter))
     }
+
+    @Test("A version-2 favorites file round-trips as written, no migration")
+    func v2RoundTrip() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        let file = directory.url.appendingPathComponent("favorites.json")
+        // Written by hand as the version-2 shape (RecipeLibrary.File):
+        // newest first is a library convention, not enforced by the format
+        // itself, so a version-2 file is read back in exactly the order
+        // it is on disk — nothing here migrates or reorders it.
+        let a = TasteSet.recipes[2].wallpaper, b = TasteSet.recipes[3].wallpaper
+        let idA = "6A2A5B1E-0000-4000-8000-000000000002", idB = "6A2A5B1E-0000-4000-8000-000000000003"
+        let json = """
+        {"version":2,"recipes":[
+            {"id":"\(idB)","name":"Second","addedAt":"2027-01-15T08:01:40Z","wallpaper":\(String(decoding: try b.jsonData(), as: UTF8.self))},
+            {"id":"\(idA)","name":"First","addedAt":"2027-01-15T08:00:00Z","wallpaper":\(String(decoding: try a.jsonData(), as: UTF8.self))}
+        ]}
+        """
+        try Data(json.utf8).write(to: file)
+        let library = RecipeLibrary(fileURL: file)
+        #expect(library.all.map(\.id.uuidString) == [idB, idA], "read in file order, not migrated")
+        #expect(library.all.map(\.name) == ["Second", "First"])
+        #expect(library.all.map(\.wallpaper) == [b, a])
+        // Unchanged, a fresh instance over the same file matches exactly.
+        #expect(RecipeLibrary(fileURL: file).all == library.all)
+    }
+
+    @Test(".macpaper file decode limits: size, format and kind, from real files on disk")
+    func fileDecodeLimits() throws {
+        let directory = TemporaryDirectory()
+        defer { directory.remove() }
+        let good = RecipeDocument(name: "Good", wallpaper: .starter)
+        let goodFile = directory.url.appendingPathComponent(good.fileName)
+        try good.fileData().write(to: goodFile)
+        let goodSize = try goodFile.resourceValues(forKeys: [.fileSizeKey]).fileSize!
+        #expect(goodSize <= ShareCode.maxDocumentBytes)
+        #expect(try RecipeDocument.decode(try Data(contentsOf: goodFile)) == good)
+        // Oversized: refused before it is even parsed as JSON.
+        let oversized = directory.url.appendingPathComponent("oversized.macpaper")
+        try Data(repeating: 0x20, count: ShareCode.maxDocumentBytes + 1).write(to: oversized)
+        #expect(throws: ShareCode.DecodeError.tooLong) { try RecipeDocument.decode(try Data(contentsOf: oversized)) }
+        // A newer format on disk.
+        let newerFormat = directory.url.appendingPathComponent("newer.macpaper")
+        try Data("{\"macpaper\":2,\"kind\":\"recipe\",\"wallpaper\":{}}".utf8).write(to: newerFormat)
+        #expect(throws: ShareCode.DecodeError.corrupt) { try RecipeDocument.decode(try Data(contentsOf: newerFormat)) }
+        // The wrong kind on disk.
+        let wrongKind = directory.url.appendingPathComponent("wrong-kind.macpaper")
+        try Data("{\"macpaper\":1,\"kind\":\"theme\",\"wallpaper\":{}}".utf8).write(to: wrongKind)
+        #expect(throws: ShareCode.DecodeError.corrupt) { try RecipeDocument.decode(try Data(contentsOf: wrongKind)) }
+        // Junk on disk.
+        let junk = directory.url.appendingPathComponent("junk.macpaper")
+        try Data("not json at all".utf8).write(to: junk)
+        #expect(throws: ShareCode.DecodeError.corrupt) { try RecipeDocument.decode(try Data(contentsOf: junk)) }
+    }
+}
+
+// MARK: - Pins
+
+@Suite("Pins")
+struct PinsTests {
+    static let renderer = WallpaperRenderer()
+    static let context = RenderContext(size: PixelSize(width: 640, height: 400), menuBarStrip: 12)
+
+    @Test("Pins.apply carries a pattern's scale and angle, but not the kind, when unpinned")
+    func patternPins() {
+        let template = Wallpaper(generator: .pattern(PatternParameters(kind: .lines, foreground: .white, background: .black, scale: 180, angle: 30)), seed: 1)
+        var candidate = Wallpaper(generator: .pattern(PatternParameters(kind: .dots, foreground: .white, background: .black, scale: 48, angle: 0)), seed: 2)
+        // Nothing pinned: the candidate keeps its own values.
+        var out = Pins.apply([], from: template, to: candidate)
+        guard case .pattern(let none) = out.generator else { Issue.record("not a pattern"); return }
+        #expect(none.scale == 48 && none.angle == 0 && none.kind == .dots)
+        // scale, angle and the kind, pinned individually.
+        out = Pins.apply([.scale], from: template, to: candidate)
+        guard case .pattern(let scaled) = out.generator else { Issue.record("not a pattern"); return }
+        #expect(scaled.scale == 180 && scaled.angle == 0, "only scale carried")
+        out = Pins.apply([.angle], from: template, to: candidate)
+        guard case .pattern(let angled) = out.generator else { Issue.record("not a pattern"); return }
+        #expect(angled.angle == 30 && angled.scale == 48, "only angle carried")
+        out = Pins.apply([.patternKind], from: template, to: candidate)
+        guard case .pattern(let kinded) = out.generator else { Issue.record("not a pattern"); return }
+        #expect(kinded.kind == .lines && kinded.scale == 48, "only the kind carried")
+        // A candidate of another kind: the pins are carried but have no target to land on.
+        candidate = Wallpaper(generator: .solid(SolidParameters(color: .black)), seed: 2)
+        out = Pins.apply([.scale, .angle, .patternKind], from: template, to: candidate)
+        #expect(out.generator == candidate.generator, "no pattern to carry into")
+    }
+
+    @Test("Pins.apply carries a mesh's columns, rows, jitter and softness independently")
+    func meshPins() {
+        let template = Wallpaper(generator: .mesh(MeshParameters(columns: 5, rows: 4, colors: [.black, .white], jitter: 0.9, softness: 0.1)), seed: 1)
+        let candidate = Wallpaper(generator: .mesh(MeshParameters(columns: 2, rows: 2, colors: [.black, .white], jitter: 0.2, softness: 0.8)), seed: 2)
+        var out = Pins.apply([.columns], from: template, to: candidate)
+        guard case .mesh(let columns) = out.generator else { Issue.record("not a mesh"); return }
+        #expect(columns.columns == 5 && columns.rows == 2 && columns.jitter == 0.2 && columns.softness == 0.8)
+        out = Pins.apply([.rows], from: template, to: candidate)
+        guard case .mesh(let rows) = out.generator else { Issue.record("not a mesh"); return }
+        #expect(rows.rows == 4 && rows.columns == 2)
+        out = Pins.apply([.jitter], from: template, to: candidate)
+        guard case .mesh(let jitter) = out.generator else { Issue.record("not a mesh"); return }
+        #expect(jitter.jitter == 0.9 && jitter.softness == 0.8)
+        out = Pins.apply([.softness], from: template, to: candidate)
+        guard case .mesh(let softness) = out.generator else { Issue.record("not a mesh"); return }
+        #expect(softness.softness == 0.1 && softness.jitter == 0.2)
+        out = Pins.apply([.columns, .rows, .jitter, .softness], from: template, to: candidate)
+        #expect(out.generator == template.generator, "every mesh knob carried")
+    }
+
+    @Test("Pins.apply carries a dither's mode, cell and palette size independently")
+    func ditherPins() {
+        let template = Wallpaper(generator: .dither(DitherParameters(source: nil, mode: .halftone, cell: 20, paletteSize: 6, ink: .black, paper: .white)), seed: 1)
+        let candidate = Wallpaper(generator: .dither(DitherParameters(source: nil, mode: .bayer2, cell: 2, paletteSize: nil, ink: .black, paper: .white)), seed: 2)
+        var out = Pins.apply([.ditherMode], from: template, to: candidate)
+        guard case .dither(let mode) = out.generator else { Issue.record("not a dither"); return }
+        #expect(mode.mode == .halftone && mode.cell == 2)
+        out = Pins.apply([.cell], from: template, to: candidate)
+        guard case .dither(let cell) = out.generator else { Issue.record("not a dither"); return }
+        #expect(cell.cell == 20 && cell.mode == .bayer2)
+        out = Pins.apply([.paletteSize], from: template, to: candidate)
+        guard case .dither(let size) = out.generator else { Issue.record("not a dither"); return }
+        #expect(size.paletteSize == 6 && size.mode == .bayer2)
+    }
+
+    @Test("Pins.apply carries a gradient's kind, angle, center and interpolation independently")
+    func gradientPins() {
+        let template = Wallpaper(generator: .gradient(GradientParameters(kind: .conic, angle: 200, center: Point(x: 0.1, y: 0.9), stops: [ColorStop(position: 0, color: .black), ColorStop(position: 1, color: .white)], interpolation: .oklch)), seed: 1)
+        let candidate = Wallpaper(generator: .gradient(GradientParameters(kind: .linear, angle: 0, center: .center, stops: [ColorStop(position: 0, color: .white), ColorStop(position: 1, color: .black)], interpolation: .srgb)), seed: 2)
+        var out = Pins.apply([.gradientKind], from: template, to: candidate)
+        guard case .gradient(let kind) = out.generator else { Issue.record("not a gradient"); return }
+        #expect(kind.kind == .conic && kind.angle == 0)
+        out = Pins.apply([.angle], from: template, to: candidate)
+        guard case .gradient(let angle) = out.generator else { Issue.record("not a gradient"); return }
+        #expect(angle.angle == 200 && angle.kind == .linear)
+        out = Pins.apply([.center], from: template, to: candidate)
+        guard case .gradient(let center) = out.generator else { Issue.record("not a gradient"); return }
+        #expect(center.center == Point(x: 0.1, y: 0.9))
+        out = Pins.apply([.interpolation], from: template, to: candidate)
+        guard case .gradient(let interp) = out.generator else { Issue.record("not a gradient"); return }
+        #expect(interp.interpolation == .oklch)
+    }
+
+    @Test("ShufflePlanner with favoritesOnly draws only from the favorites, ignoring the template's pins")
+    func favoritesOnlyIgnoresPins() {
+        var template = TasteSet.recipes[0].wallpaper
+        template.pinned = [.cellSize, .generator, .family, .palette]
+        let favorites = [TasteSet.recipes[5].wallpaper, TasteSet.recipes[6].wallpaper, TasteSet.recipes[7].wallpaper]
+        let display = DisplayInfo(id: 1, name: "A", pointSize: CGSize(width: 320, height: 200), scale: 2)
+        var generator = SeededGenerator(seed: 42)
+        var picks: Set<Wallpaper> = []
+        for _ in 0..<12 {
+            let plan = ShufflePlanner.plan(displays: [display], current: [:], favorites: favorites, favoritesOnly: true, sameOnAllDisplays: true, template: template, using: &generator)
+            guard let pick = plan[display] else { Issue.record("no pick"); continue }
+            #expect(favorites.contains(pick), "drawn from the favorites, not curated fresh")
+            picks.insert(pick)
+        }
+        #expect(picks.isSubset(of: Set(favorites)))
+        // At least one favorite drawn is not the template's own family/cell size: the pins did nothing.
+        #expect(picks.contains { $0 != template })
+    }
 }
 
 // MARK: - Budget
