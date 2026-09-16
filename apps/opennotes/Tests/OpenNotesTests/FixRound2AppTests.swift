@@ -30,6 +30,9 @@ final class AppModelFixRound2Tests: XCTestCase {
     }
 
     @MainActor private func makeModel() -> AppModel {
+        // Not a first launch: an empty folder would otherwise get the
+        // welcome note at `start()`, and this test wants the vault empty.
+        temporary.defaults.set(true, forKey: WelcomeNote.Key.decided)
         let preferences = Preferences(defaults: temporary.defaults)
         preferences.folder = folder
         preferences.autoArchiveDays = 7

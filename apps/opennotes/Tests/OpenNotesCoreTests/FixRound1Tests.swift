@@ -449,19 +449,20 @@ final class DeckStateMachineFixRound1Tests: XCTestCase {
     }
 }
 
-/// P1: the fan's shingle step shrinks so a full deck still fits a short screen.
+/// P1: a full deck still fits a short screen — now by scrolling the fan,
+/// with every tab listed and the ones past the fan's ends hidden by its
+/// mask, the plus tab always inside the panel.
 final class DeckGeometryFixRound1Tests: XCTestCase {
-    @MainActor func testEightNotesAndAMoreTabFitAShortWideScreen() {
+    @MainActor func testTwelveNotesFitAShortWideScreen() {
         let many = (0..<12).map { NoteID("n\($0)") }
         let screen = CGRect(x: 0, y: 0, width: 800, height: 500)
         let layout = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many)
-        XCTAssertEqual(layout.tabs.count, 9)
+        XCTAssertEqual(layout.tabs.count, 12)
         XCTAssertLessThanOrEqual(layout.panelFrame.height, 500)
         let bounds = CGRect(x: 0, y: 0, width: layout.panelFrame.width, height: layout.panelFrame.height)
-        for tab in layout.tabs {
-            XCTAssertTrue(bounds.contains(tab.frame), "\(tab.frame) is outside \(bounds)")
-        }
+        XCTAssertTrue(bounds.contains(layout.fan), "\(layout.fan) is outside \(bounds)")
         XCTAssertTrue(bounds.contains(layout.plusTab), "\(layout.plusTab) is outside \(bounds)")
-        XCTAssertLessThan(layout.tabStep, 88)
+        XCTAssertTrue(layout.canScrollDown)
+        XCTAssertGreaterThan(layout.fan.height, 112, "at least one whole tab shows")
     }
 }

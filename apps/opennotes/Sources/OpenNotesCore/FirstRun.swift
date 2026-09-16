@@ -101,6 +101,8 @@ nonisolated public struct FreshInstallDefault {
             loginItemApplied, updateChecksApplied,
             // Preferences (the app's Preferences.swift): the deck, capture and note defaults.
             "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.color", "notes.autoArchiveDays",
+            // WelcomeNote: the welcome note was written or found unnecessary.
+            WelcomeNote.Key.decided,
             // OpenAppsUpdater (Updater.Key): both toggles and the last check.
             "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
         ]

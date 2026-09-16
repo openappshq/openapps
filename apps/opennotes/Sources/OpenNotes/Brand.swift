@@ -82,6 +82,12 @@ enum Brand {
         Color(nsColor: NSColor(hex: color.lightFace))
     }
 
+    /// The bar along a tab's outer edge: the colour's mid tone, the same
+    /// in both appearances.
+    static func bar(_ color: NoteColor) -> Color {
+        Color(nsColor: NSColor(hex: color.bar))
+    }
+
     /// The text color on a note's face, per appearance.
     static let noteInk = dynamic(light: 0x141414, dark: 0xF8F8F8)
     /// Markers and metadata on a note's face: neutral/700 on the light

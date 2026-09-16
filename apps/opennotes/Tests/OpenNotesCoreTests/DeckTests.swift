@@ -194,24 +194,72 @@ final class DeckGeometryTests: XCTestCase {
         XCTAssertEqual(layout.note?.height, 360)
     }
 
-    @MainActor func testTheFanShinglesDownFromTheTopWithThePlusUnderneath() {
+    @MainActor func testTheFanStacksDownFromTheTopWithThePlusUnderneath() {
         let layout = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: ids)
         XCTAssertEqual(layout.tabs.map(\.id), ids)
         XCTAssertEqual(layout.tabs[0].frame.maxY, layout.panelFrame.height - 24)
-        XCTAssertEqual(layout.tabs[0].frame.minY - layout.tabs[1].frame.minY, 112 - 24)
-        XCTAssertEqual(layout.tabs[1].frame.minY - layout.tabs[2].frame.minY, 112 - 24)
-        XCTAssertEqual(layout.plusTab.maxY, layout.tabs[2].frame.minY - 8)
+        // Separate papers: a 6 pt gap, never an overlap.
+        XCTAssertEqual(layout.tabs[0].frame.minY - layout.tabs[1].frame.minY, 112 + 6)
+        XCTAssertEqual(layout.tabs[1].frame.minY - layout.tabs[2].frame.minY, 112 + 6)
+        XCTAssertEqual(layout.tabStep, 118)
+        // Three fit: the fan is the whole stack, nothing scrolls, no fade.
+        XCTAssertEqual(layout.fan.minY, layout.tabs[2].frame.minY)
+        XCTAssertEqual(layout.maxScroll, 0)
+        XCTAssertFalse(layout.canScrollUp)
+        XCTAssertFalse(layout.canScrollDown)
+        XCTAssertEqual(layout.plusTab.maxY, layout.fan.minY - 8)
         XCTAssertGreaterThanOrEqual(layout.plusTab.minY, 0)
         XCTAssertEqual(layout.panelFrame.width, 40 + 24)
     }
 
-    @MainActor func testMoreThanEightNotesGetAMoreTab() {
+    @MainActor func testEveryNoteGetsATabAndWhatDoesNotFitScrollsUnderAFade() {
         let many = (0..<12).map { NoteID("n\($0)") }
-        let layout = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many)
-        XCTAssertEqual(layout.tabs.count, 9)
-        XCTAssertNil(layout.tabs[8].id)
-        XCTAssertEqual(layout.tabs[8].more, 4)
-        XCTAssertEqual(layout.tabs.dropLast().compactMap(\.id), Array(many.prefix(8)))
+        let top = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many)
+        XCTAssertEqual(top.tabs.map(\.id), many, "no more-tab: every note has its own")
+        XCTAssertLessThanOrEqual(top.panelFrame.height, screen.height)
+        // The fan is what the screen leaves; the stack is taller.
+        XCTAssertEqual(top.fan.height, screen.height - 2 * 24 - 40 - 8)
+        XCTAssertEqual(top.maxScroll, 112 + 11 * 118 - top.fan.height)
+        XCTAssertEqual(top.scroll, 0)
+        XCTAssertFalse(top.canScrollUp)
+        XCTAssertTrue(top.canScrollDown)
+        XCTAssertLessThan(top.tabs[11].frame.maxY, top.fan.minY, "the last tab lies below the fan")
+        XCTAssertEqual(top.plusTab.maxY, top.fan.minY - 8, "the plus tab is fixed under the fan")
+        // Scrolled to the bottom: the last tab ends at the fan's bottom, the fade is above.
+        let bottom = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many, scroll: 10_000)
+        XCTAssertEqual(bottom.scroll, bottom.maxScroll, "clamped")
+        XCTAssertEqual(bottom.tabs[11].frame.minY, bottom.fan.minY, accuracy: 0.5)
+        XCTAssertTrue(bottom.canScrollUp)
+        XCTAssertFalse(bottom.canScrollDown)
+        // Half way: both.
+        let middle = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many, scroll: top.maxScroll / 2)
+        XCTAssertTrue(middle.canScrollUp)
+        XCTAssertTrue(middle.canScrollDown)
+        XCTAssertEqual(DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many, scroll: -50).scroll, 0)
+    }
+
+    @MainActor func testTheOpenOrLastUsedTabIsScrolledIntoView() {
+        let many = (0..<12).map { NoteID("n\($0)") }
+        let top = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many)
+        XCTAssertEqual(DeckGeometry.scroll(revealing: many[0], in: top), 0, "already in view: nothing moves")
+        let reveal = try! XCTUnwrap(DeckGeometry.scroll(revealing: many[11], in: top))
+        XCTAssertEqual(reveal, top.maxScroll, "the last tab: as little as needed, which is to the bottom")
+        let bottom = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many, scroll: reveal)
+        XCTAssertEqual(DeckGeometry.scroll(revealing: many[0], in: bottom), 0)
+        XCTAssertEqual(DeckGeometry.scroll(revealing: many[11], in: bottom), reveal)
+        XCTAssertNil(DeckGeometry.scroll(revealing: NoteID("elsewhere"), in: top))
+    }
+
+    @MainActor func testEachTabLeansItsOwnStableWay() {
+        let a = DeckTilt.tilt(for: NoteID("groceries"))
+        XCTAssertEqual(a.degrees, DeckTilt.tilt(for: NoteID("groceries")).degrees, "seeded from the id: the same every time")
+        XCTAssertEqual(a.inset, DeckTilt.tilt(for: NoteID("groceries")).inset)
+        XCTAssertGreaterThanOrEqual(abs(a.degrees), 1.5)
+        XCTAssertLessThanOrEqual(abs(a.degrees), 3)
+        XCTAssertGreaterThanOrEqual(a.inset, 0)
+        XCTAssertLessThanOrEqual(a.inset, 3)
+        let tilts = (0..<40).map { DeckTilt.tilt(for: NoteID("note-\($0)")).degrees }
+        XCTAssertTrue(tilts.contains { $0 > 0 } && tilts.contains { $0 < 0 }, "both ways across a deck")
     }
 
     @MainActor func testTheToastWidensTheDeckAndSitsUnderIt() {

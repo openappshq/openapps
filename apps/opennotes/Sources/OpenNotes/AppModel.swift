@@ -96,6 +96,7 @@ final class AppModel {
     /// flushes on resign, sleep and quit, and auto-archive when it is on.
     func start() {
         store.load(create: preferences.usesDefaultFolder)
+        plantWelcomeNoteIfNeeded()
         watcher.watch(store.folder)
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.store.rescan() }
@@ -123,11 +124,33 @@ final class AppModel {
         scheduleAutoArchive(runNow: true)
     }
 
+    /// The welcome note (`WelcomeNote`), once: the launch that first reads
+    /// the folder writes it when the install is fresh — no earlier
+    /// preferences, so the trial is starting and writing is allowed — and
+    /// the folder holds no note. Decided on that launch whichever way it
+    /// went; an upgrade, a folder switched later or a folder emptied by
+    /// hand gets no welcome. The license is not asked: an official build's
+    /// storage has not answered yet at this point, and a fresh install is
+    /// in its trial by definition (LICENSING.md, "States").
+    private func plantWelcomeNoteIfNeeded() {
+        guard !preferences.hadEarlierPreferences else { return }
+        guard WelcomeNote.shouldCreate(flags: preferences.flags, folderIsMissing: store.folderIsMissing, hasNotes: !store.notes.isEmpty) else { return }
+        do {
+            try store.plant(WelcomeNote.note(created: now()))
+        } catch {
+            // Nothing the user did: not a save problem to show. The deck
+            // simply starts empty, as before.
+            revision += 1
+        }
+    }
+
     // MARK: - Notes
 
     var active: [Note] { _ = revision; return store.active }
     var archived: [Note] { _ = revision; return store.archived }
     var deckOrder: [NoteID] { active.map(\.id) }
+    /// The pinned ones among them: the group a deck move stays in.
+    var pinnedIDs: Set<NoteID> { Set(active.filter(\.pinned).map(\.id)) }
 
     func note(_ id: NoteID) -> Note? {
         _ = revision

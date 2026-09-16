@@ -19,6 +19,13 @@ final class Preferences {
     }
 
     @ObservationIgnored private let defaults: UserDefaults
+    /// The first-run flags share the defaults domain (`FlagStore`): the
+    /// welcome note's decision is kept there, beside the guide's.
+    @ObservationIgnored let flags: any FlagStore
+    /// An earlier launch left preferences behind (`FreshInstallDefault`),
+    /// read when this is created, before the current launch writes any:
+    /// the install is not fresh, and the welcome note is not for it.
+    @ObservationIgnored let hadEarlierPreferences: Bool
 
     var side: DeckSide {
         didSet { defaults.set(side.rawValue, forKey: Key.side) }
@@ -58,6 +65,8 @@ final class Preferences {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        flags = defaults
+        hadEarlierPreferences = FreshInstallDefault.Key.earlierPreferenceEvidence.contains { defaults.hasValue(forKey: $0) }
         side = defaults.string(forKey: Key.side).flatMap(DeckSide.init(rawValue:)) ?? .right
         display = defaults.string(forKey: Key.display).flatMap(DeckDisplay.init(rawValue:)) ?? .main
         if let data = defaults.data(forKey: Key.hotkey) {

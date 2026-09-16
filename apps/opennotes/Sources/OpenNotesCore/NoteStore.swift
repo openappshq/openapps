@@ -506,6 +506,29 @@ public final class NoteStore {
         return note
     }
 
+    /// The app's own note (`WelcomeNote`), written whole and at once: the
+    /// file is created exclusively — never over one that appeared meanwhile
+    /// — and the note is in memory, clean, as if read. The license is not
+    /// asked: this runs on the launch that first reads the folder, before
+    /// an official build's storage has answered, and only on a fresh
+    /// install (the app's caller decides), which is always in its trial.
+    public func plant(_ note: Note) throws {
+        guard !folderIsMissing else { throw StoreError.folderMissing(folder) }
+        guard notes[note.id] == nil else { throw StoreError.io("\(note.id.fileName) is already there.") }
+        do {
+            identities[note.id] = try NoteFile.createExclusively(fileURL(for: note.id), contents: FrontMatter.serialize(note))
+        } catch NoteFile.Failure.exists {
+            throw StoreError.io("\(note.id.fileName) is already there.")
+        } catch {
+            throw StoreError.io("\(note.id.fileName): \(error)")
+        }
+        var planted = note
+        planted.bodyIsLoaded = true
+        planted.truncated = false
+        store(planted)
+        onEvent(.updated([note.id]))
+    }
+
     /// One below the lowest active order, so the note lands on top. Orders
     /// are clamped on read, and if the lowest is at the floor anyway the
     /// active notes are renumbered first, so this never overflows.
