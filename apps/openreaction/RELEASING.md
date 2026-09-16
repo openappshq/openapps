@@ -11,7 +11,8 @@ commits the update feed, verifies both live and bumps the Homebrew cask.
 Nothing about a release is manual except pushing the tag.
 
 ```sh
-brew install --cask openappshq/tap/openreaction   # how users install it
+curl -fsSL https://openapps.space/install/openreaction | sh   # how users install it
+brew install --cask openappshq/tap/openreaction               # or with Homebrew
 ```
 
 The scripts the workflow runs are the ones you can run locally:

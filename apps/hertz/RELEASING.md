@@ -12,8 +12,9 @@ update feed, verifies both live and bumps the Homebrew cask. Nothing about a
 release is manual except pushing the tag.
 
 ```sh
-brew install --cask openappshq/tap/hertz   # how users install it
-brew upgrade --cask hertz                  # how they can update too
+curl -fsSL https://openapps.space/install/hertz | sh   # how users install it
+brew install --cask openappshq/tap/hertz               # or with Homebrew
+brew upgrade --cask hertz                              # how they can update too
 ```
 
 The scripts the workflow runs are the ones you can run locally:
