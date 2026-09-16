@@ -146,7 +146,7 @@ final class FreshInstallDefaultTests: XCTestCase {
         let expected: Set<String> = [
             "deck.side", "deck.display", "hotkey", "notesFolder", "notes.face", "notes.color", "notes.autoArchiveDays",
             OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step,
-            FreshInstallDefault.Key.loginItemApplied, FreshInstallDefault.Key.updateChecksApplied,
+            FreshInstallDefault.Key.loginItemApplied, FreshInstallDefault.Key.updateChecksApplied, FreshInstallDefault.Key.displayApplied,
             "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
         ]
         XCTAssertEqual(Set(FreshInstallDefault.Key.earlierPreferenceEvidence), expected)

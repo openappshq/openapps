@@ -239,12 +239,19 @@ final class NoteStoreTests: XCTestCase {
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(10)], ofItemAtPath: folder.appendingPathComponent("a.md").path)
         store.rescan()
         XCTAssertEqual(events, [])
-        // Added and removed.
+        // Added, and removed: the file gone is noted, and the note goes
+        // only once a later rescan (after the grace) still finds no file.
         try write("b.md", "B note")
         try FileManager.default.removeItem(at: folder.appendingPathComponent("a.md"))
         store.rescan()
+        XCTAssertEqual(events, [.updated([NoteID("b")])])
+        XCTAssertNotNil(store.note(NoteID("a")))
+        XCTAssertEqual(store.pendingRemovals, [NoteID("a")])
+        clock += NoteStore.removalGrace
+        store.rescan()
         XCTAssertEqual(events, [.updated([NoteID("b")]), .removed([NoteID("a")])])
         XCTAssertNil(store.note(NoteID("a")))
+        XCTAssertEqual(store.pendingRemovals, [])
     }
 
     @MainActor func testAnOutsideEditUnderUnsavedChangesKeepsTheFileAndMovesOursToAConflictCopy() throws {

@@ -144,7 +144,8 @@ final class PreferencesTests: XCTestCase {
         let temporary = try TemporaryDefaults()
         let preferences = Preferences(defaults: temporary.defaults)
         XCTAssertEqual(preferences.side, .right)
-        XCTAssertEqual(preferences.display, .main)
+        // Every display on a fresh install (PreferencesDefaultsTests has the rest).
+        XCTAssertEqual(preferences.display, .every)
         XCTAssertEqual(preferences.hotkey, .default)
         XCTAssertEqual(preferences.face, .sans)
         XCTAssertEqual(preferences.color, .coral)
@@ -272,7 +273,8 @@ final class WiringTests: XCTestCase {
         // The flavour's line: from source it says so; an official build
         // names where the license stands (here: nothing bound, so the flavour alone).
         XCTAssertTrue(text.contains(Licensing.isCompiledIn ? "Licensing: official build" : "Licensing: off (source build"), text)
-        XCTAssertTrue(text.contains("Deck: right edge · the main display · hidden"), text)
+        XCTAssertTrue(text.contains("Deck: right edge · every display · hidden"), text)
+        XCTAssertTrue(text.contains("· Other folder · watcher off"), text)
         XCTAssertTrue(text.contains("Hotkey: ⌥⌘N"), text)
         XCTAssertTrue(text.contains("watcher off"), text)
         XCTAssertTrue(text.contains("Notes: 0 active · 0 archived · 0 unsaved"), text)
