@@ -127,8 +127,22 @@ describe("POST /api/trial", () => {
     ]);
   });
 
-  it("accepts exactly the catalog's paid apps, Hertz included since it went on sale", () => {
-    expect([...TRIAL_APPS].sort()).toEqual(["hertz", "openklack", "openreaction"]);
+  it("accepts exactly the catalog's paid apps: Hertz since it went on sale, macPaper since it was added", () => {
+    expect([...TRIAL_APPS].sort()).toEqual(["hertz", "macpaper", "openklack", "openreaction"]);
+  });
+
+  it("starts a macPaper trial like any other app's, in test and live", async () => {
+    const device = freshDevice();
+    for (const env of ["test", "live"] as const) {
+      const response = await post({ app: "macpaper", device, env });
+      expect(response.status).toBe(200);
+      const body = await response.json<{ started_at: string; now: string }>();
+      expect(body.started_at).toMatch(ISO);
+    }
+    expect((await rows(device)).map((row) => `${row.app}/${row.env}`)).toEqual([
+      "macpaper/live",
+      "macpaper/test",
+    ]);
   });
 
   it("starts a Hertz trial like any other app's", async () => {

@@ -1,7 +1,7 @@
 # Development and release guide
 
 OpenApps HQ is one workspace for independent desktop apps and their marketing pages.
-OpenKlack, [OpenReaction](../apps/openreaction/README.md), [Hertz](../apps/hertz/README.md) and [OpenNotes](../apps/opennotes/README.md) have independent native apps.
+OpenKlack, [OpenReaction](../apps/openreaction/README.md), [Hertz](../apps/hertz/README.md), [macPaper](../apps/macpaper/README.md) and [OpenNotes](../apps/opennotes/README.md) have independent native apps.
 
 ## Run
 
@@ -33,10 +33,12 @@ apps/
       pages/                  Lazy-loaded page entries
     src/apps/openreaction/     OpenReaction marketing and emoji demo
     src/apps/hertz/            Hertz marketing and the drawn dashboard
+    src/apps/macpaper/         macPaper marketing and the notch scene
   site-worker/                Cloudflare Worker: serves the site, runs /api/trial on D1
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
   openreaction/               OpenReaction's Swift app
   hertz/                      Hertz's Swift app
+  macpaper/                   macPaper's Swift app (in development; no website page yet)
   opennotes/                  OpenNotes' Swift app
 packages/
   openapps-licensing/         Swift: licensing rules, trial, record store and clients (LICENSING.md)
@@ -58,7 +60,7 @@ design/
 ```
 
 The workspace remains pnpm + Vite+, with no additional task runner.
-`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/openklack/`, its download page at `/openklack/download/`, OpenReaction at `/openreaction/`, and Hertz at `/hertz/`.
+`pnpm dev` serves OpenApps HQ at `/`, OpenKlack at `/openklack/`, its download page at `/openklack/download/`, OpenReaction at `/openreaction/`, Hertz at `/hertz/`, and macPaper at `/macpaper/`.
 `pnpm openklack:dev` runs the native utility.
 `pnpm build` emits one static `dist/` with a real HTML entry for each catalog page and a `404.html` fallback.
 The website loads each product's code and styles only when its route opens.
@@ -116,7 +118,7 @@ The website’s install links open `/openklack/download/`, a separate static HTM
 
 What no page code can prevent: the host that serves the thanks page receives the initial request, query string included. The build emits `dist/_headers` from the catalog (`apps/website/headers.ts`): every `noindex` page is served with `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex` and `Cache-Control: no-store`. On Cloudflare those pages are plain static asset requests that never run Worker code, and the Worker keeps Workers Logs off; don't enable Logpush or Workers Logs for it.
 
-Paid app pages offer the install (the one-line command with Homebrew under it, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the install command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's page also keeps an install section with the command and the Homebrew line, on the same gate (`VITE_HERTZ_DODO_PAID_PRODUCT_ID` and `VITE_HERTZ_BREW_CASK`).
+Paid app pages offer the install (the one-line command with Homebrew under it, with its 3-day trial and no signup, plus a direct download when one is configured) and Buy for the app's price. Trials start in the app, so there is no trial checkout or trial thanks page. Buying fails closed: Buy shows “Coming soon”, and the download page says the Mac release is coming soon, unless the app's paid product ID is set and its `VITE_<APP>_BREW_CASK` is a well-formed cask. There is no on/off list in code; unsetting the cask variable pulls the app. After a purchase, the thanks page repeats the install command before the open-and-paste steps, for buyers who don't have the app yet. Hertz's and macPaper's pages also keep an install section with the command and the Homebrew line, on the same gate (`VITE_<APP>_DODO_PAID_PRODUCT_ID` and `VITE_<APP>_BREW_CASK`).
 
 ## Sound library
 
@@ -156,6 +158,10 @@ System-wide sound is implemented in the development desktop application below; p
 ## Hertz
 
 The menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift build`, `swift test`, `swift run Hertz`, `scripts/bundle.sh`; see [its README](../apps/hertz/README.md). It asks macOS for no permissions. Official builds compile licensing in from `packages/openapps-licensing` (`OPENAPPS_LICENSING=1` with a generated `LicensingConfig.swift`, [LICENSING.md](../LICENSING.md)): the 3-day trial, Settings → License, and the readings off after the trial; a build from source has none of it. Official builds also compile in the shared updater, `packages/openapps-updater` (`OPENAPPS_OFFICIAL=1`): the signed feed at `https://openapps.space/updates/hertz/appcast.xml`, automatic checks on for a fresh install, installing opt-in, `brew upgrade --cask hertz` always works ([RELEASES.md](../RELEASES.md), [its release guide](../apps/hertz/RELEASING.md)). The [product contract](../design/products/hertz.md) records approved behavior.
+
+## macPaper
+
+The notch wallpaper maker lives in `apps/macpaper` and is plain SwiftPM: `swift build`, `swift test`, `scripts/bundle.sh`; see [its README](../apps/macpaper/README.md). It asks macOS for no permissions. It is unreleased: the release workflow (`.github/workflows/macpaper.yml`), the cask template and the install script are in place, the catalog entry and website page arrive with the first licensed release. Licensing and the updater follow the other Swift apps: compiled out of a source build, in with `OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1` after `scripts/generate-licensing-config.sh` has written the (gitignored) configuration; a third flavour, `OPENAPPS_OFFICIAL=1 MACPAPER_UPDATE_TEST=1` (never with licensing), is the update-test variant `scripts/update-e2e.sh` builds and drives — its own bundle id and Application Support folder, no login item, no guide. All three flavours have their own tests and the checks job runs them; see [RELEASING.md](../apps/macpaper/RELEASING.md). The debug build's `--preview <directory>` renders the notch panel, the popover and Settings to PNGs without a status item, a window or a desktop change: on a shared Mac that is the way to look at the UI, never `open` or `swift run`. The [product contract](../design/products/macpaper.md) records approved behavior.
 
 ## OpenNotes
 

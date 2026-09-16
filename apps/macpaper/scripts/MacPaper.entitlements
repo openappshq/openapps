@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the signed macPaper.app (scripts/bundle.sh).
+
+  The app is not sandboxed: it writes wallpapers and exports where the user
+  asks, hands files to NSWorkspace, and registers a global hotkey. The
+  hardened runtime is enabled on the codesign command line with no
+  exceptions: macPaper loads no frameworks, plug-ins or JIT, and asks macOS
+  for no permissions.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

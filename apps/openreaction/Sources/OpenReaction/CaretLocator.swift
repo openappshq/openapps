@@ -83,13 +83,14 @@ final class CaretLocator: @unchecked Sendable {
         return .noGeometry(target)
     }
 
-    /// Read-only verification, in order:
-    /// 1. The focused element must be the remembered one (`CFEqual`, same pid)
-    ///    and must answer that it is not a secure field.
-    /// 2. The selection must be readable, empty, and at least `typed` long.
-    /// 3. The text before the caret must be readable and equal `typed`.
-    /// Anything else refuses. The host is never modified here; the gate posts
-    /// key events later, if it still may.
+    /// Read-only verification. The focused element must be the remembered one
+    /// (`CFEqual`, same pid); the rest — the secure check, comparing the
+    /// selection and the text before the caret against the typed token, and
+    /// deciding whether the typed-replacement fallback is authorized — is the
+    /// pure `CaretVerification.decide`, fed the raw `AXRole`, `AXSubrole` and
+    /// selection answers. The fallback (`.unverifiable`) is authorized only for
+    /// a positively-readable editable non-secure text field; any unreadable or
+    /// non-text answer refuses. The host is never modified here.
     private func verifyTarget(_ target: FocusTarget, typed: String, text: String) -> VerifyResult {
         guard let remembered = elements[target] else { return .refused }
         let systemWide = AXUIElementCreateSystemWide()
@@ -99,31 +100,50 @@ final class CaretLocator: @unchecked Sendable {
         AXUIElementSetMessagingTimeout(focused, Self.messagingTimeout)
         var pid: pid_t = 0
         guard AXUIElementGetPid(focused, &pid) == .success, pid == target.pid else { return .refused }
-        guard Self.secureFieldCheck(focused) == false else { return .refused }
 
-        guard let selection = Self.selectedRange(focused), selection.length == 0 else { return .refused }
         let count = typed.utf16.count
-        guard selection.location >= count else { return .refused }
-        guard let before = Self.string(focused, CFRange(location: selection.location - count, length: count)) else {
-            return .refused
+        let selection = Self.selectedRange(focused).map { (location: $0.location, length: $0.length) }
+        let decision = CaretVerification.decide(
+            role: Self.stringAnswer(focused, kAXRoleAttribute as String),
+            subrole: Self.stringAnswer(focused, kAXSubroleAttribute as String),
+            typedCount: count,
+            selection: selection,
+            typed: typed
+        ) { location, length in
+            Self.string(focused, CFRange(location: location, length: length))
         }
-        return before == typed ? .keystrokes(text: text) : .refused
+        switch decision {
+        case .keystrokes: return .keystrokes(text: text)
+        case .unverifiable: return .unverifiable(text: text)
+        case .refused: return .refused
+        }
     }
 
     // MARK: - Attribute helpers
 
-    /// True/false when the element answered, nil when the question could not
-    /// be delivered (timeout, dead app) and the field might be secure.
-    private static func secureFieldCheck(_ element: AXUIElement) -> Bool? {
+    /// Maps a string attribute's raw AX result to the answer state the pure
+    /// rule reasons about: a well-formed string, a genuinely absent attribute,
+    /// or an unreadable answer (error, timeout, or a `success` carrying nil or
+    /// a non-string). Fail-closed: anything not positively a string is either
+    /// `absent` (genuinely missing) or `unreadable`.
+    private static func stringAnswer(_ element: AXUIElement, _ attribute: String) -> AXStringAnswer {
         var value: CFTypeRef?
-        switch AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) {
+        switch AXUIElementCopyAttributeValue(element, attribute as CFString, &value) {
         case .success:
-            return (value as? String) == kAXSecureTextFieldSubrole
+            if let string = value as? String { return .value(string) }
+            return .unreadable
         case .noValue, .attributeUnsupported:
-            return false
+            return .absent
         default:
-            return nil
+            return .unreadable
         }
+    }
+
+    /// True/false when the element answered, nil when the question could not
+    /// be delivered (timeout, dead app) and the field might be secure. Shares
+    /// the subrole mapping with verification through `CaretVerification`.
+    private static func secureFieldCheck(_ element: AXUIElement) -> Bool? {
+        CaretVerification.isSecure(subrole: stringAnswer(element, kAXSubroleAttribute as String))
     }
 
     private static func selectedRange(_ element: AXUIElement) -> CFRange? {

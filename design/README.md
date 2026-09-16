@@ -9,6 +9,7 @@ Read only the documents needed for the task.
 | OpenKlack behavior | [Product contract](products/openklack.md) |
 | OpenReaction behavior | [App architecture](../apps/openreaction/docs/architecture.md) |
 | Hertz behavior | [Product contract](products/hertz.md) |
+| macPaper behavior | [Product contract](products/macpaper.md), [tokens and assets](../apps/macpaper/design/) |
 | OpenNotes behavior | [Product contract](products/opennotes.md) |
 | Logos and icons | [Asset usage](assets/README.md) |
 | Token values | [tokens.json](tokens.json) |

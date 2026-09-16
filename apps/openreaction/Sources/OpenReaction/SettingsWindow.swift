@@ -168,6 +168,8 @@ private struct SettingsView: View {
 
             AppExclusionsSection(controller: controller)
 
+            TypedReplacementSection(controller: controller)
+
             #if OPENAPPS_OFFICIAL
             if let updates {
                 UpdatesSection(updates: updates)

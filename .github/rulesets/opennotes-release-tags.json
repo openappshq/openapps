@@ -1,0 +1,17 @@
+{
+  "name": "OpenNotes release tags",
+  "target": "tag",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/tags/opennotes-v*"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    { "type": "update" },
+    { "type": "non_fast_forward" },
+    { "type": "deletion" }
+  ]
+}

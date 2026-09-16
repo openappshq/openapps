@@ -56,6 +56,8 @@ final class AppController {
     let permissions: PermissionMonitor
     private(set) var isEnabled: Bool
     private(set) var exclusions: AppExclusions
+    /// Apps where the typed-replacement fallback is switched off (default on).
+    private(set) var typedReplacement: TypedReplacementSettings
     private(set) var isTapRunning = false
     /// Set when `relaunch()` could not start a new instance.
     private(set) var relaunchError: String?
@@ -109,6 +111,7 @@ final class AppController {
         static let enabled = "enabled"
         static let frecency = "frecency"
         static let exclusions = "exclusions"
+        static let typedReplacement = "typedReplacement"
     }
 
     /// `defaults`, the permission provider and actions, and the relauncher
@@ -137,6 +140,7 @@ final class AppController {
             frecency = Frecency()
         }
         exclusions = Self.decode(AppExclusions.self, key: DefaultsKey.exclusions, defaults: defaults) ?? AppExclusions()
+        typedReplacement = Self.decode(TypedReplacementSettings.self, key: DefaultsKey.typedReplacement, defaults: defaults) ?? TypedReplacementSettings()
     }
 
     func start() {
@@ -148,6 +152,9 @@ final class AppController {
         self.runner = runner
         lock.attach(runner)
         tap = KeyboardTap(runner: runner)
+        focusMonitor.isExcluded = { [weak self] bundleIdentifier in
+            self?.exclusions.isExcluded(bundleIdentifier) ?? false
+        }
         focusMonitor.onFocusChange = { [weak self] in
             guard let self else { return }
             self.pushFrontmostExclusion()
@@ -196,6 +203,30 @@ final class AppController {
         updateExclusions { $0.restoreDefaults() }
     }
 
+    func setTypedReplacement(_ enabled: Bool, bundleIdentifier: String) {
+        updateTypedReplacement { $0.setEnabled(enabled, bundleIdentifier: bundleIdentifier) }
+    }
+
+    func disableTypedReplacement(_ bundleIdentifiers: [String]) {
+        updateTypedReplacement { $0.disable(bundleIdentifiers) }
+    }
+
+    func restoreDefaultTypedReplacement() {
+        updateTypedReplacement { $0.restoreDefaults() }
+    }
+
+    /// Single write path for the typed-replacement list, mirroring exclusions:
+    /// persisted, and the frontmost app's new answer pushed to the gate at once.
+    private func updateTypedReplacement(_ change: (inout TypedReplacementSettings) -> Void) {
+        var updated = typedReplacement
+        change(&updated)
+        guard updated != typedReplacement else { return }
+        typedReplacement = updated
+        Self.encode(typedReplacement, key: DefaultsKey.typedReplacement, defaults: defaults)
+        pushFrontmostExclusion()
+        resetTyping()
+    }
+
     /// Single write path: `exclusions` is the observed source of truth for
     /// Settings and the status menu; the gate gets the frontmost app's new
     /// answer at once.
@@ -209,10 +240,15 @@ final class AppController {
         resetTyping()
     }
 
-    /// The gate never touches AppKit: the frontmost app's exclusion is
-    /// computed here and handed in as a locked input.
+    /// The gate never touches AppKit: the frontmost app's exclusion and its
+    /// typed-replacement answer are computed here and handed in as locked
+    /// inputs.
     private func pushFrontmostExclusion() {
-        runner?.frontmostApp(excluded: exclusions.isExcluded(NSWorkspace.shared.frontmostApplication?.bundleIdentifier))
+        let bundleIdentifier = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        runner?.frontmostApp(
+            excluded: exclusions.isExcluded(bundleIdentifier),
+            typedReplacement: typedReplacement.isEnabled(bundleIdentifier)
+        )
     }
 
     /// Starts a new instance, then quits this one once it is running.

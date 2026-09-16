@@ -46,6 +46,8 @@ case "$APP_ID" in
     openreaction) BUNDLE_ID="com.openappshq.openreaction" ;;
     openklack) BUNDLE_ID="com.openklack.desktop" ;;
     hertz) BUNDLE_ID="com.openappshq.hertz" ;;
+    macpaper) BUNDLE_ID="com.openappshq.macpaper" ;;
+    opennotes) BUNDLE_ID="com.openappshq.opennotes" ;;
     *) echo "error: unknown app '$APP_ID'; add its bundle identifier to write-install-script.sh" >&2; exit 1 ;;
 esac
 

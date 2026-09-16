@@ -151,3 +151,67 @@ public struct AppExclusions: Codable, Equatable, Sendable {
         removed.formIntersection(Self.defaultBundleIdentifiers)
     }
 }
+
+/// Apps where the typed-replacement fallback is turned off. The fallback lets
+/// OpenReaction insert into fields Accessibility cannot read back (Chromium and
+/// Electron web views) by trusting the tail it saw typed, so it is on by
+/// default everywhere. Only the apps the user switched off are stored, as a
+/// difference from that default — the same way `AppExclusions` stores its
+/// differences — so the default staying "on for every app" needs nothing on
+/// disk.
+public struct TypedReplacementSettings: Codable, Equatable, Sendable {
+    public private(set) var disabled: Set<String>
+
+    public init(disabled: Set<String> = []) {
+        self.disabled = disabled
+        normalize()
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        disabled = try container.decodeIfPresent(Set<String>.self, forKey: .disabled) ?? []
+        normalize()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case disabled
+    }
+
+    /// True unless the app was switched off. An unknown app (no bundle id)
+    /// keeps the default, on.
+    public func isEnabled(_ bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return true }
+        return !disabled.contains(bundleIdentifier)
+    }
+
+    public var hasUserChanges: Bool { !disabled.isEmpty }
+
+    /// Apps switched off, sorted by bundle id.
+    public var disabledBundleIdentifiers: [String] {
+        disabled.sorted { $0.lowercased() < $1.lowercased() }
+    }
+
+    public mutating func setEnabled(_ enabled: Bool, bundleIdentifier: String) {
+        guard !bundleIdentifier.isEmpty else { return }
+        if enabled {
+            disabled.remove(bundleIdentifier)
+        } else {
+            disabled.insert(bundleIdentifier)
+        }
+    }
+
+    /// Switches the given apps off. Empty ids are ignored.
+    public mutating func disable(_ bundleIdentifiers: some Sequence<String>) {
+        for bundleIdentifier in bundleIdentifiers where !bundleIdentifier.isEmpty {
+            disabled.insert(bundleIdentifier)
+        }
+    }
+
+    public mutating func restoreDefaults() {
+        disabled.removeAll()
+    }
+
+    private mutating func normalize() {
+        disabled.remove("")
+    }
+}

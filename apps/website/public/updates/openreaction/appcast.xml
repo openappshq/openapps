@@ -6,21 +6,21 @@
         <description>OpenReaction releases</description>
         <language>en</language>
         <item>
-            <title>OpenReaction 0.1.4</title>
+            <title>OpenReaction 0.1.5</title>
             <openapps:app>openreaction</openapps:app>
             <openapps:channel>stable</openapps:channel>
-            <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
-            <sparkle:version>1004</sparkle:version>
+            <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
+            <sparkle:version>1005</sparkle:version>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <openapps:publishedAt>2026-09-16T10:55:30Z</openapps:publishedAt>
-            <pubDate>Wed, 16 Sep 2026 10:55:30 +0000</pubDate>
-            <description><![CDATA[OpenReaction 0.1.4. Release notes: https://github.com/openappshq/openapps/releases/tag/openreaction-v0.1.4]]></description>
-            <openapps:sha256>68e07acf8e7b30b5df06a75ae50c9551b68407ccfa0478ceb7d1a789a0a2d416</openapps:sha256>
-            <enclosure url="https://github.com/openappshq/openapps/releases/download/openreaction-v0.1.4/OpenReaction-0.1.4.zip" length="3214997" type="application/octet-stream" sparkle:edSignature="To3RcMZLIf7mbnLkOUJIs3FCnDphrztqdSXYrwv4Bx4xAQ5rthEgNie+tJV2ZbGuetUmRCk/+B/vQK69GPQhBA=="/>
+            <openapps:publishedAt>2026-09-16T15:48:45Z</openapps:publishedAt>
+            <pubDate>Wed, 16 Sep 2026 15:48:45 +0000</pubDate>
+            <description><![CDATA[OpenReaction 0.1.5. Release notes: https://github.com/openappshq/openapps/releases/tag/openreaction-v0.1.5]]></description>
+            <openapps:sha256>f724862545239e6a6db5a5928e51bce57106ffdbd945129f0fb71862da0f187a</openapps:sha256>
+            <enclosure url="https://github.com/openappshq/openapps/releases/download/openreaction-v0.1.5/OpenReaction-0.1.5.zip" length="3272126" type="application/octet-stream" sparkle:edSignature="2SDAmIXr3dFRqh04YzrrCgl88LM0WWRIqWqJPfTCPhmr4JWFPoh0ArTFM7jX3jhIZ0TTts4Q/b/UpEjzJaZiBA=="/>
         </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 2WsYmfRF6ayZU1n38wphzPO6tg3Xn6N8gXfN/FPEAlMS+EW/9ze3rDcZMb39vjBUFLcJFNZkNfQHwV0ZXyRiCQ==
+edSignature: eVWwcCMIc4N5SAKKD6fydmAeSaAjv7Dhn4B+0g0l95q30lDWrCT5SxUhxlx3WBLIvTp47g+CHSVCWpbFv85kCA==
 length: 1504
 -->

@@ -1,0 +1,32 @@
+/* macPaper's signature colour, from apps/macpaper/design/tokens.json: tangerine
+   is the app's, not a state (success stays green, danger red, warning HQ
+   yellow). The steps are derived (hue ~22°, lightness stepped like the shared
+   ramps) and are not in Figma yet. */
+:root[data-product="macpaper"] {
+  --palette-tangerine-50: #fff1ea;
+  --palette-tangerine-200: #ffcdb3;
+  --palette-tangerine-300: #ffb48a;
+  --palette-tangerine-500: #ff7a2f;
+  --palette-tangerine-600: #e5551f;
+  --palette-tangerine-700: #b8411a;
+  --palette-tangerine-800: #96351a;
+  --palette-tangerine-950: #4a2114;
+  --color-accent-solid: var(--palette-tangerine-700);
+  --color-accent-hover: var(--palette-tangerine-800);
+  --color-accent-subtle: var(--palette-tangerine-50);
+  --color-accent-text: var(--palette-tangerine-700);
+  --color-accent-on: var(--palette-white);
+  --color-focus-ring: var(--palette-tangerine-700);
+  --color-brand-macpaper: var(--palette-tangerine-300);
+  --color-brand-macpaper-shade: var(--palette-tangerine-500);
+  --brand-solid: var(--palette-tangerine-300);
+  --brand-on: var(--palette-neutral-950);
+}
+:root[data-product="macpaper"][data-theme="dark"] {
+  --color-accent-solid: var(--palette-tangerine-300);
+  --color-accent-hover: var(--palette-tangerine-200);
+  --color-accent-subtle: var(--palette-tangerine-950);
+  --color-accent-text: var(--palette-tangerine-200);
+  --color-accent-on: var(--palette-neutral-950);
+  --color-focus-ring: var(--palette-tangerine-300);
+}

@@ -19,6 +19,10 @@ describe("classifyPath", () => {
       "/hertz",
       "/hertz/download/",
       "/hertz/thanks/",
+      "/macpaper/",
+      "/macpaper",
+      "/macpaper/download/",
+      "/macpaper/thanks/",
       "/thanks/",
       "/thanks",
     ]) {
@@ -60,6 +64,8 @@ describe("classifyPath", () => {
       "/hertz/nope",
       "/install/",
       "/install/openklack/",
+      "/macpaper/thanks/trial/",
+      "/macpaper/nope",
     ]) {
       expect(classifyPath(path), path).toBe("unknown");
     }

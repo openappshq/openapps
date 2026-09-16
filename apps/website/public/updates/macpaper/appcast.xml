@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:openapps="https://openapps.space/xml-namespaces/releases">
+    <channel>
+        <title>macPaper</title>
+        <link>https://openapps.space/macpaper/</link>
+        <description>macPaper releases</description>
+        <language>en</language>
+        <item>
+            <title>macPaper 0.1.0</title>
+            <openapps:app>macpaper</openapps:app>
+            <openapps:channel>stable</openapps:channel>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:version>1000</sparkle:version>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <openapps:publishedAt>2026-09-16T15:21:22Z</openapps:publishedAt>
+            <pubDate>Wed, 16 Sep 2026 15:21:22 +0000</pubDate>
+            <description><![CDATA[macPaper 0.1.0. Release notes: https://github.com/openappshq/openapps/releases/tag/macpaper-v0.1.0]]></description>
+            <openapps:sha256>4bc34ecb908886db8b7bdc92947abf97a281324ca70a960be01ad70cc4e8035f</openapps:sha256>
+            <enclosure url="https://github.com/openappshq/openapps/releases/download/macpaper-v0.1.0/macPaper-0.1.0.zip" length="4990258" type="application/octet-stream" sparkle:edSignature="32+RGr9UhjdB7L0KALGaueaNUBawMuiuPNDzhSlsdLX0Si6dFolWmGdC+GZVul8HdAXzPCAmQPBkfbxCjIRbCw=="/>
+        </item>
+    </channel>
+</rss>
+<!-- sparkle-signatures:
+edSignature: t1Q4WYKwZLJJSK98EO2hXyuiAIdGwIHDErYG8BrCBWJV128bBaVk4HmhZSs2iaSIjNqZ+dnEfWzZrvS46+LyDg==
+length: 1468
+-->

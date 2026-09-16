@@ -86,7 +86,17 @@ public enum VerifyResult: Equatable, Sendable {
     /// The typed token is right before an empty caret: delete it with key
     /// events and type `text`.
     case keystrokes(text: String)
-    /// The field, selection or text could not be confirmed. Nothing may change.
+    /// No field could be read back through Accessibility, but nothing marks it
+    /// unsafe: it is not secure, and the selection or text is simply not
+    /// exposed (a Chromium or Electron app whose text tree stays hidden). The
+    /// gate may fall back to typed replacement — deleting the tail it saw the
+    /// user type and typing `text` — when the frontmost app allows it. This
+    /// trusts that the typed tail is still right before the caret, since focus
+    /// has not moved in this generation.
+    case unverifiable(text: String)
+    /// The field, selection or text was read and did not match (a real
+    /// selection, the text before the caret differs), or the field could not
+    /// be confirmed safe. Nothing may change.
     case refused
 }
 
@@ -347,6 +357,10 @@ public struct InputGate: Sendable {
     private var focusGeneration = 0
     private var trackingActive = false
     private var frontmostExcluded = false
+    /// Whether the frontmost app allows typed replacement (the fallback for
+    /// fields Accessibility cannot read back). Default on; set per app by the
+    /// app layer alongside the exclusion answer.
+    private var frontmostTypedReplacement = true
     private var transaction: Transaction?
     private var deferred: Deferred?
     private var nextTransactionID = 0
@@ -571,10 +585,12 @@ public struct InputGate: Sendable {
         return closeGate()
     }
 
-    /// Whether the frontmost app is on the exclusion list. Computed by the
-    /// app layer whenever the frontmost app or the list changes.
-    public mutating func frontmostApp(excluded: Bool) {
+    /// Whether the frontmost app is on the exclusion list, and whether it
+    /// allows typed replacement. Computed by the app layer whenever the
+    /// frontmost app, the exclusion list or the typed-replacement list changes.
+    public mutating func frontmostApp(excluded: Bool, typedReplacement: Bool = true) {
         frontmostExcluded = excluded
+        frontmostTypedReplacement = typedReplacement
     }
 
     /// Answer to `.requestProbe`. For a token probe, `decode` returns the
@@ -614,16 +630,23 @@ public struct InputGate: Sendable {
     /// decided by `commit` when the queued work runs.
     public mutating func verifyResult(transaction id: Int, _ result: VerifyResult) -> [GateEffect] {
         guard var current = transaction, current.id == id, current.phase == .verifying else { return [] }
+        let text: String
         switch result {
-        case .keystrokes(let text) where isAuthorized(current):
-            guard case .replacement(let typed, _) = current.kind else { return cancelTransaction() }
-            current.phase = .authorized
-            current.inserted = text
-            transaction = current
-            return [.post(transaction: id, deleteCount: typed.count, text: text), .armWatchdog(transaction: id)]
+        case .keystrokes(let value) where isAuthorized(current):
+            text = value
+        case .unverifiable(let value) where isAuthorized(current) && frontmostTypedReplacement:
+            // No field to read back, but focus has not moved since the tail was
+            // typed and the app allows typed replacement: post the same deletes
+            // and text as the verified path, trusting the typed tail.
+            text = value
         default:
             return cancelTransaction()
         }
+        guard case .replacement(let typed, _) = current.kind else { return cancelTransaction() }
+        current.phase = .authorized
+        current.inserted = text
+        transaction = current
+        return [.post(transaction: id, deleteCount: typed.count, text: text), .armWatchdog(transaction: id)]
     }
 
     /// Called by the app layer at the moment the queued replacement is about

@@ -1,0 +1,519 @@
+@import "./tokens.css";
+
+code {
+  font-family: var(--font-mono);
+}
+
+/* --- Hero ------------------------------------------------------------------
+   The lead and the actions on the left, the notch scene on the right: the idea
+   in one picture beside the sentence that says it. */
+.mp-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 520px);
+  gap: 48px 72px;
+  align-items: center;
+}
+.mp-hero-stage {
+  min-width: 0;
+}
+
+/* --- The notch scene -------------------------------------------------------
+   A screen on a raised key. The wallpapers are three layers that crossfade;
+   the panel drops from under the menu bar, presses two swatches, and goes back
+   up. One 12-second loop, every part timed from the same clock. */
+.mp-scene {
+  --mp-cycle: 12s;
+  --mp-ink: #141414;
+  --mp-glass: oklch(1 0 0 / 0.72);
+  --mp-glass-ink: #141414;
+  container-type: inline-size;
+  border-radius: var(--radius-soft);
+  padding: 20px;
+  background: var(--surface-face);
+  box-shadow: var(--keycap-rest);
+}
+.mp-screen {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--mp-ink);
+  box-shadow:
+    inset 0 0 0 1px oklch(0 0 0 / 0.2),
+    0 1px 2px oklch(0 0 0 / 0.16);
+  /* The scene is a picture of a Mac, so it keeps its own shape in both themes. */
+  color-scheme: light;
+}
+.mp-wall {
+  position: absolute;
+  inset: 0;
+}
+.mp-wall-gradient {
+  background: linear-gradient(160deg, #ffb26b 0%, #ff6f91 48%, #5b3fd6 100%);
+}
+.mp-wall-mesh {
+  background:
+    radial-gradient(60% 70% at 18% 20%, #7fd8df 0%, transparent 70%),
+    radial-gradient(55% 60% at 82% 24%, #ffd528 0%, transparent 68%),
+    radial-gradient(70% 70% at 70% 88%, #f3a0dc 0%, transparent 70%),
+    radial-gradient(60% 60% at 20% 90%, #304bff 0%, transparent 70%), #16737b;
+  opacity: 0;
+}
+.mp-wall-pattern {
+  background:
+    repeating-linear-gradient(90deg, oklch(1 0 0 / 0.16) 0 1px, transparent 1px 9%),
+    repeating-linear-gradient(0deg, oklch(1 0 0 / 0.16) 0 1px, transparent 1px 14%),
+    linear-gradient(180deg, #2c2c2c, #141414);
+  opacity: 0;
+}
+.mp-menubar {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 9%;
+  background: var(--mp-glass);
+  display: flex;
+  justify-content: center;
+}
+.mp-notch {
+  width: 27%;
+  height: 100%;
+  border-radius: 0 0 9px 9px;
+  background: var(--mp-ink);
+}
+.mp-dock {
+  position: absolute;
+  inset: auto 0 4%;
+  display: flex;
+  justify-content: center;
+  gap: 4%;
+  height: 8%;
+}
+.mp-dock span {
+  aspect-ratio: 1;
+  border-radius: 22%;
+  background: var(--mp-glass);
+}
+.mp-panel {
+  position: absolute;
+  top: 9%;
+  left: 50%;
+  width: 52%;
+  translate: -50% 0;
+  padding: 5% 4% 4%;
+  border-radius: 0 0 14px 14px;
+  background: var(--mp-glass);
+  color: var(--mp-glass-ink);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.5),
+    0 18px 36px -18px oklch(0 0 0 / 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 5%;
+}
+.mp-panel-tabs {
+  display: flex;
+  gap: 4%;
+  font: 500 clamp(6px, 1.9cqw, 11px) / 1.6 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: oklch(0 0 0 / 0.55);
+}
+.mp-panel-tabs .is-active {
+  color: var(--mp-glass-ink);
+  box-shadow: 0 2px 0 var(--mp-glass-ink);
+}
+.mp-swatches {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6%;
+}
+.mp-swatch {
+  aspect-ratio: 16 / 10;
+  border-radius: 12%;
+  box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.12);
+}
+.mp-swatch-1 {
+  background: linear-gradient(160deg, #ffb26b, #ff6f91 48%, #5b3fd6);
+}
+.mp-swatch-2 {
+  background:
+    radial-gradient(60% 70% at 18% 20%, #7fd8df 0%, transparent 70%),
+    radial-gradient(55% 60% at 82% 24%, #ffd528 0%, transparent 68%),
+    radial-gradient(70% 70% at 70% 88%, #f3a0dc 0%, transparent 70%), #16737b;
+}
+.mp-swatch-3 {
+  background:
+    repeating-linear-gradient(90deg, oklch(1 0 0 / 0.2) 0 1px, transparent 1px 22%),
+    repeating-linear-gradient(0deg, oklch(1 0 0 / 0.2) 0 1px, transparent 1px 34%), #2c2c2c;
+}
+.mp-swatch-4 {
+  background: linear-gradient(200deg, #91dcb4, #236b48);
+}
+.mp-swatch-5 {
+  background: linear-gradient(135deg, #f3a0dc, #304bff);
+}
+.mp-swatch-6 {
+  background: #626262;
+}
+.mp-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 4%;
+  font: 600 clamp(6px, 1.9cqw, 11px) / 1 var(--font-sans);
+}
+.mp-panel-button {
+  padding: 0.55em 1em;
+  border-radius: 0.5em;
+  background: oklch(0 0 0 / 0.08);
+}
+.mp-panel-button.is-primary {
+  color: var(--palette-white);
+  background: var(--palette-tangerine-700);
+}
+.mp-panel-star {
+  margin-left: auto;
+  color: oklch(0 0 0 / 0.55);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .mp-panel {
+    animation: mp-drop var(--mp-cycle) infinite;
+  }
+  .mp-wall-mesh {
+    animation: mp-wall-second var(--mp-cycle) linear infinite;
+  }
+  .mp-wall-pattern {
+    animation: mp-wall-third var(--mp-cycle) linear infinite;
+  }
+  .mp-swatch-2 {
+    animation: mp-press-second var(--mp-cycle) infinite;
+  }
+  .mp-swatch-3 {
+    animation: mp-press-third var(--mp-cycle) infinite;
+  }
+  /* The panel comes down the way a real one does: fast, a little past rest,
+     then settled. Going up is a plain retreat. */
+  @keyframes mp-drop {
+    0%,
+    6% {
+      translate: -50% -104%;
+      animation-timing-function: var(--ease-spring);
+    }
+    12%,
+    80% {
+      translate: -50% 0;
+      animation-timing-function: var(--ease-out);
+    }
+    86%,
+    100% {
+      translate: -50% -104%;
+    }
+  }
+  @keyframes mp-wall-second {
+    0%,
+    30% {
+      opacity: 0;
+    }
+    34%,
+    92% {
+      opacity: 1;
+    }
+    97%,
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes mp-wall-third {
+    0%,
+    56% {
+      opacity: 0;
+    }
+    60%,
+    88% {
+      opacity: 1;
+    }
+    93%,
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes mp-press-second {
+    0%,
+    28% {
+      scale: 1;
+      box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.12);
+    }
+    30% {
+      scale: 0.92;
+    }
+    34%,
+    54% {
+      scale: 1;
+      box-shadow: 0 0 0 2px var(--palette-tangerine-700);
+    }
+    58%,
+    100% {
+      scale: 1;
+      box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.12);
+    }
+  }
+  @keyframes mp-press-third {
+    0%,
+    54% {
+      scale: 1;
+      box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.12);
+    }
+    56% {
+      scale: 0.92;
+    }
+    60%,
+    84% {
+      scale: 1;
+      box-shadow: 0 0 0 2px var(--palette-tangerine-700);
+    }
+    88%,
+    100% {
+      scale: 1;
+      box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.12);
+    }
+  }
+}
+
+/* --- What it makes ---------------------------------------------------------
+   The generators listed on the left, six of their wallpapers on the right. */
+.make-section {
+  padding-block: var(--section-pad);
+}
+.make-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
+  gap: 48px 72px;
+  align-items: start;
+}
+.make-text h2 {
+  font-size: clamp(38px, 4.6vw, 68px);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+  margin-top: 20px;
+}
+.make-lead {
+  max-width: 44ch;
+  margin-top: 20px;
+  font-size: 18px;
+  color: var(--muted);
+}
+.makers {
+  display: grid;
+  gap: 18px;
+  margin: 40px 0 0;
+}
+.makers > div {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+.makers dt {
+  font: 400 12px/1.6 var(--font-mono);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--color-accent-text);
+}
+.makers dd {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.make-stage {
+  position: sticky;
+  top: 40px;
+}
+.mp-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 20px;
+  list-style: none;
+  border-radius: var(--radius-soft);
+  background: var(--surface-face);
+  box-shadow: var(--keycap-rest);
+}
+.mp-gallery li {
+  display: grid;
+  gap: 8px;
+}
+.mp-paper {
+  display: block;
+  aspect-ratio: 16 / 10;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.1);
+}
+.mp-paper-label {
+  font: 400 11px/1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mp-paper-gradient {
+  background: linear-gradient(160deg, #ffb26b 0%, #ff6f91 48%, #5b3fd6 100%);
+}
+.mp-paper-mesh {
+  background:
+    radial-gradient(60% 70% at 18% 20%, #7fd8df 0%, transparent 70%),
+    radial-gradient(55% 60% at 82% 24%, #ffd528 0%, transparent 68%),
+    radial-gradient(70% 70% at 70% 88%, #f3a0dc 0%, transparent 70%),
+    radial-gradient(60% 60% at 20% 90%, #304bff 0%, transparent 70%), #16737b;
+}
+.mp-paper-pattern {
+  background:
+    repeating-linear-gradient(90deg, oklch(1 0 0 / 0.18) 0 1px, transparent 1px 12%),
+    repeating-linear-gradient(0deg, oklch(1 0 0 / 0.18) 0 1px, transparent 1px 19%),
+    linear-gradient(180deg, #2c2c2c, #141414);
+}
+.mp-paper-grain {
+  background:
+    repeating-radial-gradient(circle at 30% 40%, oklch(1 0 0 / 0.05) 0 1px, transparent 1px 3px),
+    repeating-radial-gradient(circle at 70% 60%, oklch(0 0 0 / 0.08) 0 1px, transparent 1px 4px),
+    #484848;
+}
+/* A gradient quantised into blocks: what a photo looks like after pixelize. */
+.mp-paper-pixels {
+  background:
+    linear-gradient(
+      90deg,
+      oklch(0 0 0 / 0) 0 12.5%,
+      oklch(0 0 0 / 0.08) 12.5% 25%,
+      oklch(0 0 0 / 0) 25% 37.5%,
+      oklch(0 0 0 / 0.08) 37.5% 50%,
+      oklch(0 0 0 / 0) 50% 62.5%,
+      oklch(0 0 0 / 0.08) 62.5% 75%,
+      oklch(0 0 0 / 0) 75% 87.5%,
+      oklch(0 0 0 / 0.08) 87.5%
+    ),
+    linear-gradient(
+      180deg,
+      #7fd8df 0 20%,
+      #22b3bf 20% 40%,
+      #16737b 40% 60%,
+      #ffd528 60% 80%,
+      #ff6f91 80%
+    );
+}
+.mp-paper-stripes {
+  background: repeating-linear-gradient(-30deg, #91dcb4 0 14px, #236b48 14px 28px);
+}
+
+/* --- The Mac app ----------------------------------------------------------- */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 48px 40px;
+}
+.feature-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: oklch(1 0 0 / 0.07);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.08);
+  color: var(--palette-tangerine-300);
+}
+.feature-grid h3 {
+  font-size: 24px;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+  margin: 20px 0 12px;
+}
+.feature-grid p {
+  color: var(--palette-neutral-400);
+}
+.feature-grid code {
+  font-size: 0.92em;
+}
+
+/* --- Install ---------------------------------------------------------------- */
+.install-section {
+  padding-block: var(--section-space) var(--section-pad);
+}
+.install-section .section-heading {
+  margin-bottom: 36px;
+}
+.mp-install {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  max-width: 620px;
+}
+.mp-install .install-command {
+  max-width: none;
+  width: 100%;
+}
+.mp-install-note {
+  font-size: 15px;
+  color: var(--muted);
+}
+.mp-install-note code {
+  font: 500 0.92em/1 var(--font-mono);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--surface-face);
+  color: var(--foreground);
+}
+.closing-wrap {
+  padding-block: var(--section-pad);
+}
+
+@media (max-width: 1100px) {
+  .feature-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 1000px) {
+  .mp-hero-grid,
+  .make-grid {
+    grid-template-columns: 1fr;
+  }
+  .mp-hero-stage,
+  .make-stage {
+    max-width: 520px;
+  }
+  .make-stage {
+    position: static;
+  }
+}
+@media (max-width: 900px) {
+  .feature-grid {
+    gap: 32px 24px;
+  }
+}
+@media (max-width: 600px) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .makers > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .mp-scene,
+  .mp-gallery {
+    padding: 12px;
+  }
+  .mp-gallery {
+    gap: 12px;
+  }
+}
+@media (forced-colors: active) {
+  .mp-screen,
+  .mp-panel,
+  .mp-paper,
+  .mp-swatch {
+    border: 1px solid CanvasText;
+  }
+}
