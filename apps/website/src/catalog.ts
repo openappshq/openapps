@@ -161,9 +161,7 @@ export const products: Product[] = [
     icon: "/brand/macpaper/app-icon.svg",
     accent: "tangerine",
     wordmark: false,
-    // Mirrors of `apps/macpaper/design/assets` until the app lands on main;
-    // point this there and delete the folder then.
-    brandSource: "apps/website/src/apps/macpaper/brand",
+    brandSource: "apps/macpaper/design/assets",
     assets: [],
     pages: [
       {
