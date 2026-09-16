@@ -1,0 +1,106 @@
+# OpenNotes
+
+Sticky notes kept as a deck docked to the edge of the screen: a thin pill at rest, a fan of tabs when the pointer reaches the edge, one note slid out to write in. Every note is a plain Markdown file in a folder the user can see; nothing else stores it.
+Open source under MIT; the official build is paid on the same terms as every OpenApps HQ app ([LICENSING.md](../../LICENSING.md): 3-day in-app trial, no signup, one license for 3 Macs). Installed with one Terminal line or Homebrew; the official build checks a signed feed for updates once a day and installs one only when the user says so ([RELEASES.md](../../RELEASES.md)).
+
+Primary task: press the hotkey anywhere, type, press Escape. The note is on the edge and in the folder.
+
+## Identity
+
+Signature color: coral (`coral/300` tile face, `coral/500` shade, `coral/700` / `coral/300` accent in light / dark) — a sticky that is not HQ's yellow. The ramp is derived for OpenNotes and recorded in [`apps/opennotes/design/tokens.json`](../../apps/opennotes/design/tokens.json) with its contrast checks; `coral/300` never carries text on a light ground.
+The mark is a square sticky with its bottom-right corner folded up, in ink; the app icon is the same sticky on a coral tile.
+Type follows the shared system: Bricolage Grotesque for window headings, Instrument Sans for interface text and the sans note face, IBM Plex Mono for labels, the "Saved" line and the mono note face.
+The deck, the note card and the All Notes window are flat surfaces with one contact shadow on the open note; no glass (a translucent sticky reads as a sheet of paper, not a note).
+
+## The deck
+
+One deck per hosted display, docked to the **right** edge (Settings: left), vertically centred on the visible frame, above every window including full-screen apps and Stage Manager stages, on every Space. It never takes focus from the app in front until the user starts writing in a note.
+
+| State | Looks like | Enters | Leaves |
+| --- | --- | --- | --- |
+| Pill | A 14 pt strip on the edge, one dash per active note in the note's color, rounded ends; 8 dashes at most, a dot for "more" | Launch; the fan collapsing; Escape or a click outside an open note | The pointer reaching the edge for 120 ms |
+| Fan | Tabs shingled down the edge, 40 pt wide, one per active note (8 at most, then "+N"), the title reading down the tab in the note's color; a `+` tab at the end | The pill, after the pointer has rested on the edge; the hotkey while read-only; an open note closing | The pointer leaving the edge and the deck for 350 ms; a tab click; Escape |
+| Open | One note slid out of the deck as a 320 × 360 pt card next to its tab; the other tabs stay as the fan | A tab click; the hotkey (a new note, focused); ⌘W from another open note (the next one); "Open" in All Notes | Escape (saves, slides back to the fan); a click outside; the hotkey again; ⌘W with no next note; Archive |
+| Editing | The open note with the keyboard focus (the app is active, the caret in the text) | A click in the text; the hotkey's new note | Escape; a click outside |
+
+Rules:
+
+- Hover opens the fan, and only the fan: a note never opens on its own.
+- The open note stays open while the pointer is elsewhere; only Escape, a click outside, the hotkey, Archive or ⌘W close it. Closing always saves.
+- Every change of state is one movement (180 ms, ease-out); Reduce Motion makes them instant.
+- The deck reads `~/Documents/OpenNotes` (Settings: any folder) and shows what is there, so a note written by another app appears within a second.
+- **Read-only** (after the trial, [LICENSING.md](../../LICENSING.md)): the deck stays visible and every note opens and can be read, exported and archived; the text is not editable, the hotkey and `+` fan the deck instead of creating, and the open note's footer says why. Nothing the user wrote is ever hidden.
+
+## Capture
+
+The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `RegisterEventHotKey`, so no permission; never `⌘Q`, `⌘Tab`, `⌘Space`, a bare `⇧`, or an `Fn`/Globe combination) creates a note in the deck and opens it for writing from any app, full-screen ones included. Escape saves and slides it back. An empty new note is not kept: Escape on a note with no text removes it.
+
+## Notes
+
+- A note is one `.md` file: YAML front matter (`color`, `pinned`, `archived`, `order`, `created`, `modified`), then the text. The first line is the title (a leading `# ` is not shown as such). The file is named from the title on the first save (`groceries.md`, `groceries-2.md`; `note-20260916-1030.md` when there is none) and never renamed afterwards, so iCloud Drive, Obsidian and git see one stable file.
+- Saved 250 ms after typing stops, and on every close. Outside edits are picked up by a folder watcher (FSEvents) and by a rescan when the app becomes active; a file that changed on disk while the user has unsaved edits is saved last-writer-wins, the outside version kept beside it as `<name> (conflict <date>).md`. Nothing is ever silently overwritten, and the app never deletes a file.
+- Paste is plain text. Smart quotes, smart dashes and text replacement are off in every note.
+- Markdown-lite, styled live without changing a character: `#`, `##`, `###` headings, `**bold**`, `_italic_` / `*italic*`, `` `code` ``, `- ` / `* ` / `1. ` lists, `- [ ]` / `- [x]` checklists (a click on the box toggles it, `[ ]` ↔ `[x]` in the file), URLs underlined. Markers stay visible, dimmed. Nothing else is interpreted.
+- Two faces: Sans (Instrument Sans) and Mono (IBM Plex Mono); a default in Settings, and the open note's footer switches its own note.
+- Six colors: coral, yellow, mint, sky, lilac, paper. The default is coral (Settings). Colors follow the appearance: a light face with ink text, a deep face with paper text in Dark Mode; the tab and the pill dash keep the light face in both.
+- Pinned notes come first in the deck and are never auto-archived.
+- Archive, not delete: ⌘⇧A or the footer moves a note out of the deck (`archived: true` in the file); a toast in the deck offers Undo for 10 s. Archived notes stay in the folder, in search, and in All Notes → Archived, where Restore brings one back. Auto-archive (Settings → Notes: off, 7, 30 or 90 days) archives unpinned notes untouched for that long, at launch and hourly. Deleting a file is the Finder's job.
+
+## All Notes
+
+⌥⌘L, the menu-bar item or the deck's fan footer opens one window: a search field (titles and text, case- and diacritic-insensitive, live), Active / Archived, a list (color bar, title, first line, age; drag to reorder the active list, which writes `order` to the files) and a preview pane with Open, Pin / Unpin, Archive / Restore, Export… (`.md` as saved without the front matter, or `.txt` with the markers stripped), Reveal in Finder. Export and Reveal work in read-only too.
+
+## Keyboard
+
+| Keys | Does |
+| --- | --- |
+| ⌥⌘N (rebindable) | New note, from any app |
+| ⎋ | Save and slide the note back; collapse the fan |
+| ⌘W | Save and open the next note in the deck; the last one slides back |
+| ⌘⇧A | Archive the open note (Undo for 10 s) |
+| ⌘⇧P | Pin / unpin the open note |
+| ⌘⇧M | Switch the open note between Sans and Mono |
+| ⌥⌘L | All Notes |
+| ⌘, | Settings |
+
+## Menu bar
+
+A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes…, Settings…, Quit. No Dock icon. Opening the app again from Finder or Spotlight opens All Notes.
+
+## Settings
+
+| Section | Behavior |
+| --- | --- |
+| General | Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off); Deck side (right / left); Display (the main display, the display with the pointer, every display); Hotkey (the recorder; a taken or refused key says so); Notes folder (the path and Choose…; the deck reloads from the new folder, files are never moved) |
+| Notes | Face (Sans / Mono) for new notes; Color for new notes; Auto-archive untouched notes (off / 7 / 30 / 90 days) |
+| License (official builds) | The shared section ([LICENSING.md](../../LICENSING.md)): state, Buy a license, paste a key, Remove this Mac; the trial pill in the title bar |
+| Updates (official builds) | The shared section ([RELEASES.md](../../RELEASES.md)) |
+| About | What OpenNotes reads (the notes folder) and where it goes (nowhere; the only network calls are the license check, the trial registry and the update check, none in a source build); MIT; Copy Diagnostics (version, login state, side, display, hotkey and its problem, folder path, note counts, watcher state, the build's licensing flavour) |
+
+## Defaults and recovery
+
+| Situation | Behavior |
+| --- | --- |
+| Fresh install (no earlier preferences, both records positively absent) | Open at login and Check for updates automatically are turned on once, after storage answers, each under its own flag; never revisited |
+| The notes folder is missing | Created on launch (the default under Documents); a chosen folder that has gone (an unmounted volume) shows one note-shaped message in the deck, "Can't find the notes folder", with Choose… in Settings; nothing is created elsewhere |
+| A file can't be parsed | Front matter that isn't ours is left alone; the whole file is the text and the note takes the defaults. It is saved back only if the user edits it, and then with front matter |
+| A save fails | The note stays open with its text, the footer says "Couldn't save" and why, the next keystroke retries |
+| An outside edit lands while the note is open and unedited | The text updates in place, the caret kept where the text allows |
+| An outside edit lands while the note has unsaved edits | Ours is saved; theirs is kept as the conflict copy; the footer says so once |
+| Hotkey taken by another app | Settings → General shows "⌥⌘N is taken by another app" under the recorder; the menu-bar item still creates notes |
+| The display hosting the deck goes away | The deck moves to the next host by the Display setting; an open note is saved first |
+| Read-only (trial ended, license needed) | See "The deck": visible, readable, exportable, archivable; not editable, no new notes |
+
+No permissions, no accounts, no telemetry. Diagnostics are copied only on request and only to the pasteboard. The privacy copy every licensed app ships (LICENSING.md, "Privacy copy") is OpenNotes' too.
+
+## Out of scope
+
+Rich text, images, fonts beyond the two faces, a database, our own sync, a notch surface, encryption of the files (FileVault does that), per-app notes, AutoPaste, inline math, OCR, timers, widgets, iPhone. Some are later tickets; none changes the file format.
+
+## Marketing only
+
+At `/opennotes/`: the coral key in the headline, a drawn deck beside the three states, the install block with the one-line command and Copy, Buy, questions, the closing field.
+
+## References
+
+[App README](../../apps/opennotes/README.md) · [Releasing](../../apps/opennotes/RELEASING.md) · [Tokens](../../apps/opennotes/design/tokens.json) · [Licensing](../../LICENSING.md) · [Hertz contract](hertz.md) (the shared surface this one mirrors).
