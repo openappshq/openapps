@@ -286,19 +286,23 @@ private struct NotchStage: View {
             VStack(spacing: 0) {
                 ZStack {
                     Rectangle().fill(Color.black.opacity(0.12)).frame(height: Self.menuBarHeight)
+                    // The shade under the menu-bar row, the column's width: the
+                    // items above it are untouched.
+                    MenuBarShade().frame(width: content.width, height: Self.menuBarHeight)
                     HStack {
                         Image(systemName: "apple.logo").font(.system(size: 14, weight: .semibold))
                         Text("Finder").font(.system(size: 13, weight: .semibold))
                         Text("File").font(.system(size: 13))
                         Text("Edit").font(.system(size: 13))
+                        Text("View").font(.system(size: 13))
+                        Text("Go").font(.system(size: 13))
+                        Text("Window").font(.system(size: 13))
                         Spacer()
                         Image(systemName: "wifi").font(.system(size: 13))
                         Text("Tue 9:41").font(.system(size: 13))
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
-                    // The shade over the menu-bar row, the column's width, then the notch.
-                    MenuBarShade().frame(width: content.width, height: Self.menuBarHeight)
                     Rectangle().fill(Color.black).frame(width: 252, height: Self.menuBarHeight)
                 }
                 content

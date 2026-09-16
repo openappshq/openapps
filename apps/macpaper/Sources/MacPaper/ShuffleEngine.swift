@@ -11,6 +11,29 @@ protocol ScheduledToken {
     func cancel()
 }
 
+/// A delay the model arms and may cancel (the live-apply debounce); the
+/// tests replace it with a manual one that fires on demand.
+protocol DelayScheduler {
+    func schedule(after delay: Duration, _ fire: @escaping @MainActor () -> Void) -> any ScheduledToken
+}
+
+/// A sleeping task.
+struct TaskDelayScheduler: DelayScheduler {
+    private final class Token: ScheduledToken {
+        let task: Task<Void, Never>
+        init(_ task: Task<Void, Never>) { self.task = task }
+        func cancel() { task.cancel() }
+    }
+
+    func schedule(after delay: Duration, _ fire: @escaping @MainActor () -> Void) -> any ScheduledToken {
+        Token(Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            fire()
+        })
+    }
+}
+
 /// `Timer` on the main run loop, in common modes, with a 30 s tolerance.
 struct TimerScheduler: OneShotScheduler {
     private final class Token: ScheduledToken {

@@ -94,7 +94,9 @@ final class NotchPanelController {
         shade.isOpaque = false
         shade.backgroundColor = .clear
         shade.hasShadow = false
-        shade.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+        // Under the menu bar's own window: it shows through the bar's
+        // translucency and never tints a menu item.
+        shade.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue - 1)
         shade.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         shade.isReleasedWhenClosed = false
         shade.hidesOnDeactivate = false
@@ -359,9 +361,11 @@ struct PanelRim: View {
     }
 }
 
-/// The click-through strip over the menu-bar row above the column: the
-/// column's black, at `PanelTheme.menuBarShadeAlpha`, so the row reads as
-/// part of it while the menu bar keeps every click.
+/// The click-through strip under the menu-bar row above the column (below
+/// the menu bar's window level, so it shows through the bar's translucency
+/// and never tints an item): the column's black at
+/// `PanelTheme.menuBarShadeAlpha`, so the row reads as part of it while
+/// the menu bar keeps every click.
 struct MenuBarShade: View {
     var body: some View {
         Rectangle().fill(Brand.Panel.ground.opacity(PanelTheme.menuBarShadeAlpha))

@@ -151,7 +151,7 @@ struct ThinSlider: View {
             let fraction = (value - range.lowerBound) / max(range.upperBound - range.lowerBound, .ulpOfOne)
             let x = CGFloat(min(max(fraction, 0), 1)) * width
             ZStack(alignment: .leading) {
-                Capsule().fill(Brand.Panel.border.opacity(0.6)).frame(height: track)
+                Capsule().fill(Brand.Panel.track).frame(height: track)
                 Capsule().fill(Brand.Panel.accent).frame(width: x + knob / 2, height: track)
                 Circle()
                     .fill(Color.white)

@@ -90,6 +90,7 @@ enum Brand {
         static let textPrimary = Color(PanelTheme.textPrimary)
         static let textSecondary = Color(PanelTheme.textSecondary)
         static let border = Color(PanelTheme.border)
+        static let track = Color(PanelTheme.track)
         static let rim = Color(PanelTheme.border).opacity(PanelTheme.rimAlpha)
         static let accent = Color(PanelTheme.accent)
         static let accentOn = Color(PanelTheme.accentOn)

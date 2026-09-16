@@ -244,23 +244,38 @@ private struct PreviewCard: View {
             .overlay { focusOverlay }
             .clipShape(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-            HStack(spacing: Brand.Space.s8) {
-                if let display = model.currentDisplay, model.displaysDiffer || model.displays.count > 1 {
-                    Tag(text: display.name)
-                }
-                if model.currentApplied == model.draft {
-                    Tag(text: "On the desktop")
-                } else if model.previewWallpaper != model.draft || model.isApplying {
-                    Tag(text: "Rendering…")
-                }
-                if let readability = model.readability, model.previewWallpaper == model.draft {
-                    Tag(text: readability.reads ? "Menu bar: reads" : "Menu bar: low contrast", warning: !readability.reads)
+            // The tags on one line where they fit, the display's name on its
+            // own line where they do not; never truncated.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Brand.Space.s8) { displayTag; stateTags }
+                VStack(alignment: .leading, spacing: Brand.Space.s4) {
+                    displayTag
+                    HStack(spacing: Brand.Space.s8) { stateTags }
                 }
             }
             .padding(Brand.Space.s8)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(previewLabel)
+    }
+
+    @ViewBuilder
+    private var displayTag: some View {
+        if let display = model.currentDisplay, model.displaysDiffer || model.displays.count > 1 {
+            Tag(text: display.name)
+        }
+    }
+
+    @ViewBuilder
+    private var stateTags: some View {
+        if model.currentApplied == model.draft {
+            Tag(text: "On the desktop")
+        } else if model.previewWallpaper != model.draft || model.isApplying {
+            Tag(text: "Rendering…")
+        }
+        if let readability = model.readability, model.previewWallpaper == model.draft {
+            Tag(text: readability.reads ? "Menu bar: reads" : "Menu bar: low contrast", warning: !readability.reads)
+        }
     }
 
     /// The focal point of a framed image: a ring the user drags.
@@ -301,7 +316,7 @@ private struct Tag: View {
             .font(Brand.mono(10, medium: true))
             .tracking(0.5)
             .lineLimit(1)
-            .truncationMode(.tail)
+            .fixedSize()
             .foregroundStyle(warning ? Color.black : .white)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)

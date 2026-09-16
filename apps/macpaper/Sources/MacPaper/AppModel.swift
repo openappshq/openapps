@@ -268,17 +268,25 @@ final class AppModel {
 
     @ObservationIgnored private var previewGeneration = 0
     @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingPreview: PreviewRequest?
+    @ObservationIgnored private var previewInFlight = false
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var statusTask: Task<Void, Never>?
     @ObservationIgnored private var exportWorkspace: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
-    /// Live apply: the generation of the last change, the debounce, and
-    /// the chain every apply queues on so they land one at a time.
+    /// Live apply: the generation of the last change, the debounce (a
+    /// scheduler the tests replace with a manual one), and the chain every
+    /// apply queues on so they land one at a time.
     @ObservationIgnored private var liveGeneration = 0
-    @ObservationIgnored private var liveTask: Task<Void, Never>?
+    @ObservationIgnored private var liveToken: (any ScheduledToken)?
+    @ObservationIgnored var liveScheduler: any DelayScheduler = TaskDelayScheduler()
     @ObservationIgnored private var applyChain: Task<Void, Never>?
     @ObservationIgnored private var queuedApplies = 0
     /// How many live applies were started; the tests read it.
     @ObservationIgnored private(set) var liveApplyCount = 0
+    /// Runs on the main actor after an apply's render, before the
+    /// generation check and any desktop call; the tests drive the
+    /// "superseded while rendering" path through it.
+    @ObservationIgnored var afterPrepare: @MainActor () -> Void = {}
 
     init(
         preferences: Preferences, license: LicenseStatus, paths: AppPaths, desktop: any DesktopApplier,
@@ -342,27 +350,51 @@ final class AppModel {
     /// The side shown: the chosen one, else the Mac's appearance.
     var shownSide: Side { editingSide ?? systemAppearance() }
 
+    /// What a preview render is asked for.
+    private struct PreviewRequest {
+        let generation: Int
+        let wallpaper: Wallpaper
+        let context: RenderContext
+        let scale: Double
+        let side: Side
+    }
+
+    /// One preview render at a time: a request made while one is in flight
+    /// waits as the single pending one (a newer request replaces it), and
+    /// runs when the render lands. A slider dragged fast costs one render
+    /// in flight and one queued, never a pile of stale ones.
     private func schedulePreview() {
         previewGeneration &+= 1
-        let generation = previewGeneration
-        let wallpaper = draft
         let context = currentContext
-        let scale = Double(previewSize.width) / Double(context.size.width)
-        let side = shownSide
+        pendingPreview = PreviewRequest(
+            generation: previewGeneration, wallpaper: draft, context: context,
+            scale: Double(previewSize.width) / Double(context.size.width), side: shownSide
+        )
+        startPreviewIfIdle()
+    }
+
+    private func startPreviewIfIdle() {
+        guard !previewInFlight, let request = pendingPreview else { return }
+        pendingPreview = nil
+        previewInFlight = true
         let renderer = renderer
         let cache = previewCache
-        previewTask?.cancel()
         previewTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let key = RenderCache.Key(wallpaper: wallpaper, side: side, context: context.scaled(by: scale))
-            let raster = cache.render(key) { renderer.render(wallpaper, side: side, context: context, scale: scale) }
-            let readability = MenuBarReadability.assess(raster, stripHeight: context.scaled(by: scale).menuBarStrip, side: side)
-            guard !Task.isCancelled, let image = raster.cgImage else { return }
+            let scaled = request.context.scaled(by: request.scale)
+            let key = RenderCache.Key(wallpaper: request.wallpaper, side: request.side, context: scaled)
+            let raster = cache.render(key) { renderer.render(request.wallpaper, side: request.side, context: request.context, scale: request.scale) }
+            let readability = MenuBarReadability.assess(raster, stripHeight: scaled.menuBarStrip, side: request.side)
+            let image = raster.cgImage
             await MainActor.run {
-                guard let self, generation == self.previewGeneration else { return }
-                self.preview = image
-                self.previewWallpaper = wallpaper
-                self.previewSide = side
-                self.readability = readability
+                guard let self else { return }
+                self.previewInFlight = false
+                if request.generation == self.previewGeneration, let image {
+                    self.preview = image
+                    self.previewWallpaper = request.wallpaper
+                    self.previewSide = request.side
+                    self.readability = readability
+                }
+                self.startPreviewIfIdle()
             }
         }
     }
@@ -495,9 +527,18 @@ final class AppModel {
         editedGenerator = editedGenerator.withPalette(colors)
     }
 
-    /// One of the preset palettes, by name.
+    /// One of the preset palettes: the colors, and the top shade lifted
+    /// where the menu bar would not read on a side (a small render, here).
     func applyPreset(_ preset: PresetPalette) {
-        applyPalette(preset.colors)
+        guard allowed() else { return }
+        var copy = draft
+        copy = copy.withSideGenerator(shownSide, editedGenerator.withPalette(preset.colors)).liftingMenuBar(context: readabilityContext, renderer: renderer)
+        edit { $0 = copy }
+    }
+
+    /// The current display's context at a small size, for readability checks.
+    var readabilityContext: RenderContext {
+        currentContext.scaled(by: 160 / Double(currentContext.size.width))
     }
 
     /// The preset the edited generator's colors come from, if any.
@@ -836,11 +877,9 @@ final class AppModel {
         guard appliesLive else { return }
         liveGeneration &+= 1
         let generation = liveGeneration
-        liveTask?.cancel()
-        liveTask = Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(for: self.liveApplyDelay)
-            guard !Task.isCancelled, generation == self.liveGeneration else { return }
+        liveToken?.cancel()
+        liveToken = liveScheduler.schedule(after: liveApplyDelay) { [weak self] in
+            guard let self, generation == self.liveGeneration else { return }
             self.liveApply(generation: generation)
         }
     }
@@ -857,8 +896,8 @@ final class AppModel {
     /// Drops a pending live apply, and marks one in flight as superseded:
     /// an explicit action lands the draft itself.
     private func cancelLiveApply() {
-        liveTask?.cancel()
-        liveTask = nil
+        liveToken?.cancel()
+        liveToken = nil
         liveGeneration &+= 1
     }
 
@@ -902,7 +941,11 @@ final class AppModel {
                 displays: targets, current: currentByDisplay, favorites: favorites,
                 favoritesOnly: preferences.favoritesOnly, sameOnAllDisplays: preferences.sameOnAllDisplays, using: &generator
             ).mapValues { pins.carry(from: current, into: $0) }
-            if plan.values.allSatisfy({ !blocklist.contains($0) }) { return plan }
+            // The never-show list is asked about the pick itself; the lift
+            // (a top shade so the menu bar reads) comes after.
+            if plan.values.allSatisfy({ !blocklist.contains($0) }) {
+                return plan.mapValues { $0.liftingMenuBar(context: readabilityContext, renderer: renderer) }
+            }
         }
         return [:]
     }
@@ -961,6 +1004,7 @@ final class AppModel {
             show(error.localizedDescription, tone: .error)
             return
         }
+        afterPrepare()
         if let generation, generation != liveGeneration {
             // A newer change is on its way: this render never reaches a desktop.
             for image in prepared.images { applier.discard(image) }

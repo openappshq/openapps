@@ -33,7 +33,9 @@ struct EffectsSection: View {
             }
         }
         ParameterRow(title: "Pair", value: pairNote, pin: .pair, model: model) {
-            HStack(spacing: Brand.Space.s12) {
+            // The frame count goes under the segments, never beside them:
+            // the row's width is the measured control's.
+            VStack(alignment: .leading, spacing: Brand.Space.s8) {
                 SegmentedControl(title: "Pair", selection: Binding(get: { PairChoice(model.draft.pair) }, set: { model.setPair($0.pair(frames: currentFrames)) }), choices: PairChoice.allCases.map { ($0, $0.title) })
                 if case .timeOfDay(let frames) = model.draft.pair {
                     CountStepperOver(values: PairMode.frameCounts, value: frames, title: { "\($0) frames" }) { model.setPair(.timeOfDay(frames: $0)) }
