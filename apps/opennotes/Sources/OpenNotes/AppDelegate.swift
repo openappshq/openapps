@@ -105,7 +105,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .terminateCancel
             }
         }
-        return .terminateNow
+        // Then the license's last save and the updater's staged install
+        // (Licensing/LicensingLaunch.swift); nothing in a source build.
+        return finishTerminate()
     }
 
     /// The hotkey's Carbon handler goes with the app.

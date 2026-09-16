@@ -88,16 +88,16 @@ extension AppDelegate {
     }
     #endif
 
-    #if OPENAPPS_LICENSING || OPENAPPS_OFFICIAL
-    /// Official builds save the trial's latest observed time before the
-    /// process exits, bounded by `LicenseController.quitSaveBound`, so a
-    /// stuck disk never holds up Quit, and as the very last thing hand the
-    /// quit to the updater: a staged update whose consent still holds is
-    /// exchanged in (one atomic rename, evaluated against the running app's
-    /// identity first), and after "Restart" the app is reopened; a failed
-    /// restart install cancels the quit so the user sees why. The open
-    /// notes are saved by `applicationWillTerminate`, after this.
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    /// The end of `applicationShouldTerminate`, after every note is
+    /// flushed: official builds save the trial's latest observed time
+    /// before the process exits, bounded by `LicenseController.quitSaveBound`,
+    /// so a stuck disk never holds up Quit, and as the very last thing hand
+    /// the quit to the updater: a staged update whose consent still holds
+    /// is exchanged in (one atomic rename, evaluated against the running
+    /// app's identity first), and after "Restart" the app is reopened; a
+    /// failed restart install cancels the quit so the user sees why. A
+    /// source build has nothing to wait for.
+    func finishTerminate() -> NSApplication.TerminateReply {
         #if OPENAPPS_LICENSING
         let license = licenseController
         #else
@@ -123,7 +123,6 @@ extension AppDelegate {
         }
         return .terminateLater
     }
-    #endif
 
     // MARK: - Deep link
 
