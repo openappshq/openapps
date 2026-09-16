@@ -330,8 +330,6 @@ struct PreviewText: View {
 
     private var attributed: AttributedString {
         let styler = NoteStyler(face: face, appearance: NSAppearance(named: dark ? .darkAqua : .aqua))
-        let storage = NSTextStorage(string: text)
-        styler.apply(to: storage)
-        return AttributedString(storage)
+        return styler.previewAttributed(text)
     }
 }
