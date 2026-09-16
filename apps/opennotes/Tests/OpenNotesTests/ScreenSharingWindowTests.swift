@@ -3,13 +3,15 @@ import XCTest
 @testable import OpenNotes
 @testable import OpenNotesCore
 
-/// The controller path of "Hide notes from screen sharing" on All Notes:
-/// the window takes `.none` while the setting is on, and — a window once
-/// hidden can never be shown again — turning the setting off replaces it
-/// with a new one that is shared. The window is made but never ordered
-/// front, so nothing appears on screen; the deck's decks follow the same
-/// `ScreenSharing.apply` verdict through `DeckHost`, which is not run here
-/// because its panels would be shown.
+/// The controller path of "Keep notes out of screen sharing" on All Notes:
+/// the window's `sharingType` is `.none` while the setting is on, and —
+/// the setter never raises it again — turning the setting off replaces
+/// the window with a new `.readOnly` one, keeping its frame and the
+/// user's search, filter and selection. The property, not capture. The
+/// window is made but never ordered front and never autosaves its frame,
+/// so nothing appears on screen and no defaults domain is written; the
+/// decks follow the same `ScreenSharing.apply` verdict through `DeckHost`,
+/// which is not run here because its panels would be shown.
 final class ScreenSharingWindowTests: XCTestCase {
     private var folder: URL!
     private var temporary: TemporaryDefaults!
@@ -35,7 +37,10 @@ final class ScreenSharingWindowTests: XCTestCase {
         let preferences = Preferences(defaults: temporary.defaults)
         preferences.folder = folder
         let model = AppModel(preferences: preferences, license: LicenseStatus(startsRestricted: false), store: NoteStore(folder: folder), watcher: FolderWatcher())
-        return (AllNotesWindowController(model: model, openNote: { _ in }), preferences)
+        let controller = AllNotesWindowController(model: model, openNote: { _ in })
+        // No frame autosave: a test writes nothing to any defaults domain.
+        controller.frameAutosaveName = nil
+        return (controller, preferences)
     }
 
     /// The observation fires on the next main-queue turn.
@@ -43,7 +48,7 @@ final class ScreenSharingWindowTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
-    @MainActor func testAWindowMadeWithTheSettingOnIsHidden() {
+    @MainActor func testAWindowMadeWithTheSettingOnHasSharingTypeNone() {
         let (controller, preferences) = makeController()
         preferences.hideFromScreenSharing = true
         controller.makeWindow()
@@ -51,7 +56,7 @@ final class ScreenSharingWindowTests: XCTestCase {
         XCTAssertEqual(controller.window?.isVisible, false, "never shown by a test")
     }
 
-    @MainActor func testTurningTheSettingOnHidesTheOpenWindowInPlace() {
+    @MainActor func testTurningTheSettingOnSetsNoneOnTheOpenWindowInPlace() {
         let (controller, preferences) = makeController()
         controller.makeWindow()
         let original = controller.window
@@ -62,12 +67,18 @@ final class ScreenSharingWindowTests: XCTestCase {
         XCTAssertEqual(controller.window?.sharingType, NSWindow.SharingType.none)
     }
 
-    @MainActor func testTurningTheSettingOffReplacesAHiddenWindowWithASharedOne() {
+    @MainActor func testTurningTheSettingOffReplacesTheWindowWithAReadOnlyOneKeepingFrameAndState() {
         let (controller, preferences) = makeController()
         preferences.hideFromScreenSharing = true
         controller.makeWindow()
         let hidden = controller.window
         XCTAssertEqual(hidden?.sharingType, NSWindow.SharingType.none)
+        // Where the user had it, and what they were looking at.
+        let frame = NSRect(x: 120, y: 80, width: 800, height: 600)
+        hidden?.setFrame(frame, display: false)
+        controller.session.query = "milk"
+        controller.session.showsArchived = true
+        controller.session.selection = NoteID("groceries")
         preferences.hideFromScreenSharing = false
         settle()
         XCTAssertNotNil(controller.window)
@@ -75,5 +86,9 @@ final class ScreenSharingWindowTests: XCTestCase {
         XCTAssertEqual(controller.window?.sharingType, .readOnly)
         XCTAssertEqual(hidden?.sharingType, NSWindow.SharingType.none)
         XCTAssertEqual(controller.window?.isVisible, false, "the old one was not up, so neither is the new")
+        XCTAssertEqual(controller.window?.frame, frame, "the same place")
+        XCTAssertEqual(controller.session.query, "milk")
+        XCTAssertTrue(controller.session.showsArchived)
+        XCTAssertEqual(controller.session.selection, NoteID("groceries"))
     }
 }

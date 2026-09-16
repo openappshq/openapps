@@ -3,11 +3,14 @@ import XCTest
 @testable import OpenNotes
 @testable import OpenNotesCore
 
-/// "Hide notes from screen sharing" (design/products/opennotes.md,
-/// "Settings"): only the surfaces that show a note's text take
+/// "Keep notes out of screen sharing" (design/products/opennotes.md,
+/// "The deck"): only the surfaces that show a note's text take
 /// `sharingType = .none`; Settings and the setup guide are always shared.
-final class ScreenSharingTests: XCTestCase {
-    @MainActor func testOnlyDeckAndAllNotesHideWhenTheSettingIsOn() {
+/// These prove the property the app sets and how the setter behaves on
+/// this OS (a one-way ratchet) — never that any capture tool honours it,
+/// which is a request macOS may ignore and nothing here can check.
+final class ScreenSharingSharingTypeTests: XCTestCase {
+    @MainActor func testOnlyDeckAndAllNotesAskForNoneWhenTheSettingIsOn() {
         for surface in ScreenSharing.Surface.allCases {
             let type = ScreenSharing.sharingType(for: surface, hidden: true)
             switch surface {
@@ -19,13 +22,13 @@ final class ScreenSharingTests: XCTestCase {
         }
     }
 
-    @MainActor func testEverySurfaceIsSharedWhenTheSettingIsOff() {
+    @MainActor func testEverySurfaceIsReadOnlyWhenTheSettingIsOff() {
         for surface in ScreenSharing.Surface.allCases {
             XCTAssertEqual(ScreenSharing.sharingType(for: surface, hidden: false), .readOnly, "\(surface)")
         }
     }
 
-    @MainActor func testAHiddenWindowCanNeverBeShownAgainAndSaysSo() {
+    @MainActor func testTheSetterNeverRaisesSharingTypeFromNoneAndApplySaysSo() {
         let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         XCTAssertTrue(ScreenSharing.apply(to: window, surface: .deck, hidden: true))
         XCTAssertEqual(window.sharingType, .none)
@@ -35,13 +38,13 @@ final class ScreenSharingTests: XCTestCase {
         XCTAssertEqual(window.sharingType, .none)
     }
 
-    @MainActor func testAFreshWindowNeverHiddenCanBeShown() {
+    @MainActor func testAFreshWindowTakesReadOnly() {
         let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         XCTAssertTrue(ScreenSharing.apply(to: window, surface: .deck, hidden: false))
         XCTAssertEqual(window.sharingType, .readOnly)
     }
 
-    @MainActor func testASurfaceThatIsNeverHiddenAlwaysSucceeds() {
+    @MainActor func testASurfaceThatNeverAsksForNoneAlwaysSucceeds() {
         let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         XCTAssertTrue(ScreenSharing.apply(to: window, surface: .settings, hidden: true))
         XCTAssertEqual(window.sharingType, .readOnly)

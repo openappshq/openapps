@@ -136,6 +136,33 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.save(note.id), note.id)
         XCTAssertEqual(model.statusLine(for: note.id), "Saved · now")
     }
+
+    /// The tabs' counts come from the model's cache: a count follows the
+    /// text typed here and a change found on disk, and a note without a
+    /// box or with no box any more reads nil.
+    @MainActor func testTheChecklistCountFollowsTypingAndOutsideEdits() throws {
+        let model = makeModel()
+        let note = try XCTUnwrap(model.createNote())
+        XCTAssertNil(model.checklistProgress(for: note.id))
+        model.setText("Groceries\n- [ ] milk\n- [ ] eggs", for: note.id)
+        XCTAssertEqual(model.checklistProgress(for: note.id)?.label, "0/2")
+        XCTAssertEqual(model.checklistProgress(for: note.id)?.label, "0/2", "the cached answer")
+        model.setText("Groceries\n- [x] milk\n- [ ] eggs", for: note.id)
+        XCTAssertEqual(model.checklistProgress(for: note.id)?.label, "1/2")
+        model.setText("Groceries\nno boxes now", for: note.id)
+        XCTAssertNil(model.checklistProgress(for: note.id))
+        // Saved, then changed on disk: the rescan's `.updated` drops the cache.
+        model.setText("Groceries\n- [x] milk\n- [x] eggs", for: note.id)
+        let saved = try XCTUnwrap(model.save(note.id))
+        XCTAssertEqual(model.checklistProgress(for: saved)?.label, "2/2")
+        clock.addTimeInterval(2)
+        let file = model.store.fileURL(for: saved)
+        let outside = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "- [x] eggs", with: "- [ ] eggs\n- [ ] bread")
+        try outside.write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: clock], ofItemAtPath: file.path)
+        model.store.rescan()
+        XCTAssertEqual(model.checklistProgress(for: saved)?.label, "1/3")
+    }
 }
 
 /// The preferences round trip, the fresh-install evidence, the folder default.

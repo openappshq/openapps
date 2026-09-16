@@ -2,7 +2,7 @@ import XCTest
 @testable import OpenNotes
 @testable import OpenNotesCore
 
-/// "Hide notes from screen sharing" on once, on a demonstrably fresh
+/// "Keep notes out of screen sharing" on once, on a demonstrably fresh
 /// install (design/products/opennotes.md, "Settings";
 /// Preferences.applyScreenSharingDefaultIfNeeded).
 final class ScreenSharingDefaultTests: XCTestCase {

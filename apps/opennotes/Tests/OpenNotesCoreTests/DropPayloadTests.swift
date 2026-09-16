@@ -4,8 +4,10 @@ import XCTest
 /// What a drop onto the deck becomes (design/products/opennotes.md, "Drop
 /// to create"): the note's text, from the items the pasteboard carried.
 final class DropPayloadTests: XCTestCase {
-    @MainActor func testTextIsTheBodyAsIsWithOnlyTrailingNewlinesTrimmed() {
-        XCTAssertEqual(DropPayload.noteText(for: [.text("hello\n\nworld\n\n\n")]), "hello\n\nworld")
+    @MainActor func testTextIsTheBodyExactlyAsDropped() {
+        // Not a character changed: blank lines inside and at the end stay.
+        XCTAssertEqual(DropPayload.noteText(for: [.text("hello\n\nworld\n\n\n")]), "hello\n\nworld\n\n\n")
+        XCTAssertEqual(DropPayload.noteText(for: [.text("  indented\n")]), "  indented\n")
         XCTAssertEqual(DropPayload.noteText(for: [.text("one line")]), "one line")
     }
 
