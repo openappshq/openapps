@@ -160,7 +160,8 @@ jobs:
       # key and nothing beyond 127.0.0.1: builds the update-test variant twice,
       # signs, serves and installs it (RELEASING.md, "The update end-to-end
       # test"). Runs the variant as a real app on the runner's GUI session; it
-      # touches no notes folder and asks for no permission.
+      # keeps its notes in its own Application Support folder, never the
+      # user's, and asks for no permission.
       - name: Run the update end-to-end test
         env:
           OPENAPPS_LICENSING: "0"

@@ -27,8 +27,6 @@ OpenNotes needs **no permissions**: the hotkey is a Carbon system hotkey, the de
 
 ## Install
 
-The official build is not released yet (this branch is the app's first ticket; the pipeline, licensing and website follow). Once it is:
-
 ```sh
 curl -fsSL https://openapps.space/install/opennotes | sh
 ```
