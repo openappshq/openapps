@@ -28,7 +28,7 @@ Rules:
 - Hover opens the fan, and only the fan: a note never opens on its own.
 - The open note stays open while the pointer is elsewhere; only Escape, a click outside, the hotkey, Archive or ⌘W close it. Closing always saves.
 - Every change of state is one movement (180 ms, ease-out); Reduce Motion makes them instant.
-- The deck reads `~/Documents/OpenNotes` (Settings: any folder) and shows what is there, so a note written by another app appears within a second.
+- The deck reads the notes folder (`~/Documents/OpenNotes`, iCloud Drive, or any folder; see "Storage") and shows what is there, so a note written by another app appears within a second.
 - **Read-only** (after the trial, [LICENSING.md](../../LICENSING.md); see "Licensing"): the deck stays visible and every note opens and can be read, searched and exported; the text is not editable, the hotkey and `+` fan the deck instead of creating, archive and the swatches are off, and the open note's footer says why. Nothing the user wrote is ever hidden or changed.
 
 ## Capture
@@ -46,6 +46,31 @@ The global hotkey (default ⌥⌘N; Settings: rebindable through Carbon's `Regis
 - Six colors: coral, yellow, mint, sky, lilac, paper. The default is coral (Settings). Colors follow the appearance: a light face with ink text, a deep face with paper text in Dark Mode; the tab and the pill dash keep the light face in both.
 - Pinned notes come first in the deck and are never auto-archived.
 - Archive, not delete: ⌘⇧A or the footer moves a note out of the deck (`archived: true` in the file); a toast in the deck offers Undo for 10 s. Archived notes stay in the folder, in search, and in All Notes → Archived, where Restore brings one back. Auto-archive (Settings → Notes: off, 7, 30 or 90 days) archives unpinned notes untouched for that long, at launch and then whenever the next note falls due (nothing runs while it is off). Deleting a file is the Finder's job.
+
+## Storage
+
+Every note is a plain `.md` file in one folder; the folder is the only store, and where it is is a choice — Settings → General → Notes folder, and the setup guide's files step, offer the same three:
+
+| Choice | Folder | Notes |
+| --- | --- | --- |
+| On this Mac (default) | `~/Documents/OpenNotes` | Created when missing |
+| iCloud Drive | `~/Library/Mobile Documents/com~apple~CloudDocs/OpenNotes`, shown in Finder as iCloud Drive › OpenNotes | Created when missing; offered only while iCloud Drive's root exists on the Mac, else the row says "Sign in to iCloud Drive in System Settings". Any Mac signed in to the same iCloud, and any iOS Markdown app that opens iCloud Drive, sees the same files |
+| Other folder… | Any folder the user picks (an Obsidian vault) | Never created by the app |
+
+Nothing beyond the folder path is stored: the choice is read off the path, so an older install with a chosen folder reads as "Other folder". Switching **copies** every note file to the new folder and then reads the new folder; nothing is ever moved or deleted from the old one. A file already in the new folder with the same content is left alone; one with different content keeps its content and ours goes beside it as `<name> (conflict <time>).md`; a note iCloud has not downloaded has nothing to copy yet and is said so. Unsaved text is written to the old folder first, and the switch waits if it can't be (as any folder change); while read-only the switch waits for a license. What the switch did is one line under the choice until the next switch.
+
+iCloud Drive is used as a folder, through the file system alone — no CloudKit, no ubiquity container, no entitlement (the app ships self-signed), no sync of our own. What iCloud shows on disk and what the app does with it:
+
+| iCloud does | OpenNotes does |
+| --- | --- |
+| Leaves a placeholder (`.<name>.md.icloud`) for a file it has not downloaded | The note is in the deck and All Notes under its file name, greyed as not downloaded; opening it asks iCloud for the file (`startDownloadingUbiquitousItem`) and shows "Downloading…" until it arrives. A placeholder is never written over and never counts as a deleted note |
+| Evicts a file the app holds (the file becomes a placeholder while the note is open or has unsaved text) | The text in memory is the note; a save finds the placeholder, asks for the download, keeps the text dirty and retries as any failed save ("waiting for iCloud" in the footer). When the file is back unchanged the save goes through; changed, it gets the usual conflict copy |
+| Replaces a file by rename when a change arrives (a new inode, every time) | A file's identity is its **content**: the write transaction hashes the bytes behind the descriptor and compares them with what was last read or written, whatever inode holds them; the inode it verified is what the swap is checked against. So a file iCloud re-delivered unchanged is the same file, and one it changed gets the conflict copy |
+| Keeps versions it could not merge (two Macs wrote the file) as `NSFileVersion` conflict versions | Each unresolved version is kept as `<name> (conflict from <device> <time>).md` beside the file — the same shape as our own conflict copies, never over an existing file — and then marked resolved; a version identical to the file is only resolved. Nothing is lost silently |
+| Shows a file missing for an instant during a swap | A file a rescan does not find is removed from the deck only once a later rescan, half a second or more later, still does not find it (the app rescans again within a second to confirm); an unsaved or new note is never dropped for its file |
+| Brings files in without a file event, sometimes | Besides the FSEvents watcher and the rescan on activation, the folder is read again every 30 s while it is iCloud's (`isUbiquitousItem`: the iCloud Drive folder, or Desktop & Documents kept in iCloud) |
+
+Status: while the folder is iCloud's, All Notes' footer and the open note's "Saved" line say "In iCloud Drive · up to date / n not downloaded / downloading n of m / waiting for iCloud"; Diagnostics includes the storage choice and that state. No state is claimed the file system does not show.
 
 ## All Notes
 
@@ -72,18 +97,22 @@ A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes�
 
 | Section | Behavior |
 | --- | --- |
-| General | Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off); Deck side (right / left); Display (the main display; the display with the pointer — the deck moves when the pointer reaches another display's edge, never while a note is open; every display); Hotkey (the recorder; a taken or refused key says so); Notes folder (the path and Choose…; unsaved text is written to the old folder first, and the switch waits if it can't be; files are never moved) |
+| General | Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off); Deck side (right / left); Display (**every display** on a fresh install, decided once from the preferences alone and never revisited — an install with earlier preferences keeps the main display it had; the main display; the display with the pointer — the deck moves when the pointer reaches another display's edge, never while a note is open); Hotkey (the recorder; a taken or refused key says so); Notes folder (On this Mac / iCloud Drive / Other folder…, see "Storage": switching copies the notes and never moves a file; unsaved text is written to the old folder first, and the switch waits if it can't be; Change… for another folder) |
 | Notes | Face (Sans / Mono) for new notes; Color for new notes; Auto-archive untouched notes (off / 7 / 30 / 90 days) |
 | License (official builds) | The shared section ([LICENSING.md](../../LICENSING.md)): state, Buy a license (opens the website; never a price), paste a key, Remove this Mac (confirmed); storage and journal problems named; a key from the `opennotes://activate` link waits for Activate; the trial pill in the title bar |
 | Updates | The shared section ([RELEASES.md](../../RELEASES.md)): Check for updates automatically (on once for a fresh install), Download and install automatically (off until turned on), the status with Check Now / Install and Restart / Restart to Update / Try Again, "Move OpenNotes to Applications to enable updates"; a source build says it has no updater |
-| About | What OpenNotes reads (the notes folder) and where it goes (nowhere; the only network calls are the license check, the trial registry and the update check, named per flavour, none in a source build); MIT; Show setup guide; Copy Diagnostics (version, login state, side, display, hotkey and its problem, folder path, note counts, watcher state, the build's licensing flavour and where the license stands, never the key) |
+| About | What OpenNotes reads (the notes folder) and where it goes (nowhere; the only network calls are the license check, the trial registry and the update check, named per flavour, none in a source build); MIT; Show setup guide; Copy Diagnostics (version, login state, side, display, hotkey and its problem, folder path, the storage choice and iCloud's state, note counts, watcher state, the build's licensing flavour and where the license stands, never the key) |
 
 ## Defaults and recovery
 
 | Situation | Behavior |
 | --- | --- |
-| Fresh install (no earlier preferences, both records positively absent) | Open at login and Check for updates automatically are turned on once, after storage answers, each under its own flag; never revisited |
-| The notes folder is missing | Created on launch (the default under Documents); a chosen folder that has gone (an unmounted volume) shows one note-shaped message in the deck, "Can't find the notes folder", with Choose… in Settings; nothing is created elsewhere |
+| Fresh install (no earlier preferences, both records positively absent) | Open at login and Check for updates automatically are turned on once, after storage answers, each under its own flag; never revisited. Display is set to every display once, from the preferences alone (no storage answer needed), under its own flag |
+| The notes folder is missing | Created on launch (the default under Documents, and the iCloud Drive folder); a chosen folder that has gone (an unmounted volume) shows one note-shaped message in the deck, "Can't find the notes folder", with the choice in Settings; nothing is created elsewhere |
+| A note's file is an iCloud placeholder | Shown greyed under its file name; opening asks iCloud for it ("Downloading…"); never written over, never treated as deleted (see "Storage") |
+| A file is evicted by iCloud while the note has unsaved text | The text stays in the app; the save asks for the download, says "waiting for iCloud" and retries; back unchanged, saved; back changed, the conflict copy |
+| iCloud left conflict versions of a file | Each becomes `<name> (conflict from <device> <time>).md` beside the file and is marked resolved |
+| A file is missing for an instant (a sync tool's rename) | Not a delete: the note goes only once a later rescan, after the grace, still finds no file |
 | A file can't be parsed | Front matter that isn't ours is left alone; the whole file is the text and the note takes the defaults. It is saved back only if the user edits it, and then with front matter |
 | A save fails | The note stays open with its text, the footer says "Couldn't save" and why, the next keystroke retries |
 | An outside edit lands while the note is open and unedited | The text updates in place, the caret kept where the text allows |
@@ -93,7 +122,7 @@ A template sticky symbol; the menu: New Note, Show Deck / Hide Deck, All Notes�
 | The system refuses a rename in the middle of a write (a full disk, a provider hiccup) | Nothing is deleted: every version stays on disk under some name (the outside version as `<name> (conflict …).md`, or in a hidden temporary that the next folder read gives a `<name> (recovered …).md` name), the footer says so, and the note is read again before it is written again |
 | Hotkey taken by another app | Settings → General shows "⌥⌘N is taken by another app" under the recorder; the menu-bar item still creates notes |
 | The display hosting the deck goes away | The deck moves to the next host by the Display setting; an open note is saved first |
-| Read-only (trial ended, license needed) | See "Licensing": visible, readable, searchable, exportable; nothing changed, nothing new |
+| Read-only (trial ended, license needed) | See "Licensing": visible, readable, searchable, exportable; nothing changed, nothing new; the storage choice waits for a license |
 
 No permissions, no accounts, no telemetry. Diagnostics are copied only on request and only to the pasteboard. The privacy copy every licensed app ships (LICENSING.md, "Privacy copy") is OpenNotes' too.
 
@@ -107,11 +136,11 @@ What says so: the pill (the trial's remaining days, or the short reason) at the 
 
 ## Setup guide
 
-Once, on the first launch of the packaged app (never from `swift run`, never in the update-test variant), and again from Settings → About → Show setup guide, resuming at the furthest step reached: Welcome (what the deck is, the hotkey; the trial line and the pill from the real license state), Nothing to grant (what OpenNotes touches: the notes folder, the pasteboard when pasting; the network calls of this flavour), Your notes are files (the folder in use, iCloud Drive or an Obsidian vault as the folder, Open Settings), Starts with your Mac (the login item from its real state, the switch), Tips (the hotkey, the edge, All Notes, and in official builds where the license lives). Skip for now at any step keeps the progress.
+Once, on the first launch of the packaged app (never from `swift run`, never in the update-test variant), and again from Settings → About → Show setup guide, resuming at the furthest step reached: Welcome (what the deck is, the hotkey; the trial line and the pill from the real license state), Nothing to grant (what OpenNotes touches: the notes folder, the pasteboard when pasting; the network calls of this flavour), Your notes are files (the storage choice — On this Mac / iCloud Drive / Other folder… — as in Settings, with what switching does), Starts with your Mac (the login item from its real state, the switch), Tips (the hotkey, the edge, All Notes, and in official builds where the license lives). Skip for now at any step keeps the progress.
 
 ## Out of scope
 
-Rich text, images, fonts beyond the two faces, a database, our own sync, a notch surface, encryption of the files (FileVault does that), per-app notes, AutoPaste, inline math, OCR, timers, widgets, iPhone. Some are later tickets; none changes the file format.
+Rich text, images, fonts beyond the two faces, a database, our own sync (iCloud Drive is used as a folder; no CloudKit), a notch surface, encryption of the files (FileVault does that), per-app notes, AutoPaste, inline math, OCR, timers, widgets, an iPhone app (any iOS Markdown app can open the iCloud Drive folder). Some are later tickets; none changes the file format.
 
 ## Marketing only
 
