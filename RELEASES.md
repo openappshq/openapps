@@ -11,7 +11,7 @@ How every OpenApps HQ app is released, installed and kept up to date. OpenKlack,
 | Release tags | `<app>-vX.Y.Z` (strict SemVer, never moved or reused) |
 | Release files | A zip of the `.app` attached to the GitHub Release for that tag |
 | Update feed | `https://openapps.space/updates/<app>/latest.json`, a signed JSON file served by the website |
-| Updates | Manual by default: `brew upgrade --cask <app>`, or "Check now" in the app. Automatic checks and installs are opt-in Settings toggles, **off by default** |
+| Updates | Automatic *checks* on by default (decided 2026-09-16; before that, off): the app notices a new version and says so. Installing stays the user's move: "Update available — Install", `brew upgrade --cask <app>`, or the opt-in "Download and install automatically" toggle, **off by default** |
 | Update signatures | Every feed and every zip is signed with an app-specific update key that official builds pin |
 
 **Hertz, for now:** no in-app updater, no feed and no update key. `brew upgrade --cask hertz` is its only update path, its cask sets `auto_updates false` so Homebrew reports upgrades, and its workflow has no feed job. Its standalone self-updater was removed on import because it fetched the repository-wide latest release. When the shared Swift updater package lands, Hertz adopts it and this exception goes away.
@@ -99,8 +99,8 @@ The feed never points at a release until that release's zip is published and ver
 | Rule | Detail |
 | --- | --- |
 | Who updates | Official builds only. Builds from source never check, download or install |
-| When | Only when the user opts in: then on launch in the background, every 24 hours while running, and on wake if the last check is older than 24 hours. With automatic checks off (the default), the app never contacts the feed on its own |
-| Settings | "Check for updates automatically" (**off** by default), "Download and install automatically" (**off** by default), and "Check now", which always works |
+| When | With automatic checks on (the default on a fresh install): on launch in the background, every 24 hours while running, and on wake if the last check is older than 24 hours. With automatic checks off, the app never contacts the feed on its own |
+| Settings | "Check for updates automatically" (**on** by default), "Download and install automatically" (**off** by default), and "Check now", which always works. **Defaults apply to fresh installs only:** a default is written once, the first time the app runs with no earlier preferences, and recorded as decided; an upgrade never changes a toggle the user could have set, whether they touched it or not. Same rule as "Open at login" |
 | Install | Download and verify in the background, then install on the next quit or relaunch; the menu shows "Update ready — Restart". Never interrupt typing or sound playback mid-use |
 | Location | Install in place; if the app runs from a read-only location or App Translocation, show "Move <App> to Applications to enable updates" instead |
 | Failures | Retry with backoff (1 hour, then daily). Never loop or block the app |
