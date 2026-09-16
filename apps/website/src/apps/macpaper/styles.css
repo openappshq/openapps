@@ -170,7 +170,7 @@ code {
 }
 .mp-panel-button.is-primary {
   color: var(--palette-white);
-  background: var(--palette-teal-700);
+  background: var(--palette-tangerine-700);
 }
 .mp-panel-star {
   margin-left: auto;
@@ -250,7 +250,7 @@ code {
     34%,
     54% {
       scale: 1;
-      box-shadow: 0 0 0 2px var(--palette-teal-700);
+      box-shadow: 0 0 0 2px var(--palette-tangerine-700);
     }
     58%,
     100% {
@@ -270,7 +270,7 @@ code {
     60%,
     84% {
       scale: 1;
-      box-shadow: 0 0 0 2px var(--palette-teal-700);
+      box-shadow: 0 0 0 2px var(--palette-tangerine-700);
     }
     88%,
     100% {
@@ -421,7 +421,7 @@ code {
   border-radius: 10px;
   background: oklch(1 0 0 / 0.07);
   box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.08);
-  color: var(--palette-teal-300);
+  color: var(--palette-tangerine-300);
 }
 .feature-grid h3 {
   font-size: 24px;

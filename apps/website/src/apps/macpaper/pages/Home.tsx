@@ -49,28 +49,28 @@ const REQUIREMENTS = (
 const makers: [string, string][] = [
   [
     "Gradient",
-    "two or more colours, an angle, and the blend drawn at your display's native pixels",
+    "linear, radial or conic; two to six stops; blended in OKLCH so there is no grey dip between saturated colours",
   ],
   [
     "Mesh",
-    "soft colour fields that meet the way ink does on wet paper; move the points, get another",
+    "a grid of colour points, up to six colours, jitter and softness; the seed places the points and picks their colours",
   ],
-  ["Pattern", "grids, stripes, dots and tiles, with the spacing and the colours yours to set"],
+  ["Pattern", "dots, lines, checks, noise or contours; two colours, a scale, an angle"],
   [
-    "Solid + grain",
-    "one colour with a little film grain, true black included, for a desktop that stays out of the way",
-  ],
-  [
-    "Pixelize and dither",
-    "your own photo as pixel art, or through Bayer, Floyd–Steinberg, blue noise, halftone or ASCII; it never leaves your Mac",
+    "Solid",
+    "one colour, or True black: exact zeros with every finish off, the ground Liquid Glass reads best on",
   ],
   [
-    "Tint and palette",
-    "a duotone or gradient map over a photo or a generator; a palette pulled from a picture, or one accent colour, interpolated in OKLCH so it never turns to mud",
+    "Pixelize",
+    "your own photo in blocks of 4 to 64 pixels, with an optional palette of 2 to 32 colours; it never leaves your Mac",
   ],
   [
-    "Pairs",
-    "light and dark from one seed, a solar set for the hours of the day, a desktop and phone pair",
+    "Dither",
+    "the same photo through Bayer, Floyd–Steinberg, blue noise, halftone or ASCII, in ink and paper or a reduced palette",
+  ],
+  [
+    "Finishes",
+    "tint, duotone, gradient map, film grain, and a shade over the menu-bar strip when the panel says the menu bar reads low",
   ],
 ];
 
@@ -78,74 +78,74 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
   {
     icon: <Sparkles size={20} />,
     title: "Made on the spot.",
-    body: "The generators draw the wallpaper on your Mac, at each display's own pixels. No downloads, no library to browse, no account.",
+    body: "Every wallpaper is a document: a generator, its knobs and a seed, rendered on your Mac at each display's exact pixels. No downloads, no library to browse, no account.",
   },
   {
     icon: <Grid2x2 size={20} />,
     title: "Pixelize and dither.",
-    body: "Drop in a picture of your own and it becomes pixel art, or halftone, or ASCII. Choose the pixel size; the image stays on your Mac.",
+    body: "Drop in a picture of your own and it becomes pixel art, halftone or ASCII. Drag the focal point, choose fill, fit or stretch per display; the image stays on your Mac.",
   },
   {
     icon: <Palette size={20} />,
-    title: "Tint and palette.",
-    body: "A duotone or gradient map over any photo or generator. Pull a palette from a picture, or start from one accent colour.",
+    title: "Colours from anywhere.",
+    body: "Pull a palette from a photo, expand your Mac's accent colour into one, or use the built-in sets. Everything interpolates in OKLCH so nothing lands in the grey.",
   },
   {
     icon: <SunMoon size={20} />,
     title: "Light, dark, and the hours.",
-    body: "One seed gives a light and a dark version, or a solar set that follows the day. They are written as one HEIC, so macOS keeps switching after macPaper quits.",
+    body: "Every document has a light and a dark side, or a time-of-day set at 4, 8 or 16 moments. Applied as one HEIC, the format macOS's own dynamic desktops use, so macOS keeps switching after macPaper quits.",
   },
   {
     icon: <Monitor size={20} />,
     title: "Every display, its own.",
     body: (
       <>
-        Cropped and fitted per display at native pixels, with palettes that stay readable under the
-        menu bar. One wallpaper per display, or per Space, set through macOS's own{" "}
-        <code>NSWorkspace</code>.
+        Rendered at each display's native pixels and handed to macOS through{" "}
+        <code>NSWorkspace</code>; a 5120×1440 ultrawide gets a 5120×1440 plate, never an upscale.
+        One document everywhere, or one per display.
       </>
     ),
   },
   {
     icon: <Pin size={20} />,
     title: "Stays put.",
-    body: "Pin a wallpaper and macPaper keeps a local copy and re-applies it after a login, a wake, a Space change or a display change. It never writes into Apple's wallpaper caches.",
+    body: "The applied file is macPaper's own copy, never a write into Apple's caches. Keep it applied, and macPaper sets it again whenever macOS shows something else: at launch, on wake, on unlock, on a Space or display change.",
   },
   {
     icon: <Frame size={20} />,
     title: "Drawn around the notch.",
-    body: "Compositions that know where the cutout is: a mesh grows out of it, contours part around it. Notchless and external displays get a painted pill instead.",
+    body: "A mesh can emerge from the cutout, a pattern's contours part around it, and a display without a notch gets a painted pill for symmetry. The composition is part of the document and renders per display.",
   },
   {
     icon: <Shuffle size={20} />,
     title: "Seeds, favorites, shuffle.",
     body: (
       <>
-        Every wallpaper is a seed. Favorites are seeds; <code>macpaper://s/…</code> rebuilds one on
-        another Mac; shuffle on a schedule from them, mark one never-show-this, or take an optional
-        daily still to remix.
+        Share puts <code>macpaper://s/…</code> on the pasteboard, the whole document and never an
+        image. Remix is a new seed. Favorites are documents, so they render again for any display.
+        Shuffle on a schedule from favorites or fresh, and Never show this keeps one out.
       </>
     ),
   },
   {
     icon: <FileDown size={20} />,
     title: "Export anywhere.",
-    body: "PNG at display size, SVG where the generator is vector, HEIC for a pair. The same still can go on the lock screen, with a plain fallback where macOS ignores it.",
+    body: "PNG at display size, SVG where the generator is vector, a HEIC pair, or a phone pair: the desktop still and a portrait of the same document to AirDrop yourself.",
   },
   {
     icon: <Clock size={20} />,
     title: "Past the desktop.",
-    body: "A screensaver from the same still, a clock face matched to its palette, subtle motion on the stills that pauses on battery and in full screen, and Now Playing art as a wallpaper.",
+    body: "A clock face on the wallpaper layer, below the icons, matched to the applied palette. A screen saver you install into your Screen Savers folder that shows the applied stills and crossfades through favorites.",
   },
   {
     icon: <SlidersHorizontal size={20} />,
     title: "The notch, your way.",
-    body: "Open on hover, on click, or both; choose which display hosts it, which way it opens and how wide; hide it in full screen; give it a hotkey. Or turn it off and use the menu bar.",
+    body: "Open on hover, on click, or both; choose which display hosts it and how wide it is; hide it in full screen; give it a hotkey. Or turn it off and use the menu bar.",
   },
   {
     icon: <LockKeyhole size={20} />,
     title: "Asks for nothing.",
-    body: "No Accessibility, no screen recording, no account, no telemetry. Location is optional, for the solar set; the network is touched only for the license and update checks, and the daily still if you turn it on.",
+    body: "No Accessibility, no Screen Recording, no Location, no account, no telemetry. Nothing is uploaded; the only network calls are the license check and the update check.",
   },
 ];
 
@@ -160,7 +160,7 @@ const questions = [
   ],
   [
     "How do licenses and trials work?",
-    `Install macPaper and it works right away for ${TRIAL_DAYS} days on that Mac, with no signup. To keep it, pay ${PRICE} once for ${MACS_PER_LICENSE} Macs, forever. No subscription or account, and nothing is charged when the trial ends: the generators pause until you buy a license or build from source, and the wallpaper you have set stays, because macOS is showing it, not macPaper. Remove a Mac in Settings › License to free a seat, or contact support if you no longer have it.`,
+    `Install macPaper and it works right away for ${TRIAL_DAYS} days on that Mac, with no signup. To keep it, pay ${PRICE} once for ${MACS_PER_LICENSE} Macs, forever. No subscription or account, and nothing is charged when the trial ends: generating, Shuffle, Apply and Export pause until you buy a license or build from source, and the wallpaper you have set stays, because macPaper never removes what it set. Remove a Mac in Settings › License to free a seat, or contact support if you no longer have it.`,
   ],
   [
     "Can I use it offline?",
@@ -168,27 +168,31 @@ const questions = [
   ],
   [
     "What permissions does it need?",
-    "None. Wallpapers are set through macOS's own workspace API, the one System Settings uses, so there is no Accessibility prompt and no screen recording. Location is optional and only used to time a solar set; without it you pick the hours yourself. Nothing to grant, nothing to revoke.",
+    "None. Wallpapers are set through macOS's own workspace API, the one System Settings uses, so there is no Accessibility prompt and no Screen Recording. The time-of-day pair follows the clock, not the sun, so there is no Location prompt either. Nothing to grant, nothing to revoke.",
   ],
   [
     "My wallpaper keeps resetting. Does this fix it?",
-    "That is what pinning is for. macPaper keeps its own copy of a pinned wallpaper and sets it again after a login, a wake, a Space change or a display change, through the public API. It never edits Apple's wallpaper caches, so an update cannot leave your desktop in a broken state.",
+    "That is what Keep it applied is for. macPaper applies its own copy of the file and sets it again after a launch, a wake, an unlock, a Space change or a display change, through the public API. It never writes into Apple's wallpaper caches, so an OS update that clears them cannot take your desktop with it.",
+  ],
+  [
+    "Can I set a different wallpaper on each Space?",
+    "Apply → Every Space is the default: it applies now and re-applies as each Space becomes active, so they all match. This Space only applies once to the Space you are on. macOS gives no public identity for a Space, so if it rearranges Spaces automatically that one cannot be followed; Settings says so and points at the toggle.",
   ],
   [
     "Does it change the lock screen?",
-    "It applies the same still to the lock screen where macOS accepts it. There is no public API for that, so when the login window ignores it macPaper says so instead of pretending.",
+    "The lock screen follows the desktop: since macOS Sonoma it shows the current desktop wallpaper, and there is no public way to set a separate one. A light/dark pair follows too. macPaper says this plainly under About instead of pretending otherwise.",
   ],
   [
-    "What happens to a photo I pixelize or tint?",
-    "It is read, processed and written out on your Mac, and never uploaded. The original is not changed.",
+    "What happens to a photo I pixelize or dither?",
+    "It is read, processed and written out on your Mac, and never uploaded. The original is not changed; a copy is kept so a favorite still works after the original moves.",
   ],
   [
-    "Will motion or the clock eat my battery?",
-    "Motion on the stills is subtle, pauses on battery and whenever an app is in full screen, and the clock face redraws once a second. If you never turn them on, macPaper does nothing while the panel is closed.",
+    "Does the clock or the screen saver cost battery?",
+    "The clock is one window on the desktop level that redraws once a second, hidden in full screen and drawn without a sweeping hand under Reduce Motion. The screen saver needs nothing from the app while it runs. Neither is on until you turn it on; with the panel closed macPaper does nothing.",
   ],
   [
     "What does the official build send anywhere?",
-    `Official builds of macPaper include a ${TRIAL_DAYS}-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, your images, and how you use the app are never sent. Builds from source never contact the license service. Official builds also fetch our signed update feed once a day to tell you about a new version; that request carries no identifiers, and installing is your call. The optional daily still is fetched only if you turn it on.`,
+    `Official builds of macPaper include a ${TRIAL_DAYS}-day free trial with no signup. To keep it to one trial per Mac, the app sends a one-way hash of your Mac’s hardware ID (it can’t be turned back into the ID or linked across our apps) to our trial registry once, when the trial starts. If you buy a license, the app checks it with Dodo Payments, our payment provider: the license key and an activation ID are sent when you activate and once a day after that. Your Mac’s name, your images, and how you use the app are never sent. Builds from source never contact the license service. Official builds also fetch our signed update feed once a day to tell you about a new version; that request carries no identifiers, and installing is your call.`,
   ],
   [
     "Why is it not notarized?",
@@ -196,7 +200,7 @@ const questions = [
   ],
   [
     "Can I use the wallpapers somewhere else?",
-    "Yes. Export any of them as a PNG, SVG or HEIC, or share the seed; what macPaper makes on your Mac is yours.",
+    "Yes. Export any of them as a PNG, SVG or HEIC, or share the seed link; what macPaper makes on your Mac is yours.",
   ],
 ];
 
@@ -228,9 +232,9 @@ export default function App() {
             <div className="hero-grid mp-hero-grid">
               <div className="hero-intro">
                 <p>
-                  Gradients, meshes, dither, tints, light-and-dark and solar pairs, made on your Mac
-                  at each display's own pixels and set from a panel that drops out of the notch.
-                  Pinned, they stay.
+                  Gradients, meshes, patterns, dither and pixel art, light-and-dark and time-of-day
+                  pairs, made on your Mac at each display's own pixels and set from a panel that
+                  drops out of the notch. Stills that macOS keeps showing after the app quits.
                 </p>
                 <div className="hero-actions">
                   <BuyButtons app="macpaper" requirements={REQUIREMENTS} />
@@ -250,9 +254,9 @@ export default function App() {
                 <Legend index="01">What it makes</Legend>
                 <h2 id="make-title">Made here. Not downloaded.</h2>
                 <p className="make-lead">
-                  Nothing comes from a gallery. Each wallpaper is a seed drawn on your Mac, for the
-                  display it is going on, and can be redrawn, remixed or shared as often as you
-                  like.
+                  Nothing comes from a gallery. Each wallpaper is a document with a seed, drawn on
+                  your Mac for the display it is going on, and can be redrawn, remixed or shared as
+                  often as you like.
                 </p>
               </div>
               <dl className="makers reveal-group">

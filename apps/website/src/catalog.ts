@@ -14,7 +14,7 @@ export type Product = {
    */
   free?: boolean;
   icon: string;
-  accent: "cobalt" | "orchid" | "green" | "teal";
+  accent: "cobalt" | "orchid" | "green" | "tangerine";
   /** Whether `/brand/<id>/wordmark-{ink,paper}.svg` exist; otherwise the name is set in type. */
   wordmark?: boolean;
   brandSource: string;
@@ -159,10 +159,10 @@ export const products: Product[] = [
     platform: "macOS",
     price: "$5",
     icon: "/brand/macpaper/app-icon.svg",
-    accent: "teal",
+    accent: "tangerine",
     wordmark: false,
-    // Placeholder masters until the app's identity lands in
-    // `apps/macpaper/design/assets`; point this there and delete the folder then.
+    // Mirrors of `apps/macpaper/design/assets` until the app lands on main;
+    // point this there and delete the folder then.
     brandSource: "apps/website/src/apps/macpaper/brand",
     assets: [],
     pages: [
@@ -171,7 +171,7 @@ export const products: Product[] = [
         entry: "Home",
         title: "macPaper · Wallpapers your Mac makes itself",
         description:
-          "Gradients, meshes, dither, tints and light-and-dark pairs, made on your Mac at native pixels and set on every display from a panel that drops out of the notch. macPaper is an open-source Mac app. No permissions, no telemetry.",
+          "Gradients, meshes, patterns, dither and pixel art, light-and-dark and time-of-day pairs, made on your Mac at native pixels and set on every display from a panel that drops out of the notch. macPaper is an open-source Mac app. No permissions, no telemetry.",
         template: "src/apps/macpaper/template.html",
       },
       {
