@@ -44,14 +44,24 @@ struct OnboardingLaunchTests {
         #expect(OnboardingLaunch.resumeStep(store: store) == .welcome)
     }
 
-    @Test("The steps are in guide order: welcome, nothing to grant, login, tips")
+    @Test("allCases is declaration order; the walk is welcome, panel, permissions, login, tips, and raw values keep their meaning")
     func stepsAreInGuideOrder() {
-        #expect(GuideStep.allCases == [.welcome, .permissions, .loginItem, .tips])
-        #expect(GuideStep.welcome.next == .permissions)
-        #expect(GuideStep.tips.previous == .loginItem)
-        #expect(GuideStep.welcome.previous == nil)
+        // The raw value is what the flag stores, so it never changes for a
+        // step even as the walk order does.
+        #expect(GuideStep.allCases == [.welcome, .permissions, .loginItem, .tips, .panel])
+        #expect(GuideStep.panel.rawValue == 4)
+        #expect(GuideStep.order == [.welcome, .panel, .permissions, .loginItem, .tips])
+        #expect(GuideStep.welcome.next == .panel)
+        #expect(GuideStep.panel.next == .permissions)
+        #expect(GuideStep.permissions.next == .loginItem)
+        #expect(GuideStep.loginItem.next == .tips)
         #expect(GuideStep.tips.next == nil)
-        #expect(GuideStep.welcome < GuideStep.tips)
+        #expect(GuideStep.tips.previous == .loginItem)
+        #expect(GuideStep.panel.previous == .welcome)
+        #expect(GuideStep.welcome.previous == nil)
+        #expect(GuideStep.welcome.index == 0 && GuideStep.panel.index == 1 && GuideStep.tips.index == 4)
+        #expect(GuideStep.welcome < GuideStep.panel && GuideStep.panel < GuideStep.permissions && GuideStep.permissions < GuideStep.tips)
+        #expect(GuideStep.tips.isLast && !GuideStep.panel.isLast)
     }
 
     @Test("The guide's own flags are earlier-launch evidence for the defaults")
@@ -144,10 +154,11 @@ struct FreshInstallDefaultMatrixTests {
     @Test("The evidence list names every preference the app writes")
     func theEvidenceListNamesEveryPreferenceTheAppWrites() {
         // Preferences.swift's keys (PreferenceKey.all), OnboardingLaunch's,
-        // both defaults' flags and the updater's (Updater.Key in
-        // packages/openapps-updater).
+        // the notch hint's, both defaults' flags and the updater's
+        // (Updater.Key in packages/openapps-updater).
         let expected = Set(PreferenceKey.all).union([
             OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step,
+            NotchHint.Key.launches, NotchHint.Key.used,
             FreshInstallDefault.Key.loginItemApplied, FreshInstallDefault.Key.updateChecksApplied,
             "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
         ])

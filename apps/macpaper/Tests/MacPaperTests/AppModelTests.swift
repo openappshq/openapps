@@ -431,7 +431,7 @@ struct AppModelTests {
         #expect(text.hasPrefix("macPaper dev (0)\n"))
         #expect(text.contains("Licensing: \(Licensing.flavourDescription)"))
         #expect(text.contains("- Built-in (1) · 32×20 pt @2x · 64×40 px · notch 10 pt · main"))
-        #expect(text.contains("Hotkey: ⌃⌥⌘W"))
+        #expect(text.contains("Hotkey: ⌥⌘P"))
         #expect(text.contains("Applied:\n- nothing yet"))
     }
 }

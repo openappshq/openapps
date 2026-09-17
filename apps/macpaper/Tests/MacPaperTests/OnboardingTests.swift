@@ -28,11 +28,13 @@ struct OnboardingModelTests {
         OnboardingModel(loginItem: LoginItem(flags: flags, service: InertLoginItemService()), license: license, defaults: flags)
     }
 
-    @Test("Starts at welcome, moves forward and back, and only records progress forward")
+    @Test("Starts at welcome, walks welcome, panel, permissions, login, tips, and only records progress forward")
     func stepsAndProgress() {
         let model = makeModel()
         #expect(model.step == .welcome)
         model.getStarted()
+        #expect(model.step == .panel)
+        model.advance()
         #expect(model.step == .permissions)
         model.advance()
         #expect(model.step == .loginItem)
@@ -98,5 +100,42 @@ struct OnboardingModelTests {
         let controller = OnboardingWindowController(loginItem: LoginItem(flags: flags, service: InertLoginItemService()), license: license, showSettings: {}, defaults: flags)
         controller.model.onOpenLicense?()
         #expect(opened == 1)
+    }
+
+    @Test("The model exposes hasNotch and the shortcut from the closures it is given")
+    func notchAndShortcut() {
+        let withNotch = OnboardingModel(loginItem: LoginItem(flags: flags, service: InertLoginItemService()), license: license, defaults: flags, hasNotch: { true }, shortcut: { "⌥⌘P" })
+        #expect(withNotch.hasNotch && withNotch.shortcut == "⌥⌘P")
+        let withoutNotch = OnboardingModel(loginItem: LoginItem(flags: flags, service: InertLoginItemService()), license: license, defaults: flags, hasNotch: { false }, shortcut: { nil })
+        #expect(!withoutNotch.hasNotch && withoutNotch.shortcut == nil)
+        // The defaults: no notch, the default hotkey's own display string.
+        #expect(!makeModel().hasNotch && makeModel().shortcut == Hotkey.default.displayString)
+    }
+}
+
+/// "Where the panel lives": the setup guide's panel step (`PanelStep.swift`).
+@Suite("Guide copy: the panel step")
+@MainActor
+struct PanelStepCopyTests {
+    @Test("With a notch, the line names the notch, the menu-bar icon and the shortcut")
+    func withNotch() {
+        let line = GuideCopy.panelLine(hasNotch: true, shortcut: "⌥⌘P")
+        #expect(line.contains("notch"))
+        #expect(line.contains("menu bar icon"))
+        #expect(line.contains("⌥⌘P"))
+    }
+
+    @Test("Without a notch, the line says the Mac has none and still names the icon and the shortcut")
+    func withoutNotch() {
+        let line = GuideCopy.panelLine(hasNotch: false, shortcut: "⌥⌘P")
+        #expect(line.contains("no notch"))
+        #expect(line.contains("menu bar icon"))
+        #expect(line.contains("⌥⌘P"))
+    }
+
+    @Test("Without a shortcut, neither line mentions one")
+    func noShortcut() {
+        #expect(!GuideCopy.panelLine(hasNotch: true, shortcut: nil).contains("⌥⌘P"))
+        #expect(!GuideCopy.panelLine(hasNotch: false, shortcut: nil).contains("⌥⌘P"))
     }
 }

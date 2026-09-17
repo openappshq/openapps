@@ -24,53 +24,59 @@ struct PanelLayoutTests {
         #expect(PanelLayout.paneWidth(columnWidth: 440) == CGFloat(440 - 56 - 40))
     }
 
-    @Test("The column takes most of the screen under the top inset, capped")
+    @Test("The column takes most of the visible frame under the edge margin, capped")
     func columnHeight() {
-        #expect(PanelLayout.columnHeight(screenHeight: 982, topInset: 37) == PanelLayout.maximumHeight, "921 would fit; the cap wins")
-        #expect(PanelLayout.columnHeight(screenHeight: 900, topInset: 37) == 900 - 37 - PanelLayout.bottomMargin)
-        #expect(PanelLayout.columnHeight(screenHeight: 1440, topInset: 30) == PanelLayout.maximumHeight)
-        #expect(PanelLayout.columnHeight(screenHeight: 20, topInset: 37) == 0)
+        #expect(PanelLayout.heightCap(visibleHeight: 945) == PanelLayout.maximumHeight, "929 would fit; the cap wins")
+        #expect(PanelLayout.heightCap(visibleHeight: 900) == 900 - 2 * PanelLayout.edgeMargin)
+        #expect(PanelLayout.heightCap(visibleHeight: 1440) == PanelLayout.maximumHeight)
+        #expect(PanelLayout.heightCap(visibleHeight: 10) == 0)
+        #expect(PanelLayout.columnHeight(contentHeight: 500, visibleHeight: 945) == 500)
+        #expect(PanelLayout.columnHeight(contentHeight: 5000, visibleHeight: 945) == PanelLayout.maximumHeight)
+        #expect(PanelLayout.columnHeight(contentHeight: -10, visibleHeight: 945) == 0)
     }
 }
 
 @Suite("Panel anchor")
 struct PanelAnchorTests {
     static let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    /// The visible frame under a 37-point menu bar.
+    static let visible = CGRect(x: 0, y: 0, width: 1512, height: 945)
     static let notch = CGRect(x: 630, y: 945, width: 252, height: 37)
 
-    @Test("The top inset is the notch on a notched display and the menu bar plus the popover's gap elsewhere")
-    func topInset() {
-        #expect(NotchGeometry.topInset(for: .notch(Self.notch, menuBarHeight: 37)) == 37)
-        #expect(NotchGeometry.topInset(for: .notch(Self.notch, menuBarHeight: 40)) == 40, "a menu bar taller than the notch wins")
-        #expect(NotchGeometry.topInset(for: .statusItem(CGRect(x: 1300, y: 958, width: 28, height: 24), menuBarHeight: 24)) == 24 + PanelLayout.popoverGap)
-        #expect(NotchGeometry.topInset(for: .topCenter(menuBarHeight: 25)) == 25 + PanelLayout.popoverGap)
+    @Test("The column's top is squared against the notch, or a margin under the menu bar elsewhere")
+    func top() {
+        #expect(NotchGeometry.top(of: .notch(Self.notch), visibleFrame: Self.visible) == 945)
+        let item = CGRect(x: 1300, y: 952, width: 28, height: 22)
+        #expect(NotchGeometry.top(of: .statusItem(item), visibleFrame: Self.visible) == Self.visible.maxY - PanelLayout.edgeMargin)
+        #expect(NotchGeometry.top(of: .topCenter, visibleFrame: Self.visible) == Self.visible.maxY - PanelLayout.edgeMargin)
     }
 
-    @Test("On a notch the column is centered on it and squared against it; under the item its trailing edges meet")
+    @Test("On a notch the column is centered on it and squared against it; under the item it is centered, clamped to the visible frame")
     func frames() {
-        let onNotch = NotchGeometry.panelFrame(screenFrame: Self.screen, anchor: .notch(Self.notch, menuBarHeight: 37), width: 440, contentHeight: 900)
+        let onNotch = NotchGeometry.panelFrame(screenFrame: Self.screen, visibleFrame: Self.visible, anchor: .notch(Self.notch), width: 440, contentHeight: 900)
         #expect(onNotch == CGRect(x: 756 - 220, y: 945 - 900, width: 440, height: 900))
-        let item = CGRect(x: 1380, y: 958, width: 28, height: 24)
-        let underItem = NotchGeometry.panelFrame(screenFrame: Self.screen, anchor: .statusItem(item, menuBarHeight: 24), width: 440, contentHeight: 900)
-        #expect(underItem.maxX == item.maxX)
-        #expect(underItem.maxY == 982 - 24 - PanelLayout.popoverGap)
+        let item = CGRect(x: 1380, y: 952, width: 28, height: 22)
+        let underItem = NotchGeometry.panelFrame(screenFrame: Self.screen, visibleFrame: Self.visible, anchor: .statusItem(item), width: 440, contentHeight: 900)
+        #expect(underItem.maxX == Self.visible.maxX - PanelLayout.edgeMargin, "clamped to the right edge")
+        #expect(underItem.maxY == Self.visible.maxY - PanelLayout.edgeMargin)
         // An item near the left edge: the column stays on screen.
-        let leftItem = CGRect(x: 100, y: 958, width: 28, height: 24)
-        #expect(NotchGeometry.panelFrame(screenFrame: Self.screen, anchor: .statusItem(leftItem, menuBarHeight: 24), width: 440, contentHeight: 900).minX == 0)
+        let leftItem = CGRect(x: 20, y: 952, width: 28, height: 22)
+        #expect(NotchGeometry.panelFrame(screenFrame: Self.screen, visibleFrame: Self.visible, anchor: .statusItem(leftItem), width: 440, contentHeight: 900).minX == Self.visible.minX + PanelLayout.edgeMargin)
         // A screen with its origin elsewhere.
         let external = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
-        let centered = NotchGeometry.panelFrame(screenFrame: external, anchor: .topCenter(menuBarHeight: 24), width: 560, contentHeight: 900)
-        #expect(centered.midX == external.midX && centered.maxY == 1440 - 24 - PanelLayout.popoverGap)
+        let externalVisible = CGRect(x: 1512, y: 0, width: 2560, height: 1416)
+        let centered = NotchGeometry.panelFrame(screenFrame: external, visibleFrame: externalVisible, anchor: .topCenter, width: 560, contentHeight: 900)
+        #expect(centered.midX == externalVisible.midX && centered.maxY == externalVisible.maxY - PanelLayout.edgeMargin)
     }
 
     @Test("The menu-bar shade sits over the column on a notch only")
     func shade() {
-        let anchor = PanelAnchor.notch(Self.notch, menuBarHeight: 37)
-        let frame = NotchGeometry.panelFrame(screenFrame: Self.screen, anchor: anchor, width: 440, contentHeight: 900)
+        let anchor = PanelAnchor.notch(Self.notch)
+        let frame = NotchGeometry.panelFrame(screenFrame: Self.screen, visibleFrame: Self.visible, anchor: anchor, width: 440, contentHeight: 900)
         #expect(NotchGeometry.menuBarShadeFrame(screenFrame: Self.screen, anchor: anchor, panelFrame: frame) == CGRect(x: frame.minX, y: 945, width: 440, height: 37))
-        let item = PanelAnchor.statusItem(CGRect(x: 1380, y: 958, width: 28, height: 24), menuBarHeight: 24)
+        let item = PanelAnchor.statusItem(CGRect(x: 1380, y: 952, width: 28, height: 22))
         #expect(NotchGeometry.menuBarShadeFrame(screenFrame: Self.screen, anchor: item, panelFrame: frame) == nil)
-        #expect(NotchGeometry.menuBarShadeFrame(screenFrame: Self.screen, anchor: .topCenter(menuBarHeight: 24), panelFrame: frame) == nil)
+        #expect(NotchGeometry.menuBarShadeFrame(screenFrame: Self.screen, anchor: .topCenter, panelFrame: frame) == nil)
     }
 }
 
