@@ -725,7 +725,7 @@ struct AllNotesView: View {
             HStack(spacing: 5) {
                 if let color = commonColor {
                     Circle()
-                        .fill(Brand.tab(color))
+                        .fill(NoteAppearance(color: color).swatch)
                         .overlay(Circle().strokeBorder(Color.black.opacity(0.35), lineWidth: 1))
                         .frame(width: 12, height: 12)
                 } else {
