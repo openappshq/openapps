@@ -140,7 +140,7 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
   {
     icon: <SlidersHorizontal size={20} />,
     title: "The notch, your way.",
-    body: "Open on hover, on click, or both; choose which display hosts it and how wide it is; hide it in full screen; give it a hotkey. Or turn it off and use the menu bar.",
+    body: "Open on hover, on click, or both; choose which display hosts it and how wide it is; hide it in full screen. The same panel opens from the menu bar icon or with ⌥⌘P, and on a Mac without a notch it hangs from the icon.",
   },
   {
     icon: <LockKeyhole size={20} />,
