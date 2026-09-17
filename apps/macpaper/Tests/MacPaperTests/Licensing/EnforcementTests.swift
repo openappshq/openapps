@@ -274,12 +274,15 @@ struct EnforcementTests {
     func scheduledShuffleAfterTheDeadline() async {
         trialStore.record = trialRecord(elapsed: 3 * FakeClock.day - 60)
         _ = await attach()
-        model.scheduledShuffle()
+        // Fixed seeds: a random draw can exhaust the gate's attempts on the
+        // harness's tiny displays and shuffle nothing, which would look like
+        // enforcement (AppModelTests.shuffle does the same).
+        model.scheduledShuffle(seed: 11)
         await harness.settle()
         #expect(harness.desktop.calls.count == 2, "two displays, same on all")
         model.clearStatus()
         clock.advance(120)
-        model.scheduledShuffle()
+        model.scheduledShuffle(seed: 12)
         await harness.settle()
         #expect(harness.desktop.calls.count == 2)
         #expect(model.status == nil, "a timer's shuffle says nothing; the panel's card does")

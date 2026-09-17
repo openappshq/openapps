@@ -1110,9 +1110,9 @@ final class AppModel {
 
     /// The scheduled shuffle: every display, per the settings, without
     /// touching the draft unless the panel shows an applied document.
-    func scheduledShuffle() {
+    func scheduledShuffle(seed: UInt64 = .randomSeed()) {
         guard license.hasAccess(), !displays.isEmpty else { return }
-        var generator = SeededGenerator(seed: .randomSeed())
+        var generator = SeededGenerator(seed: seed)
         guard let plan = shufflePlan(for: displays, using: &generator) else { return }
         let draftWasApplied = currentApplied == draft
         if draftWasApplied, let mine = currentDisplay.flatMap({ plan[$0] }) {

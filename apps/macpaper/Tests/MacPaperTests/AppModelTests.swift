@@ -159,13 +159,13 @@ struct AppModelTests {
         // Editing the draft, then a scheduled shuffle: the desktop changes, the draft stays.
         h.model.load(before.reseeded(99))
         let edited = h.model.draft
-        h.model.scheduledShuffle()
+        h.model.scheduledShuffle(seed: 12)
         await h.settle()
         #expect(h.model.draft == edited)
         #expect(h.model.appliedState.wallpaper(for: 1) != edited)
         // A draft that is the applied one follows the scheduled shuffle.
         h.model.load(h.model.appliedState.wallpaper(for: 1)!)
-        h.model.scheduledShuffle()
+        h.model.scheduledShuffle(seed: 13)
         await h.settle()
         #expect(h.model.draft == h.model.appliedState.wallpaper(for: 1))
     }
