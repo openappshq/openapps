@@ -182,6 +182,7 @@ struct AllNotesView: View {
     @FocusState private var searchFocused: Bool
     @Environment(\.previewRendering) private var previewRendering
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The sidebar's width in the harness and its ideal width in the window.
     static let sidebarWidth: CGFloat = 300
@@ -319,9 +320,11 @@ struct AllNotesView: View {
     /// The head, the license card, the list, and — while anything is
     /// checked — the selection bar docked at the foot, sliding up with
     /// the first check and down with the last uncheck (the header count
-    /// fades in at the top at the same time).
+    /// fades in at the top at the same time); with Reduce Motion on, both
+    /// simply appear (`SelectionMotion`).
     private var sidebar: some View {
-        VStack(spacing: 0) {
+        let motion = SelectionMotion.chosen(reduceMotion: reduceMotion)
+        return VStack(spacing: 0) {
             VStack(spacing: Brand.Space.s8) {
                 searchField
                 HStack(spacing: Brand.Space.s4) {
@@ -331,7 +334,7 @@ struct AllNotesView: View {
                 }
                 if selecting {
                     selectionHeader
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .transition(motion.transition(from: .top))
                 }
             }
             .padding(Brand.Space.s12)
@@ -386,13 +389,13 @@ struct AllNotesView: View {
             }
             if selecting {
                 selectionBar
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(motion.transition(from: .bottom))
             }
         }
         // The bar slides in from under the column's foot, not over the
         // window's rows below the split.
         .clipped()
-        .animation(.easeOut(duration: Brand.Motion.standard), value: selecting)
+        .animation(motion.animation, value: selecting)
     }
 
     private var searchField: some View {
@@ -947,6 +950,36 @@ struct AllNotesView: View {
         .padding(Brand.Space.s24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// How the selection header and bar come and go: travelling in from the
+/// column's edges over `Brand.Motion.standard`, or — with Reduce Motion
+/// on — appearing where they belong with no animation at all, the list
+/// settling at once (design/system.md: no decorative travel under
+/// reduced motion, as the deck does).
+enum SelectionMotion: Equatable {
+    case travel, appear
+
+    static func chosen(reduceMotion: Bool) -> SelectionMotion {
+        reduceMotion ? .appear : .travel
+    }
+
+    /// The transition for a piece entering from `edge`; a fade alone
+    /// under `appear`, which without an animation is instant.
+    func transition(from edge: Edge) -> AnyTransition {
+        switch self {
+        case .travel: .opacity.combined(with: .move(edge: edge))
+        case .appear: .opacity
+        }
+    }
+
+    /// nil is no animation: the layout changes in one step.
+    var animation: Animation? {
+        switch self {
+        case .travel: .easeOut(duration: Brand.Motion.standard)
+        case .appear: nil
+        }
     }
 }
 

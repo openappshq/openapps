@@ -195,4 +195,16 @@ final class AllNotesBulkBarTests: XCTestCase {
         XCTAssertFalse(selection.ordered(in: [onScreen]).isEmpty, "on view: the bar comes up")
         XCTAssertEqual(selection.ordered(in: [onScreen]), [onScreen], "the off-screen id never reaches the bar")
     }
+
+    // MARK: - Reduce Motion
+
+    /// With Reduce Motion on, the header and the bar appear where they
+    /// belong with no animation and no travel; off, they slide in from
+    /// the column's edges over the standard duration.
+    @MainActor func testSelectionMotionAppearsWithoutAnimationUnderReduceMotion() {
+        XCTAssertEqual(SelectionMotion.chosen(reduceMotion: true), .appear)
+        XCTAssertEqual(SelectionMotion.chosen(reduceMotion: false), .travel)
+        XCTAssertNil(SelectionMotion.appear.animation, "the list settles in one step")
+        XCTAssertNotNil(SelectionMotion.travel.animation)
+    }
 }
