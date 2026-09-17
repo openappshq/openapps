@@ -120,12 +120,12 @@ final class DeckReorderTests: XCTestCase {
         XCTAssertEqual(sut.state, .fan)
     }
 
-    @MainActor func testEscapeWithNoDragStillCollapsesTheFanToThePill() {
+    @MainActor func testEscapeWithNoDragStillCollapsesTheFanToRest() {
         var sut = machine()
         _ = sut.handle(.pointerEnteredEdge)
         _ = sut.handle(.timerFired(.hoverOpen))
-        XCTAssertEqual(sut.handle(.escape), [.showPill])
-        XCTAssertEqual(sut.state, .pill)
+        XCTAssertEqual(sut.handle(.escape), [.showRest])
+        XCTAssertEqual(sut.state, .rest)
     }
 
     @MainActor func testRenameDuringADragFollowsTheDraggedNote() {
@@ -159,9 +159,9 @@ final class DeckReorderTests: XCTestCase {
         _ = sut.handle(.pointerEnteredEdge)
         _ = sut.handle(.timerFired(.hoverOpen))
         _ = sut.handle(.tabLifted(a))
-        XCTAssertEqual(sut.handle(.hostLost), [.cancelDrag, .showPill])
+        XCTAssertEqual(sut.handle(.hostLost), [.cancelDrag, .showRest])
         XCTAssertNil(sut.dragging)
-        XCTAssertEqual(sut.state, .pill)
+        XCTAssertEqual(sut.state, .rest)
     }
 
     @MainActor func testNotesChangedCarriesThePinnedSetAndDefaultsToEmpty() {

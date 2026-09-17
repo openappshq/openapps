@@ -11,9 +11,9 @@ final class DeckDropTests: XCTestCase {
         DeckStateMachine(settings: DeckSettings(readOnly: readOnly), notes: [a, b])
     }
 
-    @MainActor func testDroppedOnAPillCreatesANoteAndLeavesTheStateFanned() {
+    @MainActor func testDroppedAtRestCreatesANoteAndLeavesTheStateFanned() {
         var sut = machine()
-        XCTAssertEqual(sut.state, .pill)
+        XCTAssertEqual(sut.state, .rest)
         XCTAssertEqual(sut.handle(.dropped), [.createNote])
         XCTAssertEqual(sut.state, .fan)
     }
@@ -58,26 +58,26 @@ final class DeckDropNoticeLayoutTests: XCTestCase {
     private let metrics = DeckMetrics()
 
     @MainActor func testNoticeGivesTheToastRectTheNoticeHeightAndGrowsThePanel() {
-        let base = DeckGeometry.layout(state: .pill, side: .right, visibleFrame: screen, notes: ids)
-        let withNotice = DeckGeometry.layout(state: .pill, side: .right, visibleFrame: screen, notes: ids, notice: true)
+        let base = DeckGeometry.layout(state: .rest, side: .right, visibleFrame: screen, notes: ids)
+        let withNotice = DeckGeometry.layout(state: .rest, side: .right, visibleFrame: screen, notes: ids, notice: true)
         XCTAssertEqual(withNotice.toast?.height, metrics.noticeHeight)
         XCTAssertEqual(withNotice.panelFrame.height, base.panelFrame.height + metrics.gap + metrics.noticeHeight)
     }
 
     @MainActor func testToastAloneGivesTheToastHeight() {
-        let base = DeckGeometry.layout(state: .pill, side: .right, visibleFrame: screen, notes: ids)
-        let withToast = DeckGeometry.layout(state: .pill, side: .right, visibleFrame: screen, notes: ids, toast: true)
+        let base = DeckGeometry.layout(state: .rest, side: .right, visibleFrame: screen, notes: ids)
+        let withToast = DeckGeometry.layout(state: .rest, side: .right, visibleFrame: screen, notes: ids, toast: true)
         XCTAssertEqual(withToast.toast?.height, metrics.toastHeight)
         XCTAssertEqual(withToast.panelFrame.height, base.panelFrame.height + metrics.gap + metrics.toastHeight)
     }
 
     @MainActor func testNoticeWinsWhenBothAreRequested() {
-        let both = DeckGeometry.layout(state: .pill, side: .right, visibleFrame: screen, notes: ids, toast: true, notice: true)
+        let both = DeckGeometry.layout(state: .rest, side: .right, visibleFrame: screen, notes: ids, toast: true, notice: true)
         XCTAssertEqual(both.toast?.height, metrics.noticeHeight)
     }
 
     @MainActor func testNeitherLeavesNoToastRect() {
-        let neither = DeckGeometry.layout(state: .pill, side: .right, visibleFrame: screen, notes: ids)
+        let neither = DeckGeometry.layout(state: .rest, side: .right, visibleFrame: screen, notes: ids)
         XCTAssertNil(neither.toast)
     }
 }
