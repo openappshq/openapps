@@ -19,6 +19,9 @@ final class NotchHost {
     /// under it on a click on the item, and for the hotkey where the
     /// notch panel cannot show.
     var statusItemFrame: () -> CGRect? = { nil }
+    /// The menu-bar item's window: a click in it is the item's own toggle,
+    /// never a click outside the panel.
+    var statusItemWindow: () -> NSWindow? = { nil }
     /// The first-run glow's flags; nil never shows the glow (the harness).
     private let hintFlags: (any FlagStore)?
     private(set) var controllers: [DisplayID: NotchPanelController] = [:]
@@ -115,6 +118,7 @@ final class NotchHost {
             display: display, screen: screen, model: model, preferences: preferences, hostsNotch: hostsNotch,
             header: { [weak self] in self?.header?() },
             statusItemFrame: { [weak self] in self?.statusItemFrame() },
+            statusItemWindow: { [weak self] in self?.statusItemWindow() },
             hintFlags: hintFlags,
             showSettings: showSettings, quit: quit
         )

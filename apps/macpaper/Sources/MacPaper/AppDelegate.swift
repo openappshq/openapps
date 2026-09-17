@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // launch count for the notch glow, itself earlier-launch evidence,
         // may be written. The panels read it as they are made.
         NotchHint.recordLaunch(store: UserDefaults.standard)
+        preferences.commitHotkeyDefault()
 
         let statusItem = StatusItemController(model: model, preferences: preferences, showSettings: { [weak self] in self?.showSettings() }, quit: { NSApp.terminate(nil) })
         self.statusItem = statusItem
@@ -66,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         notch.header = { [weak self] in self?.panelHeader?() ?? AnyView(EmptyView()) }
         notch.statusItemFrame = { [weak statusItem] in statusItem?.buttonFrame }
+        notch.statusItemWindow = { [weak statusItem] in statusItem?.buttonWindow }
         self.notch = notch
         statusItem.togglePanel = { [weak notch] in notch?.toggleFromStatusItem() }
         statusItem.panelIsShown = { [weak notch] in notch?.isOpen ?? false }

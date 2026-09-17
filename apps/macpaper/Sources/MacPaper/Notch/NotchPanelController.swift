@@ -39,6 +39,9 @@ final class NotchPanelController {
     /// The menu-bar item's frame in screen coordinates, when it has one:
     /// a click on the item and the hotkey hang the column under it.
     private let statusItemFrame: () -> CGRect?
+    /// The window the menu-bar item lives in: a click there is the item's
+    /// own toggle (delivered on mouse-up), never a click outside.
+    private let statusItemWindow: () -> NSWindow?
     /// The licensing wiring's header (the trial pill), read at every
     /// layout; nil draws nothing.
     private let header: () -> AnyView?
@@ -69,7 +72,7 @@ final class NotchPanelController {
         didSet { if hostsNotch != oldValue { layoutHoverZone() } }
     }
 
-    init(display: DisplayInfo, screen: NSScreen, model: AppModel, preferences: Preferences, hostsNotch: Bool, header: @escaping () -> AnyView? = { nil }, statusItemFrame: @escaping () -> CGRect? = { nil }, hintFlags: (any FlagStore)? = nil, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
+    init(display: DisplayInfo, screen: NSScreen, model: AppModel, preferences: Preferences, hostsNotch: Bool, header: @escaping () -> AnyView? = { nil }, statusItemFrame: @escaping () -> CGRect? = { nil }, statusItemWindow: @escaping () -> NSWindow? = { nil }, hintFlags: (any FlagStore)? = nil, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.display = display
         self.header = header
         self.screen = screen
@@ -77,6 +80,7 @@ final class NotchPanelController {
         self.preferences = preferences
         self.hostsNotch = hostsNotch
         self.statusItemFrame = statusItemFrame
+        self.statusItemWindow = statusItemWindow
         self.showSettings = showSettings
         self.quit = quit
         machine = PanelStateMachine(settings: preferences.panelSettings)
@@ -351,10 +355,12 @@ final class NotchPanelController {
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             MainActor.assumeIsolated { self?.handle(.clickedOutside) }
         }
-        // A click in one of the app's other windows (Settings) is outside too.
+        // A click in one of the app's other windows (Settings) is outside
+        // too; not one on the menu-bar item, whose mouse-up toggles.
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
-                if let self, event.window !== self.panel, event.window !== self.hoverWindow { self.handle(.clickedOutside) }
+                guard let self else { return }
+                if Self.clickIsOutside(window: event.window, own: [self.panel, self.hoverWindow, self.statusItemWindow()]) { self.handle(.clickedOutside) }
             }
             return event
         }
@@ -366,6 +372,13 @@ final class NotchPanelController {
             }
             return handled ? nil : event
         }
+    }
+
+    /// Whether a mouse-down in `window` is a click outside the panel: any
+    /// window but the panel's own, the hover zone's and the menu-bar
+    /// item's (whose click is the item's toggle, on mouse-up).
+    static func clickIsOutside(window: AnyObject?, own: [AnyObject?]) -> Bool {
+        !own.contains { $0 != nil && $0 === window }
     }
 
     private func removeMonitors() {

@@ -51,7 +51,7 @@ struct LibrarySection: View {
                     .foregroundStyle(Brand.Panel.textSecondary)
                     .padding(.vertical, Brand.Space.s8)
             } else {
-                PanelList(rendering: previewRendering) {
+                PanelList(count: model.favoriteList.count) {
                     ForEach(model.favoriteList) { favorite in
                         RecipeRow(model: model, favorite: favorite)
                         if favorite.id != model.favoriteList.last?.id {

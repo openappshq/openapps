@@ -98,7 +98,9 @@ struct PanelDemo: View {
             let size = proxy.size
             let menuBar: CGFloat = 26
             let notch = CGRect(x: size.width / 2 - 45, y: 0, width: 90, height: menuBar - 3)
-            let item = CGRect(x: size.width - 92, y: 3, width: 20, height: 20)
+            // The item's rect places the drawn icon, the pointer's target
+            // and the column alike: the clock beside it has a fixed width.
+            let item = CGRect(x: size.width - 12 - 34 - 10 - 20, y: 3, width: 20, height: 20)
             let trigger = hasNotch ? CGPoint(x: notch.midX, y: notch.midY + 2) : CGPoint(x: item.midX, y: item.midY + 2)
             let start = CGPoint(x: size.width * 0.28, y: size.height * 0.78)
             let pointer = CGPoint(
@@ -118,14 +120,17 @@ struct PanelDemo: View {
                     Text("Finder").font(.system(size: 11, weight: .semibold))
                     Spacer()
                     Image(systemName: "wifi").font(.system(size: 11))
-                    Image(nsImage: AppResources.menuBarImage()).renderingMode(.template)
-                        .frame(width: item.width, height: item.height)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(hasNotch ? 0 : 0.25 * drop)))
-                    Text("9:41").font(.system(size: 11))
+                    Color.clear.frame(width: item.width, height: item.height)
+                    Text("9:41").font(.system(size: 11)).frame(width: 34, alignment: .trailing)
                 }
                 .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .frame(height: menuBar)
+                Image(nsImage: AppResources.menuBarImage()).renderingMode(.template)
+                    .foregroundStyle(.white)
+                    .frame(width: item.width, height: item.height)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(hasNotch ? 0 : 0.25 * drop)))
+                    .offset(x: item.minX, y: item.minY)
                 if hasNotch {
                     // The glow under the notch, then the notch itself.
                     NotchGlow()

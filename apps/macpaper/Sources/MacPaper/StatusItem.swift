@@ -35,6 +35,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.delegate = self
     }
 
+    /// The window the item lives in (the status bar's): a click there is
+    /// never a click outside the panel.
+    var buttonWindow: NSWindow? { item.button?.window }
+
     /// The item's frame in screen coordinates: where the column hangs
     /// from when opened from here.
     var buttonFrame: CGRect? {

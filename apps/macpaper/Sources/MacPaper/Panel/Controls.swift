@@ -20,20 +20,39 @@ extension EnvironmentValues {
 
 // MARK: - Lists
 
-/// A list of rows in the column: lazy, so a long library or history builds
+/// A list of `count` rows in the column, each `PanelLayout.listRowHeight`
+/// with a hairline between: lazy, so a long library or history builds
 /// only the rows in the scroll viewport; a plain stack for the harness,
-/// whose renderer has no viewport.
+/// whose renderer has no viewport; and while the column is measured
+/// (`panelSizing`) a blank of the rows' height, so no row — and no
+/// thumbnail render behind it — is built just to know how tall the list is.
 struct PanelList<Content: View>: View {
-    let rendering: Bool
+    let count: Int
     @ViewBuilder let content: () -> Content
+    @Environment(\.previewRendering) private var previewRendering
+    @Environment(\.panelSizing) private var panelSizing
+
+    /// What `count` rows and their hairlines take.
+    static func height(rows count: Int) -> CGFloat {
+        guard count > 0 else { return 0 }
+        return CGFloat(count) * PanelLayout.listRowHeight + CGFloat(count - 1)
+    }
 
     var body: some View {
-        if rendering {
+        if panelSizing {
+            Color.clear.frame(height: Self.height(rows: count))
+        } else if previewRendering {
             VStack(spacing: 0) { content() }
         } else {
             LazyVStack(spacing: 0) { content() }
         }
     }
+}
+
+extension EnvironmentValues {
+    /// Set while the column is measured off-screen for its natural height
+    /// (`PanelMetrics.naturalHeight`): lists stand in for their rows.
+    @Entry var panelSizing = false
 }
 
 // MARK: - Segments

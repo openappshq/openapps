@@ -16,20 +16,24 @@ final class NotchHintController {
     private var screen: NSScreen
     private var notch: CGRect
     private let window: NSPanel
-    private var monitor: Any?
+    private let monitor: any PointerMonitor
     private var isNear = false
     private var panelIsOpen = false
     private var done = false
+
+    /// Whether the pointer is still watched: only while the hint is armed.
+    var isWatching: Bool { monitor.isInstalled }
 
     /// Off while the notch panel is off or this display does not host it.
     var isEnabled = true {
         didSet { if isEnabled != oldValue { refresh() } }
     }
 
-    init(screen: NSScreen, notch: CGRect, flags: any FlagStore) {
+    init(screen: NSScreen, notch: CGRect, flags: any FlagStore, monitor: any PointerMonitor = GlobalPointerMonitor()) {
         self.flags = flags
         self.screen = screen
         self.notch = notch
+        self.monitor = monitor
         window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -44,9 +48,7 @@ final class NotchHintController {
         window.contentView = NSHostingView(rootView: NotchGlow())
         window.alphaValue = 0
         layout()
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
-            MainActor.assumeIsolated { self?.pointerMoved() }
-        }
+        monitor.install { [weak self] point in self?.pointerMoved(to: point) }
     }
 
     deinit {
@@ -60,10 +62,11 @@ final class NotchHintController {
     }
 
     /// The notch opened the panel: the hint is done, this launch and every
-    /// later one.
+    /// later one, and the pointer is no longer watched.
     func markUsed() {
         NotchHint.markUsed(store: flags)
         done = true
+        monitor.remove()
         refresh()
     }
 
@@ -74,12 +77,11 @@ final class NotchHintController {
 
     func panelClosed() {
         panelIsOpen = false
-        pointerMoved()
+        pointerMoved(to: NSEvent.mouseLocation)
     }
 
     func tearDown() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
+        monitor.remove()
         window.orderOut(nil)
     }
 
@@ -87,17 +89,22 @@ final class NotchHintController {
         window.setFrame(NotchGeometry.hintGlowFrame(screenFrame: screen.frame, notch: notch), display: false)
     }
 
-    private func pointerMoved() {
-        let near = NotchGeometry.hintZone(screenFrame: screen.frame, notch: notch).contains(NSEvent.mouseLocation)
+    /// The pointer moved to `point` (screen coordinates).
+    func pointerMoved(to point: CGPoint) {
+        let near = NotchGeometry.hintZone(screenFrame: screen.frame, notch: notch).contains(point)
         guard near != isNear else { return }
         isNear = near
         refresh()
     }
 
+    /// Whether the glow is showing (fading in or lit).
+    private(set) var isShowing = false
+
     /// Shown while the pointer is near, the panel is closed and the hint
     /// still applies; faded in and out over the standard duration.
     private func refresh() {
         let shown = isEnabled && isNear && !panelIsOpen && !done
+        isShowing = shown
         if shown { window.orderFrontRegardless() }
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if reduceMotion {
@@ -114,6 +121,36 @@ final class NotchHintController {
                 }
             })
         }
+    }
+}
+
+/// Where the hint reads the pointer from: a global mouse-moved monitor in
+/// the app (`GlobalPointerMonitor`), a hand-driven fake in the tests.
+protocol PointerMonitor: AnyObject {
+    var isInstalled: Bool { get }
+    func install(_ handler: @escaping @MainActor (CGPoint) -> Void)
+    func remove()
+}
+
+/// `NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved)`: mouse
+/// events need no permission (keyboard monitors would), and the app's own
+/// windows never report through it (the hover zone and the panel have
+/// their own tracking). Removed as soon as the hint is done.
+final class GlobalPointerMonitor: PointerMonitor {
+    private var token: Any?
+
+    var isInstalled: Bool { token != nil }
+
+    func install(_ handler: @escaping @MainActor (CGPoint) -> Void) {
+        remove()
+        token = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { _ in
+            MainActor.assumeIsolated { handler(NSEvent.mouseLocation) }
+        }
+    }
+
+    func remove() {
+        if let token { NSEvent.removeMonitor(token) }
+        token = nil
     }
 }
 

@@ -108,11 +108,11 @@ Its width is the setting below, unless a segmented control needs more: every seg
 | Direction | down (v1 renders down only; left, right are stored for a later release) | down |
 | Width | compact / regular / wide (360 / 440 / 560 pt, each grown to fit the widest control's labels) | regular |
 | Hide in fullscreen | on / off | on |
-| Show panel (the shortcut) | any key with at least one modifier, or none; shown in the menu-bar item's menu | ⌥⌘P |
+| Show panel (the shortcut) | any key with at least one modifier, or none; shown in the menu-bar item's menu | ⌥⌘P on a fresh install; an install upgraded from 0.2 keeps ⌃⌥⌘W (its default then), written once at the first launch that finds no stored shortcut, after the fresh-install evidence has been read |
 
 Behavior:
 
-- Hover opens after the hover delay over the notch and closes 400 ms after the pointer leaves the panel and the notch; a click opens at once and then only a click outside, Escape, the shortcut, the item, Collapse or Hide in fullscreen closes it. Opening by click while a hover-open is pending cancels the pending open. A hover-opened panel that the pointer enters stays as long as the pointer is inside.
+- Hover opens after the hover delay over the notch and closes 400 ms after the pointer leaves the panel and the notch; a click opens at once and then only a click outside, Escape, the shortcut, the item, Collapse or Hide in fullscreen closes it. A click on the menu-bar item is never a click outside: its mouse-up toggles, so a second click on the item closes and does not reopen. Opening by click while a hover-open is pending cancels the pending open. A hover-opened panel that the pointer enters stays as long as the pointer is inside.
 - The menu-bar item toggles the panel under itself whatever the notch settings say; a click while a panel is open on another display closes that one first.
 - The shortcut toggles: closes an open panel, else opens one from the notch where the notch panel may show, else under the menu-bar item.
 - In fullscreen (Hide in fullscreen on) the panel closes and the notch does nothing until the space leaves fullscreen; the item and the shortcut still open the panel, under the item.
@@ -123,7 +123,7 @@ Behavior:
 ### Finding the notch (first run)
 
 - The setup guide's second step, **"Where the panel lives"**, right after the welcome: a drawn display with a looping animation of the pointer reaching the notch, the glow lighting under it and the column dropping, and the words that the menu-bar icon opens the same panel, and so does the shortcut. On a Mac without a notch (no connected display has one) the step says the panel lives in the menu bar — the icon and the shortcut are the triggers — and the animation reaches the icon instead. Reduce Motion holds the last frame.
-- **The glow.** For the first five launches, or until the notch has opened the panel once (by hover or click), a soft tangerine glow — a bright seam under the notch's edge and a fall-off over 40 points — fades in and pulses whenever the pointer comes within 80 points of the notch, and fades out when it leaves, the panel opens, or the notch panel is off. A click-through window at the menu bar's level; the pointer is read by a global mouse-moved monitor (no permission: only keyboard monitors need one) that exists only while the glow is armed. Reduce Motion: the glow shows without pulsing. Two flags beside the first-run flags (`notchHint.launches`, counted after the fresh-install evidence has been read; `notchHint.used`), both earlier-launch evidence.
+- **The glow.** For the first five launches, or until the notch has opened the panel once (by hover or click), a soft tangerine glow — a bright seam under the notch's edge and a fall-off over 40 points — fades in and pulses whenever the pointer comes within 80 points of the notch, and fades out when it leaves, the panel opens, or the notch panel is off. A click-through window at the menu bar's level; the pointer is read by a global mouse-moved monitor (no permission: only keyboard monitors need one) that exists only while the glow is armed and is removed the moment the notch opens the panel. Reduce Motion: the glow shows without pulsing. Two flags beside the first-run flags (`notchHint.launches`, counted after the fresh-install evidence has been read; `notchHint.used`), both earlier-launch evidence.
 - The menu-bar item's tooltip says "click for the panel, right-click for the menu".
 
 ### Notch-aware composition

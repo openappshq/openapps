@@ -171,11 +171,13 @@ extension EnvironmentValues {
 enum PanelMetrics {
     /// The height the column takes unscrolled, measured off-screen: what
     /// the window opens at (up to the display's cap) and what the harness
-    /// draws.
+    /// draws. The lists stand in for their rows (`panelSizing`), so a
+    /// library of hundreds costs nothing to measure and renders no
+    /// thumbnail before the window shows.
     static func naturalHeight(of content: PanelContent) -> CGFloat {
         var content = content
         content.height = nil
-        let hosting = NSHostingView(rootView: content.environment(\.previewRendering, true))
+        let hosting = NSHostingView(rootView: content.environment(\.previewRendering, true).environment(\.panelSizing, true))
         hosting.appearance = NSAppearance(named: .darkAqua)
         return hosting.fittingSize.height.rounded(.up)
     }

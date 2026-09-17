@@ -34,18 +34,19 @@ final class Preferences {
     var hoverDelay: TimeInterval {
         didSet { defaults.set(hoverDelay, forKey: PreferenceKey.hoverDelay) }
     }
-    /// Nil is "no hotkey".
+    /// Nil is "no hotkey". Without a stored value the default depends on
+    /// the install: ⌥⌘P on a fresh one, ⌃⌥⌘W where an earlier launch left
+    /// preferences (the shortcut those installs had); `commitHotkeyDefault`
+    /// writes the choice once, so later launches read it like any other.
     var hotkey: Hotkey? {
         didSet {
-            if let hotkey, let data = try? JSONEncoder().encode(hotkey) {
-                defaults.set(data, forKey: PreferenceKey.hotkey)
-            } else {
-                // Stored as empty data, not removed: "no hotkey" is a choice,
-                // and a choice is earlier-launch evidence.
-                defaults.set(Data(), forKey: PreferenceKey.hotkey)
-            }
+            hotkeyDefaultPending = false
+            writeHotkey()
         }
     }
+    /// The hotkey was defaulted, not read: to be written once the launch
+    /// has read its fresh-install evidence.
+    @ObservationIgnored private(set) var hotkeyDefaultPending = false
     var shuffleInterval: ShuffleInterval {
         didSet { defaults.set(shuffleInterval.rawValue, forKey: PreferenceKey.shuffleInterval) }
     }
@@ -105,7 +106,11 @@ final class Preferences {
         if let data = defaults.data(forKey: PreferenceKey.hotkey) {
             hotkey = data.isEmpty ? nil : try? JSONDecoder().decode(Hotkey.self, from: data)
         } else {
-            hotkey = .default
+            // Read before anything is written: an upgrade keeps the shortcut
+            // it had, a fresh install gets the new one.
+            let hadEarlierPreferences = FreshInstallDefault.Key.earlierPreferenceEvidence.contains { defaults.object(forKey: $0) != nil }
+            hotkey = hadEarlierPreferences ? .legacyDefault : .default
+            hotkeyDefaultPending = true
         }
         shuffleInterval = defaults.string(forKey: PreferenceKey.shuffleInterval).flatMap(ShuffleInterval.init(rawValue:)) ?? .off
         favoritesOnly = defaults.object(forKey: PreferenceKey.favoritesOnly) as? Bool ?? false
@@ -117,6 +122,25 @@ final class Preferences {
         clockSize = defaults.string(forKey: PreferenceKey.clockSize).flatMap(ClockSize.init(rawValue:)) ?? .medium
         let pinNames = defaults.data(forKey: PreferenceKey.pins).flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
         pins = Set(pinNames.compactMap { ParameterKey(rawValue: $0) ?? Self.legacyPinNames[$0] })
+    }
+
+    /// Writes a defaulted hotkey so the next launch reads it. Called once
+    /// the launch has read its fresh-install evidence (the login item's and
+    /// the updater's), since the key is itself evidence of an earlier launch.
+    func commitHotkeyDefault() {
+        guard hotkeyDefaultPending else { return }
+        hotkeyDefaultPending = false
+        writeHotkey()
+    }
+
+    private func writeHotkey() {
+        if let hotkey, let data = try? JSONEncoder().encode(hotkey) {
+            defaults.set(data, forKey: PreferenceKey.hotkey)
+        } else {
+            // Stored as empty data, not removed: "no hotkey" is a choice,
+            // and a choice is earlier-launch evidence.
+            defaults.set(Data(), forKey: PreferenceKey.hotkey)
+        }
     }
 
     /// What the hover delay may be set to, in seconds.

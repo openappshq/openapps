@@ -44,9 +44,13 @@ public struct Hotkey: Codable, Hashable, Sendable {
         self.modifiers = modifiers
     }
 
-    /// ⌥⌘P: shows and hides the panel. Also the menu-bar item's "Show
-    /// panel" item, which displays whatever the setting is.
+    /// ⌥⌘P: shows and hides the panel, on a fresh install. Also the
+    /// menu-bar item's "Show panel" item, which displays whatever the
+    /// setting is.
     public static let `default` = Hotkey(keyCode: 35, modifiers: [.option, .command])
+    /// ⌃⌥⌘W: what installs before 0.2.1 had, kept for them on upgrade
+    /// (`Preferences`).
+    public static let legacyDefault = Hotkey(keyCode: 13, modifiers: [.control, .option, .command])
 
     /// A hotkey needs at least one of ⌘, ⌥ or ⌃ (⇧ alone would take a
     /// letter from every app), a key that is not a modifier, and must not
