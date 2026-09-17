@@ -804,9 +804,12 @@ nonisolated public struct DeckScrollKeeper: Hashable, Sendable {
     }
 
     /// The user scrolled by `delta` (positive: the tabs move up), clamped
-    /// to `maxScroll`; false when nothing changed.
-    public mutating func scroll(by delta: CGFloat, maxScroll: CGFloat) -> Bool {
-        guard maxScroll > 0 else { return false }
+    /// to `maxScroll`; false when nothing changed. Only the fan (and the
+    /// fan beside an open note) scrolls: at rest the stack shows from the
+    /// first note, so a wheel or a drag over it leaves the kept scroll as
+    /// the fan left it.
+    public mutating func scroll(by delta: CGFloat, maxScroll: CGFloat, in state: DeckState) -> Bool {
+        guard state != .rest, maxScroll > 0 else { return false }
         let next = min(max(scroll + delta, 0), maxScroll)
         guard next != scroll else { return false }
         scroll = next

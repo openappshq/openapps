@@ -778,7 +778,7 @@ final class DeckScrollKeeperTests: XCTestCase {
         keeper.handle(.closeNote(many[0]))
         keeper.handle(.showFan)
         let fan = layout(.fan, scroll: 0)
-        XCTAssertTrue(keeper.scroll(by: 10_000, maxScroll: fan.maxScroll))
+        XCTAssertTrue(keeper.scroll(by: 10_000, maxScroll: fan.maxScroll, in: .fan))
         XCTAssertEqual(keeper.scroll, fan.maxScroll, "clamped")
         keeper.handle(.showRest)
         XCTAssertNil(keeper.settle(layout(.rest, scroll: keeper.scroll)))
@@ -792,21 +792,44 @@ final class DeckScrollKeeperTests: XCTestCase {
         var keeper = DeckScrollKeeper()
         keeper.handle(.openNote(many[0], focus: false))
         _ = keeper.settle(layout(.open(many[0], editing: false), scroll: 0))
-        _ = keeper.scroll(by: 10_000, maxScroll: layout(.open(many[0], editing: false), scroll: 0).maxScroll)
+        _ = keeper.scroll(by: 10_000, maxScroll: layout(.open(many[0], editing: false), scroll: 0).maxScroll, in: .open(many[0], editing: false))
         keeper.orderChanged(noteOpen: true)
         XCTAssertEqual(keeper.settle(layout(.open(many[0], editing: false), scroll: keeper.scroll)), 0, "brought back to the top")
-        _ = keeper.scroll(by: 10_000, maxScroll: layout(.fan, scroll: 0).maxScroll)
+        _ = keeper.scroll(by: 10_000, maxScroll: layout(.fan, scroll: 0).maxScroll, in: .fan)
         keeper.orderChanged(noteOpen: false)
         XCTAssertNil(keeper.settle(layout(.fan, scroll: keeper.scroll)), "no note open: the scroll is the user's")
     }
 
     @MainActor func testScrollingIsClampedAndANoOpWhenEverythingFits() {
         var keeper = DeckScrollKeeper()
-        XCTAssertFalse(keeper.scroll(by: 40, maxScroll: 0), "three notes fit: nothing to scroll")
-        XCTAssertTrue(keeper.scroll(by: 40, maxScroll: 100))
-        XCTAssertFalse(keeper.scroll(by: -100, maxScroll: 100) && keeper.scroll != 0, "clamped at the top")
+        XCTAssertFalse(keeper.scroll(by: 40, maxScroll: 0, in: .fan), "three notes fit: nothing to scroll")
+        XCTAssertTrue(keeper.scroll(by: 40, maxScroll: 100, in: .fan))
+        XCTAssertFalse(keeper.scroll(by: -100, maxScroll: 100, in: .fan) && keeper.scroll != 0, "clamped at the top")
         XCTAssertEqual(keeper.scroll, 0)
-        XCTAssertFalse(keeper.scroll(by: -1, maxScroll: 100), "already at the top: unchanged")
+        XCTAssertFalse(keeper.scroll(by: -1, maxScroll: 100, in: .fan), "already at the top: unchanged")
+    }
+
+    @MainActor func testAWheelOverTheStackAtRestLeavesTheFansScrollAsItWasLeft() {
+        var keeper = DeckScrollKeeper()
+        // The fan scrolled half way, then folded into the rest.
+        let fan = layout(.fan, scroll: 0)
+        XCTAssertTrue(keeper.scroll(by: fan.maxScroll / 2, maxScroll: fan.maxScroll, in: .fan))
+        let kept = keeper.scroll
+        keeper.handle(.showRest)
+        let rest = layout(.rest, scroll: keeper.scroll)
+        XCTAssertEqual(rest.scroll, kept, "the rest carries the fan's scroll")
+        // A wheel or a drag over the compact stack: nothing to scroll,
+        // nothing remembered differently.
+        XCTAssertFalse(keeper.scroll(by: 10_000, maxScroll: rest.maxScroll, in: .rest))
+        XCTAssertFalse(keeper.scroll(by: -10_000, maxScroll: rest.maxScroll, in: .rest))
+        XCTAssertEqual(keeper.scroll, kept)
+        XCTAssertNil(keeper.settle(rest))
+        // The fan grows back open where it was left.
+        keeper.handle(.showFan)
+        XCTAssertEqual(layout(.fan, scroll: keeper.scroll).scroll, kept)
+        // And scrolls again once it is out.
+        XCTAssertTrue(keeper.scroll(by: 10_000, maxScroll: fan.maxScroll, in: .fan))
+        XCTAssertEqual(keeper.scroll, fan.maxScroll)
     }
 
     @MainActor func testTheKeptNoteFollowsARename() {

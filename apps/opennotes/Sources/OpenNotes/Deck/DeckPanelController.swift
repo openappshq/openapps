@@ -523,9 +523,10 @@ final class DeckPanelController {
     /// lies below comes into view): a wheel or trackpad over the fan, a
     /// drag on the deck's bare axis, ↑↓ with the deck focused, a lifted
     /// tab held at the fan's end. Clamped by the layout; no-op when
-    /// everything fits.
+    /// everything fits, and at rest (the stack does not scroll; the fan
+    /// grows back open where it was left).
     func scroll(by delta: CGFloat) {
-        guard keeper.scroll(by: delta, maxScroll: layout.maxScroll) else { return }
+        guard keeper.scroll(by: delta, maxScroll: layout.maxScroll, in: machine.state) else { return }
         render()
     }
 
