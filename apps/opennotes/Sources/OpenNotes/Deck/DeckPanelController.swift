@@ -53,13 +53,10 @@ final class DeckPanelController {
     private var dragCancelToken = 0
     /// The note a drop or ⌥⌘↑/↓ is moving, for the announcement after.
     private var moving: NoteID?
-    /// How far the fan is scrolled (clamped by the layout at each render).
-    private var scroll: CGFloat = 0
-    /// The tab to keep in view: the open note, else the last one used.
-    private var keep: NoteID?
-    /// Set when `keep` changed or the fan opened: the next render scrolls
-    /// so the kept tab shows, and then leaves the scroll to the user.
-    private var revealPending = false
+    /// How far the fan is scrolled and which tab it keeps in view
+    /// (`DeckScrollKeeper`): the open note's tab is revealed once when it
+    /// opens or is moved; the fan showing keeps the scroll the rest had.
+    private var keeper = DeckScrollKeeper()
     /// Something held over the deck (`DeckDrop`): the tabs lift as a
     /// target, or the deck says why a drop is refused.
     private var dropHover: DropHover = .none
@@ -178,7 +175,7 @@ final class DeckPanelController {
     func noteRedirected(from: NoteID, to: NoteID) {
         redirects[from] = to
         if held == from { held = to }
-        if keep == from { keep = to }
+        keeper.renamed(from: from, to: to)
         if colorPanelNote == from { colorPanelNote = to }
         _ = machine.handle(.noteRenamed(from: from, to: to))
         render()
@@ -264,7 +261,7 @@ final class DeckPanelController {
         handle(.notesChanged(model.deckOrder, pinned: model.pinnedIDs))
         // The order changed elsewhere (All Notes' drag) with a note open:
         // its tab follows into view. Otherwise the scroll is the user's.
-        if machine.order != before, machine.isOpen { revealPending = true }
+        if machine.order != before { keeper.orderChanged(noteOpen: machine.isOpen) }
         render()
     }
 
@@ -281,6 +278,7 @@ final class DeckPanelController {
     }
 
     private func perform(_ effect: DeckEffect) {
+        keeper.handle(effect)
         switch effect {
         case .startTimer(let kind, let delay):
             timers[kind]?.invalidate()
@@ -294,7 +292,6 @@ final class DeckPanelController {
             removeMonitors()
             if panel.isKeyWindow { panel.resignKey() }
             model.clearConflictNotice()
-            if effect == .showFan { revealPending = true }
             // The colour panel opened for the note that just closed goes too.
             NoteColorPanel.shared.dismiss(ownersStartingWith: "note:")
             colorPanelNote = nil
@@ -308,8 +305,6 @@ final class DeckPanelController {
             if let held, held != id { model.release(held) }
             if held != id { model.retain(id) }
             held = id
-            keep = id
-            revealPending = true
             installMonitors()
             if focus {
                 focusCounter += 1
@@ -359,8 +354,10 @@ final class DeckPanelController {
             _ = machine.handle(.notesChanged(model.deckOrder, pinned: model.pinnedIDs))
             // A note moved by the keyboard or VoiceOver may have left the
             // fan's window: the open note's tab is brought back into view.
-            if machine.order != before, machine.isOpen { revealPending = true }
-            if let mover, machine.order != before { announceMove(of: mover) }
+            if machine.order != before {
+                keeper.orderChanged(noteOpen: machine.isOpen)
+                if let mover { announceMove(of: mover) }
+            }
         case .cancelDrag:
             dragCancelToken += 1
             endDrag()
@@ -408,16 +405,12 @@ final class DeckPanelController {
         let refusal = dropHover.refusal
         let toast = pending != nil
         let notice = refusal != nil
-        layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: toast, notice: notice, scroll: scroll)
-        scroll = layout.scroll
-        // The open or last-used tab is brought into the fan once, when it
-        // changed or the fan opened; the user's own scrolling is kept.
-        if revealPending {
-            revealPending = false
-            if let keep = keep.map(current), let revealed = DeckGeometry.scroll(revealing: keep, in: layout), revealed != scroll {
-                scroll = revealed
-                layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: toast, notice: notice, scroll: scroll)
-            }
+        layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: toast, notice: notice, scroll: keeper.scroll)
+        // The open tab is brought into the fan once, when it opened or was
+        // moved; the user's own scrolling is otherwise kept, and the fan
+        // opens at the scroll the rest showed.
+        if let revealed = keeper.settle(layout) {
+            layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: toast, notice: notice, scroll: revealed)
         }
         var content = DeckContent(
             layout: layout, state: state, side: preferences.side, notes: notes, openNote: openNote,
@@ -532,10 +525,7 @@ final class DeckPanelController {
     /// tab held at the fan's end. Clamped by the layout; no-op when
     /// everything fits.
     func scroll(by delta: CGFloat) {
-        guard layout.maxScroll > 0 else { return }
-        let next = min(max(scroll + delta, 0), layout.maxScroll)
-        guard next != scroll else { return }
-        scroll = next
+        guard keeper.scroll(by: delta, maxScroll: layout.maxScroll) else { return }
         render()
     }
 

@@ -667,9 +667,91 @@ nonisolated public enum DeckAutoScroll {
         return nil
     }
 
+    /// The same for a lifted tab over a layout: the drag's centre is in
+    /// the panel's SwiftUI coordinates (y down), the layout's fan in
+    /// AppKit's (y up), flipped here.
+    public static func direction(for drag: DeckDrag, in layout: DeckLayout, metrics: DeckMetrics = DeckMetrics()) -> Direction? {
+        let height = layout.panelFrame.height
+        let fan = CGRect(x: layout.fan.minX, y: height - layout.fan.maxY, width: layout.fan.width, height: layout.fan.height)
+        return direction(tabCenterY: drag.centerY, fan: fan, canScrollUp: layout.canScrollUp, canScrollDown: layout.canScrollDown, metrics: metrics)
+    }
+
     /// The scroll for one tick: positive moves the tabs up.
     public static func delta(_ direction: Direction) -> CGFloat {
         direction == .up ? -step : step
+    }
+}
+
+/// A tab being dragged along the deck: which, and where its centre is
+/// now (the panel's SwiftUI coordinates, y down the screen), so a fan
+/// that scrolls under the pointer changes nothing about where the tab is.
+nonisolated public struct DeckDrag: Hashable, Sendable {
+    public var id: NoteID
+    public var centerY: CGFloat
+
+    public init(id: NoteID, centerY: CGFloat) {
+        self.id = id
+        self.centerY = centerY
+    }
+}
+
+/// What the fan is scrolled to, and which tab it keeps in view: the open
+/// note's, else the last one used, brought into the fan once when a note
+/// opens or a move takes an open note's tab out of view — and otherwise
+/// left where the user put it. The fan showing reveals nothing: the rest
+/// is the fan folded in, so the fan opens at the scroll the rest showed.
+/// Pure; the controller owns the layout and the window.
+nonisolated public struct DeckScrollKeeper: Hashable, Sendable {
+    /// How far the fan is scrolled (clamped at each `settle`).
+    public private(set) var scroll: CGFloat = 0
+    /// The tab to keep in view: the open note, else the last one used.
+    public private(set) var keep: NoteID?
+    /// Set when `keep` changed or its tab was moved: the next `settle`
+    /// scrolls so the kept tab shows, and then leaves the scroll alone.
+    public private(set) var revealPending = false
+
+    public init() {}
+
+    /// An effect the controller performs: a note opening is kept and
+    /// revealed; showing the fan or the rest keeps the scroll as it is.
+    public mutating func handle(_ effect: DeckEffect) {
+        if case .openNote(let id, _) = effect {
+            keep = id
+            revealPending = true
+        }
+    }
+
+    /// The order changed (a drag, ⌥⌘↑ / ⌥⌘↓, All Notes): with a note
+    /// open, its tab may have left the fan's window and is brought back.
+    public mutating func orderChanged(noteOpen: Bool) {
+        if noteOpen { revealPending = true }
+    }
+
+    /// The kept note's identity moved.
+    public mutating func renamed(from: NoteID, to: NoteID) {
+        if keep == from { keep = to }
+    }
+
+    /// The user scrolled by `delta` (positive: the tabs move up), clamped
+    /// to `maxScroll`; false when nothing changed.
+    public mutating func scroll(by delta: CGFloat, maxScroll: CGFloat) -> Bool {
+        guard maxScroll > 0 else { return false }
+        let next = min(max(scroll + delta, 0), maxScroll)
+        guard next != scroll else { return false }
+        scroll = next
+        return true
+    }
+
+    /// The layout was made at `scroll`: takes its clamped scroll, and
+    /// performs a pending reveal once. Returns the scroll the layout must
+    /// be remade at when the reveal moved it, else nil.
+    public mutating func settle(_ layout: DeckLayout, metrics: DeckMetrics = DeckMetrics()) -> CGFloat? {
+        scroll = layout.scroll
+        guard revealPending else { return nil }
+        revealPending = false
+        guard let keep, let revealed = DeckGeometry.scroll(revealing: keep, in: layout, metrics: metrics), revealed != scroll else { return nil }
+        scroll = revealed
+        return revealed
     }
 }
 

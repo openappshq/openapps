@@ -74,14 +74,6 @@ struct DeckContent {
     var onAllNotes: () -> Void = {}
 }
 
-/// A tab being dragged along the deck: which, and where its centre is
-/// now (the panel's SwiftUI coordinates, y down the screen), so a fan
-/// that scrolls under the pointer changes nothing about where the tab is.
-struct DeckDrag: Hashable {
-    var id: NoteID
-    var centerY: CGFloat
-}
-
 /// The deck: the fan of tabs, the `+` tab, the open note and the archive
 /// toast, each placed by `DeckLayout` (AppKit coordinates, flipped here).
 /// At rest the same tabs, folded in: each one's edge peeking out of the
@@ -428,7 +420,11 @@ struct DeckView: View {
                     // Where in the tab the pointer took it: kept, so the
                     // tab does not jump under the pointer.
                     grab = value.startLocation.y - slotCenterY(index)
-                    withAnimation(reduceMotion ? nil : Self.lift) { drag = DeckDrag(id: id, centerY: value.location.y - grab) }
+                    let lifted = DeckDrag(id: id, centerY: value.location.y - grab)
+                    withAnimation(reduceMotion ? nil : Self.lift) { drag = lifted }
+                    // Lifted already at an end of the fan: the fan scrolls
+                    // from this moment, not from the next pointer move.
+                    updateEdgeHold(for: lifted)
                 }
             }
             .onEnded { _ in
@@ -460,10 +456,10 @@ struct DeckView: View {
 
     /// Within a quarter tab of an end with more beyond it, the fan scrolls
     /// under the held tab on a timer (`DeckAutoScroll`) until the tab
-    /// moves away, the end is reached, or the tab is dropped.
+    /// moves away, the end is reached, or the tab is dropped. Judged at
+    /// the lift, at every pointer move, and when the layout's ends change.
     private func updateEdgeHold(for drag: DeckDrag) {
-        let direction = DeckAutoScroll.direction(tabCenterY: drag.centerY, fan: fanRect, canScrollUp: content.layout.canScrollUp, canScrollDown: content.layout.canScrollDown, metrics: metrics)
-        edgeHold.moved(to: direction, onScroll: content.onScroll)
+        edgeHold.moved(to: DeckAutoScroll.direction(for: drag, in: content.layout, metrics: metrics), onScroll: content.onScroll)
     }
 
     /// The `+` tab: a neutral paper under the fan, its edge at rest like
