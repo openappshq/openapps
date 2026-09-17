@@ -155,7 +155,7 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
   {
     icon: <ListChecks size={20} />,
     title: "Select many. Delete only to the Trash.",
-    body: "Check rows in All Notes (⇧-click a range, ⌘A for all on view) and archive, pin, recolour, change the font, export or reveal them at once, with one undo. Archived notes can go: Delete… asks first and moves the files to the Trash, where Finder can put them back. OpenNotes never deletes a file for good.",
+    body: "Check rows in All Notes (⇧-click a range, ⌘A for all on view) and archive them at once (one undo for the batch), or pin, recolour, change the font, export or reveal them together. Archived notes can go: Delete… asks first and moves the files to the Trash, where Finder can put them back. OpenNotes never deletes a file for good.",
   },
   {
     icon: <Workflow size={20} />,
