@@ -43,9 +43,14 @@ final class ScreenSharingWindowTests: XCTestCase {
         return (controller, preferences)
     }
 
-    /// The observation fires on the next main-queue turn.
-    @MainActor private func settle() {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    /// The observation fires on the next main-queue turn; a slow machine
+    /// (CI) may take a few turns to get there, so the loop is spun until
+    /// `done` says so or two seconds pass.
+    @MainActor private func settle(until done: () -> Bool = { true }) {
+        let deadline = Date().addingTimeInterval(2)
+        repeat {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        } while !done() && Date() < deadline
     }
 
     @MainActor func testAWindowMadeWithTheSettingOnHasSharingTypeNone() {
@@ -62,7 +67,7 @@ final class ScreenSharingWindowTests: XCTestCase {
         let original = controller.window
         XCTAssertEqual(original?.sharingType, .readOnly)
         preferences.hideFromScreenSharing = true
-        settle()
+        settle { controller.window?.sharingType == NSWindow.SharingType.none }
         XCTAssertTrue(controller.window === original, "hiding needs no new window")
         XCTAssertEqual(controller.window?.sharingType, NSWindow.SharingType.none)
     }
@@ -80,12 +85,12 @@ final class ScreenSharingWindowTests: XCTestCase {
         controller.session.showsArchived = true
         controller.session.selection = NoteID("groceries")
         preferences.hideFromScreenSharing = false
-        settle()
+        settle { controller.window?.sharingType == .readOnly }
         XCTAssertNotNil(controller.window)
         // Either macOS raised the window's type in place, or it kept the
         // window hidden for its life and the controller made a new one in
         // its place; both end with a shared window where the user had it.
-        XCTAssertEqual(controller.window?.sharingType, .readOnly)
+        XCTAssertEqual(controller.window?.sharingType, .readOnly, "type \(String(describing: controller.window?.sharingType.rawValue)), same window: \(controller.window === hidden)")
         if controller.window !== hidden {
             XCTAssertEqual(hidden?.sharingType, NSWindow.SharingType.none, "replaced only because it could not be shown again")
         }
