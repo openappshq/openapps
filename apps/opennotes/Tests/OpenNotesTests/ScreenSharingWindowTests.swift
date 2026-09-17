@@ -67,7 +67,7 @@ final class ScreenSharingWindowTests: XCTestCase {
         XCTAssertEqual(controller.window?.sharingType, NSWindow.SharingType.none)
     }
 
-    @MainActor func testTurningTheSettingOffReplacesTheWindowWithAReadOnlyOneKeepingFrameAndState() {
+    @MainActor func testTurningTheSettingOffShowsAReadOnlyWindowKeepingFrameAndState() {
         let (controller, preferences) = makeController()
         preferences.hideFromScreenSharing = true
         controller.makeWindow()
@@ -82,9 +82,13 @@ final class ScreenSharingWindowTests: XCTestCase {
         preferences.hideFromScreenSharing = false
         settle()
         XCTAssertNotNil(controller.window)
-        XCTAssertFalse(controller.window === hidden, "a new window, the old one being hidden for its life")
+        // Either macOS raised the window's type in place, or it kept the
+        // window hidden for its life and the controller made a new one in
+        // its place; both end with a shared window where the user had it.
         XCTAssertEqual(controller.window?.sharingType, .readOnly)
-        XCTAssertEqual(hidden?.sharingType, NSWindow.SharingType.none)
+        if controller.window !== hidden {
+            XCTAssertEqual(hidden?.sharingType, NSWindow.SharingType.none, "replaced only because it could not be shown again")
+        }
         XCTAssertEqual(controller.window?.isVisible, false, "the old one was not up, so neither is the new")
         XCTAssertEqual(controller.window?.frame, frame, "the same place")
         XCTAssertEqual(controller.session.query, "milk")

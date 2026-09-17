@@ -6,9 +6,11 @@ import XCTest
 /// "Keep notes out of screen sharing" (design/products/opennotes.md,
 /// "The deck"): only the surfaces that show a note's text take
 /// `sharingType = .none`; Settings and the setup guide are always shared.
-/// These prove the property the app sets and how the setter behaves on
-/// this OS (a one-way ratchet) — never that any capture tool honours it,
-/// which is a request macOS may ignore and nothing here can check.
+/// These prove the property the app sets and that `apply` reports what
+/// the setter did — whether macOS raised a hidden window's type again
+/// (some sessions do, an interactive macOS 26 does not) — never that any
+/// capture tool honours it, which is a request macOS may ignore and
+/// nothing here can check.
 final class ScreenSharingSharingTypeTests: XCTestCase {
     @MainActor func testOnlyDeckAndAllNotesAskForNoneWhenTheSettingIsOn() {
         for surface in ScreenSharing.Surface.allCases {
@@ -28,14 +30,17 @@ final class ScreenSharingSharingTypeTests: XCTestCase {
         }
     }
 
-    @MainActor func testTheSetterNeverRaisesSharingTypeFromNoneAndApplySaysSo() {
+    @MainActor func testApplySaysWhetherAHiddenWindowShowsAgain() {
         let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         XCTAssertTrue(ScreenSharing.apply(to: window, surface: .deck, hidden: true))
         XCTAssertEqual(window.sharingType, .none)
-        // Once hidden, macOS never raises it again: the caller is told to
-        // recreate the window instead of trusting this one to show again.
-        XCTAssertFalse(ScreenSharing.apply(to: window, surface: .deck, hidden: false))
-        XCTAssertEqual(window.sharingType, .none)
+        // Whether macOS raises the type again is the OS's (an interactive
+        // macOS 26 keeps the window hidden for its life; a CI session
+        // raises it): `apply` reports which, so the owner knows whether to
+        // trust this window or make a new one.
+        let shownAgain = ScreenSharing.apply(to: window, surface: .deck, hidden: false)
+        XCTAssertEqual(shownAgain, window.sharingType == .readOnly)
+        if !shownAgain { XCTAssertEqual(window.sharingType, .none) }
     }
 
     @MainActor func testAFreshWindowTakesReadOnly() {

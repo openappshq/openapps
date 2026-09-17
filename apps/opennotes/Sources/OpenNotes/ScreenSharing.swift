@@ -10,11 +10,12 @@ import AppKit
 /// the setup guide show no note and are shared like any window. One rule,
 /// applied wherever a window is made or the setting changes.
 ///
-/// macOS never raises a window's `sharingType` again once it is `.none`
-/// (the setter is a one-way ratchet, verified on macOS 26): a window
-/// hidden once stays hidden for its life. So turning the setting off
-/// cannot be done in place — `apply` says so, and the owner makes the
-/// window anew (the deck's host rebuilds its decks, All Notes reopens).
+/// macOS may refuse to raise a window's `sharingType` again once it is
+/// `.none` (an interactive macOS 26 keeps the window hidden for its life;
+/// a headless session raises it). So turning the setting off is tried in
+/// place, and `apply` says whether it took — when it did not, the owner
+/// makes the window anew (the deck's host rebuilds its decks, All Notes
+/// reopens where it was).
 enum ScreenSharing {
     /// The window classes the app has, by what they show.
     enum Surface: CaseIterable {

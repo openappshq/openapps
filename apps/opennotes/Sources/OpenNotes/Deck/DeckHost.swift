@@ -27,9 +27,9 @@ final class DeckHost {
         // re-renders in it.
         observeChanges({ [preferences] in _ = preferences.face; _ = preferences.font; _ = preferences.size }, onChange: { [weak self] in self?.notesChanged() })
         // "Keep notes out of screen sharing": every deck's window follows.
-        // Turned off, a deck once hidden cannot be shown again (macOS never
-        // raises a window's sharing type, `ScreenSharing`): that deck is
-        // torn down — its open note saved and slid back — and made anew.
+        // Turned off, a deck macOS will not show again (it may refuse to
+        // raise a window's sharing type, `ScreenSharing`) is torn down —
+        // its open note saved and slid back — and made anew.
         observeChanges({ [preferences] in _ = preferences.hideFromScreenSharing }, onChange: { [weak self] in
             guard let self else { return }
             var replaced = false
