@@ -48,7 +48,7 @@ struct PaletteTests {
     /// documents to. Failing pairs are recorded individually rather than
     /// failing the whole matrix at the first one, so a run says exactly
     /// which combinations need attention.
-    @Test("Every preset × pixel-field family renders and reads on at least one side")
+    @Test("Every preset × pixel-field family renders and reads on at least one side", .heavy, .tags(.heavy))
     func paletteFieldMatrix() {
         #expect(Palettes.presets.count >= 50)
         #expect(Set(Palettes.presets.map(\.name)).count == Palettes.presets.count, "unique names")
@@ -369,7 +369,7 @@ struct CuratedShuffleTests {
         #expect(QualityGate.assess(first, renderer: Self.renderer, context: Self.context, previous: first).failures.contains(.sameAsBefore))
     }
 
-    @Test("The taste set passes the gate")
+    @Test("The taste set passes the gate", .heavy, .tags(.heavy))
     func tasteSetPasses() {
         for recipe in TasteSet.recipes {
             let verdict = QualityGate.assess(recipe.wallpaper, renderer: Self.renderer, context: QualityGate.defaultContext)

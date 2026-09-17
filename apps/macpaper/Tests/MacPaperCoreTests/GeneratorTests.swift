@@ -172,7 +172,7 @@ struct GeneratorTests {
         #expect(half.pixel(x: 0, y: 0) == .black)
     }
 
-    @Test("Random documents come from the seed and never pixelize")
+    @Test("Random documents come from the seed and never pixelize", .heavy, .tags(.heavy))
     func randomDocuments() {
         var a = SeededGenerator(seed: 123)
         var b = SeededGenerator(seed: 123)

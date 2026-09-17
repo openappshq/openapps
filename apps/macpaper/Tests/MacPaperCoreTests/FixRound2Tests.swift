@@ -19,7 +19,7 @@ struct SameOnAllDisplaysTests {
     static let secondary = DisplayInfo(id: 2, name: "External", pointSize: CGSize(width: 1920, height: 1080), scale: 1, topInset: 24)
     static let displays = [main, secondary]
 
-    @Test("A same-on-all-displays draw is either empty or the one document it picks passes the gate on every display's own context")
+    @Test("A same-on-all-displays draw is either empty or the one document it picks passes the gate on every display's own context", .heavy, .tags(.heavy))
     func passesEveryContext() {
         for seed: UInt64 in 1...8 {
             var generator = SeededGenerator(seed: seed)
@@ -35,7 +35,7 @@ struct SameOnAllDisplaysTests {
         }
     }
 
-    @Test("Shuffle.next with both contexts never returns a document that fails the gate on either; the old single-context behavior (main only) is gone")
+    @Test("Shuffle.next with both contexts never returns a document that fails the gate on either; the old single-context behavior (main only) is gone", .heavy, .tags(.heavy))
     func nextAcrossContexts() {
         var previous: Wallpaper?
         for seed: UInt64 in 1...8 {

@@ -194,10 +194,13 @@ jobs:
       - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
       - run: rustup default "$RUST_TOOLCHAIN"
       - name: Restore the target directory
-        # Keyed by flavour, toolchain and the lock file; the newest cache for
-        # the flavour is restored when nothing matches exactly, and every run
-        # saves its own so the next one starts from this build. Incremental
-        # state is machine-bound and left out.
+        # One cache for every leg, keyed by toolchain and the lock file: a
+        # target directory holds every feature set side by side and is a
+        # gigabyte compressed, so the legs share it rather than each saving
+        # their own. The newest cache is restored when nothing matches
+        # exactly; the first leg to finish saves this commit's, the others
+        # find it saved, and the feature sets accumulate over a few runs.
+        # Incremental state is machine-bound and left out.
         uses: actions/cache@v4
         with:
           path: |
@@ -206,10 +209,10 @@ jobs:
             ~/.cargo/git/db
             apps/openklack-desktop/src-tauri/target
             !apps/openklack-desktop/src-tauri/target/**/incremental
-          key: openklack-${{ matrix.flavour }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('apps/openklack-desktop/src-tauri/Cargo.lock') }}-${{ github.sha }}
+          key: openklack-cargo-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('apps/openklack-desktop/src-tauri/Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
-            openklack-${{ matrix.flavour }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('apps/openklack-desktop/src-tauri/Cargo.lock') }}-
-            openklack-${{ matrix.flavour }}-${{ env.RUST_TOOLCHAIN }}-
+            openklack-cargo-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('apps/openklack-desktop/src-tauri/Cargo.lock') }}-
+            openklack-cargo-${{ env.RUST_TOOLCHAIN }}-
       - name: Restore the sources' commit times
         run: scripts/release/restore-mtimes.sh apps/openklack-desktop
       - name: Check formatting
