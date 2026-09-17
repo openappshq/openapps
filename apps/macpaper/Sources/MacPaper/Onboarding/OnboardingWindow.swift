@@ -14,6 +14,12 @@ final class OnboardingModel {
     private(set) var step: GuideStep
     private(set) var isVisible = false
     @ObservationIgnored private let defaults: any FlagStore
+    /// Whether a connected display has a notch: the panel step shows the
+    /// notch hover zone then, the menu-bar item otherwise. Asked each time
+    /// the guide shows.
+    @ObservationIgnored private let notchPresent: () -> Bool
+    /// The shortcut as set, for the panel step's words; nil without one.
+    @ObservationIgnored private let shortcutText: () -> String?
 
     /// Opens Settings → License: from the trial pill on the welcome step
     /// and the tips.
@@ -22,12 +28,17 @@ final class OnboardingModel {
     @ObservationIgnored var onOpenSettings: (() -> Void)?
     @ObservationIgnored var onClose: (() -> Void)?
 
-    init(loginItem: LoginItem, license: LicenseStatus, defaults: any FlagStore = UserDefaults.standard) {
+    init(loginItem: LoginItem, license: LicenseStatus, defaults: any FlagStore = UserDefaults.standard, hasNotch: @escaping () -> Bool = { false }, shortcut: @escaping () -> String? = { Hotkey.default.displayString }) {
         self.loginItem = loginItem
         self.license = license
         self.defaults = defaults
+        notchPresent = hasNotch
+        shortcutText = shortcut
         step = OnboardingLaunch.resumeStep(store: defaults)
     }
+
+    var hasNotch: Bool { notchPresent() }
+    var shortcut: String? { shortcutText() }
 
     /// The trial's remaining time or the license's short reason, in
     /// official builds; nil while licensed or without licensing.
@@ -95,9 +106,9 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private let defaults: any FlagStore
     private var window: NSWindow?
 
-    init(loginItem: LoginItem, license: LicenseStatus, showSettings: @escaping () -> Void, defaults: any FlagStore = UserDefaults.standard) {
+    init(loginItem: LoginItem, license: LicenseStatus, showSettings: @escaping () -> Void, defaults: any FlagStore = UserDefaults.standard, hasNotch: @escaping () -> Bool = { false }, shortcut: @escaping () -> String? = { nil }) {
         self.defaults = defaults
-        model = OnboardingModel(loginItem: loginItem, license: license, defaults: defaults)
+        model = OnboardingModel(loginItem: loginItem, license: license, defaults: defaults, hasNotch: hasNotch, shortcut: shortcut)
         super.init()
         model.onClose = { [weak self] in self?.window?.close() }
         model.onOpenLicense = { [license] in license.openLicense() }
@@ -139,7 +150,9 @@ extension AppDelegate {
     func showGuide() {
         if onboarding == nil {
             onboarding = OnboardingWindowController(
-                loginItem: loginItem, license: licenseStatus, showSettings: { [weak self] in self?.showSettings() }
+                loginItem: loginItem, license: licenseStatus, showSettings: { [weak self] in self?.showSettings() },
+                hasNotch: { [weak self] in self?.model.displays.contains(where: \.hasNotch) ?? false },
+                shortcut: { [weak self] in self?.preferences.hotkey?.displayString }
             )
         }
         onboarding?.show()

@@ -354,3 +354,37 @@ struct PanelWidthTests {
         #expect(font.familyName == "Instrument Sans", "the brand font is registered")
     }
 }
+
+/// The column's natural height, measured off-screen before the window
+/// shows (`PanelMetrics.naturalHeight`) — no window, just an
+/// `NSHostingView` laid out and thrown away.
+@MainActor
+struct PanelNaturalHeightTests {
+    init() {
+        AppResources.registerFonts()
+    }
+
+    @Test("The natural height clears the header and footer, and grows with the section's content")
+    func naturalHeight() {
+        let h = AppModelTests.Harness()
+        defer { h.tearDown() }
+        let width = PanelMetrics.width(for: .regular)
+
+        h.model.panelSection = .export
+        let export = PanelMetrics.naturalHeight(of: PanelContent(model: h.model, width: width, showSettings: {}, quit: {}))
+        #expect(export > 0)
+        #expect(export >= PanelLayout.headerHeight + 32, "at least the header and a footer row")
+
+        h.model.panelSection = .library
+        let emptyLibrary = PanelMetrics.naturalHeight(of: PanelContent(model: h.model, width: width, showSettings: {}, quit: {}))
+        #expect(emptyLibrary > 0)
+
+        h.model.load(Wallpaper.starter.reseeded(11))
+        h.model.saveRecipe(named: "One")
+        h.model.load(Wallpaper.starter.reseeded(12))
+        h.model.saveRecipe(named: "Two")
+        #expect(h.model.favoriteList.count == 2)
+        let libraryWithFavorites = PanelMetrics.naturalHeight(of: PanelContent(model: h.model, width: width, showSettings: {}, quit: {}))
+        #expect(libraryWithFavorites > emptyLibrary, "a couple of favorites make the library section taller")
+    }
+}

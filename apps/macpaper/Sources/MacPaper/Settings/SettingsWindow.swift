@@ -135,8 +135,8 @@ struct SettingsView: View {
             LoginItemToggle(loginItem: loginItem)
             Toggle(isOn: $preferences.notchEnabled) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Notch panel").font(Brand.body(14))
-                    note("Off: the menu-bar popover only.")
+                    Text("Open from the notch").font(Brand.body(14))
+                    note(notchNote)
                 }
             }
             Picker(selection: $preferences.hostDisplay) {
@@ -158,6 +158,22 @@ struct SettingsView: View {
                 Text("Open on").font(Brand.body(14))
             }
             .disabled(!preferences.notchEnabled)
+            HStack(alignment: .center, spacing: Brand.Space.s12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hover delay").font(Brand.body(14))
+                    note("How long the pointer rests on the notch before the panel opens.")
+                }
+                Spacer()
+                Slider(value: $preferences.hoverDelay, in: Preferences.hoverDelayRange, step: 0.05)
+                    .frame(width: 140)
+                    .accessibilityLabel("Hover delay")
+                    .accessibilityValue(hoverDelayText)
+                Text(hoverDelayText)
+                    .font(Brand.mono(12))
+                    .foregroundStyle(Brand.textSecondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+            .disabled(!preferences.notchEnabled || !preferences.trigger.opensOnHover)
             Picker(selection: $preferences.direction) {
                 ForEach(PanelDirection.allCases, id: \.self) { direction in
                     Text(direction.title + (direction.isRendered ? "" : " (coming later)")).tag(direction)
@@ -178,18 +194,19 @@ struct SettingsView: View {
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Width").font(Brand.body(14))
-                    note("The column is as tall as the display allows; a width grows to fit its longest label.")
+                    note("As tall as its content, up to what the display allows; grows to fit its longest label.")
                 }
             }
-            .disabled(!preferences.notchEnabled)
             Toggle(isOn: $preferences.hideInFullscreen) {
-                Text("Hide in fullscreen").font(Brand.body(14))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hide in fullscreen").font(Brand.body(14))
+                    note("The notch opens nothing over a fullscreen app; the menu bar icon and the shortcut still do.")
+                }
             }
-            .disabled(!preferences.notchEnabled)
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Hotkey").font(Brand.body(14))
-                    note("Opens and closes the panel anywhere; the popover when the panel can’t show.")
+                    Text("Show panel").font(Brand.body(14))
+                    note("The shortcut shows and hides the panel from anywhere — from the notch, or under the menu bar icon where the notch can’t. Also in the icon’s menu.")
                 }
                 Spacer()
                 HotkeyRecorder(hotkey: $preferences.hotkey, problem: hotkeys.problem)
@@ -199,13 +216,25 @@ struct SettingsView: View {
         }
     }
 
+    /// Where the hover zone is, or that this Mac has none.
+    private var notchNote: String {
+        if model.displays.contains(where: \.hasNotch) {
+            return "Rest the pointer on the notch — the cutout at the top of the display — or click it. The menu bar icon opens the same panel."
+        }
+        return "No display has a notch right now: the menu bar icon and the shortcut open the panel. These settings apply once a notched display is connected."
+    }
+
+    private var hoverDelayText: String {
+        String(format: "%.2f s", preferences.hoverDelay)
+    }
+
     private var hostNote: String {
         let notched = model.displays.filter(\.hasNotch)
         switch preferences.hostDisplay {
         case .notchDisplay:
-            return notched.isEmpty ? "No display has a notch right now: the menu-bar popover carries everything." : "The panel is on \(notched[0].name)."
+            return notched.isEmpty ? "No display has a notch right now; the menu bar icon and the shortcut open the panel on any display." : "The notch panel is on \(notched[0].name)."
         case .mainDisplay:
-            return model.displays.first(where: \.isMain).map { "The panel is on \($0.name)" + ($0.hasNotch ? "." : ", from the top center.") } ?? ""
+            return model.displays.first(where: \.isMain).map { "The notch panel is on \($0.name)" + ($0.hasNotch ? "." : ", from the top center.") } ?? ""
         case .everyNotchedDisplay:
             return notched.isEmpty ? "No display has a notch right now." : "One panel on each: \(notched.map(\.name).joined(separator: ", "))."
         }

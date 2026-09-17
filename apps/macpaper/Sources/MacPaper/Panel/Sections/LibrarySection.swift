@@ -6,7 +6,8 @@ import SwiftUI
 /// on a fresh install the taste set's starters). A recipe is the whole
 /// document; clicking one loads it, and live apply takes it to the
 /// desktop; a row drags out as a `.macpaper` file, and one dropped on
-/// the column is imported.
+/// the column is imported. The list is lazy: it can hold many recipes,
+/// and only the rows in the column's scroll viewport are built.
 struct LibrarySection: View {
     @Bindable var model: AppModel
     @State private var name = ""
@@ -50,7 +51,7 @@ struct LibrarySection: View {
                     .foregroundStyle(Brand.Panel.textSecondary)
                     .padding(.vertical, Brand.Space.s8)
             } else {
-                VStack(spacing: 0) {
+                PanelList(count: model.favoriteList.count) {
                     ForEach(model.favoriteList) { favorite in
                         RecipeRow(model: model, favorite: favorite)
                         if favorite.id != model.favoriteList.last?.id {

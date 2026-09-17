@@ -15,7 +15,7 @@ struct HistorySection: View {
                     .foregroundStyle(Brand.Panel.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                VStack(spacing: 0) {
+                PanelList(count: model.historyList.count) {
                     ForEach(model.historyList) { entry in
                         HistoryRow(model: model, entry: entry)
                         if entry.id != model.historyList.last?.id {

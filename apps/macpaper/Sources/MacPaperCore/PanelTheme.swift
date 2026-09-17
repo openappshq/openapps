@@ -99,11 +99,17 @@ public enum PanelLayout {
     public static let segmentPadding: CGFloat = 10
     public static let segmentSpacing: CGFloat = 2
     public static let segmentInset: CGFloat = 2
-    /// The gap under the menu bar when the column is not on a notch.
-    public static let popoverGap: CGFloat = 6
-    /// The column keeps this much of the screen free under it.
-    public static let bottomMargin: CGFloat = 24
+    /// The margin the column keeps inside the display's visible frame:
+    /// under the menu bar (where it is not on the notch), at the bottom,
+    /// and at the left and right edges.
+    public static let edgeMargin: CGFloat = 8
+    /// The column is never taller than this, whatever the display.
     public static let maximumHeight: CGFloat = 920
+    /// How close the pointer comes to the notch, in points on every side,
+    /// before the first-run glow shows.
+    public static let hintReach: CGFloat = 80
+    /// How far under the notch the glow reaches.
+    public static let hintDepth: CGFloat = 40
 
     /// The width a segmented control takes so that its widest label fits on
     /// one line in every segment: every segment as wide as the widest
@@ -126,10 +132,16 @@ public enum PanelLayout {
         return max(setting.points, ceil(needed))
     }
 
-    /// The column's height on a screen: most of what is under the top
-    /// inset, a margin kept at the bottom, capped.
-    public static func columnHeight(screenHeight: CGFloat, topInset: CGFloat) -> CGFloat {
-        let available = max(0, screenHeight - topInset - bottomMargin)
-        return min(maximumHeight, available)
+    /// The tallest the column may be on a display: the visible frame's
+    /// height less the margin above and below, at most `maximumHeight`.
+    public static func heightCap(visibleHeight: CGFloat) -> CGFloat {
+        min(maximumHeight, max(0, visibleHeight - 2 * edgeMargin))
+    }
+
+    /// The column's height on a display: the content's, up to the cap. The
+    /// sections column scrolls inside a capped column; the rail and the
+    /// footer stay put.
+    public static func columnHeight(contentHeight: CGFloat, visibleHeight: CGFloat) -> CGFloat {
+        min(max(0, contentHeight), heightCap(visibleHeight: visibleHeight))
     }
 }

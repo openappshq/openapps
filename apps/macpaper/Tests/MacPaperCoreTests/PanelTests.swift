@@ -27,22 +27,6 @@ struct NotchGeometryTests {
         #expect(NotchGeometry.hoverZone(screenFrame: external, notch: nil) == CGRect(x: 1512 + 1280 - 100, y: 1438, width: 200, height: 2))
     }
 
-    @Test("The panel hangs from the menu bar, centered on the notch, inside the screen")
-    func panelFrame() {
-        let notch = CGRect(x: 630, y: 945, width: 252, height: 37)
-        let frame = NotchGeometry.panelFrame(screenFrame: Self.screen, menuBarHeight: 37, notch: notch, width: .regular, contentHeight: 500)
-        #expect(frame == CGRect(x: 756 - 220, y: 945 - 500, width: 440, height: 500))
-        // No notch: centered on the screen, under a 24-point menu bar and the popover's gap.
-        let plain = NotchGeometry.panelFrame(screenFrame: Self.screen, menuBarHeight: 24, notch: nil, width: .compact, contentHeight: 300)
-        #expect(plain == CGRect(x: 756 - 180, y: 982 - 24 - PanelLayout.popoverGap - 300, width: 360, height: 300))
-        // A notch near the edge: the panel stays on screen.
-        let edge = NotchGeometry.panelFrame(screenFrame: Self.screen, menuBarHeight: 37, notch: CGRect(x: 1400, y: 945, width: 100, height: 37), width: .wide, contentHeight: 100)
-        #expect(edge.maxX == Self.screen.maxX && edge.width == 560)
-        // Taller than the screen: clipped to it.
-        let tall = NotchGeometry.panelFrame(screenFrame: Self.screen, menuBarHeight: 37, notch: notch, width: .regular, contentHeight: 5000)
-        #expect(tall.minY == 0 && tall.height == 945)
-    }
-
     @Test("Host display resolution")
     func hosts() {
         let notched = DisplayInfo(id: 1, name: "Built-in", pointSize: CGSize(width: 1512, height: 982), scale: 2, notchWidth: 252, isMain: false)
@@ -141,13 +125,15 @@ struct PanelStateMachineTests {
         #expect(both.handle(.settingsChanged(PanelSettings(trigger: .click))) == [.cancelTimer(.hoverOpen)])
     }
 
-    @Test("Fullscreen hides the panel and blocks hover; the hotkey opens the popover instead")
+    @Test("Fullscreen hides the panel and blocks hover; the hotkey still opens it, under the item")
     func fullscreen() {
         var panel = PanelStateMachine()
         #expect(panel.handle(.fullscreenChanged(true)).isEmpty)
         #expect(panel.handle(.pointerEnteredNotch).isEmpty)
         #expect(panel.handle(.notchClicked).isEmpty)
-        #expect(panel.handle(.hotkey) == [.openPopover])
+        #expect(panel.handle(.hotkey) == [.open])
+        #expect(panel.openedBy == .hotkey)
+        #expect(panel.handle(.hotkey) == [.close])
         #expect(panel.handle(.fullscreenChanged(false)).isEmpty)
         #expect(panel.handle(.hotkey) == [.open])
         #expect(panel.openedBy == .hotkey)
@@ -160,14 +146,45 @@ struct PanelStateMachineTests {
         #expect(shown.handle(.hotkey) == [.open])
     }
 
-    @Test("Turning the panel off closes it; the hotkey then opens the popover")
+    @Test("Turning the panel off closes it; hover and a click do nothing, but the hotkey still opens it")
     func disabled() {
         var panel = PanelStateMachine()
         _ = panel.handle(.notchClicked)
         #expect(panel.handle(.settingsChanged(PanelSettings(isEnabled: false))) == [.close])
-        #expect(panel.handle(.hotkey) == [.openPopover])
         #expect(panel.handle(.pointerEnteredNotch).isEmpty)
         #expect(panel.handle(.notchClicked).isEmpty)
+        #expect(panel.handle(.hotkey) == [.open])
+        #expect(panel.openedBy == .hotkey)
+    }
+
+    @Test("The menu-bar item opens under itself whatever the notch settings say, and toggles")
+    func statusItem() {
+        var panel = PanelStateMachine(settings: PanelSettings(isEnabled: false))
+        #expect(panel.handle(.statusItemClicked) == [.open])
+        #expect(panel.isOpen && panel.openedBy == .statusItem)
+        #expect(panel.handle(.statusItemClicked) == [.close])
+        // Fullscreen hiding the notch panel does not stop the item either.
+        var fullscreen = PanelStateMachine()
+        _ = fullscreen.handle(.fullscreenChanged(true))
+        #expect(!fullscreen.canShow)
+        #expect(fullscreen.handle(.statusItemClicked) == [.open])
+        #expect(fullscreen.openedBy == .statusItem)
+    }
+
+    @Test("The hotkey opens the panel while it is off, and the default hover delay is 180 ms")
+    func hotkeyOpensWhileOff() {
+        var panel = PanelStateMachine()
+        #expect(!panel.isOpen)
+        #expect(panel.handle(.hotkey) == [.open])
+        #expect(panel.openedBy == .hotkey)
+        #expect(PanelSettings.defaultHoverOpenDelay == 0.18)
+    }
+
+    @Test("A settings change carries a new hover-open delay into the next hover")
+    func settingsChangedHoverDelay() {
+        var panel = PanelStateMachine()
+        _ = panel.handle(.settingsChanged(PanelSettings(hoverOpenDelay: 0.5)))
+        #expect(panel.handle(.pointerEnteredNotch) == [.startTimer(.hoverOpen, 0.5)])
     }
 
     @Test("Losing the host resets everything")
@@ -197,9 +214,10 @@ struct PanelStateMachineTests {
 
 @Suite("Hotkey")
 struct HotkeyTests {
-    @Test("The default is ⌃⌥⌘W, shortcuts print in macOS order, and validity needs a real modifier")
+    @Test("The default is ⌥⌘P, shortcuts print in macOS order, and validity needs a real modifier")
     func hotkey() throws {
-        #expect(Hotkey.default.displayString == "⌃⌥⌘W")
+        #expect(Hotkey.default.keyCode == 35 && Hotkey.default.modifiers == [.option, .command])
+        #expect(Hotkey.default.displayString == "⌥⌘P")
         #expect(Hotkey(keyCode: 49, modifiers: [.shift, .command]).displayString == "⇧⌘Space")
         #expect(Hotkey(keyCode: 0, modifiers: .shift).isValid == false)
         #expect(Hotkey(keyCode: 0, modifiers: .option).isValid)
@@ -284,6 +302,42 @@ struct FirstRunTests {
     }
 }
 
+@Suite("Notch hint")
+struct NotchHintTests {
+    typealias MemoryFlags = FirstRunTests.MemoryFlags
+
+    @Test("Armed before any launch, and through the fifth; disarmed from the sixth")
+    func armedForTheFirstFiveLaunches() {
+        let store = MemoryFlags()
+        #expect(NotchHint.isArmed(store: store))
+        for launch in 1...NotchHint.launchesShown {
+            NotchHint.recordLaunch(store: store)
+            #expect(NotchHint.isArmed(store: store), "launch \(launch)")
+        }
+        NotchHint.recordLaunch(store: store)
+        #expect(!NotchHint.isArmed(store: store), "the sixth launch")
+    }
+
+    @Test("markUsed disarms the hint whatever the launch count")
+    func markUsedDisarms() {
+        let store = MemoryFlags()
+        NotchHint.markUsed(store: store)
+        #expect(!NotchHint.isArmed(store: store))
+        let midway = MemoryFlags()
+        NotchHint.recordLaunch(store: midway)
+        NotchHint.recordLaunch(store: midway)
+        NotchHint.markUsed(store: midway)
+        #expect(!NotchHint.isArmed(store: midway))
+    }
+
+    @Test("The hint's flags, and the hover delay, count as earlier-launch evidence")
+    func evidence() {
+        #expect(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(NotchHint.Key.launches))
+        #expect(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(NotchHint.Key.used))
+        #expect(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(PreferenceKey.hoverDelay))
+    }
+}
+
 @Suite("Diagnostics")
 struct DiagnosticsTests {
     @Test("The text names the version, the displays, the panel and the applied documents")
@@ -298,7 +352,7 @@ struct DiagnosticsTests {
         let text = snapshot.text(generatedAt: Date(timeIntervalSince1970: 0))
         #expect(text.hasPrefix("macPaper 0.1.0 (1000)\nGenerated: "))
         #expect(text.contains("Open at login: on\nLicensing: compiled out (source build)\n\nDisplays:\n- Built-in Retina Display (1) · 1512×982 pt @2x · 3024×1964 px · notch 252 pt · main\n"))
-        #expect(text.contains("Notch panel: on · host notchDisplay · opens on both · down · regular · hide in fullscreen on\nHotkey: ⌃⌥⌘W\nShuffle: hour1 · favorites only off · same on all displays on\nFavorites: 2\n"))
+        #expect(text.contains("Notch panel: on · host notchDisplay · opens on both · down · regular · hide in fullscreen on\nHotkey: ⌥⌘P\nShuffle: hour1 · favorites only off · same on all displays on\nFavorites: 2\n"))
         #expect(text.contains("Applied:\n- 1: {\"") && text.contains("\"composition\":\"none\""))
         let empty = DiagnosticsSnapshot(appVersion: "dev", loginStatus: "off", licensing: "x", displays: [], panelSettings: PanelSettings(), hostDisplay: .mainDisplay, direction: .down, width: .compact, hotkey: nil, hotkeyProblem: "taken", shuffle: .off, favoritesOnly: true, sameOnAllDisplays: false, favoritesCount: 0, applied: [:], lastApplied: nil).text()
         #expect(empty.contains("Displays:\n- none") && empty.contains("Hotkey: none (taken)") && empty.contains("Last applied: never") && empty.contains("Applied:\n- nothing yet"))
