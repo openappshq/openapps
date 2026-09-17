@@ -132,6 +132,142 @@ final class AllNotesTextTests: XCTestCase {
         XCTAssertEqual(AllNotesText.rowLabel(n, now: now), "Groceries, 5 min")
     }
 
+    // MARK: - selectionCaption / selected
+
+    @MainActor func testSelectionCaptionNamesTheCountAndTheScope() {
+        XCTAssertEqual(AllNotesText.selectionCaption(3, archived: false), "3 SELECTED · ACTIVE")
+        XCTAssertEqual(AllNotesText.selectionCaption(1, archived: true), "1 SELECTED · ARCHIVED")
+    }
+
+    @MainActor func testSelectedNamesTheCountOfVisible() {
+        XCTAssertEqual(AllNotesText.selected(3, of: 11), "3 of 11 selected")
+        XCTAssertEqual(AllNotesText.selected(0, of: 11), "0 of 11 selected")
+    }
+
+    // MARK: - skipped / trashed
+
+    @MainActor func testSkippedWithNoReasonsIsJustTheCount() {
+        XCTAssertEqual(AllNotesText.skipped(2, of: 5, reasons: []), "2 of 5 skipped")
+    }
+
+    @MainActor func testSkippedJoinsEveryDistinctReason() {
+        XCTAssertEqual(AllNotesText.skipped(2, of: 5, reasons: ["A", "B"]), "2 of 5 skipped: A · B")
+    }
+
+    @MainActor func testTrashedIsSingularForOneNote() {
+        XCTAssertEqual(AllNotesText.trashed(1), "Moved 1 note to the Trash")
+    }
+
+    @MainActor func testTrashedIsPluralForMany() {
+        XCTAssertEqual(AllNotesText.trashed(3), "Moved 3 notes to the Trash")
+    }
+
+    // MARK: - deleteTitle / deleteList
+
+    @MainActor func testDeleteTitleForOneNoteNamesIt() {
+        XCTAssertEqual(AllNotesText.deleteTitle(["Groceries"]), "Move “Groceries” to the Trash?")
+    }
+
+    @MainActor func testDeleteTitleForManyNamesTheCount() {
+        XCTAssertEqual(AllNotesText.deleteTitle(["A", "B", "C"]), "Move 3 notes to the Trash?")
+    }
+
+    @MainActor func testDeleteListShowsEveryTitleUnderTheLimit() {
+        let titles = ["A", "B", "C"]
+        XCTAssertEqual(AllNotesText.deleteList(titles), titles)
+    }
+
+    @MainActor func testDeleteListCutsAtFiveAndSaysHowManyMore() {
+        let titles = ["A", "B", "C", "D", "E", "F", "G"]
+        XCTAssertEqual(AllNotesText.deleteList(titles), ["A", "B", "C", "D", "E", "and 2 more"])
+    }
+
+    // MARK: - rowLabel(checked:)
+
+    @MainActor func testRowLabelIncludesCheckedWhenChecked() {
+        let n = note(modified: now.addingTimeInterval(-5 * 60))
+        XCTAssertEqual(AllNotesText.rowLabel(n, checked: true, now: now), "Groceries, 5 min, checked")
+    }
+
+    @MainActor func testRowLabelOmitsCheckedWhenNotChecked() {
+        let n = note(modified: now.addingTimeInterval(-5 * 60))
+        XCTAssertEqual(AllNotesText.rowLabel(n, now: now), "Groceries, 5 min")
+    }
+
+    // MARK: - AllNotesNotice.refusals / .expires
+
+    @MainActor func testRefusalsIsNilWhenNothingWasSkipped() {
+        var outcome = AppModel.BulkOutcome()
+        outcome.done = [NoteID("a"), NoteID("b")]
+        XCTAssertNil(AllNotesNotice.refusals(in: outcome))
+    }
+
+    @MainActor func testRefusalsDedupesReasonsAndCountsEveryAttempt() {
+        var outcome = AppModel.BulkOutcome()
+        outcome.done = [NoteID("a")]
+        outcome.skipped = [
+            .init(id: NoteID("b"), reason: "Too large"),
+            .init(id: NoteID("c"), reason: "Too large"),
+            .init(id: NoteID("d"), reason: "Read-only"),
+        ]
+        guard case .skipped(let count, let of, let reasons) = AllNotesNotice.refusals(in: outcome) else { return XCTFail("expected .skipped") }
+        XCTAssertEqual(count, 3)
+        XCTAssertEqual(of, 4)
+        XCTAssertEqual(reasons, ["Too large", "Read-only"])
+    }
+
+    @MainActor func testOnlyTheTrashedNoticeExpires() {
+        XCTAssertTrue(AllNotesNotice.trashed(count: 2, urls: []).expires)
+        XCTAssertFalse(AllNotesNotice.skipped(count: 1, of: 2, reasons: []).expires)
+    }
+
+    // MARK: - AllNotesExport.plan
+
+    @MainActor func testPlanNumbersADuplicateNameWithinTheBatch() {
+        let a = Note(id: NoteID("a"), text: "Groceries\nmilk", created: now)
+        let b = Note(id: NoteID("b"), text: "Groceries\nmilk", created: now)
+        let plans = AllNotesExport.plan([a, b], as: .markdown) { _ in false }
+        XCTAssertEqual(plans.map(\.name), ["groceries.md", "groceries-2.md"])
+        XCTAssertEqual(plans.map(\.id), [a.id, b.id])
+    }
+
+    @MainActor func testPlanAlsoAvoidsANameAlreadyTaken() {
+        let a = Note(id: NoteID("a"), text: "Groceries\nmilk", created: now)
+        let plans = AllNotesExport.plan([a], as: .plainText) { $0 == "groceries.txt" }
+        XCTAssertEqual(plans.map(\.name), ["groceries-2.txt"])
+    }
+
+    // MARK: - AllNotesExport.write
+
+    @MainActor func testWriteCreatesOneFilePerNoteAndNumbersAClashWithAnExistingFile() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let existing = Data("already here".utf8)
+        try existing.write(to: folder.appendingPathComponent("groceries.md"))
+        let a = Note(id: NoteID("a"), text: "Milk\nand eggs", created: now)
+        let b = Note(id: NoteID("b"), text: "Bread\nrye", created: now)
+        let c = Note(id: NoteID("c"), text: "Groceries\nmore", created: now)
+        let outcome = AllNotesExport.write([a, b, c], as: .markdown, into: folder)
+        XCTAssertEqual(outcome.done, [a.id, b.id, c.id])
+        XCTAssertEqual(outcome.skipped, [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(), ["bread.md", "groceries-2.md", "groceries.md", "milk.md"])
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("milk.md")), Export.file(for: a, as: .markdown).data)
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("bread.md")), Export.file(for: b, as: .markdown).data)
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("groceries-2.md")), Export.file(for: c, as: .markdown).data)
+        // The file already in the folder is untouched.
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("groceries.md")), existing)
+    }
+
+    @MainActor func testWriteSkipsEveryNoteWithAReasonWhenTheFolderDoesNotExist() {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-export-missing-\(UUID().uuidString)", isDirectory: true)
+        let a = Note(id: NoteID("a"), text: "Groceries\nmilk", created: now)
+        let outcome = AllNotesExport.write([a], as: .markdown, into: missing)
+        XCTAssertEqual(outcome.done, [])
+        XCTAssertEqual(outcome.skipped.map(\.id), [a.id])
+        XCTAssertFalse(outcome.skipped[0].reason.isEmpty)
+    }
+
     // MARK: - No defaults touched
 
     /// `DefaultsLeakGuardTests` (Tests/OpenNotesTests/TemporaryDefaults.swift)

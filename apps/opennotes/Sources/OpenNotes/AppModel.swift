@@ -309,9 +309,14 @@ final class AppModel {
         }
     }
 
-    func setColor(_ color: NoteColor, for id: NoteID) { attempt { try store.setColor(color, for: id) } }
+    /// Each returns why the store refused, or nil when the note was
+    /// written: the single-note paths answer with nothing, the bulk paths
+    /// (All Notes' checked set) count the answers.
+    @discardableResult
+    func setColor(_ color: NoteColor, for id: NoteID) -> String? { attempt { try store.setColor(color, for: id) } }
     /// The note's own font, or nil for the default in Settings.
-    func setTypeface(_ typeface: NoteTypeface?, for id: NoteID) { attempt { try store.setTypeface(typeface, for: id) } }
+    @discardableResult
+    func setTypeface(_ typeface: NoteTypeface?, for id: NoteID) -> String? { attempt { try store.setTypeface(typeface, for: id) } }
     func setFace(_ face: NoteFace, for id: NoteID) { setTypeface(.face(face), for: id) }
     /// The note's own size, or nil for the default.
     func setFontSize(_ size: Int?, for id: NoteID) { attempt { try store.setFontSize(size, for: id) } }
@@ -319,7 +324,121 @@ final class AppModel {
     /// and the not-installed fallback. The deck, All Notes and the harness
     /// all read this one answer.
     func appearance(of note: Note) -> NoteAppearance { NoteAppearance.resolve(note, preferences: preferences) }
-    func setPinned(_ pinned: Bool, for id: NoteID) { attempt { try store.setPinned(pinned, for: id) } }
+    @discardableResult
+    func setPinned(_ pinned: Bool, for id: NoteID) -> String? { attempt { try store.setPinned(pinned, for: id) } }
+
+    // MARK: - Bulk (All Notes' checked set)
+
+    /// How a bulk action went: the notes it changed, in the order given,
+    /// and the ones the store refused with why (a placeholder, a file too
+    /// large, a body that could not be read back).
+    struct BulkOutcome: Equatable {
+        struct Skip: Equatable {
+            let id: NoteID
+            let reason: String
+        }
+
+        var done: [NoteID] = []
+        var skipped: [Skip] = []
+        /// Where the files went, for Delete (the Trash entries to show).
+        var trashed: [URL] = []
+
+        var attempted: Int { done.count + skipped.count }
+    }
+
+    /// The license is asked once here, at the entry point, and once more
+    /// per note by the single-note path (and at the file by the store):
+    /// refused at the entry, every note is skipped with the read-only
+    /// line and nothing is written.
+    private func bulk(_ ids: [NoteID], _ each: (NoteID) -> String?) -> BulkOutcome {
+        var outcome = BulkOutcome()
+        guard allowed() else {
+            outcome.skipped = ids.map { BulkOutcome.Skip(id: $0, reason: StoreError.readOnly.localizedDescription) }
+            return outcome
+        }
+        for id in ids {
+            if let reason = each(id) {
+                outcome.skipped.append(BulkOutcome.Skip(id: id, reason: reason))
+            } else {
+                outcome.done.append(id)
+            }
+        }
+        return outcome
+    }
+
+    /// The checked notes out of the deck, one toast and one Undo for the
+    /// whole batch.
+    func archive(_ ids: [NoteID]) -> BulkOutcome {
+        // `done` holds the ids the notes have now: a save that found an
+        // outside edit archived the conflict copy, and that is what undo
+        // restores.
+        var archived: [NoteID] = []
+        var outcome = bulk(ids) { id in
+            switch archiveWithoutUndo(id) {
+            case .success(let current):
+                archived.append(current)
+                return nil
+            case .failure(let problem):
+                return problem.message
+            }
+        }
+        outcome.done = archived
+        if let first = archived.first, let note = store.note(first) {
+            undo.archived(archived, title: note.title, at: now())
+            scheduleUndoExpiry()
+        }
+        return outcome
+    }
+
+    /// The checked archived notes back into the deck, one Undo (which
+    /// archives them again) for the batch.
+    func unarchive(_ ids: [NoteID]) -> BulkOutcome {
+        let outcome = bulk(ids) { id in
+            undo.forget(id)
+            return attempt { try store.unarchive(id) }
+        }
+        if let first = outcome.done.first, let note = store.note(first) {
+            undo.restored(outcome.done, title: note.title, at: now())
+            scheduleUndoExpiry()
+        }
+        return outcome
+    }
+
+    func setPinned(_ pinned: Bool, for ids: [NoteID]) -> BulkOutcome {
+        bulk(ids) { setPinned(pinned, for: $0) }
+    }
+
+    func setColor(_ color: NoteColor, for ids: [NoteID]) -> BulkOutcome {
+        bulk(ids) { setColor(color, for: $0) }
+    }
+
+    func setTypeface(_ typeface: NoteTypeface?, for ids: [NoteID]) -> BulkOutcome {
+        bulk(ids) { setTypeface(typeface, for: $0) }
+    }
+
+    func setFontSize(_ size: Int?, for ids: [NoteID]) -> BulkOutcome {
+        bulk(ids) { id in attempt { try store.setFontSize(size, for: id) } }
+    }
+
+    /// Delete on archived notes: each file to the Trash (`NoteStore.trash`),
+    /// after All Notes' confirmation. No undo of the app's own — the
+    /// Trash is the undo — so the outcome carries where the files went.
+    func trash(_ ids: [NoteID]) -> BulkOutcome {
+        var trashed: [URL] = []
+        var outcome = bulk(ids) { id in
+            attempt {
+                if let url = try store.trash(id) { trashed.append(url) }
+            }
+        }
+        outcome.trashed = trashed
+        for id in outcome.done { undo.forget(id) }
+        return outcome
+    }
+
+    /// Every file in one Finder window.
+    func revealInFinder(_ ids: [NoteID]) {
+        NSWorkspace.shared.activateFileViewerSelecting(ids.map { store.fileURL(for: $0) })
+    }
 
     // MARK: - Folder
 
@@ -389,10 +508,31 @@ final class AppModel {
     /// archived flag is written to the file.
     func archive(_ id: NoteID) {
         guard allowed(), let note = store.note(id) else { return }
-        let current = save(id) ?? id
-        attempt { try store.archive(current) }
-        guard store.note(current)?.archived == true else { return }
+        guard case .success(let current) = archiveWithoutUndo(id) else { return }
         undo.archived(current, title: note.title, at: now())
+        scheduleUndoExpiry()
+    }
+
+    /// Why an archive wrote nothing, for the footer.
+    private struct ArchiveProblem: Error {
+        let message: String
+    }
+
+    /// The archive itself: saved first, the id resolved through any
+    /// redirect (a save that found an outside edit archives the conflict
+    /// copy, and that id is the answer — what undo must restore), then
+    /// the flag written. The undo entry is the caller's: one per note
+    /// from the deck, one per batch from All Notes.
+    private func archiveWithoutUndo(_ id: NoteID) -> Result<NoteID, ArchiveProblem> {
+        guard store.note(id) != nil else { return .failure(ArchiveProblem(message: StoreError.noSuchNote(id).localizedDescription)) }
+        let current = save(id) ?? id
+        if let problem = attempt({ try store.archive(current) }) { return .failure(ArchiveProblem(message: problem)) }
+        guard store.note(current)?.archived == true else { return .failure(ArchiveProblem(message: "Couldn’t archive \(current.fileName).")) }
+        return .success(current)
+    }
+
+    /// The toast leaves on its own once the window has passed.
+    private func scheduleUndoExpiry() {
         undoTimer?.invalidate()
         undoTimer = Timer.scheduledTimer(withTimeInterval: ArchiveUndo.window + 0.05, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -403,11 +543,17 @@ final class AppModel {
         }
     }
 
-    /// The toast's Undo: the latest archive comes back. Asked at the
-    /// click: a toast can outlive the trial by ten seconds.
+    /// The toast's Undo: the latest archive comes back — or the latest
+    /// batch of them, or a restored batch goes back to Archived. Asked at
+    /// the click: a toast can outlive the trial by ten seconds.
     func undoArchive() {
-        guard allowed(), let id = undo.undo(at: now()) else { return }
-        attempt { try store.unarchive(id) }
+        guard allowed(), let pending = undo.undoPending(at: now()) else { return }
+        for id in pending.ids {
+            switch pending.kind {
+            case .archived: attempt { try store.unarchive(id) }
+            case .restored: attempt { try store.archive(id) }
+            }
+        }
     }
 
     func unarchive(_ id: NoteID) {
@@ -575,18 +721,23 @@ final class AppModel {
     }
 
     /// A change: asked at the action; a refusal is not a save problem
-    /// (the read-only line covers it), any other failure is.
-    private func attempt(_ work: () throws -> Void) {
-        guard allowed() else { return }
+    /// (the read-only line covers it), any other failure is. Returns why
+    /// nothing was written, or nil.
+    @discardableResult
+    private func attempt(_ work: () throws -> Void) -> String? {
+        guard allowed() else { return StoreError.readOnly.localizedDescription }
+        var problem: String?
         do {
             storageProblem = nil
             try work()
             saveProblem = nil
         } catch {
-            if !Self.isRefusal(error) { saveProblem = error.localizedDescription }
+            problem = error.localizedDescription
+            if !Self.isRefusal(error) { saveProblem = problem }
             revision += 1
         }
         scheduleRetryIfNeeded()
+        return problem
     }
 
     /// The store refused because the license does not allow writing.

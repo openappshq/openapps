@@ -272,7 +272,57 @@ final class PreviewHarness {
                 if await !write(view, scheme: scheme, appearance: appearance, to: "allnotes-\(name)-\(suffix).png") { failures += 1 }
                 try? FileManager.default.removeItem(at: stage.folder)
             }
+            // Multi-select over the ten: the pointer on a row shows its
+            // box; three checked put the bulk bar in the pane; five
+            // checked with two the store refused show the footer; the
+            // same three under Archived offer Delete…; the Trash footer;
+            // then read-only, where the bar keeps Export, Reveal and Clear.
+            let multi = allNotesModel(notes: 10)
+            let multiIDs = multi.model.active.map(\.id)
+            let hoverView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, hover: multiIDs[1])
+                .frame(width: 800, height: 680)
+                .background(Brand.canvas)
+            if await !write(hoverView, scheme: scheme, appearance: appearance, to: "allnotes-hover-\(suffix).png") { failures += 1 }
+            let checkedSession = AllNotesSession()
+            for id in multiIDs[1...3] { checkedSession.selected.toggle(id) }
+            let checkedView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, session: checkedSession)
+                .frame(width: 800, height: 680)
+                .background(Brand.canvas)
+            if await !write(checkedView, scheme: scheme, appearance: appearance, to: "allnotes-selected-\(suffix).png") { failures += 1 }
+            let skippedSession = AllNotesSession()
+            for id in multiIDs[0...4] { skippedSession.selected.toggle(id) }
+            skippedSession.show(.skipped(count: 2, of: 5, reasons: [StoreError.notDownloaded(NoteID("reading-list")).localizedDescription, StoreError.oversized(NoteID("ideas-for-the-talk")).localizedDescription]))
+            let skippedView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, session: skippedSession)
+                .frame(width: 800, height: 680)
+                .background(Brand.canvas)
+            if await !write(skippedView, scheme: scheme, appearance: appearance, to: "allnotes-skipped-\(suffix).png") { failures += 1 }
+            _ = multi.model.archive(Array(multiIDs[6...8]))
+            let archivedSession = AllNotesSession()
+            archivedSession.showsArchived = true
+            for id in multi.model.archived.map(\.id).prefix(2) { archivedSession.selected.toggle(id) }
+            let archivedView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, session: archivedSession)
+                .frame(width: 800, height: 680)
+                .background(Brand.canvas)
+            if await !write(archivedView, scheme: scheme, appearance: appearance, to: "allnotes-archived-selected-\(suffix).png") { failures += 1 }
+            let trashedSession = AllNotesSession()
+            trashedSession.showsArchived = true
+            trashedSession.show(.trashed(count: 2, urls: [URL(fileURLWithPath: "/dev/null")]))
+            let trashedView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, session: trashedSession)
+                .frame(width: 800, height: 680)
+                .background(Brand.canvas)
+            if await !write(trashedView, scheme: scheme, appearance: appearance, to: "allnotes-trashed-\(suffix).png") { failures += 1 }
+            let sheet = DeleteConfirmation(titles: multi.model.archived.map(\.title) + ["Packing", "Recipes to try", "Gift ideas", "Q4 plan notes"], onCancel: {}, onConfirm: {})
+                .padding(Brand.Space.s24)
+                .background(Brand.surface)
+            if await !write(sheet, scheme: scheme, appearance: appearance, to: "delete-sheet-\(suffix).png") { failures += 1 }
             setRestricted(true)
+            let readOnlySession = AllNotesSession()
+            for id in multiIDs[1...3] { readOnlySession.selected.toggle(id) }
+            let selectedReadOnly = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, session: readOnlySession)
+                .frame(width: 800, height: 760)
+                .background(Brand.canvas)
+            if await !write(selectedReadOnly, scheme: scheme, appearance: appearance, to: "allnotes-selected-readonly-\(suffix).png") { failures += 1 }
+            try? FileManager.default.removeItem(at: multi.folder)
             let allNotesReadOnly = AllNotesView(model: model, openNote: { _ in }, export: { _, _ in })
                 .frame(width: 800, height: 600)
                 .background(Brand.canvas)

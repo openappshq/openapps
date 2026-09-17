@@ -227,7 +227,7 @@ private struct FilesStep: View {
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text("Each note is one Markdown file with a short front matter for its color, order and dates. Open them in any editor, back them up, grep them; OpenNotes notices changes made elsewhere and never deletes a note you wrote (the one file it removes is a new note you closed empty). Keep them in iCloud Drive and they are on every Mac signed in to it.")
+                Text("Each note is one Markdown file with a short front matter for its color, order and dates. Open them in any editor, back them up, grep them; OpenNotes notices changes made elsewhere and never deletes a note for good: an archived note can be moved to the Trash from All Notes, after asking, and the one file it removes on its own is a new note you closed empty. Keep them in iCloud Drive and they are on every Mac signed in to it.")
                     .font(Brand.body(16))
                     .lineSpacing(4)
                     .foregroundStyle(Brand.textSecondary)

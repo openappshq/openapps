@@ -496,7 +496,7 @@ struct DeckView: View {
 
     private func toast(_ pending: ArchiveUndo.Pending) -> some View {
         HStack(spacing: Brand.Space.s8) {
-            Text("Archived “\(pending.title)”")
+            Text(pending.message)
                 .font(Brand.body(12))
                 .foregroundStyle(Color.white)
                 .lineLimit(1)

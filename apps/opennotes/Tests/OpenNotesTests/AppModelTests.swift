@@ -125,6 +125,26 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(try files().count, 2)
     }
 
+    @MainActor func testArchivingWithUnsavedTextDivertedByAnOutsideEditArchivesTheConflictCopyAndUndoFollowsIt() throws {
+        let model = makeModel()
+        let url = folder.appendingPathComponent("a.md")
+        try Data("A".utf8).write(to: url)
+        model.store.load(create: false)
+        model.setText("Ours", for: NoteID("a"))
+        try Data("Theirs, longer".utf8).write(to: url)
+        model.archive(NoteID("a"))
+        let pending = try XCTUnwrap(model.pendingUndo)
+        XCTAssertNotEqual(pending.ids, [NoteID("a")])
+        XCTAssertEqual(pending.ids.count, 1)
+        let copy = pending.ids[0]
+        XCTAssertEqual(model.note(copy)?.archived, true)
+        XCTAssertEqual(model.note(NoteID("a"))?.archived, false)
+        model.undoArchive()
+        XCTAssertEqual(model.note(copy)?.archived, false)
+        XCTAssertEqual(model.note(NoteID("a"))?.archived, false)
+        XCTAssertEqual(model.note(NoteID("a"))?.text, "Theirs, longer")
+    }
+
     @MainActor func testTheSaveProblemShowsUntilTheNextSuccess() throws {
         let model = makeModel()
         let note = try XCTUnwrap(model.createNote())
