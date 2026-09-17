@@ -32,7 +32,7 @@ on:
       - .github/rulesets/hertz-release-tags.json
       - "!**/*.md"
   push:
-    branches: [main, pipeline-fast-checks]
+    branches: [main]
     tags: [hertz-v*]
     paths:
       - apps/hertz/**

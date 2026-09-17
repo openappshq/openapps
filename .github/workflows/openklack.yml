@@ -38,7 +38,7 @@ on:
       - .github/rulesets/openklack-release-tags.json
       - "!**/*.md"
   push:
-    branches: [main, pipeline-fast-checks]
+    branches: [main]
     tags: [openklack-v*]
     paths:
       - apps/openklack-desktop/**

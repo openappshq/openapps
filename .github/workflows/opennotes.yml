@@ -32,7 +32,7 @@ on:
       - .github/rulesets/opennotes-release-tags.json
       - "!**/*.md"
   push:
-    branches: [main, pipeline-fast-checks]
+    branches: [main]
     tags: [opennotes-v*]
     paths:
       - apps/opennotes/**
