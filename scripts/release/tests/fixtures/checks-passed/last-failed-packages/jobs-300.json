@@ -1,81 +1,65 @@
 {
-  "total_count": 10,
+  "total_count": 8,
   "jobs": [
     {
-      "id": 1001,
-      "run_id": 100,
+      "id": 3001,
+      "run_id": 300,
       "name": "preflight",
       "status": "completed",
       "conclusion": "success",
       "completed_at": "2026-09-16T23:00:00Z"
     },
     {
-      "id": 1002,
-      "run_id": 100,
+      "id": 3002,
+      "run_id": 300,
       "name": "checks (source)",
       "status": "completed",
       "conclusion": "success",
       "completed_at": "2026-09-16T23:00:00Z"
     },
     {
-      "id": 1003,
-      "run_id": 100,
+      "id": 3003,
+      "run_id": 300,
       "name": "checks (official)",
       "status": "completed",
       "conclusion": "success",
       "completed_at": "2026-09-16T23:00:00Z"
     },
     {
-      "id": 1004,
-      "run_id": 100,
-      "name": "checks (licensed)",
-      "status": "completed",
-      "conclusion": "success",
-      "completed_at": "2026-09-16T23:00:00Z"
-    },
-    {
-      "id": 1005,
-      "run_id": 100,
-      "name": "checks (update-test)",
-      "status": "completed",
-      "conclusion": "success",
-      "completed_at": "2026-09-16T23:00:00Z"
-    },
-    {
-      "id": 1006,
-      "run_id": 100,
+      "id": 3004,
+      "run_id": 300,
       "name": "packages",
       "status": "completed",
-      "conclusion": "success",
+      "conclusion": "failure",
       "completed_at": "2026-09-16T23:00:00Z"
     },
     {
-      "id": 1007,
-      "run_id": 100,
+      "id": 3005,
+      "run_id": 300,
       "name": "lint",
       "status": "completed",
-      "conclusion": "success",
+      "conclusion": "skipped",
       "completed_at": "2026-09-16T23:00:00Z"
     },
     {
-      "id": 1008,
-      "run_id": 100,
+      "id": 3006,
+      "run_id": 300,
       "name": "release",
       "status": "completed",
       "conclusion": "skipped",
       "completed_at": "2026-09-16T23:00:00Z"
     },
     {
-      "id": 1009,
-      "run_id": 100,
+      "id": 3007,
+      "run_id": 300,
       "name": "publish",
       "status": "completed",
       "conclusion": "skipped",
       "completed_at": "2026-09-16T23:00:00Z"
     },
     {
-      "id": 10010,
-      "run_id": 100,
+      "id": 3008,
+      "run_id": 300,
       "name": "feed",
       "status": "completed",
       "conclusion": "skipped",

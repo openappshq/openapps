@@ -58,7 +58,7 @@ legs() {
 }
 four="source licensed official update-test"
 legs "sources: every leg" macpaper "apps/macpaper/Sources/MacPaper/App.swift" "$four" '["source","licensed","official","update-test"]'
-legs "tests only: the two suites" macpaper "apps/macpaper/Tests/MacPaperTests/AppModelTests.swift" "$four" '["source","official"]'
+legs "tests only: the suite, and the flavour suites in every flavour" macpaper "apps/macpaper/Tests/MacPaperTests/AppModelTests.swift" "$four" '["source","licensed","official","update-test"]'
 legs "the licensing package: the flavour suites and builds" macpaper "packages/openapps-licensing/Package.swift" "$four" '["licensed","official","update-test"]'
 legs "the app's scripts: the bundle and the e2e" macpaper "apps/macpaper/scripts/bundle.sh" "$four" '["official","update-test"]'
 legs "the shared scripts: the bundle" macpaper "scripts/release/write-install-script.sh" "$four" '["official"]'
@@ -68,8 +68,28 @@ legs "OpenKlack's front end: the development build's own leg" openklack "apps/op
 legs "OpenKlack's Rust tree: every leg" openklack "apps/openklack-desktop/src-tauri/Cargo.lock" "source licensed official update-test app" '["source","licensed","official","update-test","app"]'
 legs "no flavours asked for: no list" macpaper "apps/macpaper/Sources/MacPaper/App.swift" "" ''
 got="$(./changes.sh macpaper --fallback "$four" | sed -n 's/^flavours=//p')"
-[[ "$got" == '["source","official"]' ]] || { echo "error (fallback legs): $got" >&2; exit 1; }
-echo "ok: a publish with no passed run: the source and official legs"
+[[ "$got" == '["source","licensed","official","update-test"]' ]] || { echo "error (fallback legs): $got" >&2; exit 1; }
+echo "ok: a publish with no passed run: the suite and the flavour suites"
+
+# What the last run left failed runs again, whatever this push touched.
+redo() {
+    local label="$1" input="$2" redo_list="$3" want="$4"
+    local got
+    got="$(tr ' ' '\n' <<< "$input" | ./changes.sh macpaper --diff "$four" "$redo_list" | sed -n 's/=true$//p' | paste -sd ' ' -)"
+    [[ "$got" == "$want" ]] || { echo "error ($label): got '$got', expected '$want'" >&2; exit 1; }
+    echo "ok: $label"
+}
+redo "a failed package job, after a tests-only push" "apps/macpaper/Tests/MacPaperTests/AppModelTests.swift" "packages" "suite flavour_suite licensing_tests updater_tests any"
+redo "a cancelled update-test leg, after a docs push" "apps/macpaper/README.md" "checks (update-test)" "flavour_suite build_flavours update_e2e any"
+redo "cancelled source and official legs, after a scripts push" "apps/macpaper/scripts/bundle.sh" $'checks (source)\nchecks (official)' "suite flavour_suite bundle update_e2e lint any"
+redo "a failed lint and app leg (OpenKlack names)" "" $'lint\nchecks (app)' "bundle lint any"
+got="$(./changes.sh macpaper --nothing "$four" "packages" | grep -c "=true" || true)"
+[[ "$got" == 0 ]] || { echo "error: --nothing must ignore leftovers (the passed run covered them)" >&2; exit 1; }
+echo "ok: a publish that relies on a passed run ignores leftovers"
+got="$(./changes.sh macpaper --fallback "$four" "packages" | sed -n 's/=true$//p' | paste -sd ' ' -)"
+[[ "$got" == "suite flavour_suite licensing_tests updater_tests any" ]] || { echo "error (fallback with leftovers): $got" >&2; exit 1; }
+echo "ok: a publish with no passed run redoes the leftovers too"
+if ./changes.sh macpaper --all "$four" "deploy" >/dev/null 2>&1; then echo "error: an unknown job to redo was accepted" >&2; exit 1; fi
 if ./changes.sh macpaper --all "source nightly" >/dev/null 2>&1; then echo "error: an unknown flavour was accepted" >&2; exit 1; fi
 if ./changes.sh "Bad App" --all >/dev/null 2>&1; then echo "error: a malformed app id was accepted" >&2; exit 1; fi
 if ./changes.sh macpaper --whatever >/dev/null 2>&1; then echo "error: an unknown mode was accepted" >&2; exit 1; fi

@@ -34,7 +34,7 @@ on:
       - .github/workflows/site.yml
       - "!**/*.md"
   push:
-    branches: [main]
+    branches: [main, pipeline-fast-checks]
     paths:
       - apps/website/**
       - apps/site-worker/**
@@ -57,6 +57,12 @@ on:
       - .github/workflows/site.yml
       - "!**/*.md"
   workflow_dispatch:
+
+# A newer push to a pull request cancels its older run; a push to main
+# (which may deploy) never is.
+concurrency:
+  group: site-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

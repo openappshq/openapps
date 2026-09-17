@@ -5,6 +5,7 @@
       "id": 100,
       "head_sha": "fedcba9876543210fedcba9876543210fedcba98",
       "status": "completed",
+      "conclusion": "success",
       "path": ".github/workflows/macpaper.yml"
     }
   ]

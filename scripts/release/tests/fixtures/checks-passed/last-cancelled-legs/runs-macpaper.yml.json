@@ -2,10 +2,10 @@
   "total_count": 1,
   "workflow_runs": [
     {
-      "id": 100,
+      "id": 300,
       "head_sha": "0123456789abcdef0123456789abcdef01234567",
       "status": "completed",
-      "conclusion": "success",
+      "conclusion": "cancelled",
       "path": ".github/workflows/macpaper.yml"
     }
   ]

@@ -38,7 +38,7 @@ on:
       - .github/rulesets/openklack-release-tags.json
       - "!**/*.md"
   push:
-    branches: [main]
+    branches: [main, pipeline-fast-checks]
     tags: [openklack-v*]
     paths:
       - apps/openklack-desktop/**
@@ -72,6 +72,13 @@ on:
         type: boolean
         default: false
 
+# A newer push to the same branch or pull request cancels the older run's
+# checks; a tag push or a manual run (a release) is never cancelled and
+# cancels nothing — its own group is the run.
+concurrency:
+  group: openklack-${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/') }}
+
 permissions:
   contents: read
 
@@ -90,6 +97,10 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # The runs, jobs and plan artifact of earlier runs.
+      actions: read
     outputs:
       checks: ${{ steps.evidence.outputs.checks }}
       checks_run: ${{ steps.evidence.outputs.run }}
@@ -116,12 +127,26 @@ jobs:
             echo "checks=needed" >> "$GITHUB_OUTPUT"
             echo "No run of the checks passed for $GITHUB_SHA within a day: the source and official flavours run before the release." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+      - name: What the branch's last run left unfinished
+        # A failed or cancelled check job runs again on the next push whatever
+        # that push touches; an unreadable answer means everything runs.
+        id: leftovers
+        if: github.event_name != 'workflow_dispatch' || steps.evidence.outputs.checks != 'passed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if ! redo="$(scripts/release/last-run-failures.sh openklack.yml "$BRANCH")"; then redo=ALL; fi
+          { echo "redo<<REDO"; echo "$redo"; echo "REDO"; } >> "$GITHUB_OUTPUT"
       - name: Classify the change
         id: changes
         env:
           BEFORE: ${{ github.event.before }}
           BASE: ${{ github.event.pull_request.base.sha }}
           EVIDENCE: ${{ steps.evidence.outputs.checks }}
+          REDO: ${{ steps.leftovers.outputs.redo }}
+          PLAN: ${{ runner.temp }}/plan.txt
           # source, licensed, official and update-test are the Cargo feature
           # sets (none, licensing, licensing+updater, updater); app is the
           # development build.
@@ -134,15 +159,25 @@ jobs:
             push) case "$GITHUB_REF" in refs/tags/*) mode=--all ;; *) base="$BEFORE" ;; esac ;;
             *) mode=--all ;;
           esac
+          if [ "$REDO" = ALL ]; then mode=--all; fi
           if [ -z "$mode" ]; then
-            # A new branch or a force-push has no previous commit to diff against.
+            # A new branch, or a force-push whose previous commit is gone, has no commit to diff against.
             if [ -n "$base" ] && ! printf '%s' "$base" | grep -Eq '^0+$' && git cat-file -e "$base^{commit}" 2>/dev/null; then
-              git diff --name-only "$base" "$GITHUB_SHA" | scripts/release/changes.sh openklack --diff "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"
+              git diff --name-only "$base" "$GITHUB_SHA" | scripts/release/changes.sh openklack --diff "$FLAVOURS" "$REDO" | tee -a "$GITHUB_OUTPUT" "$PLAN"
             else
               mode=--all
             fi
           fi
-          if [ -n "$mode" ]; then scripts/release/changes.sh openklack "$mode" "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"; fi
+          if [ -n "$mode" ]; then scripts/release/changes.sh openklack "$mode" "$FLAVOURS" "$REDO" | tee -a "$GITHUB_OUTPUT" "$PLAN"; fi
+      - name: Record the plan
+        # What this run checks, for a later manual run to read back
+        # (scripts/release/checks-passed.sh): a job this plan left out was
+        # skipped by design; any other skip is no evidence.
+        uses: actions/upload-artifact@v4
+        with:
+          name: preflight
+          path: ${{ runner.temp }}/plan.txt
+          retention-days: 7
 
   # One leg per Cargo feature set the change calls for, plus the development
   # app, in parallel, each from a cached target directory. The source leg
@@ -214,7 +249,10 @@ jobs:
             openklack-cargo-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('apps/openklack-desktop/src-tauri/Cargo.lock') }}-
             openklack-cargo-${{ env.RUST_TOOLCHAIN }}-
       - name: Restore the sources' commit times
-        run: scripts/release/restore-mtimes.sh apps/openklack-desktop
+        # Files unchanged since the cache's own commit (the marker it
+        # carries) get their commit times back, changed ones keep the
+        # checkout's now, so Cargo never reuses a stale artifact.
+        run: scripts/release/restore-mtimes.sh apps/openklack-desktop/src-tauri/target/openapps-cache-commit apps/openklack-desktop
       - name: Check formatting
         if: matrix.flavour == 'source'
         run: cargo fmt --manifest-path "$MANIFEST" -- --check
@@ -273,15 +311,16 @@ jobs:
   # never touches tags, releases, the feed or the tap.
   release:
     # Only the canonical repository releases; a fork keeps the checks and
-    # nothing else. Every check job must have passed or been skipped by
-    # preflight — a run that relied on an earlier passed run, or a change
-    # that called for less — never failed or cancelled.
+    # nothing else. The checks must have passed here, or been skipped because
+    # preflight found a run that passed them; packages and lint may be
+    # skipped on a manual run only (by that evidence, or by the fallback
+    # plan) — never after a failure or a cancellation.
     if: |
       !cancelled() && github.repository == 'openappshq/openapps'
       && (startsWith(github.ref, 'refs/tags/openklack-v') || github.event_name == 'workflow_dispatch')
       && needs.preflight.result == 'success'
-      && (needs.checks.result == 'success' || needs.checks.result == 'skipped')
-      && (needs.lint.result == 'success' || needs.lint.result == 'skipped')
+      && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.preflight.outputs.checks == 'passed'))
+      && (needs.lint.result == 'success' || (needs.lint.result == 'skipped' && github.event_name == 'workflow_dispatch'))
     needs: [preflight, checks, lint]
     runs-on: macos-15
     timeout-minutes: 90

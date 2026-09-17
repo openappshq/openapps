@@ -7,7 +7,7 @@
       "name": "preflight",
       "status": "completed",
       "conclusion": "success",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 1002,
@@ -15,7 +15,7 @@
       "name": "checks (source)",
       "status": "completed",
       "conclusion": "success",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 1003,
@@ -23,7 +23,7 @@
       "name": "checks (official)",
       "status": "completed",
       "conclusion": "success",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 1004,
@@ -31,7 +31,7 @@
       "name": "checks (licensed)",
       "status": "completed",
       "conclusion": "success",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 1005,
@@ -39,7 +39,7 @@
       "name": "checks (update-test)",
       "status": "completed",
       "conclusion": "success",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 1006,
@@ -47,7 +47,7 @@
       "name": "packages",
       "status": "completed",
       "conclusion": "success",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 1007,
@@ -55,31 +55,31 @@
       "name": "lint",
       "status": "completed",
       "conclusion": "success",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 1008,
       "run_id": 100,
       "name": "release",
       "status": "completed",
-      "conclusion": "skipped",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "conclusion": "cancelled",
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 1009,
       "run_id": 100,
       "name": "publish",
       "status": "completed",
-      "conclusion": "skipped",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "conclusion": "cancelled",
+      "completed_at": "2026-09-16T23:00:00Z"
     },
     {
       "id": 10010,
       "run_id": 100,
       "name": "feed",
       "status": "completed",
-      "conclusion": "skipped",
-      "completed_at": "2026-09-15T20:00:00Z"
+      "conclusion": "cancelled",
+      "completed_at": "2026-09-16T23:00:00Z"
     }
   ]
 }

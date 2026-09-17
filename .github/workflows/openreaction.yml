@@ -23,10 +23,12 @@ on:
       - scripts/release/**
       - packaging/homebrew/**
       - .github/workflows/openreaction.yml
+      - .github/workflows/nightly.yml
+      - .github/workflows/site.yml
       - .github/rulesets/openreaction-release-tags.json
       - "!**/*.md"
   push:
-    branches: [main]
+    branches: [main, pipeline-fast-checks]
     tags: [openreaction-v*]
     paths:
       - apps/openreaction/**
@@ -35,6 +37,8 @@ on:
       - scripts/release/**
       - packaging/homebrew/**
       - .github/workflows/openreaction.yml
+      - .github/workflows/nightly.yml
+      - .github/workflows/site.yml
       - .github/rulesets/openreaction-release-tags.json
       - "!**/*.md"
   workflow_dispatch:
@@ -51,6 +55,13 @@ on:
         description: Allow publishing a version lower than the newest published release (a back-port)
         type: boolean
         default: false
+
+# A newer push to the same branch or pull request cancels the older run's
+# checks; a tag push or a manual run (a release) is never cancelled and
+# cancels nothing — its own group is the run.
+concurrency:
+  group: openreaction-${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
@@ -80,6 +91,10 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # The runs, jobs and plan artifact of earlier runs.
+      actions: read
     defaults:
       run:
         working-directory: .
@@ -115,12 +130,26 @@ jobs:
             echo "checks=needed" >> "$GITHUB_OUTPUT"
             echo "No run of the checks passed for $GITHUB_SHA within a day: the source and official flavours run before the release." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+      - name: What the branch's last run left unfinished
+        # A failed or cancelled check job runs again on the next push whatever
+        # that push touches; an unreadable answer means everything runs.
+        id: leftovers
+        if: github.event_name != 'workflow_dispatch' || steps.evidence.outputs.checks != 'passed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if ! redo="$(scripts/release/last-run-failures.sh openreaction.yml "$BRANCH")"; then redo=ALL; fi
+          { echo "redo<<REDO"; echo "$redo"; echo "REDO"; } >> "$GITHUB_OUTPUT"
       - name: Classify the change
         id: changes
         env:
           BEFORE: ${{ github.event.before }}
           BASE: ${{ github.event.pull_request.base.sha }}
           EVIDENCE: ${{ steps.evidence.outputs.checks }}
+          REDO: ${{ steps.leftovers.outputs.redo }}
+          PLAN: ${{ runner.temp }}/plan.txt
           FLAVOURS: source licensed official
         run: |
           mode=""; base=""
@@ -130,21 +159,31 @@ jobs:
             push) case "$GITHUB_REF" in refs/tags/*) mode=--all ;; *) base="$BEFORE" ;; esac ;;
             *) mode=--all ;;
           esac
+          if [ "$REDO" = ALL ]; then mode=--all; fi
           if [ -z "$mode" ]; then
-            # A new branch or a force-push has no previous commit to diff against.
+            # A new branch, or a force-push whose previous commit is gone, has no commit to diff against.
             if [ -n "$base" ] && ! printf '%s' "$base" | grep -Eq '^0+$' && git cat-file -e "$base^{commit}" 2>/dev/null; then
-              git diff --name-only "$base" "$GITHUB_SHA" | scripts/release/changes.sh openreaction --diff "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"
+              git diff --name-only "$base" "$GITHUB_SHA" | scripts/release/changes.sh openreaction --diff "$FLAVOURS" "$REDO" | tee -a "$GITHUB_OUTPUT" "$PLAN"
             else
               mode=--all
             fi
           fi
-          if [ -n "$mode" ]; then scripts/release/changes.sh openreaction "$mode" "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"; fi
+          if [ -n "$mode" ]; then scripts/release/changes.sh openreaction "$mode" "$FLAVOURS" "$REDO" | tee -a "$GITHUB_OUTPUT" "$PLAN"; fi
+      - name: Record the plan
+        # What this run checks, for a later manual run to read back
+        # (scripts/release/checks-passed.sh): a job this plan left out was
+        # skipped by design; any other skip is no evidence.
+        uses: actions/upload-artifact@v4
+        with:
+          name: preflight
+          path: ${{ runner.temp }}/plan.txt
+          retention-days: 7
 
   # One leg per flavour the change calls for, in parallel. Each leg builds
   # its flavour with its tests from a cached build directory; the source
   # flavour runs the whole suite, the official flavour the suites that read
-  # the flavour (scripts/flavour-tests.txt) and then builds the ad-hoc
-  # development app, the licensed flavour only builds.
+  # the flavour (scripts/flavour-tests.txt), the licensed flavour runs those
+  # too, and the official flavour then builds the ad-hoc development app.
   checks:
     needs: preflight
     if: needs.preflight.outputs.flavours != '[]'
@@ -200,10 +239,12 @@ jobs:
             openreaction-${{ matrix.flavour }}-${{ steps.xcode.outputs.swift }}-${{ hashFiles('apps/openreaction/Package.swift', 'packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-
             openreaction-${{ matrix.flavour }}-${{ steps.xcode.outputs.swift }}-
       - name: Restore the sources' commit times
-        # A checkout stamps every file with now; the cached build would
-        # rebuild everything. Commit times are the same on every runner.
+        # A checkout stamps every file with now and the cached build would
+        # rebuild everything; files unchanged since the cache's own commit
+        # (the marker it carries) get their commit times back, changed ones
+        # keep now, so nothing stale is ever reused.
         working-directory: .
-        run: scripts/release/restore-mtimes.sh apps/openreaction packages/openapps-licensing packages/openapps-updater
+        run: scripts/release/restore-mtimes.sh apps/openreaction/.build/openapps-cache-commit apps/openreaction packages/openapps-licensing packages/openapps-updater
       - name: Generate the licensing configuration
         if: env.OPENAPPS_LICENSING == '1'
         run: scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
@@ -218,7 +259,9 @@ jobs:
         if: matrix.flavour == 'source' && needs.preflight.outputs.suite == 'true'
         run: swift test --skip-build --scratch-path "$SCRATCH_PATH" --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests'
       - name: Run the suites that read the flavour
-        if: matrix.flavour == 'official' && needs.preflight.outputs.flavour_suite == 'true'
+        # In every flavour but source: the isolation, licensing and updater
+        # assertions differ per flavour and gate every push.
+        if: matrix.flavour != 'source' && needs.preflight.outputs.flavour_suite == 'true'
         run: |
           filter="$(../../scripts/release/test-filter.sh scripts/flavour-tests.txt)"
           selected="$(swift test list --skip-build --scratch-path "$SCRATCH_PATH" | grep -Ec "$filter" || true)"
@@ -283,7 +326,7 @@ jobs:
           restore-keys: |
             packages-${{ steps.xcode.outputs.swift }}-${{ hashFiles('packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-
             packages-${{ steps.xcode.outputs.swift }}-
-      - run: scripts/release/restore-mtimes.sh packages/openapps-licensing packages/openapps-updater
+      - run: scripts/release/restore-mtimes.sh packages/openapps-licensing/.build/openapps-cache-commit packages/openapps-licensing packages/openapps-updater
       - name: Test the licensing package
         if: needs.preflight.outputs.licensing_tests == 'true'
         run: swift test --package-path packages/openapps-licensing
@@ -312,28 +355,30 @@ jobs:
           shellcheck apps/openreaction/scripts/*.sh apps/openreaction/scripts/tests/*.sh scripts/release/*.sh scripts/release/tests/*.sh packaging/homebrew/*.sh packaging/homebrew/tests/*.sh
           # The served install scripts are plain POSIX sh (RELEASES.md, "Install script").
           shellcheck -s sh apps/website/public/install/*
-          actionlint .github/workflows/openreaction.yml
+          actionlint .github/workflows/openreaction.yml .github/workflows/nightly.yml .github/workflows/site.yml
           apps/openreaction/scripts/tests/scan-binary.test.sh
           scripts/release/tests/with-signing-keychain.test.sh
           scripts/release/tests/install-script.test.sh
           scripts/release/tests/checks-passed.test.sh
           scripts/release/tests/changes.test.sh
+          scripts/release/tests/restore-mtimes.test.sh
           packaging/homebrew/tests/bump-cask.test.sh
 
   # Builds, signs, verifies and packages the release. Read-only token: it
   # never touches tags, releases, the feed or the tap.
   release:
     # Only the canonical repository releases; a fork keeps the checks and
-    # nothing else. Every check job must have passed or been skipped by
-    # preflight — a run that relied on an earlier passed run, or a change
-    # that called for less — never failed or cancelled.
+    # nothing else. The checks must have passed here, or been skipped because
+    # preflight found a run that passed them; packages and lint may be
+    # skipped on a manual run only (by that evidence, or by the fallback
+    # plan) — never after a failure or a cancellation.
     if: |
       !cancelled() && github.repository == 'openappshq/openapps'
       && (startsWith(github.ref, 'refs/tags/openreaction-v') || github.event_name == 'workflow_dispatch')
       && needs.preflight.result == 'success'
-      && (needs.checks.result == 'success' || needs.checks.result == 'skipped')
-      && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
-      && (needs.lint.result == 'success' || needs.lint.result == 'skipped')
+      && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.preflight.outputs.checks == 'passed'))
+      && (needs.packages.result == 'success' || (needs.packages.result == 'skipped' && github.event_name == 'workflow_dispatch'))
+      && (needs.lint.result == 'success' || (needs.lint.result == 'skipped' && github.event_name == 'workflow_dispatch'))
     needs: [preflight, checks, packages, lint]
     runs-on: macos-26
     timeout-minutes: 60

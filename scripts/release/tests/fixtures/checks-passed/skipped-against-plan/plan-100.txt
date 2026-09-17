@@ -1,0 +1,10 @@
+suite=true
+flavour_suite=true
+build_flavours=false
+bundle=false
+update_e2e=false
+licensing_tests=false
+updater_tests=false
+lint=true
+any=true
+flavours=["source","official"]

@@ -5,12 +5,14 @@
       "id": 200,
       "head_sha": "0123456789abcdef0123456789abcdef01234567",
       "status": "completed",
+      "conclusion": "success",
       "path": ".github/workflows/macpaper.yml"
     },
     {
       "id": 100,
       "head_sha": "0123456789abcdef0123456789abcdef01234567",
       "status": "completed",
+      "conclusion": "success",
       "path": ".github/workflows/macpaper.yml"
     }
   ]
