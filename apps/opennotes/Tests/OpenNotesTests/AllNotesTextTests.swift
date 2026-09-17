@@ -237,6 +237,37 @@ final class AllNotesTextTests: XCTestCase {
         XCTAssertEqual(plans.map(\.name), ["groceries-2.txt"])
     }
 
+    // MARK: - AllNotesExport.write
+
+    @MainActor func testWriteCreatesOneFilePerNoteAndNumbersAClashWithAnExistingFile() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let existing = Data("already here".utf8)
+        try existing.write(to: folder.appendingPathComponent("groceries.md"))
+        let a = Note(id: NoteID("a"), text: "Milk\nand eggs", created: now)
+        let b = Note(id: NoteID("b"), text: "Bread\nrye", created: now)
+        let c = Note(id: NoteID("c"), text: "Groceries\nmore", created: now)
+        let outcome = AllNotesExport.write([a, b, c], as: .markdown, into: folder)
+        XCTAssertEqual(outcome.done, [a.id, b.id, c.id])
+        XCTAssertEqual(outcome.skipped, [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(), ["bread.md", "groceries-2.md", "groceries.md", "milk.md"])
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("milk.md")), Export.file(for: a, as: .markdown).data)
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("bread.md")), Export.file(for: b, as: .markdown).data)
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("groceries-2.md")), Export.file(for: c, as: .markdown).data)
+        // The file already in the folder is untouched.
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("groceries.md")), existing)
+    }
+
+    @MainActor func testWriteSkipsEveryNoteWithAReasonWhenTheFolderDoesNotExist() {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-export-missing-\(UUID().uuidString)", isDirectory: true)
+        let a = Note(id: NoteID("a"), text: "Groceries\nmilk", created: now)
+        let outcome = AllNotesExport.write([a], as: .markdown, into: missing)
+        XCTAssertEqual(outcome.done, [])
+        XCTAssertEqual(outcome.skipped.map(\.id), [a.id])
+        XCTAssertFalse(outcome.skipped[0].reason.isEmpty)
+    }
+
     // MARK: - No defaults touched
 
     /// `DefaultsLeakGuardTests` (Tests/OpenNotesTests/TemporaryDefaults.swift)

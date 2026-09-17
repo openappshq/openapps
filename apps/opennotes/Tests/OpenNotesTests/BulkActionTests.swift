@@ -56,6 +56,26 @@ final class BulkActionTests: XCTestCase {
         XCTAssertEqual(pending.message, "Archived 3 notes")
     }
 
+    @MainActor func testArchiveBatchArchivesTheConflictCopyInPlaceOfADivertedNoteAndUndoRestoresTheWholeBatchIncludingIt() throws {
+        try write("a.md", "A")
+        try write("b.md", "B")
+        try write("c.md", "C")
+        let model = makeModel()
+        model.setText("Ours", for: NoteID("b"))
+        try Data("Theirs, longer".utf8).write(to: folder.appendingPathComponent("b.md"))
+        let ids = [NoteID("a"), NoteID("b"), NoteID("c")]
+        let outcome = model.archive(ids)
+        XCTAssertEqual(outcome.done.count, 3)
+        XCTAssertFalse(outcome.done.contains(NoteID("b")))
+        let copy = outcome.done[1]
+        XCTAssertNotEqual(copy, NoteID("b"))
+        let pending = try XCTUnwrap(model.pendingUndo)
+        XCTAssertEqual(pending.ids, outcome.done)
+        model.undoArchive()
+        XCTAssertEqual(model.active.map(\.id).sorted(), [NoteID("a"), NoteID("b"), NoteID("c"), copy].sorted())
+        XCTAssertEqual(model.archived, [])
+    }
+
     @MainActor func testUndoArchiveRestoresTheWholeBatch() throws {
         try write("a.md", "A")
         try write("b.md", "B")
