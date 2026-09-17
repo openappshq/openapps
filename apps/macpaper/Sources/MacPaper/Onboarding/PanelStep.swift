@@ -48,8 +48,9 @@ struct PanelStep: View {
     }
 }
 
-/// The step's words, kept where the tests can read them.
-extension GuideCopy {
+/// The step's words, kept where the tests can read them. Nonisolated
+/// like the enum itself (the target's default is the main actor).
+nonisolated extension GuideCopy {
     /// What the panel step says under its heading.
     static func panelLine(hasNotch: Bool, shortcut: String?) -> String {
         if hasNotch {
