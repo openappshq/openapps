@@ -8,12 +8,18 @@ name: macPaper
 # commit the feed, verify live, bump the cask. The release compiles licensing
 # in (LICENSING.md) against Dodo live mode with the paid product ID from the
 # macpaper-release environment and the in-app updater with the committed update
-# key; the checks job compiles the licensed and the official flavour against
-# test mode with a placeholder ID and a throwaway key. Setup, variables and secrets:
-# apps/macpaper/RELEASING.md.
+# key; the checks compile the licensed and the official flavour against
+# test mode with a placeholder ID and a throwaway key. Setup, variables and
+# secrets: apps/macpaper/RELEASING.md.
+#
+# The checks run what the change touches and nothing more (RELEASES.md,
+# "Pipeline"): a preflight job classifies the diff and, on a manual run,
+# looks for a run of these checks that already passed for this commit; the
+# flavours then build and test in parallel, each from a cached build
+# directory, with the heavy tests left to nightly.yml.
 #
 # The paths filter applies to branch pushes and pull requests; tag pushes
-# always run, which is what the release needs.
+# always run, which is what the release needs. Markdown never triggers.
 on:
   pull_request:
     paths:
@@ -24,8 +30,9 @@ on:
       - packaging/homebrew/**
       - .github/workflows/macpaper.yml
       - .github/rulesets/macpaper-release-tags.json
+      - "!**/*.md"
   push:
-    branches: [main]
+    branches: [main, pipeline-fast-checks]
     tags: [macpaper-v*]
     paths:
       - apps/macpaper/**
@@ -35,6 +42,7 @@ on:
       - packaging/homebrew/**
       - .github/workflows/macpaper.yml
       - .github/rulesets/macpaper-release-tags.json
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       version:
@@ -59,7 +67,7 @@ defaults:
     working-directory: apps/macpaper
 
 env:
-  # The checks job compiles the licensed flavour against Dodo test mode with a
+  # The checks compile the licensed flavour against Dodo test mode with a
   # placeholder product ID; nothing built with it is ever published, and
   # verify-release.sh --release refuses a binary that contains it.
   PLACEHOLDER_PAID_PRODUCT_ID: pdt_placeholder_macpaper
@@ -67,22 +75,148 @@ env:
   # manual run from a branch. Build and publish serialise per tag, so a
   # second run for the same version queues behind the first instead of racing it.
   RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('macpaper-v{0}', inputs.version) || github.ref_name }}
+  # Tests marked heavy (minutes of rendering) run nightly, not here.
+  OPENAPPS_HEAVY_TESTS: "0"
 
 jobs:
-  checks:
-    runs-on: macos-26
-    timeout-minutes: 45
+  # What this run has to check. On a manual run, first whether a run of
+  # these checks already passed for this commit (scripts/release/checks-passed.sh);
+  # then which legs and steps the change calls for (scripts/release/changes.sh).
+  # A push or pull request never relies on an earlier run.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      checks: ${{ steps.evidence.outputs.checks }}
+      checks_run: ${{ steps.evidence.outputs.run }}
+      flavours: ${{ steps.changes.outputs.flavours }}
+      suite: ${{ steps.changes.outputs.suite }}
+      flavour_suite: ${{ steps.changes.outputs.flavour_suite }}
+      bundle: ${{ steps.changes.outputs.bundle }}
+      update_e2e: ${{ steps.changes.outputs.update_e2e }}
+      licensing_tests: ${{ steps.changes.outputs.licensing_tests }}
+      updater_tests: ${{ steps.changes.outputs.updater_tests }}
+      lint: ${{ steps.changes.outputs.lint }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          # The history, to diff against the previous push.
+          fetch-depth: 0
+      - name: Look for a passed run of these checks
+        id: evidence
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if run="$(scripts/release/checks-passed.sh macpaper.yml "$GITHUB_SHA")"; then
+            echo "checks=passed" >> "$GITHUB_OUTPUT"
+            echo "run=$run" >> "$GITHUB_OUTPUT"
+            echo "The checks passed in run $run for $GITHUB_SHA: https://github.com/$GH_REPO/actions/runs/$run" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "checks=needed" >> "$GITHUB_OUTPUT"
+            echo "No run of the checks passed for $GITHUB_SHA within a day: the source and official flavours run before the release." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Classify the change
+        id: changes
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          EVIDENCE: ${{ steps.evidence.outputs.checks }}
+          FLAVOURS: source licensed official update-test
+        run: |
+          mode=""; base=""
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) if [ "$EVIDENCE" = passed ]; then mode=--nothing; else mode=--fallback; fi ;;
+            pull_request) base="$BASE" ;;
+            push) case "$GITHUB_REF" in refs/tags/*) mode=--all ;; *) base="$BEFORE" ;; esac ;;
+            *) mode=--all ;;
+          esac
+          if [ -z "$mode" ]; then
+            # A new branch or a force-push has no previous commit to diff against.
+            if [ -n "$base" ] && ! printf '%s' "$base" | grep -Eq '^0+$' && git cat-file -e "$base^{commit}" 2>/dev/null; then
+              git diff --name-only "$base" "$GITHUB_SHA" | scripts/release/changes.sh macpaper --diff "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"
+            else
+              mode=--all
+            fi
+          fi
+          if [ -n "$mode" ]; then scripts/release/changes.sh macpaper "$mode" "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"; fi
+
+  # One leg per flavour the change calls for, in parallel. Each leg builds
+  # its flavour with its tests from a cached build directory; the source
+  # flavour runs the whole suite, the official flavour the suites that read
+  # the flavour (scripts/flavour-tests.txt) and then builds the ad-hoc
+  # development app, the licensed and update-test flavours only build, and
+  # update-test runs the update end-to-end test.
+  checks:
+    needs: preflight
+    if: needs.preflight.outputs.flavours != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: ${{ fromJSON(needs.preflight.outputs.flavours) }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      SCRATCH_PATH: .build/${{ matrix.flavour }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # The history, for the commit times the cached build is keyed on.
+          fetch-depth: 0
       - name: Select Xcode 26
+        id: xcode
         run: |
           xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
           if [ -z "$xcode" ]; then echo "Xcode 26 (macOS 26 SDK) is required."; exit 1; fi
           sudo xcode-select -s "$xcode"
           xcodebuild -version
           swift --version
+          echo "swift=$(swift --version 2>&1 | sed -nE 's/.*swiftlang-([0-9.]+).*/\1/p' | head -1)" >> "$GITHUB_OUTPUT"
+      - name: Set the flavour
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          # The flavour's build environment (Package.swift, scripts/bundle.sh).
+          case "$FLAVOUR" in
+            source) licensing=0; official=0 ;;
+            licensed) licensing=1; official=0 ;;
+            official) licensing=1; official=1 ;;
+            update-test) licensing=0; official=1; echo "MACPAPER_UPDATE_TEST=1" >> "$GITHUB_ENV" ;;
+            *) echo "Unknown flavour $FLAVOUR"; exit 1 ;;
+          esac
+          {
+            echo "OPENAPPS_LICENSING=$licensing"
+            echo "OPENAPPS_OFFICIAL=$official"
+            echo "OPENAPPS_DODO_ENV=test"
+            echo "OPENAPPS_DODO_PAID_PRODUCT_ID=$PLACEHOLDER_PAID_PRODUCT_ID"
+          } >> "$GITHUB_ENV"
+      - name: Restore the build directory
+        # Keyed by flavour, toolchain and the package manifests; the newest
+        # cache for the flavour is restored when nothing matches exactly, and
+        # every run saves its own so the next one starts from this build.
+        uses: actions/cache@v4
+        with:
+          path: apps/macpaper/.build
+          key: macpaper-${{ matrix.flavour }}-${{ steps.xcode.outputs.swift }}-${{ hashFiles('apps/macpaper/Package.swift', 'packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-${{ github.sha }}
+          restore-keys: |
+            macpaper-${{ matrix.flavour }}-${{ steps.xcode.outputs.swift }}-${{ hashFiles('apps/macpaper/Package.swift', 'packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-
+            macpaper-${{ matrix.flavour }}-${{ steps.xcode.outputs.swift }}-
+      - name: Restore the sources' commit times
+        # A checkout stamps every file with now; the cached build would
+        # rebuild everything. Commit times are the same on every runner.
+        working-directory: .
+        run: scripts/release/restore-mtimes.sh apps/macpaper packages/openapps-licensing packages/openapps-updater
+      - name: Generate the licensing configuration
+        if: env.OPENAPPS_LICENSING == '1'
+        run: scripts/generate-licensing-config.sh Sources/MacPaper/Licensing/LicensingConfig.swift
+      - name: Build the ${{ matrix.flavour }} flavour with its tests
+        run: swift build --build-tests --scratch-path "$SCRATCH_PATH"
       # MacPaperCoreTests is pure logic (generators and their golden hashes,
       # pixelize, the exporters, the stores against a temporary directory,
       # the shuffle planner, the applier with a fake, the panel rules, the
@@ -91,65 +225,26 @@ jobs:
       # flavours, the licensing package's manager and the updater's wiring
       # against a never-started updater. Nothing in either touches the live
       # desktop, the record store or the network, or needs a permission.
-      - name: Build and test the source flavour
-        run: swift test
-      - name: Build and test the licensed flavour
-        env:
-          OPENAPPS_LICENSING: "1"
-          OPENAPPS_DODO_ENV: test
-          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
+      - name: Run the whole suite
+        if: matrix.flavour == 'source' && needs.preflight.outputs.suite == 'true'
+        run: swift test --skip-build --scratch-path "$SCRATCH_PATH"
+      - name: Run the suites that read the flavour
+        if: matrix.flavour == 'official' && needs.preflight.outputs.flavour_suite == 'true'
         run: |
-          scripts/generate-licensing-config.sh Sources/MacPaper/Licensing/LicensingConfig.swift
-          swift test --scratch-path .build/licensed
-      - name: Build and test the official flavour
-        env:
-          OPENAPPS_LICENSING: "1"
-          OPENAPPS_OFFICIAL: "1"
-          OPENAPPS_DODO_ENV: test
-          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
-        run: |
-          scripts/generate-licensing-config.sh Sources/MacPaper/Licensing/LicensingConfig.swift
-          swift test --scratch-path .build/official
-      - name: Build and test the update-test flavour
-        # The variant scripts/update-e2e.sh drives: the updater with its test
-        # hooks, licensing compiled out (Package.swift refuses it with
-        # OPENAPPS_LICENSING=1), so its isolation is checked on every change.
-        env:
-          OPENAPPS_LICENSING: "0"
-          OPENAPPS_OFFICIAL: "1"
-          MACPAPER_UPDATE_TEST: "1"
-        run: swift test --scratch-path .build/updatetest
-      - name: Test the licensing package
-        run: swift test --package-path ../../packages/openapps-licensing
-      - name: Test the updater package
-        run: swift test --package-path ../../packages/openapps-updater
-      - name: Lint the release scripts and this workflow
-        run: |
-          brew install shellcheck actionlint >/dev/null
-          shellcheck scripts/*.sh ../../scripts/release/*.sh ../../packaging/homebrew/bump-cask.sh
-          actionlint ../../.github/workflows/macpaper.yml
-      - name: Check the cask template
-        # bump-cask.sh must accept the template as a first release and refuse a rewrite.
-        run: |
-          cask="$RUNNER_TEMP/macpaper.rb"
-          cp ../../packaging/homebrew/Casks/macpaper.rb "$cask"
-          digest="$(printf 'a%.0s' $(seq 1 64))"
-          ../../packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest"
-          grep -q '^  version "0.1.0"$' "$cask"
-          if ../../packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$(printf 'b%.0s' $(seq 1 64))" 2>/dev/null; then echo "rewrite accepted"; exit 1; fi
+          filter="$(../../scripts/release/test-filter.sh scripts/flavour-tests.txt)"
+          selected="$(swift test list --skip-build --scratch-path "$SCRATCH_PATH" | grep -Ec "$filter" || true)"
+          if [ "$selected" = 0 ]; then echo "scripts/flavour-tests.txt selects no test ($filter)."; exit 1; fi
+          echo "Running $selected tests: $filter"
+          swift test --skip-build --scratch-path "$SCRATCH_PATH" --filter "$filter"
       # The official flavour (licensing and the updater) as an ad-hoc signed
       # development app, against Dodo test mode with the placeholder ID and
       # a throwaway update key so the build does not depend on the real key;
       # it verifies like a release except for the signature and the live
       # configuration.
       - name: Build an ad-hoc signed official development app
+        if: matrix.flavour == 'official' && needs.preflight.outputs.bundle == 'true'
         env:
-          OPENAPPS_LICENSING: "1"
-          OPENAPPS_OFFICIAL: "1"
-          OPENAPPS_DODO_ENV: test
-          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
           UNIVERSAL: "1"
-          SCRATCH_PATH: .build/official-app
         run: |
           UPDATE_PUBLIC_ED_KEY="$(xcrun swift -e 'import CryptoKit; print(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString())')"
           export UPDATE_PUBLIC_ED_KEY
@@ -162,25 +257,114 @@ jobs:
       # test"). Runs the variant as a real menu-bar app on the runner's GUI
       # session; it applies nothing to any desktop and asks for no permission.
       - name: Run the update end-to-end test
-        env:
-          OPENAPPS_LICENSING: "0"
-          SCRATCH_PATH: .build/update-e2e
+        if: matrix.flavour == 'update-test' && needs.preflight.outputs.update_e2e == 'true'
         run: |
           brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3 >/dev/null
           scripts/update-e2e.sh
+      - name: Remove the generated licensing configuration
+        # Generated, gitignored and outside the cached build directory; removed
+        # all the same so nothing of the placeholder outlives the job.
+        if: always()
+        run: rm -f Sources/MacPaper/Licensing/LicensingConfig.swift
       - uses: actions/upload-artifact@v4
+        if: matrix.flavour == 'official' && needs.preflight.outputs.bundle == 'true'
         with:
           name: macPaper-development-unsigned
           path: apps/macpaper/dist/*.zip
           retention-days: 7
           if-no-files-found: error
 
+  # The shared packages' own suites, when a package changed.
+  packages:
+    needs: preflight
+    if: needs.preflight.outputs.licensing_tests == 'true' || needs.preflight.outputs.updater_tests == 'true'
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select Xcode 26
+        id: xcode
+        run: |
+          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then echo "Xcode 26 (macOS 26 SDK) is required."; exit 1; fi
+          sudo xcode-select -s "$xcode"
+          echo "swift=$(swift --version 2>&1 | sed -nE 's/.*swiftlang-([0-9.]+).*/\1/p' | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            packages/openapps-licensing/.build
+            packages/openapps-updater/.build
+          key: packages-${{ steps.xcode.outputs.swift }}-${{ hashFiles('packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-${{ github.sha }}
+          restore-keys: |
+            packages-${{ steps.xcode.outputs.swift }}-${{ hashFiles('packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-
+            packages-${{ steps.xcode.outputs.swift }}-
+      - run: scripts/release/restore-mtimes.sh packages/openapps-licensing packages/openapps-updater
+      - name: Test the licensing package
+        if: needs.preflight.outputs.licensing_tests == 'true'
+        run: swift test --package-path packages/openapps-licensing
+      - name: Test the updater package
+        if: needs.preflight.outputs.updater_tests == 'true'
+        run: swift test --package-path packages/openapps-updater
+
+  # The scripts and this workflow, when they changed. Static checks only, so
+  # a Linux runner does; the macOS runners are for building.
+  lint:
+    needs: preflight
+    if: needs.preflight.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install shellcheck and actionlint
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
+          curl -fsSL -o actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint && sudo install actionlint /usr/local/bin/actionlint && rm actionlint actionlint.tar.gz
+      - name: Lint the release scripts and this workflow
+        run: |
+          shellcheck apps/macpaper/scripts/*.sh scripts/release/*.sh scripts/release/tests/*.sh packaging/homebrew/bump-cask.sh
+          actionlint .github/workflows/macpaper.yml
+      - name: Test the pipeline scripts
+        run: |
+          scripts/release/tests/checks-passed.test.sh
+          scripts/release/tests/changes.test.sh
+      - name: Check the cask template
+        # bump-cask.sh must accept the template as a first release and refuse a rewrite.
+        run: |
+          cask="$RUNNER_TEMP/macpaper.rb"
+          cp packaging/homebrew/Casks/macpaper.rb "$cask"
+          digest="$(printf 'a%.0s' $(seq 1 64))"
+          packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest"
+          grep -q '^  version "0.1.0"$' "$cask"
+          if packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$(printf 'b%.0s' $(seq 1 64))" 2>/dev/null; then echo "rewrite accepted"; exit 1; fi
+
   # Builds, signs, verifies and packages the release. Read-only token: it
   # never touches tags, releases, the feed or the tap.
   release:
-    # Only the canonical repository releases; a fork keeps the checks and nothing else.
-    if: github.repository == 'openappshq/openapps' && (startsWith(github.ref, 'refs/tags/macpaper-v') || github.event_name == 'workflow_dispatch')
-    needs: checks
+    # Only the canonical repository releases; a fork keeps the checks and
+    # nothing else. Every check job must have passed or been skipped by
+    # preflight — a run that relied on an earlier passed run, or a change
+    # that called for less — never failed or cancelled.
+    if: |
+      !cancelled() && github.repository == 'openappshq/openapps'
+      && (startsWith(github.ref, 'refs/tags/macpaper-v') || github.event_name == 'workflow_dispatch')
+      && needs.preflight.result == 'success'
+      && (needs.checks.result == 'success' || needs.checks.result == 'skipped')
+      && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
+      && (needs.lint.result == 'success' || needs.lint.result == 'skipped')
+    needs: [preflight, checks, packages, lint]
     runs-on: macos-26
     timeout-minutes: 60
     environment: macpaper-release
@@ -204,6 +388,17 @@ jobs:
           persist-credentials: false
           # The tags too, for bundle.sh's version fallback (`git describe`).
           fetch-depth: 0
+      - name: Record the checks this release relies on
+        env:
+          CHECKS: ${{ needs.preflight.outputs.checks }}
+          CHECKS_RUN: ${{ needs.preflight.outputs.checks_run }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$CHECKS" = passed ]; then
+            echo "Checks: relied on run $CHECKS_RUN, which passed for $GITHUB_SHA — https://github.com/$REPO/actions/runs/$CHECKS_RUN" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Checks: ran in this workflow run for $GITHUB_SHA." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Select Xcode 26
         run: |
           xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"

@@ -126,7 +126,9 @@ struct PresetPaletteTests {
         ("lines", { Wallpaper(generator: .pattern(PatternParameters(kind: .lines, foreground: $0.tones.last!, background: $0.tones[1], scale: 40, angle: 45)), seed: 5) }),
     ]
 
-    @Test("Every preset, in every context, reads on both sides once lifted; the lift is the smallest shade that does")
+    // Renders every preset through four contexts, lifted and a tenth lower:
+    // minutes in a debug build, so heavy (RELEASES.md, "Pipeline").
+    @Test("Every preset, in every context, reads on both sides once lifted; the lift is the smallest shade that does", .heavy, .tags(.heavy))
     func presetsRead() {
         let renderer = WallpaperRenderer()
         let context = RenderContext(size: PixelSize(width: 640, height: 400), menuBarStrip: 12)

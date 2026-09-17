@@ -7,15 +7,56 @@ name: OpenKlack desktop
 # designated requirement, package and update-sign, publish the GitHub
 # Release, commit the signed feed to main, verify it live, bump the cask.
 # Setup and secrets: docs/development.md, "Releases and updates".
+#
+# The checks run what the change touches and nothing more (RELEASES.md,
+# "Pipeline"): a preflight job classifies the diff and, on a manual run,
+# looks for a run of these checks that already passed for this commit; the
+# Rust flavours then test and lint in parallel from a cached target
+# directory, and the development app builds in its own leg. The JavaScript
+# workspace (lint, tests, the design check, the website build) is checked
+# by site.yml, which the same files trigger.
+#
+# The paths filter applies to branch pushes and pull requests; tag pushes
+# always run, which is what the release needs. Markdown never triggers.
 on:
   pull_request:
+    paths:
+      - apps/openklack-desktop/**
+      - packages/openklack-ui/**
+      - packages/keyboard-layout/**
+      - packages/soundpacks/**
+      - packages/ui/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.base.json
+      - tsconfig.json
+      - vite.config.ts
+      - scripts/release/**
+      - packaging/homebrew/**
+      - .github/workflows/openklack.yml
+      - .github/rulesets/openklack-release-tags.json
+      - "!**/*.md"
   push:
-    branches: [main]
+    branches: [main, pipeline-fast-checks]
     tags: [openklack-v*]
-    # The release bot's feed and install-script commit deploys the website; it does not need the app checks.
-    paths-ignore:
-      - apps/website/public/updates/**
-      - apps/website/public/install/**
+    paths:
+      - apps/openklack-desktop/**
+      - packages/openklack-ui/**
+      - packages/keyboard-layout/**
+      - packages/soundpacks/**
+      - packages/ui/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.base.json
+      - tsconfig.json
+      - vite.config.ts
+      - scripts/release/**
+      - packaging/homebrew/**
+      - .github/workflows/openklack.yml
+      - .github/rulesets/openklack-release-tags.json
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       version:
@@ -42,68 +83,203 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openklack-v{0}', inputs.version) || github.ref_name }}
 
 jobs:
-  checks:
-    runs-on: macos-15
-    timeout-minutes: 40
+  # What this run has to check. On a manual run, first whether a run of
+  # these checks already passed for this commit (scripts/release/checks-passed.sh);
+  # then which legs the change calls for (scripts/release/changes.sh).
+  # A push or pull request never relies on an earlier run.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      checks: ${{ steps.evidence.outputs.checks }}
+      checks_run: ${{ steps.evidence.outputs.run }}
+      flavours: ${{ steps.changes.outputs.flavours }}
+      lint: ${{ steps.changes.outputs.lint }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+          # The history, to diff against the previous push.
+          fetch-depth: 0
+      - name: Look for a passed run of these checks
+        id: evidence
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if run="$(scripts/release/checks-passed.sh openklack.yml "$GITHUB_SHA")"; then
+            echo "checks=passed" >> "$GITHUB_OUTPUT"
+            echo "run=$run" >> "$GITHUB_OUTPUT"
+            echo "The checks passed in run $run for $GITHUB_SHA: https://github.com/$GH_REPO/actions/runs/$run" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "checks=needed" >> "$GITHUB_OUTPUT"
+            echo "No run of the checks passed for $GITHUB_SHA within a day: the source and official flavours run before the release." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Classify the change
+        id: changes
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          EVIDENCE: ${{ steps.evidence.outputs.checks }}
+          # source, licensed, official and update-test are the Cargo feature
+          # sets (none, licensing, licensing+updater, updater); app is the
+          # development build.
+          FLAVOURS: source licensed official update-test app
+        run: |
+          mode=""; base=""
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) if [ "$EVIDENCE" = passed ]; then mode=--nothing; else mode=--fallback; fi ;;
+            pull_request) base="$BASE" ;;
+            push) case "$GITHUB_REF" in refs/tags/*) mode=--all ;; *) base="$BEFORE" ;; esac ;;
+            *) mode=--all ;;
+          esac
+          if [ -z "$mode" ]; then
+            # A new branch or a force-push has no previous commit to diff against.
+            if [ -n "$base" ] && ! printf '%s' "$base" | grep -Eq '^0+$' && git cat-file -e "$base^{commit}" 2>/dev/null; then
+              git diff --name-only "$base" "$GITHUB_SHA" | scripts/release/changes.sh openklack --diff "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"
+            else
+              mode=--all
+            fi
+          fi
+          if [ -n "$mode" ]; then scripts/release/changes.sh openklack "$mode" "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"; fi
+
+  # One leg per Cargo feature set the change calls for, plus the development
+  # app, in parallel, each from a cached target directory. The source leg
+  # also checks formatting; the licensed legs test against a fake Dodo
+  # client and a fake trial registry with placeholder configuration.
+  checks:
+    needs: preflight
+    if: needs.preflight.outputs.flavours != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: ${{ fromJSON(needs.preflight.outputs.flavours) }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      MANIFEST: apps/openklack-desktop/src-tauri/Cargo.toml
+    steps:
+      - uses: actions/checkout@v6
         with:
-          node-version: 24
-      - run: npm install --global "pnpm@$PNPM_VERSION"
-      - run: pnpm install --frozen-lockfile
+          persist-credentials: false
+          # The history, for the commit times the cached build is keyed on.
+          fetch-depth: 0
+      - name: Set the flavour
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          case "$FLAVOUR" in
+            source) features="" ;;
+            licensed) features="licensing" ;;
+            official) features="licensing,updater" ;;
+            update-test) features="updater" ;;
+            app) features="" ;;
+            *) echo "Unknown flavour $FLAVOUR"; exit 1 ;;
+          esac
+          echo "FEATURES=$features" >> "$GITHUB_ENV"
+          case "$features" in
+            *licensing*)
+              # Placeholder configuration: the shared test cases run against a fake Dodo client and a fake trial registry.
+              {
+                echo "OPENKLACK_LICENSE_ENV=test"
+                echo "OPENKLACK_DODO_PAID_PRODUCT_ID=pdt_placeholder_openklack"
+                echo "OPENKLACK_BUY_URL=https://checkout.dodopayments.com/buy/pdt_placeholder_openklack?quantity=1&redirect_url=https://openapps.space/OpenKlack/thanks/"
+                echo "OPENKLACK_TRIAL_REGISTRY_URL=http://127.0.0.1:8787"
+              } >> "$GITHUB_ENV" ;;
+          esac
       - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
       - run: rustup default "$RUST_TOOLCHAIN"
-      - run: pnpm exec vp lint
-      - run: pnpm test
-      - run: pnpm design:check
-      - run: pnpm build
-      - run: cargo fmt --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml -- --check
-      - run: cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml
-      - run: cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - name: Test and lint the updater flavour
+      - name: Restore the target directory
+        # Keyed by flavour, toolchain and the lock file; the newest cache for
+        # the flavour is restored when nothing matches exactly, and every run
+        # saves its own so the next one starts from this build. Incremental
+        # state is machine-bound and left out.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            apps/openklack-desktop/src-tauri/target
+            !apps/openklack-desktop/src-tauri/target/**/incremental
+          key: openklack-${{ matrix.flavour }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('apps/openklack-desktop/src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            openklack-${{ matrix.flavour }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('apps/openklack-desktop/src-tauri/Cargo.lock') }}-
+            openklack-${{ matrix.flavour }}-${{ env.RUST_TOOLCHAIN }}-
+      - name: Restore the sources' commit times
+        run: scripts/release/restore-mtimes.sh apps/openklack-desktop
+      - name: Check formatting
+        if: matrix.flavour == 'source'
+        run: cargo fmt --manifest-path "$MANIFEST" -- --check
+      - name: Test and lint the ${{ matrix.flavour }} flavour
+        if: matrix.flavour != 'app'
         run: |
-          cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features updater
-          cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features updater -- -D warnings
-      - name: Test and lint the licensed build flavours
-        # Placeholder configuration: the shared test cases run against a fake Dodo client and a fake trial registry.
-        env:
-          OPENKLACK_LICENSE_ENV: test
-          OPENKLACK_DODO_PAID_PRODUCT_ID: pdt_placeholder_openklack
-          OPENKLACK_BUY_URL: https://checkout.dodopayments.com/buy/pdt_placeholder_openklack?quantity=1&redirect_url=https://openapps.space/OpenKlack/thanks/
-          OPENKLACK_TRIAL_REGISTRY_URL: http://127.0.0.1:8787
-        run: |
-          cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features licensing
-          cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features licensing -- -D warnings
-          cargo test --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --features licensing,updater
-          cargo clippy --locked --manifest-path apps/openklack-desktop/src-tauri/Cargo.toml --all-targets --features licensing,updater -- -D warnings
-      - name: Lint and test the release scripts
-        # The keychain wrapper test imports a throwaway certificate into a temporary keychain
-        # under bash and under zsh and checks that nothing of it is left afterwards.
-        run: |
-          brew install shellcheck >/dev/null
-          shellcheck scripts/release/*.sh scripts/release/tests/*.sh apps/openklack-desktop/release/*.sh packaging/homebrew/bump-cask.sh
-          scripts/release/tests/with-signing-keychain.test.sh
-          packaging/homebrew/tests/bump-cask.test.sh
-      - run: pnpm --filter @openapps/openklack-desktop tauri build --debug --bundles app
+          cargo test --locked --manifest-path "$MANIFEST" ${FEATURES:+--features "$FEATURES"}
+          cargo clippy --locked --manifest-path "$MANIFEST" --all-targets ${FEATURES:+--features "$FEATURES"} -- -D warnings
+      - uses: actions/setup-node@v6
+        if: matrix.flavour == 'app'
+        with:
+          node-version: 24
+      - name: Build the development app
+        if: matrix.flavour == 'app'
         env:
           APPLE_SIGNING_IDENTITY: "-"
-      - name: Archive development app
-        run: ditto -c -k --sequesterRsrc --keepParent apps/openklack-desktop/src-tauri/target/debug/bundle/macos/OpenKlack.app OpenKlack-development.zip
+        run: |
+          npm install --global "pnpm@$PNPM_VERSION"
+          pnpm install --frozen-lockfile
+          pnpm --filter @openapps/openklack-desktop tauri build --debug --bundles app
+          ditto -c -k --sequesterRsrc --keepParent apps/openklack-desktop/src-tauri/target/debug/bundle/macos/OpenKlack.app OpenKlack-development.zip
       - uses: actions/upload-artifact@v4
+        if: matrix.flavour == 'app'
         with:
           name: OpenKlack-development-apple-silicon
           path: OpenKlack-development.zip
           retention-days: 7
 
+  # The scripts and this workflow, when they changed. Static checks only, so
+  # a Linux runner does; the keychain wrapper's own test, which needs macOS,
+  # runs in openreaction.yml.
+  lint:
+    needs: preflight
+    if: needs.preflight.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install shellcheck and actionlint
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
+          curl -fsSL -o actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint && sudo install actionlint /usr/local/bin/actionlint && rm actionlint actionlint.tar.gz
+      - name: Lint and test the release scripts
+        run: |
+          shellcheck scripts/release/*.sh scripts/release/tests/*.sh apps/openklack-desktop/release/*.sh packaging/homebrew/bump-cask.sh
+          actionlint .github/workflows/openklack.yml
+          scripts/release/tests/checks-passed.test.sh
+          scripts/release/tests/changes.test.sh
+          packaging/homebrew/tests/bump-cask.test.sh
+
   # Builds, signs, verifies and packages the release. Read-only token: it
   # never touches tags, releases, the feed or the tap.
   release:
-    # Only the canonical repository releases; a fork keeps the checks and nothing else.
-    if: github.repository == 'openappshq/openapps' && (startsWith(github.ref, 'refs/tags/openklack-v') || github.event_name == 'workflow_dispatch')
-    needs: checks
+    # Only the canonical repository releases; a fork keeps the checks and
+    # nothing else. Every check job must have passed or been skipped by
+    # preflight — a run that relied on an earlier passed run, or a change
+    # that called for less — never failed or cancelled.
+    if: |
+      !cancelled() && github.repository == 'openappshq/openapps'
+      && (startsWith(github.ref, 'refs/tags/openklack-v') || github.event_name == 'workflow_dispatch')
+      && needs.preflight.result == 'success'
+      && (needs.checks.result == 'success' || needs.checks.result == 'skipped')
+      && (needs.lint.result == 'success' || needs.lint.result == 'skipped')
+    needs: [preflight, checks, lint]
     runs-on: macos-15
     timeout-minutes: 90
     environment: openklack-release
@@ -132,6 +308,17 @@ jobs:
           persist-credentials: false
           # Full history: the build number is the commit count on HEAD.
           fetch-depth: 0
+      - name: Record the checks this release relies on
+        env:
+          CHECKS: ${{ needs.preflight.outputs.checks }}
+          CHECKS_RUN: ${{ needs.preflight.outputs.checks_run }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$CHECKS" = passed ]; then
+            echo "Checks: relied on run $CHECKS_RUN, which passed for $GITHUB_SHA — https://github.com/$REPO/actions/runs/$CHECKS_RUN" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Checks: ran in this workflow run for $GITHUB_SHA." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/setup-node@v6
         with:
           node-version: 24

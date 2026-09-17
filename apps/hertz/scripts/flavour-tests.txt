@@ -1,0 +1,6 @@
+# The suites that read the build's flavour (RELEASES.md, "Pipeline"): the
+# official-flavour check runs these and nothing else, the source flavour
+# runs everything. HertzTests is the app target's suite — licensing wiring,
+# enforcement and restriction, the updater's wiring. HertzCore is compiled
+# the same in every flavour. One `swift test --filter` pattern per line.
+HertzTests

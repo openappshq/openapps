@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# A stand-in for `gh api` that answers from the fixture case named by
+# CHECKS_FIXTURE_CASE: the workflow's run listing from runs-<workflow>.json
+# (an empty listing when the file is absent), a run's jobs from
+# jobs-<id>.json. A case holding a file named FAIL answers nothing, like an
+# API that is down. Only the repository the test names is served.
+set -euo pipefail
+case_dir="$(cd "$(dirname "$0")" && pwd)/${CHECKS_FIXTURE_CASE:?}"
+[[ "${1:-}" == api ]] || { echo "fake gh: only 'gh api' is supported" >&2; exit 64; }
+path="${2:?}"
+[[ -e "$case_dir/FAIL" ]] && { echo "fake gh: HTTP 503" >&2; exit 1; }
+case "$path" in
+    repos/openappshq/openapps/actions/workflows/*/runs\?*)
+        workflow="${path#repos/openappshq/openapps/actions/workflows/}"
+        workflow="${workflow%%/*}"
+        if [[ -f "$case_dir/runs-$workflow.json" ]]; then cat "$case_dir/runs-$workflow.json"; else echo '{"total_count": 0, "workflow_runs": []}'; fi ;;
+    repos/openappshq/openapps/actions/runs/*/jobs\?*)
+        id="${path#repos/openappshq/openapps/actions/runs/}"
+        id="${id%%/*}"
+        [[ -f "$case_dir/jobs-$id.json" ]] || { echo "fake gh: HTTP 404 for run $id" >&2; exit 1; }
+        cat "$case_dir/jobs-$id.json" ;;
+    *) echo "fake gh: unexpected request $path" >&2; exit 1 ;;
+esac

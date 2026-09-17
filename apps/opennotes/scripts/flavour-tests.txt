@@ -1,0 +1,7 @@
+# The suites that read the build's flavour (RELEASES.md, "Pipeline"): the
+# official-flavour check runs these and nothing else, the source flavour
+# runs everything. OpenNotesTests is the app target's suite — licensing
+# wiring and enforcement, continuations across a deadline, the updater's
+# wiring, the setup guide, the app model. OpenNotesCore is compiled the
+# same in every flavour. One `swift test --filter` pattern per line.
+OpenNotesTests

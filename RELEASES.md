@@ -123,6 +123,62 @@ Trigger: a pushed `<app>-vX.Y.Z` tag, or a manual dispatch with a version.
 
 The feed and the install script never point at a release until that release's zip is published and verified.
 
+## Pipeline
+
+One workflow per app (`.github/workflows/<app>.yml`), plus `site.yml` for the JavaScript workspace and `nightly.yml` for the full suites. Decided 2026-09-17, after macPaper 0.2.0 took 85 minutes from push to live: four flavours ran the same 318-test suite serially, twice (once on the push, once again inside the publish run), two new tests rendered for 12 minutes, and the shared runner pool is small — the organisation's plan allows **five macOS jobs at a time** across every workflow, so a job is a slot, not free parallelism. The rules below cut the work first and parallelise what is left.
+
+### Jobs
+
+| Job | Runner | What |
+| --- | --- | --- |
+| `preflight` | Linux | Classifies the change with `scripts/release/changes.sh` and, on a manual run only, looks for a passed run with `scripts/release/checks-passed.sh`. Everything else keys off its outputs |
+| `checks (<flavour>)` | macOS | One leg per flavour the change calls for, in parallel, each building its flavour with its tests from the cached build directory. **source** runs the whole suite; **official** runs the suites that read the flavour (`apps/<app>/scripts/flavour-tests.txt`, joined by `scripts/release/test-filter.sh`) and then builds the ad-hoc signed development app; **licensed** and **update-test** only build; **update-test** runs the update end-to-end test. OpenKlack: the Cargo feature sets (none, `licensing`, `licensing,updater`, `updater`) test and lint in their legs and the development app builds in an `app` leg |
+| `packages` | macOS | The shared licensing and updater packages' own suites, when a package changed |
+| `lint` | Linux (macOS for OpenReaction, whose release-script tests need `security`, `ditto` and `xattr`) | `shellcheck`, `actionlint`, the cask template, the pipeline scripts' tests |
+| `release`, `publish`, `feed` | — | Unchanged. `release` needs every job above and runs when each **passed or was skipped by preflight**, never after a failure or a cancellation |
+
+### Skip what already passed
+
+A manual run (`workflow_dispatch`, the publish path) never repeats checks that passed: `checks-passed.sh <workflow file> <sha>` reads the workflow's completed runs for the commit, newest first, and accepts the first whose check jobs — every job except `preflight`, `release`, `publish`, `feed` — all concluded `success`, the last of them within 24 hours (`CHECKS_MAX_AGE_HOURS`). A run whose checks were themselves skipped is no evidence. Found: no check job runs, and the release job's summary names the run it relied on. Not found, or the API unreadable: the source and official legs run, then the release. A push or pull request never relies on an earlier run; a tag push runs everything (there is no previous commit to diff against). Tested against recorded API answers: `scripts/release/tests/checks-passed.test.sh`.
+
+### Run what the change touches
+
+`changes.sh <app-id> --diff [flavours]` reads the changed paths (`git diff --name-only` against the previous push, or the pull request's base; a new branch or a force-push has no base and runs everything) and prints the decisions; the table is its rules, and `scripts/release/tests/changes.test.sh` holds them. Markdown counts for nothing anywhere, and the workflows' `paths` filters already leave Markdown, `design/`, `LICENSING.md` and `RELEASES.md` out: a docs-only push runs no workflow at all. A website-only change runs `site.yml` alone (lint, tests, the design check, the website build, the worker); `design/` triggers it too, since the design check reads the tokens.
+
+| Change | source suite | official: flavour suites | licensed / update-test build | bundle | update e2e | package suites | lint |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `apps/<app>/Sources/**`, `Package.swift` (OpenKlack: `src-tauri/**`) | ✓ | ✓ **always** | ✓ | ✓ | ✓ | | |
+| `apps/<app>/Tests/**` | ✓ | ✓ | | | | | |
+| `packages/openapps-licensing/**` | | ✓ | ✓ | | | licensing | |
+| `packages/openapps-updater/**` | | ✓ | ✓ | ✓ | ✓ | updater | |
+| `apps/<app>/scripts/**`, `apps/<app>/release/**` | | | | ✓ | ✓ | | ✓ |
+| `scripts/release/**`, `packaging/homebrew/**` | | | | ✓ | | | ✓ |
+| `.github/workflows/<app>.yml`, the app's ruleset | ✓ | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| The rest of the app's tree (OpenKlack's front end and its workspace packages) | | | | ✓ | | | |
+| Tag push, new branch, force-push | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Manual run, checks already passed | | | | | | | |
+| Manual run, no passed run | ✓ | ✓ | | | | | |
+
+The floor: a change under an app's `Sources` always runs that app's flavour suites — licensing wiring and enforcement, the keeper, the updater's wiring, the setup guide — in the official flavour, and the update end-to-end test stays on every change to the app's sources, scripts or the updater. Nothing that gates licensing or data safety leaves the push path.
+
+### Test once, build the rest
+
+Every app's `<App>Core` target is compiled the same in every flavour; only the app target reads `OPENAPPS_LICENSING`/`OPENAPPS_OFFICIAL`. So the source flavour runs the whole suite once, the official flavour runs the app target's suites (`flavour-tests.txt`: `MacPaperTests`, `OpenNotesTests`, `HertzTests`; OpenReaction's `OpenReactionTests.GateRunnerShutdownTests`, the one app suite that never touches real input), and the licensed and update-test flavours prove they compile with their tests (`swift build --build-tests`). Locally `swift test` in any flavour still runs everything.
+
+### Heavy tests
+
+A test that renders at 4K or more, drives sheets, measures a budget in wall-clock time, or takes more than five seconds on its own is marked heavy: in Swift Testing `@Test("…", .heavy, .tags(.heavy))` with the `Heavy.swift` support file in the test target (`extension Trait where Self == ConditionTrait { static var heavy }` skips it while `OPENAPPS_HEAVY_TESTS=0`; the tag is for Xcode's filters); in XCTest, `try XCTSkipIf(ProcessInfo.processInfo.environment["OPENAPPS_HEAVY_TESTS"] == "0")` at the top of the test. The app workflows set `OPENAPPS_HEAVY_TESTS=0`; a local run and the nightly leave it unset. Today: macPaper's `presetsRead` (every preset through every context, 7.5 minutes in a debug build) and `fiveK` (three 5K renders, 5 minutes).
+
+`nightly.yml` runs every app's full suite in every flavour, heavy tests included, plus the packages and OpenKlack's feature sets, at 03:00 UTC and on demand. A failure opens the issue labelled `nightly`, or comments on the open one; close it when the run is green again. GitHub also e-mails the failure of a scheduled run.
+
+### Build cache
+
+Each leg restores `apps/<app>/.build` (OpenKlack: `src-tauri/target` and the Cargo registry) from `actions/cache`, keyed by app, flavour, the toolchain version and the package manifests, with the newest cache for the flavour as the fallback, and saves its own build for the next run. A checkout stamps every file with the time it was written, which would make SwiftPM rebuild everything, so `scripts/release/restore-mtimes.sh` first gives every tracked file its last commit's time (the legs check out with the history for that). The official flavour's generated `LicensingConfig.swift` is gitignored, outside `.build`, and removed at the end of the job either way; the cache holds compiled placeholder configuration only, which nothing publishes and `verify-release.sh --release` would refuse.
+
+### Adding an app
+
+The `new-app` skill copies this shape: `preflight` with the app's flavours, the matrix, `packages`, `lint`, and `release` needing all four with the pass-or-skipped rule; `apps/<app>/scripts/flavour-tests.txt`; the app's rows in `nightly.yml`. Keep the job names — `checks-passed.sh` counts every job except `preflight`, `release`, `publish` and `feed` as a check.
+
 ## Update feed
 
 `https://openapps.space/updates/<app>/latest.json`. The same URL keeps working when the website moves from Vercel to Cloudflare, so installed apps never change it.

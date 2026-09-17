@@ -1,13 +1,61 @@
 name: Website
 
-# Builds the site and deploys it with the trial registry as one Cloudflare Worker.
-# Pull requests only run checks: no job reachable from a PR holds Cloudflare
-# credentials or touches remote resources. Setup and DNS cutover: docs/cloudflare.md.
-
+# Checks the JavaScript workspace — lint, the tests, the design check, the
+# website build, the worker's types and tests — on every change to it, and
+# deploys the site with the trial registry as one Cloudflare Worker. Pull
+# requests only run checks: no job reachable from a PR holds Cloudflare
+# credentials or touches remote resources. Setup and DNS cutover:
+# docs/cloudflare.md.
+#
+# Website-only changes run here and nowhere else; the app workflows run
+# only for their own trees (RELEASES.md, "Pipeline"). Markdown never
+# triggers; design/ does, since the design check reads its tokens.
 on:
   pull_request:
+    paths:
+      - apps/website/**
+      - apps/site-worker/**
+      - apps/openklack-desktop/src/**
+      - apps/openklack-desktop/*.json
+      - apps/openklack-desktop/*.ts
+      - apps/openklack-desktop/index.html
+      - packages/openklack-ui/**
+      - packages/keyboard-layout/**
+      - packages/soundpacks/**
+      - packages/ui/**
+      - design/**
+      - scripts/*.mjs
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.base.json
+      - tsconfig.json
+      - vite.config.ts
+      - .github/workflows/site.yml
+      - "!**/*.md"
   push:
-    branches: [main]
+    branches: [main, pipeline-fast-checks]
+    paths:
+      - apps/website/**
+      - apps/site-worker/**
+      - apps/openklack-desktop/src/**
+      - apps/openklack-desktop/*.json
+      - apps/openklack-desktop/*.ts
+      - apps/openklack-desktop/index.html
+      - packages/openklack-ui/**
+      - packages/keyboard-layout/**
+      - packages/soundpacks/**
+      - packages/ui/**
+      - design/**
+      - scripts/*.mjs
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.base.json
+      - tsconfig.json
+      - vite.config.ts
+      - .github/workflows/site.yml
+      - "!**/*.md"
   workflow_dispatch:
 
 permissions:
@@ -26,6 +74,10 @@ jobs:
           node-version: 24
       - run: npm install --global pnpm@12.4.1
       - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vp lint
+      - run: pnpm test
+      - run: pnpm design:check
+      - run: pnpm build
       - run: pnpm --filter @openapps/site-worker typecheck
       - run: pnpm site:test
 

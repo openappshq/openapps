@@ -6,37 +6,45 @@ name: OpenReaction
 # build and sign, zip, update-sign, publish, commit the feed, verify live,
 # bump the cask. See apps/openreaction/RELEASING.md.
 #
+# The checks run what the change touches and nothing more (RELEASES.md,
+# "Pipeline"): a preflight job classifies the diff and, on a manual run,
+# looks for a run of these checks that already passed for this commit; the
+# flavours then build and test in parallel, each from a cached build
+# directory, with the heavy tests left to nightly.yml.
+#
 # The paths filter applies to branch pushes and pull requests; tag pushes
-# always run, which is what the release needs.
+# always run, which is what the release needs. Markdown never triggers.
 on:
   pull_request:
     paths:
       - apps/openreaction/**
       - packages/openapps-licensing/**
       - packages/openapps-updater/**
-      - packaging/homebrew/**
       - scripts/release/**
+      - packaging/homebrew/**
       - .github/workflows/openreaction.yml
       - .github/rulesets/openreaction-release-tags.json
+      - "!**/*.md"
   push:
-    branches: [main]
+    branches: [main, pipeline-fast-checks]
     tags: [openreaction-v*]
     paths:
       - apps/openreaction/**
       - packages/openapps-licensing/**
       - packages/openapps-updater/**
-      - packaging/homebrew/**
       - scripts/release/**
+      - packaging/homebrew/**
       - .github/workflows/openreaction.yml
       - .github/rulesets/openreaction-release-tags.json
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       version:
-        description: Version to build as MAJOR.MINOR.PATCH (ignored when running from an openreaction-v* tag)
+        description: Version to build as MAJOR.MINOR.PATCH (ignored when running from a openreaction-v* tag)
         type: string
         default: ""
       publish:
-        description: Publish a GitHub Release (creates the openreaction-v<version> tag at this commit if it does not exist)
+        description: Publish a GitHub Release (creates the openreaction-v<version> tag at this commit if it does not exist), then commit the feed and bump the cask
         type: boolean
         default: false
       allow_older:
@@ -53,93 +61,282 @@ defaults:
     working-directory: apps/openreaction
 
 env:
-  # The checks job compiles the licensed flavour against Dodo test mode with
-  # placeholder product IDs; nothing built with these is ever published.
+  # The checks compile the licensed flavour against Dodo test mode with a
+  # placeholder product ID; nothing built with it is ever published, and
+  # verify-release.sh --release refuses a binary that contains it.
   PLACEHOLDER_PAID_PRODUCT_ID: pdt_placeholder_openreaction
-  # The release tag this run is about: the pushed tag, or openreaction-v<input>
-  # on a manual run from a branch. Build and publish serialise per tag, so a
+  # The release tag this run is about: the pushed tag, or openreaction-v<input> on a
+  # manual run from a branch. Build and publish serialise per tag, so a
   # second run for the same version queues behind the first instead of racing it.
   RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openreaction-v{0}', inputs.version) || github.ref_name }}
+  # Tests marked heavy (minutes of rendering) run nightly, not here.
+  OPENAPPS_HEAVY_TESTS: "0"
 
 jobs:
-  checks:
-    runs-on: macos-26
-    timeout-minutes: 60
+  # What this run has to check. On a manual run, first whether a run of
+  # these checks already passed for this commit (scripts/release/checks-passed.sh);
+  # then which legs and steps the change calls for (scripts/release/changes.sh).
+  # A push or pull request never relies on an earlier run.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      checks: ${{ steps.evidence.outputs.checks }}
+      checks_run: ${{ steps.evidence.outputs.run }}
+      flavours: ${{ steps.changes.outputs.flavours }}
+      suite: ${{ steps.changes.outputs.suite }}
+      flavour_suite: ${{ steps.changes.outputs.flavour_suite }}
+      bundle: ${{ steps.changes.outputs.bundle }}
+      update_e2e: ${{ steps.changes.outputs.update_e2e }}
+      licensing_tests: ${{ steps.changes.outputs.licensing_tests }}
+      updater_tests: ${{ steps.changes.outputs.updater_tests }}
+      lint: ${{ steps.changes.outputs.lint }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          # The history, to diff against the previous push.
+          fetch-depth: 0
+      - name: Look for a passed run of these checks
+        id: evidence
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if run="$(scripts/release/checks-passed.sh openreaction.yml "$GITHUB_SHA")"; then
+            echo "checks=passed" >> "$GITHUB_OUTPUT"
+            echo "run=$run" >> "$GITHUB_OUTPUT"
+            echo "The checks passed in run $run for $GITHUB_SHA: https://github.com/$GH_REPO/actions/runs/$run" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "checks=needed" >> "$GITHUB_OUTPUT"
+            echo "No run of the checks passed for $GITHUB_SHA within a day: the source and official flavours run before the release." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Classify the change
+        id: changes
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          EVIDENCE: ${{ steps.evidence.outputs.checks }}
+          FLAVOURS: source licensed official
+        run: |
+          mode=""; base=""
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) if [ "$EVIDENCE" = passed ]; then mode=--nothing; else mode=--fallback; fi ;;
+            pull_request) base="$BASE" ;;
+            push) case "$GITHUB_REF" in refs/tags/*) mode=--all ;; *) base="$BEFORE" ;; esac ;;
+            *) mode=--all ;;
+          esac
+          if [ -z "$mode" ]; then
+            # A new branch or a force-push has no previous commit to diff against.
+            if [ -n "$base" ] && ! printf '%s' "$base" | grep -Eq '^0+$' && git cat-file -e "$base^{commit}" 2>/dev/null; then
+              git diff --name-only "$base" "$GITHUB_SHA" | scripts/release/changes.sh openreaction --diff "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"
+            else
+              mode=--all
+            fi
+          fi
+          if [ -n "$mode" ]; then scripts/release/changes.sh openreaction "$mode" "$FLAVOURS" | tee -a "$GITHUB_OUTPUT"; fi
+
+  # One leg per flavour the change calls for, in parallel. Each leg builds
+  # its flavour with its tests from a cached build directory; the source
+  # flavour runs the whole suite, the official flavour the suites that read
+  # the flavour (scripts/flavour-tests.txt) and then builds the ad-hoc
+  # development app, the licensed flavour only builds.
+  checks:
+    needs: preflight
+    if: needs.preflight.outputs.flavours != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: ${{ fromJSON(needs.preflight.outputs.flavours) }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      SCRATCH_PATH: .build/${{ matrix.flavour }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # The history, for the commit times the cached build is keyed on.
+          fetch-depth: 0
       - name: Select Xcode 26
+        id: xcode
         run: |
           xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
           if [ -z "$xcode" ]; then echo "Xcode 26 (macOS 26 SDK) is required."; exit 1; fi
           sudo xcode-select -s "$xcode"
           xcodebuild -version
           swift --version
+          echo "swift=$(swift --version 2>&1 | sed -nE 's/.*swiftlang-([0-9.]+).*/\1/p' | head -1)" >> "$GITHUB_OUTPUT"
+      - name: Set the flavour
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          # The flavour's build environment (Package.swift, scripts/bundle.sh).
+          case "$FLAVOUR" in
+            source) licensing=0; official=0 ;;
+            licensed) licensing=1; official=0 ;;
+            official) licensing=1; official=1 ;;
+            *) echo "Unknown flavour $FLAVOUR"; exit 1 ;;
+          esac
+          {
+            echo "OPENAPPS_LICENSING=$licensing"
+            echo "OPENAPPS_OFFICIAL=$official"
+            echo "OPENAPPS_DODO_ENV=test"
+            echo "OPENAPPS_DODO_PAID_PRODUCT_ID=$PLACEHOLDER_PAID_PRODUCT_ID"
+          } >> "$GITHUB_ENV"
+      - name: Restore the build directory
+        # Keyed by flavour, toolchain and the package manifests; the newest
+        # cache for the flavour is restored when nothing matches exactly, and
+        # every run saves its own so the next one starts from this build.
+        uses: actions/cache@v4
+        with:
+          path: apps/openreaction/.build
+          key: openreaction-${{ matrix.flavour }}-${{ steps.xcode.outputs.swift }}-${{ hashFiles('apps/openreaction/Package.swift', 'packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-${{ github.sha }}
+          restore-keys: |
+            openreaction-${{ matrix.flavour }}-${{ steps.xcode.outputs.swift }}-${{ hashFiles('apps/openreaction/Package.swift', 'packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-
+            openreaction-${{ matrix.flavour }}-${{ steps.xcode.outputs.swift }}-
+      - name: Restore the sources' commit times
+        # A checkout stamps every file with now; the cached build would
+        # rebuild everything. Commit times are the same on every runner.
+        working-directory: .
+        run: scripts/release/restore-mtimes.sh apps/openreaction packages/openapps-licensing packages/openapps-updater
+      - name: Generate the licensing configuration
+        if: env.OPENAPPS_LICENSING == '1'
+        run: scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
+      - name: Build the ${{ matrix.flavour }} flavour with its tests
+        run: swift build --build-tests --scratch-path "$SCRATCH_PATH"
       # Only suites that never post CGEvents or install an event tap run here:
       # the whole core library and the gate runner shutdown suite.
       # KeyboardTapTests and anything else that touches real input stay out
       # of CI. The licensing rules, stores and clients (the preferences
       # journal included) are tested with their package below.
-      - name: Build and test the source flavour
-        run: swift test --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests'
-      - name: Build and test the licensed flavour
-        env:
-          OPENAPPS_LICENSING: "1"
-          OPENAPPS_DODO_ENV: test
-          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
+      - name: Run the suites CI can
+        if: matrix.flavour == 'source' && needs.preflight.outputs.suite == 'true'
+        run: swift test --skip-build --scratch-path "$SCRATCH_PATH" --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests'
+      - name: Run the suites that read the flavour
+        if: matrix.flavour == 'official' && needs.preflight.outputs.flavour_suite == 'true'
         run: |
-          scripts/generate-licensing-config.sh Sources/OpenReaction/Licensing/LicensingConfig.swift
-          swift test --scratch-path .build/licensed \
-            --filter 'OpenReactionCoreTests|OpenReactionTests.GateRunnerShutdownTests'
-      - name: Test the licensing package
-        run: swift test --package-path ../../packages/openapps-licensing
-      - name: Test the updater package
-        run: swift test --package-path ../../packages/openapps-updater
-      - name: Lint and test the release scripts
-        run: |
-          brew install shellcheck actionlint
-          shellcheck scripts/*.sh scripts/tests/*.sh ../../scripts/release/*.sh ../../scripts/release/tests/*.sh ../../packaging/homebrew/*.sh ../../packaging/homebrew/tests/*.sh
-          # The served install scripts are plain POSIX sh (RELEASES.md, "Install script").
-          shellcheck -s sh ../../apps/website/public/install/*
-          actionlint ../../.github/workflows/openreaction.yml
-          scripts/tests/scan-binary.test.sh
-          ../../scripts/release/tests/with-signing-keychain.test.sh
-          ../../scripts/release/tests/install-script.test.sh
-          ../../packaging/homebrew/tests/bump-cask.test.sh
+          filter="$(../../scripts/release/test-filter.sh scripts/flavour-tests.txt)"
+          selected="$(swift test list --skip-build --scratch-path "$SCRATCH_PATH" | grep -Ec "$filter" || true)"
+          if [ "$selected" = 0 ]; then echo "scripts/flavour-tests.txt selects no test ($filter)."; exit 1; fi
+          echo "Running $selected tests: $filter"
+          swift test --skip-build --scratch-path "$SCRATCH_PATH" --filter "$filter"
       # The official flavour (licensing and the updater) as an ad-hoc signed
-      # development app, pinning a throwaway update key so the build does not
-      # depend on the real key existing; it verifies like a release except
-      # for the signature.
+      # development app, against Dodo test mode with the placeholder ID and
+      # a throwaway update key so the build does not depend on the real key;
+      # it verifies like a release except for the signature and the live
+      # configuration.
       - name: Build an ad-hoc signed official development app
+        if: matrix.flavour == 'official' && needs.preflight.outputs.bundle == 'true'
         env:
-          OPENAPPS_LICENSING: "1"
-          OPENAPPS_OFFICIAL: "1"
-          OPENAPPS_DODO_ENV: test
-          OPENAPPS_DODO_PAID_PRODUCT_ID: ${{ env.PLACEHOLDER_PAID_PRODUCT_ID }}
           UNIVERSAL: "1"
-          SCRATCH_PATH: .build/official
         run: |
           UPDATE_PUBLIC_ED_KEY="$(xcrun swift -e 'import CryptoKit; print(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString())')"
           export UPDATE_PUBLIC_ED_KEY
           scripts/bundle.sh
           scripts/make-zip.sh
           scripts/verify-release.sh dist/OpenReaction-*.zip
+      - name: Remove the generated licensing configuration
+        # Generated, gitignored and outside the cached build directory; removed
+        # all the same so nothing of the placeholder outlives the job.
+        if: always()
+        run: rm -f Sources/OpenReaction/Licensing/LicensingConfig.swift
       - uses: actions/upload-artifact@v4
+        if: matrix.flavour == 'official' && needs.preflight.outputs.bundle == 'true'
         with:
           name: OpenReaction-development-unsigned
           path: apps/openreaction/dist/*.zip
           retention-days: 7
           if-no-files-found: error
 
+  # The shared packages' own suites, when a package changed.
+  packages:
+    needs: preflight
+    if: needs.preflight.outputs.licensing_tests == 'true' || needs.preflight.outputs.updater_tests == 'true'
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select Xcode 26
+        id: xcode
+        run: |
+          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then echo "Xcode 26 (macOS 26 SDK) is required."; exit 1; fi
+          sudo xcode-select -s "$xcode"
+          echo "swift=$(swift --version 2>&1 | sed -nE 's/.*swiftlang-([0-9.]+).*/\1/p' | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            packages/openapps-licensing/.build
+            packages/openapps-updater/.build
+          key: packages-${{ steps.xcode.outputs.swift }}-${{ hashFiles('packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-${{ github.sha }}
+          restore-keys: |
+            packages-${{ steps.xcode.outputs.swift }}-${{ hashFiles('packages/openapps-licensing/Package.swift', 'packages/openapps-updater/Package.swift') }}-
+            packages-${{ steps.xcode.outputs.swift }}-
+      - run: scripts/release/restore-mtimes.sh packages/openapps-licensing packages/openapps-updater
+      - name: Test the licensing package
+        if: needs.preflight.outputs.licensing_tests == 'true'
+        run: swift test --package-path packages/openapps-licensing
+      - name: Test the updater package
+        if: needs.preflight.outputs.updater_tests == 'true'
+        run: swift test --package-path packages/openapps-updater
+
+  # The scripts and this workflow, when they changed. OpenReaction's lint
+  # runs the release-script tests too — the keychain wrapper, the install
+  # script and the binary scan need macOS — so it stays on a macOS runner.
+  lint:
+    needs: preflight
+    if: needs.preflight.outputs.lint == 'true'
+    runs-on: macos-26
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Lint and test the release scripts
+        run: |
+          brew install shellcheck actionlint >/dev/null
+          shellcheck apps/openreaction/scripts/*.sh apps/openreaction/scripts/tests/*.sh scripts/release/*.sh scripts/release/tests/*.sh packaging/homebrew/*.sh packaging/homebrew/tests/*.sh
+          # The served install scripts are plain POSIX sh (RELEASES.md, "Install script").
+          shellcheck -s sh apps/website/public/install/*
+          actionlint .github/workflows/openreaction.yml
+          apps/openreaction/scripts/tests/scan-binary.test.sh
+          scripts/release/tests/with-signing-keychain.test.sh
+          scripts/release/tests/install-script.test.sh
+          scripts/release/tests/checks-passed.test.sh
+          scripts/release/tests/changes.test.sh
+          packaging/homebrew/tests/bump-cask.test.sh
+
   # Builds, signs, verifies and packages the release. Read-only token: it
   # never touches tags, releases, the feed or the tap.
   release:
-    # Never in a fork: the environment, its secrets and the publish path belong to this repository.
-    if: github.repository == 'openappshq/openapps' && (startsWith(github.ref, 'refs/tags/openreaction-v') || github.event_name == 'workflow_dispatch')
-    needs: checks
+    # Only the canonical repository releases; a fork keeps the checks and
+    # nothing else. Every check job must have passed or been skipped by
+    # preflight — a run that relied on an earlier passed run, or a change
+    # that called for less — never failed or cancelled.
+    if: |
+      !cancelled() && github.repository == 'openappshq/openapps'
+      && (startsWith(github.ref, 'refs/tags/openreaction-v') || github.event_name == 'workflow_dispatch')
+      && needs.preflight.result == 'success'
+      && (needs.checks.result == 'success' || needs.checks.result == 'skipped')
+      && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
+      && (needs.lint.result == 'success' || needs.lint.result == 'skipped')
+    needs: [preflight, checks, packages, lint]
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 60
     environment: openreaction-release
     concurrency:
       group: openreaction-build-${{ github.event_name == 'push' && github.ref_name || inputs.version != '' && format('openreaction-v{0}', inputs.version) || github.ref_name }}
@@ -159,8 +356,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-          # Full history: the build number is the commit count on HEAD.
+          # The tags too, for bundle.sh's version fallback (`git describe`).
           fetch-depth: 0
+      - name: Record the checks this release relies on
+        env:
+          CHECKS: ${{ needs.preflight.outputs.checks }}
+          CHECKS_RUN: ${{ needs.preflight.outputs.checks_run }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$CHECKS" = passed ]; then
+            echo "Checks: relied on run $CHECKS_RUN, which passed for $GITHUB_SHA — https://github.com/$REPO/actions/runs/$CHECKS_RUN" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Checks: ran in this workflow run for $GITHUB_SHA." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Select Xcode 26
         run: |
           xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
@@ -184,7 +392,7 @@ jobs:
               fi ;;
             *)
               version="$INPUT_VERSION"
-              if [ -z "$version" ]; then echo "Give a version, or run from an openreaction-v* tag."; exit 1; fi ;;
+              if [ -z "$version" ]; then echo "Give a version, or run from a openreaction-v* tag."; exit 1; fi ;;
           esac
           if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Version must be MAJOR.MINOR.PATCH (got '$version')."; exit 1

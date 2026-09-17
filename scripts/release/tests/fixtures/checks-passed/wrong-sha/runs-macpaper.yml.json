@@ -1,0 +1,11 @@
+{
+  "total_count": 1,
+  "workflow_runs": [
+    {
+      "id": 100,
+      "head_sha": "fedcba9876543210fedcba9876543210fedcba98",
+      "status": "completed",
+      "path": ".github/workflows/macpaper.yml"
+    }
+  ]
+}

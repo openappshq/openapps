@@ -1,0 +1,7 @@
+# The suites that read the build's flavour (RELEASES.md, "Pipeline"): the
+# official-flavour check runs these and nothing else, the source flavour
+# runs everything CI can. OpenReaction's licensing rules are tested with
+# their package; of the app target's suites only the gate runner's
+# shutdown never touches real input (KeyboardTapTests and the permission
+# helper stay out of CI). One `swift test --filter` pattern per line.
+OpenReactionTests.GateRunnerShutdownTests

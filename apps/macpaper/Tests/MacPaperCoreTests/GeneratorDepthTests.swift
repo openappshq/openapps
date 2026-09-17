@@ -706,7 +706,7 @@ struct PinsTests {
 
 @Suite("Render budget")
 struct BudgetTests {
-    @Test("An uncached 5K render of the first three taste recipes stays within a generous bound")
+    @Test("An uncached 5K render of the first three taste recipes stays within a generous bound", .heavy, .tags(.heavy))
     func fiveK() {
         let context = RenderContext(size: PixelSize(width: 5120, height: 2880), menuBarStrip: 48)
         let renderer = WallpaperRenderer()

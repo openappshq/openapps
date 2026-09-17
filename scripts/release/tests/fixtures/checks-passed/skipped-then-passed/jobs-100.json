@@ -1,0 +1,69 @@
+{
+  "total_count": 8,
+  "jobs": [
+    {
+      "id": 1001,
+      "run_id": 100,
+      "name": "preflight",
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-09-16T22:00:00Z"
+    },
+    {
+      "id": 1002,
+      "run_id": 100,
+      "name": "checks (source)",
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-09-16T22:00:00Z"
+    },
+    {
+      "id": 1003,
+      "run_id": 100,
+      "name": "checks (official)",
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-09-16T22:00:00Z"
+    },
+    {
+      "id": 1004,
+      "run_id": 100,
+      "name": "packages",
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-09-16T22:00:00Z"
+    },
+    {
+      "id": 1005,
+      "run_id": 100,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-09-16T22:00:00Z"
+    },
+    {
+      "id": 1006,
+      "run_id": 100,
+      "name": "release",
+      "status": "completed",
+      "conclusion": "skipped",
+      "completed_at": "2026-09-16T22:00:00Z"
+    },
+    {
+      "id": 1007,
+      "run_id": 100,
+      "name": "publish",
+      "status": "completed",
+      "conclusion": "skipped",
+      "completed_at": "2026-09-16T22:00:00Z"
+    },
+    {
+      "id": 1008,
+      "run_id": 100,
+      "name": "feed",
+      "status": "completed",
+      "conclusion": "skipped",
+      "completed_at": "2026-09-16T22:00:00Z"
+    }
+  ]
+}
