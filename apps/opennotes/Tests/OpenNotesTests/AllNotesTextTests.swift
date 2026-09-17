@@ -132,16 +132,18 @@ final class AllNotesTextTests: XCTestCase {
         XCTAssertEqual(AllNotesText.rowLabel(n, now: now), "Groceries, 5 min")
     }
 
-    // MARK: - selectionCaption / selected
-
-    @MainActor func testSelectionCaptionNamesTheCountAndTheScope() {
-        XCTAssertEqual(AllNotesText.selectionCaption(3, archived: false), "3 SELECTED · ACTIVE")
-        XCTAssertEqual(AllNotesText.selectionCaption(1, archived: true), "1 SELECTED · ARCHIVED")
-    }
+    // MARK: - selected
 
     @MainActor func testSelectedNamesTheCountOfVisible() {
         XCTAssertEqual(AllNotesText.selected(3, of: 11), "3 of 11 selected")
         XCTAssertEqual(AllNotesText.selected(0, of: 11), "0 of 11 selected")
+    }
+
+    // MARK: - selectedCaption
+
+    @MainActor func testSelectedCaptionNamesTheCheckedCount() {
+        XCTAssertEqual(AllNotesText.selectedCaption(1), "1 SELECTED")
+        XCTAssertEqual(AllNotesText.selectedCaption(12), "12 SELECTED")
     }
 
     // MARK: - skipped / trashed
