@@ -2,29 +2,39 @@ import MacPaperCore
 import SwiftUI
 
 /// The column: an icon rail on the left and, beside it, the section it
-/// points at. Shared by the notch panel and the menu-bar popover. Dark in
-/// both appearances and opaque (`PanelTheme`): it hangs from the notch, so
-/// it is a piece of the same black, and no wallpaper reaches a label.
-/// Every change reaches the desktop on its own (live apply), so there is
-/// no Apply: the header says where changes land, the rail carries Shuffle
-/// and Collapse, the footer the seed. While the license restricts the
-/// feature, the license card takes the place of the sections that make
-/// wallpapers; Library and History still browse
-/// (design/products/macpaper.md, "Notch panel").
+/// points at. One column, wherever it opens from (the notch, the menu-bar
+/// item). Dark in both appearances and opaque (`PanelTheme`): it hangs
+/// from the notch, so it is a piece of the same black, and no wallpaper
+/// reaches a label. Every change reaches the desktop on its own (live
+/// apply), so there is no Apply: the header says where changes land, the
+/// rail carries Shuffle and Collapse, the footer the seed. While the
+/// license restricts the feature, the license card takes the place of
+/// the sections that make wallpapers; Library and History still browse
+/// (design/products/macpaper.md, "The panel").
+///
+/// Given a height, the column is that tall and the section scrolls inside
+/// it while the header, the preview, the rail and the footer stay put;
+/// the natural height (what the content would take unscrolled) is
+/// reported through `onNaturalHeight` so the window can follow the
+/// content up to the display's cap.
 struct WallpaperPanelView: View {
     @Bindable var model: AppModel
     /// The column's width, from the setting and the widest control.
     var width: CGFloat = PanelMetrics.width(for: .regular)
-    /// The column's height; nil sizes to the content (the harness).
+    /// The column's height; nil sizes to the content (the harness, and
+    /// the measurement the window takes before it shows).
     var height: CGFloat? = nil
     /// A slot in the header for the licensing wiring (the trial pill or
     /// the license badge); nil draws nothing.
     var header: AnyView? = nil
     let showSettings: () -> Void
     let quit: () -> Void
-    /// Collapse: closes the panel or the popover.
+    /// Collapse: closes the panel.
     var dismiss: () -> Void = {}
+    /// The height the content would take unscrolled, as it lays out.
+    var onNaturalHeight: ((CGFloat) -> Void)? = nil
     @Environment(\.previewRendering) private var previewRendering
+    @Environment(\.previewScrollOffset) private var previewScrollOffset
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -60,6 +70,18 @@ struct WallpaperPanelView: View {
         .background(Brand.Panel.ground)
         .environment(\.colorScheme, .dark)
         .animation(Motion.standard(reduceMotion: reduceMotion), value: model.status)
+        .onPreferenceChange(SectionMetrics.self) { metrics in
+            // Delivered on the main thread; the closure is only nominally
+            // nonisolated.
+            MainActor.assumeIsolated { report(metrics) }
+        }
+    }
+
+    /// What the content would take unscrolled: the column less the
+    /// section's viewport, plus the section's own height.
+    private func report(_ metrics: SectionMetrics) {
+        guard let height, let onNaturalHeight, metrics.viewport > 0 else { return }
+        onNaturalHeight((height - metrics.viewport + metrics.content).rounded(.up))
     }
 
     private var pane: some View {
@@ -76,8 +98,10 @@ struct WallpaperPanelView: View {
             PreviewCard(model: model, width: PanelLayout.paneWidth(columnWidth: width))
                 .padding(.horizontal, PanelLayout.paneInset)
                 .padding(.top, Brand.Space.s8)
+            // The section takes what is left (the scroll view, or the
+            // harness's clipped stack, is the one flexible row); the status
+            // line, the update row and the footer sit under it.
             sectionBody
-            Spacer(minLength: 0)
             if let status = model.status {
                 StatusText(status: status)
                     .padding(.horizontal, PanelLayout.paneInset)
@@ -94,30 +118,67 @@ struct WallpaperPanelView: View {
     }
 
     /// The section, scrolling when taller than the column (the harness
-    /// draws no scroll view: a plain stack, clipped by the column).
+    /// draws no scroll view: a plain stack, clipped by the column, shown
+    /// scrolled by `previewScrollOffset`). Its own height and its
+    /// viewport's are reported for `onNaturalHeight`.
     @ViewBuilder
     private var sectionBody: some View {
         let content = SectionContent(model: model, width: PanelLayout.paneWidth(columnWidth: width))
             .padding(.horizontal, PanelLayout.paneInset)
             .padding(.vertical, Brand.Space.s12)
+            .background(GeometryReader { proxy in
+                Color.clear.preference(key: SectionMetrics.self, value: SectionMetrics(content: proxy.size.height, viewport: 0))
+            })
         if height == nil {
             content
         } else if previewRendering {
             // No scroll view under `ImageRenderer`: the overflow is clipped, the footer stays.
             Color.clear
-                .overlay(alignment: .top) { content }
+                .overlay(alignment: .top) { content.offset(y: -previewScrollOffset) }
                 .clipped()
         } else {
             ScrollView(.vertical, showsIndicators: false) { content }
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: SectionMetrics.self, value: SectionMetrics(content: 0, viewport: proxy.size.height))
+                })
         }
     }
 }
 
+/// The section's laid-out height and its viewport's, each reported by
+/// the view that knows it; the two reports combine.
+private struct SectionMetrics: SwiftUI.PreferenceKey, Equatable, Sendable {
+    var content: CGFloat = 0
+    var viewport: CGFloat = 0
+
+    static let defaultValue = SectionMetrics()
+
+    static func reduce(value: inout SectionMetrics, nextValue: () -> SectionMetrics) {
+        let next = nextValue()
+        if next.content > 0 { value.content = next.content }
+        if next.viewport > 0 { value.viewport = next.viewport }
+    }
+}
+
+extension EnvironmentValues {
+    /// How far the harness shows the section scrolled, in points; the
+    /// live column scrolls for real.
+    @Entry var previewScrollOffset: CGFloat = 0
+}
+
 /// The column's widths: the setting, or wider when a segmented control
-/// needs it to keep every label on one line.
+/// needs it to keep every label on one line; and its natural height.
 enum PanelMetrics {
-    /// The popover is the regular column.
-    static var popoverWidth: CGFloat { width(for: .regular) }
+    /// The height the column takes unscrolled, measured off-screen: what
+    /// the window opens at (up to the display's cap) and what the harness
+    /// draws.
+    static func naturalHeight(of content: PanelContent) -> CGFloat {
+        var content = content
+        content.height = nil
+        let hosting = NSHostingView(rootView: content.environment(\.previewRendering, true))
+        hosting.appearance = NSAppearance(named: .darkAqua)
+        return hosting.fittingSize.height.rounded(.up)
+    }
 
     /// The widest segmented controls the pane draws, measured in the
     /// segment font.

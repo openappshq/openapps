@@ -28,6 +28,8 @@ public enum PreferenceKey {
     public static let direction = "notch.direction"
     public static let width = "notch.width"
     public static let hideInFullscreen = "notch.hideInFullscreen"
+    /// How long the pointer rests on the notch before a hover opens, in seconds.
+    public static let hoverDelay = "notch.hoverDelay"
     public static let hotkey = "notch.hotkey"
     public static let shuffleInterval = "shuffle.interval"
     public static let favoritesOnly = "shuffle.favoritesOnly"
@@ -41,27 +43,39 @@ public enum PreferenceKey {
     public static let pins = "shuffle.pins"
 
     public static let all: [String] = [
-        notchEnabled, hostDisplay, trigger, direction, width, hideInFullscreen, hotkey,
+        notchEnabled, hostDisplay, trigger, direction, width, hideInFullscreen, hoverDelay, hotkey,
         shuffleInterval, favoritesOnly, sameOnAllDisplays, exportFolder,
         keepApplied, clockStyle, clockPosition, clockSize, pins,
     ]
 }
 
-/// The setup guide's steps, in order. macPaper asks for no permission, so
-/// the guide never waits on the system: the step shown is the user's own
-/// progress, kept so "Show setup guide" resumes where they left off.
+/// The setup guide's steps. macPaper asks for no permission, so the guide
+/// never waits on the system: the step shown is the user's own progress,
+/// kept so "Show setup guide" resumes where they left off. The raw value
+/// is what the flag stores, so it never changes for a step; `order` is
+/// what the guide walks, and a step added later goes where it belongs
+/// in `order` with the next free raw value.
 public enum GuideStep: Int, CaseIterable, Comparable, Sendable {
-    case welcome
+    case welcome = 0
     /// "Nothing to grant": what macPaper touches, and that no permission is needed.
-    case permissions
+    case permissions = 1
     /// "Starts with your Mac": the login item, from its real state.
-    case loginItem
-    case tips
+    case loginItem = 2
+    case tips = 3
+    /// "Where the panel lives": the notch hover zone and the panel dropping
+    /// from it, or the menu-bar item on a Mac without a notch.
+    case panel = 4
 
-    public static func < (lhs: GuideStep, rhs: GuideStep) -> Bool { lhs.rawValue < rhs.rawValue }
+    /// The steps as the guide walks them.
+    public static let order: [GuideStep] = [.welcome, .panel, .permissions, .loginItem, .tips]
 
-    public var next: GuideStep? { GuideStep(rawValue: rawValue + 1) }
-    public var previous: GuideStep? { GuideStep(rawValue: rawValue - 1) }
+    /// The step's place in the walk.
+    public var index: Int { Self.order.firstIndex(of: self) ?? 0 }
+
+    public static func < (lhs: GuideStep, rhs: GuideStep) -> Bool { lhs.index < rhs.index }
+
+    public var next: GuideStep? { Self.order.indices.contains(index + 1) ? Self.order[index + 1] : nil }
+    public var previous: GuideStep? { index > 0 ? Self.order[index - 1] : nil }
     public var isLast: Bool { next == nil }
 }
 
@@ -99,6 +113,42 @@ public enum OnboardingLaunch {
     }
 }
 
+/// The glow under the notch that shows where the panel is triggered, for
+/// the first launches only: it pulses when the pointer comes within
+/// `PanelLayout.hintReach` of the notch, on the first `launchesShown`
+/// launches, and never again once the notch has opened the panel once
+/// (by hover or by click). The flags live beside the first-run flags.
+public enum NotchHint {
+    public enum Key {
+        /// How many launches have counted so far.
+        public static let launches = "notchHint.launches"
+        /// The notch opened the panel once: the hint is done.
+        public static let used = "notchHint.used"
+    }
+
+    /// The hint shows on this many launches.
+    public static let launchesShown = 5
+
+    /// Counts a launch; called once per launch, after the fresh-install
+    /// evidence has been read (the count is evidence of an earlier launch)
+    /// and before `isArmed` is asked.
+    public static func recordLaunch(store: any FlagStore) {
+        store.set(store.integer(forKey: Key.launches) + 1, forKey: Key.launches)
+    }
+
+    /// The panel opened from the notch: nothing left to show.
+    public static func markUsed(store: any FlagStore) {
+        store.set(true, forKey: Key.used)
+    }
+
+    /// Whether the glow is armed this launch: the notch has never opened
+    /// the panel, and this launch (counted already) is one of the first
+    /// `launchesShown`. An uncounted launch (0) counts as the first.
+    public static func isArmed(store: any FlagStore) -> Bool {
+        !store.bool(forKey: Key.used) && store.integer(forKey: Key.launches) <= launchesShown
+    }
+}
+
 /// A setting official builds turn on once, on a demonstrably fresh install:
 /// no preferences from an earlier launch (of any version), and neither a
 /// trial nor a license record in the record store, both positively absent.
@@ -121,7 +171,7 @@ public struct FreshInstallDefault {
         /// counts. The list is by hand; add a key here when the app starts
         /// writing a new one.
         public static let earlierPreferenceEvidence: [String] =
-            [OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step, loginItemApplied, updateChecksApplied]
+            [OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step, NotchHint.Key.launches, NotchHint.Key.used, loginItemApplied, updateChecksApplied]
             + PreferenceKey.all
             + ["OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck"]
     }

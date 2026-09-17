@@ -3,9 +3,8 @@ import MacPaperCore
 import SwiftUI
 
 /// Owns the long-lived objects: the model, preferences, the login item, the
-/// status item and popover, the notch panels, the hotkey, the shuffle
-/// engine and the settings window. Menu-bar only: no Dock icon, no main
-/// window.
+/// status item and its menu, the panels, the hotkey, the shuffle engine
+/// and the settings window. Menu-bar only: no Dock icon, no main window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var preferences: Preferences!
     private(set) var model: AppModel!
@@ -19,8 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var keeper: DesktopKeeper?
     private var theme: ThemeWatcher?
     private var clock: ClockController?
-    /// Filled by the licensing wiring before the first panel or popover
-    /// shows: the trial pill above the preview.
+    /// Filled by the licensing wiring before the first panel shows: the
+    /// trial pill above the preview.
     var panelHeader: (() -> AnyView)?
     var onboarding: OnboardingWindowController?
     #if OPENAPPS_LICENSING
@@ -52,20 +51,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Official builds: the updater, before this launch writes any
         // preferences (UpdatesLaunch.swift).
         startUpdates()
+        // Both fresh-install defaults have read their evidence by now (the
+        // login item's at its creation, the updater's at its own): the
+        // launch count for the notch glow, itself earlier-launch evidence,
+        // may be written. The panels read it as they are made.
+        NotchHint.recordLaunch(store: UserDefaults.standard)
 
-        let statusItem = StatusItemController(model: model, showSettings: { [weak self] in self?.showSettings() }, quit: { NSApp.terminate(nil) })
+        let statusItem = StatusItemController(model: model, preferences: preferences, showSettings: { [weak self] in self?.showSettings() }, quit: { NSApp.terminate(nil) })
         self.statusItem = statusItem
-        statusItem.header = { [weak self] in self?.panelHeader?() ?? AnyView(EmptyView()) }
         let notch = NotchHost(
             model: model, preferences: preferences,
-            onOpenPopover: { [weak statusItem] in statusItem?.open() },
             showSettings: { [weak self] in self?.showSettings() },
             quit: { NSApp.terminate(nil) }
         )
         notch.header = { [weak self] in self?.panelHeader?() ?? AnyView(EmptyView()) }
         notch.statusItemFrame = { [weak statusItem] in statusItem?.buttonFrame }
         self.notch = notch
-        statusItem.beforeOpen = { [weak notch] in notch?.closeAll() }
+        statusItem.togglePanel = { [weak notch] in notch?.toggleFromStatusItem() }
+        statusItem.panelIsShown = { [weak notch] in notch?.isOpen ?? false }
 
         // Apply, finished: the pin, the theme swap, shared links, the clock.
         keeper = DesktopKeeper(model: model, preferences: preferences, desktop: WorkspaceDesktopApplier())
@@ -75,14 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let hotkeys = HotkeyCenter()
         self.hotkeys = hotkeys
-        hotkeys.onPressed = { [weak self] in
-            guard let self else { return }
-            if self.statusItem?.isShown == true {
-                self.statusItem?.close()
-            } else {
-                self.notch?.toggleFromHotkey()
-            }
-        }
+        hotkeys.onPressed = { [weak self] in self?.notch?.toggleFromHotkey() }
         hotkeys.register(preferences.hotkey)
         observeChanges({ [preferences] in _ = preferences.hotkey }, onChange: { [weak self, preferences] in self?.hotkeys?.register(preferences.hotkey) })
 
@@ -140,12 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// `.macpaper` recipe files opened from the Finder (a double-click,
     /// a drop on the icon): imported into the library and shown in the
-    /// popover.
+    /// panel, opened under the menu-bar item.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.isFileURL {
             model.importRecipe(at: url)
         }
-        if urls.contains(where: \.isFileURL) { statusItem?.open() }
+        if urls.contains(where: \.isFileURL) { notch?.showFromStatusItem() }
     }
 }
 

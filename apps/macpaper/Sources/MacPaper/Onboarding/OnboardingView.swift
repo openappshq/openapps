@@ -3,8 +3,8 @@ import MacPaperCore
 import SwiftUI
 
 /// The setup guide, in the same shape as Hertz's and OpenReaction's:
-/// welcome, one step per permission (macPaper has none, and says so), the
-/// login item, tips.
+/// welcome, where the panel lives, one step per permission (macPaper has
+/// none, and says so), the login item, tips.
 struct OnboardingView: View {
     static let size = CGSize(width: 600, height: 600)
 
@@ -33,6 +33,7 @@ struct OnboardingView: View {
     @ViewBuilder private var stepView: some View {
         switch model.step {
         case .welcome: WelcomeStep(model: model)
+        case .panel: PanelStep(model: model)
         case .permissions: PermissionsStep(model: model)
         case .loginItem: LoginItemStep(model: model)
         case .tips: TipsStep(model: model)
@@ -55,6 +56,7 @@ private struct StepProgress: View {
     let step: GuideStep
 
     private let steps: [(GuideStep, String)] = [
+        (.panel, "Panel"),
         (.permissions, "Permissions"),
         (.loginItem, "Login"),
         (.tips, "Tips"),
@@ -112,7 +114,9 @@ private struct WelcomeStep: View {
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text("Click or hover the notch, or the menu-bar item, to make a wallpaper and put it on your desktop.")
+                Text(model.hasNotch
+                    ? "Hover or click the notch, or click the menu-bar icon, to make a wallpaper and put it on your desktop."
+                    : "Click the menu-bar icon to make a wallpaper and put it on your desktop.")
                     .font(Brand.body(16))
                     .foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -277,7 +281,9 @@ private struct TipsStep: View {
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                tip("rectangle.topthird.inset.filled", "The panel drops from the notch on click or hover. Settings → General picks which display hosts it, how it opens, its width, whether it hides in fullscreen, and the hotkey (⌃⌥⌘W); off, everything lives in the menu-bar popover.")
+                tip("rectangle.topthird.inset.filled", model.hasNotch
+                    ? "The panel drops from the notch on hover or click, and opens under the menu-bar icon from a click on it\(model.shortcut.map { " or \($0)" } ?? ""). Settings → General picks which display hosts the notch panel, the hover delay, its width, whether it hides in fullscreen, and the shortcut."
+                    : "The panel opens under the menu-bar icon from a click on it\(model.shortcut.map { " or \($0)" } ?? ""). Settings → General sets its width, whether it hides in fullscreen, and the shortcut; the notch settings apply once a notched display is connected.")
                 tip("dice", "Every wallpaper is a document with a seed. The dice picks another; click the seed to type one back in and get the exact same wallpaper, on any Mac.")
                 tip("rectangle.on.rectangle", "With “Same on all displays” off, each display keeps its own wallpaper: Apply offers this display or all of them, and Shuffle gives every display a different one. A favorite is the document, so it renders again at any display’s size.")
                 if Licensing.isCompiledIn {

@@ -6,6 +6,7 @@ import SwiftUI
 /// the x forgets it; Clear forgets all.
 struct HistorySection: View {
     @Bindable var model: AppModel
+    @Environment(\.previewRendering) private var previewRendering
 
     var body: some View {
         VStack(alignment: .leading, spacing: Brand.Space.s12) {
@@ -15,7 +16,7 @@ struct HistorySection: View {
                     .foregroundStyle(Brand.Panel.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                VStack(spacing: 0) {
+                PanelList(rendering: previewRendering) {
                     ForEach(model.historyList) { entry in
                         HistoryRow(model: model, entry: entry)
                         if entry.id != model.historyList.last?.id {

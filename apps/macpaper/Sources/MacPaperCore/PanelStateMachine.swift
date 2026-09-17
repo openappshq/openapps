@@ -10,7 +10,11 @@ public struct PanelSettings: Hashable, Sendable {
     /// How long after the pointer leaves the notch and the panel a hover-opened panel closes.
     public var hoverCloseDelay: TimeInterval
 
-    public init(isEnabled: Bool = true, trigger: PanelTrigger = .both, hideInFullscreen: Bool = true, hoverOpenDelay: TimeInterval = 0.18, hoverCloseDelay: TimeInterval = 0.4) {
+    /// 180 ms: long enough that a pointer crossing the notch on its way
+    /// to a menu opens nothing.
+    public static let defaultHoverOpenDelay: TimeInterval = 0.18
+
+    public init(isEnabled: Bool = true, trigger: PanelTrigger = .both, hideInFullscreen: Bool = true, hoverOpenDelay: TimeInterval = defaultHoverOpenDelay, hoverCloseDelay: TimeInterval = 0.4) {
         self.isEnabled = isEnabled
         self.trigger = trigger
         self.hideInFullscreen = hideInFullscreen
@@ -24,11 +28,15 @@ public enum PanelTimer: Hashable, Sendable {
 }
 
 /// What reaches the rules: pointer movement over the notch and the panel,
-/// clicks, the hotkey, the space, the settings, and the timers firing.
+/// clicks on the notch and on the menu-bar item, the hotkey, the space,
+/// the settings, and the timers firing.
 public enum PanelEvent: Hashable, Sendable {
     case pointerEnteredNotch, pointerLeftNotch
     case pointerEnteredPanel, pointerLeftPanel
     case notchClicked
+    /// The menu-bar item: the panel opens under it whatever the notch
+    /// settings say, and a second click closes it.
+    case statusItemClicked
     case hotkey
     case clickedOutside
     case escape
@@ -39,27 +47,30 @@ public enum PanelEvent: Hashable, Sendable {
     case timerFired(PanelTimer)
 }
 
-/// What the controller does in response: timers, showing and hiding the
-/// panel, or opening the menu-bar popover instead (the hotkey while the
-/// panel cannot show).
+/// What the controller does in response: timers, and showing and hiding
+/// the panel. Where the panel opens (the notch, under the menu-bar item,
+/// the top center) follows from `openedBy` (`PanelAnchor.resolve`).
 public enum PanelEffect: Hashable, Sendable {
     case startTimer(PanelTimer, TimeInterval)
     case cancelTimer(PanelTimer)
     case open
     case close
-    case openPopover
 }
 
 public enum PanelOpener: Hashable, Sendable {
     case hover, click, hotkey
+    /// The menu-bar item.
+    case statusItem
 }
 
-/// The open/close rules of the notch panel (design/products/macpaper.md,
-/// "Notch panel"): hover opens after a delay and closes after the pointer
-/// has left both the notch and the panel; a click opens at once and only a
+/// The open/close rules of the panel (design/products/macpaper.md, "The
+/// panel"): hover opens after a delay and closes after the pointer has
+/// left both the notch and the panel; a click opens at once and only a
 /// click outside, Escape, the hotkey or fullscreen closes it; the hotkey
-/// toggles, and opens the popover where the panel cannot show. Pure: the
-/// controller owns the timers and the windows and feeds events back.
+/// toggles, from the notch where the notch panel may show and from under
+/// the menu-bar item otherwise; the menu-bar item toggles the panel under
+/// itself whatever the notch settings say. Pure: the controller owns the
+/// timers and the windows and feeds events back.
 public struct PanelStateMachine: Hashable, Sendable {
     public private(set) var settings: PanelSettings
     public private(set) var isOpen = false
@@ -106,14 +117,21 @@ public struct PanelStateMachine: Hashable, Sendable {
                 cancelPendingOpen(&effects)
                 open(by: .click, &effects)
             }
-        case .hotkey:
+        case .statusItemClicked:
             if isOpen {
                 close(&effects)
-            } else if canShow {
+            } else {
+                cancelPendingOpen(&effects)
+                open(by: .statusItem, &effects)
+            }
+        case .hotkey:
+            // Opens whether or not the notch panel may show: under the
+            // menu-bar item then (the anchor follows from `openedBy`).
+            if isOpen {
+                close(&effects)
+            } else {
                 cancelPendingOpen(&effects)
                 open(by: .hotkey, &effects)
-            } else {
-                effects.append(.openPopover)
             }
         case .clickedOutside, .escape:
             if isOpen { close(&effects) }

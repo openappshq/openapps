@@ -2,21 +2,24 @@ import AppKit
 import MacPaperCore
 import SwiftUI
 
-/// The menu-bar item and its popover: the same content as the notch panel,
-/// and the only surface when the panel is off or has no host.
-final class StatusItemController: NSObject, NSPopoverDelegate {
+/// The menu-bar item: a click opens the panel under it (`NotchHost`), on
+/// whichever display the item is on, notch or not; a right click (or a
+/// Control-click) opens a plain menu whose first item is **Show panel**
+/// with the shortcut (design/products/macpaper.md, "Menu bar").
+final class StatusItemController: NSObject, NSMenuDelegate {
     private let model: AppModel
+    private let preferences: Preferences
     private let showSettings: () -> Void
     private let quit: () -> Void
     private let item: NSStatusItem
-    private var popover: NSPopover?
-    /// Closes any open notch panel before the popover shows.
-    var beforeOpen: () -> Void = {}
-    /// The licensing wiring's header (the trial pill); nil draws nothing.
-    var header: (() -> AnyView)?
+    private let menu = NSMenu()
+    /// Shows or hides the panel under the item.
+    var togglePanel: () -> Void = {}
+    var panelIsShown: () -> Bool = { false }
 
-    init(model: AppModel, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
+    init(model: AppModel, preferences: Preferences, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.model = model
+        self.preferences = preferences
         self.showSettings = showSettings
         self.quit = quit
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -24,80 +27,90 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         if let button = item.button {
             button.image = AppResources.menuBarImage()
             button.target = self
-            button.action = #selector(toggle)
+            button.action = #selector(clicked)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.setAccessibilityLabel("macPaper")
-            button.toolTip = "macPaper"
+            button.toolTip = "macPaper — click for the panel, right-click for the menu"
         }
+        menu.delegate = self
     }
 
-    var isShown: Bool { popover?.isShown ?? false }
-
-    /// The item's frame in screen coordinates: where a display without a
-    /// notch hangs the column.
+    /// The item's frame in screen coordinates: where the column hangs
+    /// from when opened from here.
     var buttonFrame: CGRect? {
         guard let button = item.button, let window = button.window else { return nil }
         return window.convertToScreen(button.convert(button.bounds, to: nil))
     }
 
-    @objc func toggle() {
-        if isShown {
-            close()
+    @objc private func clicked() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            showMenu()
         } else {
-            open()
+            togglePanel()
         }
     }
 
-    func open() {
+    /// The menu, shown by hand so the plain click keeps opening the panel:
+    /// an item with a menu set shows it on every click, so the menu is
+    /// attached for the one click that asks for it and detached after,
+    /// which places it exactly as the system places a status item's menu.
+    private func showMenu() {
         guard let button = item.button else { return }
-        beforeOpen()
-        if popover == nil {
-            let popover = NSPopover()
-            popover.behavior = .transient
-            popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            popover.delegate = self
-            // The column is dark in both appearances (PanelTheme).
-            popover.appearance = NSAppearance(named: .darkAqua)
-            let screen = button.window?.screen ?? NSScreen.main
-            let height = PanelLayout.columnHeight(
-                screenHeight: screen?.frame.height ?? 900,
-                topInset: (screen.map(ScreenCatalog.menuBarHeight(of:)) ?? 24) + PanelLayout.popoverGap
-            )
-            popover.contentViewController = NSHostingController(rootView: PopoverContent(
-                model: model, height: height, header: header?(), showSettings: showSettings, quit: quit, dismiss: { [weak self] in self?.close() }
-            ))
-            self.popover = popover
+        item.menu = menu
+        button.performClick(nil)
+        item.menu = nil
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let show = NSMenuItem(title: panelIsShown() ? "Hide panel" : "Show panel", action: #selector(togglePanelAction), keyEquivalent: "")
+        show.target = self
+        if let hotkey = preferences.hotkey {
+            // The shortcut as set in Settings, shown the way every menu does.
+            show.keyEquivalent = Hotkey.keyName(hotkey.keyCode)?.lowercased() ?? ""
+            show.keyEquivalentModifierMask = Self.modifierMask(hotkey.modifiers)
         }
-        // The popover speaks for the display the menu bar item is on.
-        if let screen = button.window?.screen, let id = ScreenCatalog.displayID(of: screen) {
-            model.targetDisplay = id
+        menu.addItem(show)
+        let settings = NSMenuItem(title: "Settings…", action: #selector(settingsAction), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
+        // An update asking for something (official builds; RELEASES.md,
+        // "In-app updater"): "macPaper X.Y.Z available — Install",
+        // "Downloading…", "Update ready — Restart". Nothing otherwise.
+        if let hint = model.updates.hint() {
+            let title = [UpdateCopy.line(for: hint), UpdateCopy.action(for: hint)].compactMap { $0 }.joined(separator: " — ")
+            let update = NSMenuItem(title: title, action: #selector(updateAction), keyEquivalent: "")
+            update.target = self
+            update.isEnabled = UpdateCopy.action(for: hint) != nil
+            update.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+            menu.addItem(update)
+            menu.addItem(.separator())
         }
-        model.clearStatus()
-        popover?.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        let quit = NSMenuItem(title: "Quit macPaper", action: #selector(quitAction), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
     }
 
-    func close() {
-        popover?.performClose(nil)
+    @objc private func togglePanelAction() { togglePanel() }
+    @objc private func settingsAction() { showSettings() }
+    @objc private func updateAction() {
+        switch model.updates.hint() {
+        case .ready: model.updates.restart()
+        case .available: model.updates.install()
+        case .downloading, nil: break
+        }
     }
+    @objc private func quitAction() { quit() }
 
-    func popoverDidClose(_ notification: Notification) {
-        // Freed so the next open reads the current settings and displays.
-        popover = nil
-    }
-}
-
-/// The same column as the notch panel, the regular width, as tall as the
-/// screen allows; the popover's own frame is around it.
-private struct PopoverContent: View {
-    let model: AppModel
-    let height: CGFloat
-    var header: AnyView? = nil
-    let showSettings: () -> Void
-    let quit: () -> Void
-    let dismiss: () -> Void
-
-    var body: some View {
-        WallpaperPanelView(model: model, width: PanelMetrics.popoverWidth, height: height, header: header, showSettings: showSettings, quit: quit, dismiss: dismiss)
+    /// A hotkey's modifiers as a menu shows them.
+    static func modifierMask(_ modifiers: Hotkey.Modifiers) -> NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers.contains(.command) { flags.insert(.command) }
+        if modifiers.contains(.option) { flags.insert(.option) }
+        if modifiers.contains(.control) { flags.insert(.control) }
+        if modifiers.contains(.shift) { flags.insert(.shift) }
+        return flags
     }
 }

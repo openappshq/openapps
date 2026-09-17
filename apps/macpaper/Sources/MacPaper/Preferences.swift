@@ -29,6 +29,11 @@ final class Preferences {
     var hideInFullscreen: Bool {
         didSet { defaults.set(hideInFullscreen, forKey: PreferenceKey.hideInFullscreen) }
     }
+    /// How long the pointer rests on the notch before a hover opens, in
+    /// seconds; kept within `Preferences.hoverDelayRange`.
+    var hoverDelay: TimeInterval {
+        didSet { defaults.set(hoverDelay, forKey: PreferenceKey.hoverDelay) }
+    }
     /// Nil is "no hotkey".
     var hotkey: Hotkey? {
         didSet {
@@ -95,6 +100,8 @@ final class Preferences {
         direction = defaults.string(forKey: PreferenceKey.direction).flatMap(PanelDirection.init(rawValue:)) ?? .down
         width = defaults.string(forKey: PreferenceKey.width).flatMap(PanelWidth.init(rawValue:)) ?? .regular
         hideInFullscreen = defaults.object(forKey: PreferenceKey.hideInFullscreen) as? Bool ?? true
+        let storedDelay = defaults.object(forKey: PreferenceKey.hoverDelay) as? Double ?? PanelSettings.defaultHoverOpenDelay
+        hoverDelay = Self.hoverDelayRange.contains(storedDelay) ? storedDelay : PanelSettings.defaultHoverOpenDelay
         if let data = defaults.data(forKey: PreferenceKey.hotkey) {
             hotkey = data.isEmpty ? nil : try? JSONDecoder().decode(Hotkey.self, from: data)
         } else {
@@ -112,8 +119,11 @@ final class Preferences {
         pins = Set(pinNames.compactMap { ParameterKey(rawValue: $0) ?? Self.legacyPinNames[$0] })
     }
 
+    /// What the hover delay may be set to, in seconds.
+    static let hoverDelayRange: ClosedRange<TimeInterval> = 0.05...1.0
+
     /// The panel rules' view of the settings.
     var panelSettings: PanelSettings {
-        PanelSettings(isEnabled: notchEnabled, trigger: trigger, hideInFullscreen: hideInFullscreen)
+        PanelSettings(isEnabled: notchEnabled, trigger: trigger, hideInFullscreen: hideInFullscreen, hoverOpenDelay: hoverDelay)
     }
 }

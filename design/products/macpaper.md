@@ -68,9 +68,18 @@ A favorite is a document, so it keeps its pair and its frames.
 
 **Share** puts `macpaper://s/<code>` on the pasteboard, where the code is the whole document (deflated JSON, base64url): every knob, the seed, the finishes, the pair and the composition, never an image (a pixelize or dither document shares without its photo and says so). Opening such a link in macPaper loads it as the draft. **Remix** is a new seed on the loaded document. **Never show this** puts a document on a blocklist shuffle never picks from (and removes it from favorites); the list is cleared in Settings.
 
-## Notch panel
+## The panel
 
-The panel is a tall column anchored to the notch of the display that hosts it: centered on the notch, its top squared against it, its bottom corners rounded, most of the screen tall (the screen's height under the notch less a 24-point margin, at most 920 points) and a fixed height while it is open, so switching sections never moves the window; the menu-bar row beside the notch is shaded in the column's width by a click-through strip under the menu bar's own window, so the row reads as part of the column through the bar's translucency while its items are never tinted and keep every click. Without a notch the column opens under the menu-bar item as the popover does — its trailing edge on the item's, rounded all round, a 6-point gap under the menu bar — or from the top center when the item is on another display (the hover zone is then a 2-point strip at the top edge, so no menu-bar item is covered), and the menu-bar popover stays the primary surface.
+One column, wherever it opens from. Where it opens decides where it hangs (`PanelAnchor.resolve`, `NotchGeometry.panelFrame`; every rule below is pure geometry over the display's `frame` and `visibleFrame`, and the tests run it on a 1512×982 notched display, a 1440×900 and a 1280×800 display without one, a secondary display with its own menu bar, and the left and right edges):
+
+| Opened by | Placement |
+| --- | --- |
+| The notch (hover or click), on the display that hosts the notch panel | Centered on the notch, its top squared against it, its bottom corners rounded; the menu-bar row beside the notch is shaded in the column's width by a click-through strip under the menu bar's own window, so the row reads as part of the column through the bar's translucency while its items are never tinted and keep every click |
+| The menu-bar item, on any display, notch or not | Under the item like every menu-bar app's window: centered on the item, an 8-point margin under the menu bar (the visible frame's top), rounded all round. Never above the menu bar, never off an edge: the column stays inside the display's visible frame with an 8-point margin on every side, so an item near the right edge gets the column slid left to fit |
+| The shortcut | From the notch where the notch panel may show (on, the pointer's display hosts it or the first host does, not hidden by fullscreen); otherwise under the menu-bar item on its display |
+| The hot edge of a display without a notch (hover or click at the top center, a 2-point strip 200 points wide so no menu-bar item is covered) | From the top center, a margin under the menu bar |
+
+Height: **`min(content, visibleFrame.height − 16)`, at most 920 points** — as tall as its content when the content is short (Export, Parameters), capped by the display when it is not (Library, Palette). In a capped column the sections column scrolls; the header, the preview, the rail and the footer stay put. The Library and History lists are lazy, so a library of many recipes builds only the rows in view. The content's height is measured before the window shows, so the column opens at its final size, and it follows the content while open (a section switched, a status line shown) with its top edge fixed, animated over the standard duration.
 
 Its width is the setting below, unless a segmented control needs more: every segment is as wide as the control's widest label measured in the segment font, and the column grows to fit the widest control, so no label ever wraps (`PanelLayout`; the tests measure the real labels). The column has an icon rail on its left (the mark; Library, Generators, Palette, Parameters, Effects, Export, History; at the bottom Shuffle and Collapse) and, beside it, the section the rail points at. The pane: a header with the section's title and the **reach** control (where every change lands: every display · this display · this Space only; the display choice is left out while "same on all displays" is on); the preview in the display's aspect, at most 200 points tall (the display's name when there is more than one, "on the desktop" while the draft is what the display shows, the menu-bar readability verdict, the focal point of a framed image); the section; a status line after an action; the update row; and a quiet footer with the seed (click to type one, a die for a new one, a pin), Settings… and Quit. Rows keep one rhythm (72 points: a 13-point semibold label with its pin and a mono readout, the control under them; thin sliders with a round knob, focusable and keyboard-operable), section labels are the mono label, lists are 72-point rows with 56-point thumbnails.
 
@@ -90,24 +99,32 @@ Its width is the setting below, unless a segmented control needs more: every seg
 
 **The menu bar reads.** A preset from the grid, a starter and every shuffle pick go through `Wallpaper.liftingMenuBar`: the smallest top shade, in tenths, at which the menu-bar strip reads on both sides (4.5:1 against the side's text and an even strip, judged on a small render); a full shade always reads, so no look lands with an unreadable menu bar. Every preset in every representative look, and every starter as shipped, is asserted to read on both sides.
 
-| Setting | Values | Default |
+| Setting (Settings → General) | Values | Default |
 | --- | --- | --- |
-| Notch panel | on / off (off: the menu-bar popover only) | on |
+| Open from the notch | on / off, with a line saying where the zone is ("Rest the pointer on the notch — the cutout at the top of the display — or click it. The menu bar icon opens the same panel."), or that no display has a notch right now. Off: the menu-bar item and the shortcut open the panel | on |
 | Host display | the notch display / the main display / every notched display | the notch display |
 | Open on | hover / click / both | both |
+| Hover delay | 0.05–1 s in steps of 0.05, a slider with its readout; off while Open on is click | 0.18 s |
 | Direction | down (v1 renders down only; left, right are stored for a later release) | down |
 | Width | compact / regular / wide (360 / 440 / 560 pt, each grown to fit the widest control's labels) | regular |
 | Hide in fullscreen | on / off | on |
-| Hotkey | any key with at least one modifier, or none | ⌃⌥⌘ W |
+| Show panel (the shortcut) | any key with at least one modifier, or none; shown in the menu-bar item's menu | ⌥⌘P |
 
 Behavior:
 
-- Hover opens after 180 ms over the notch and closes 400 ms after the pointer leaves the panel and the notch; a click opens at once and then only a click outside, Escape, the hotkey or Hide in fullscreen closes it. Opening by click while a hover-open is pending cancels the pending open. A hover-opened panel that the pointer enters stays as long as the pointer is inside.
-- The hotkey toggles the panel on the host display. With the panel off it opens the menu-bar popover instead.
-- In fullscreen (Hide in fullscreen on) the panel closes and hover does nothing until the space leaves fullscreen; the hotkey still opens the popover.
-- Reduce Motion: no drop animation, the panel appears in place; the standard drop takes 180 ms otherwise.
+- Hover opens after the hover delay over the notch and closes 400 ms after the pointer leaves the panel and the notch; a click opens at once and then only a click outside, Escape, the shortcut, the item, Collapse or Hide in fullscreen closes it. Opening by click while a hover-open is pending cancels the pending open. A hover-opened panel that the pointer enters stays as long as the pointer is inside.
+- The menu-bar item toggles the panel under itself whatever the notch settings say; a click while a panel is open on another display closes that one first.
+- The shortcut toggles: closes an open panel, else opens one from the notch where the notch panel may show, else under the menu-bar item.
+- In fullscreen (Hide in fullscreen on) the panel closes and the notch does nothing until the space leaves fullscreen; the item and the shortcut still open the panel, under the item.
+- Reduce Motion: no drop animation, the panel appears in place, and its height changes without animating; the standard drop takes 180 ms otherwise.
 - The panel never takes key focus from the app in front unless the user types in it (the seed field, a color field); Escape then returns focus.
-- The column's content is the section the rail points at (above); the section is kept across opens and shared with the popover. Collapse on the rail closes the column the way Escape does.
+- The column's content is the section the rail points at (above); the section is kept across opens, however the column is opened. Collapse on the rail closes the column the way Escape does.
+
+### Finding the notch (first run)
+
+- The setup guide's second step, **"Where the panel lives"**, right after the welcome: a drawn display with a looping animation of the pointer reaching the notch, the glow lighting under it and the column dropping, and the words that the menu-bar icon opens the same panel, and so does the shortcut. On a Mac without a notch (no connected display has one) the step says the panel lives in the menu bar — the icon and the shortcut are the triggers — and the animation reaches the icon instead. Reduce Motion holds the last frame.
+- **The glow.** For the first five launches, or until the notch has opened the panel once (by hover or click), a soft tangerine glow — a bright seam under the notch's edge and a fall-off over 40 points — fades in and pulses whenever the pointer comes within 80 points of the notch, and fades out when it leaves, the panel opens, or the notch panel is off. A click-through window at the menu bar's level; the pointer is read by a global mouse-moved monitor (no permission: only keyboard monitors need one) that exists only while the glow is armed. Reduce Motion: the glow shows without pulsing. Two flags beside the first-run flags (`notchHint.launches`, counted after the fresh-install evidence has been read; `notchHint.used`), both earlier-launch evidence.
+- The menu-bar item's tooltip says "click for the panel, right-click for the menu".
 
 ### Notch-aware composition
 
@@ -115,7 +132,7 @@ A document may compose around the notch of the display it is applied to: **Emerg
 
 ## Menu bar
 
-A template symbol (the mark) with no readout. Clicking opens the popover with the same column as the notch panel, the regular width, as tall as the screen allows, dark in both appearances. The popover is the only surface when the notch panel is off, when no display has a notch and the host display setting is "the notch display", and in fullscreen while the panel is hidden.
+A template symbol (the mark) with no readout. A click opens the panel under the item (above), on whatever display the item is on; a right click or Control-click opens a plain menu: **Show panel** / **Hide panel** with the shortcut as set (first), **Settings…** ⌘, then, in official builds, the update line while an update asks for something (RELEASES.md, "In-app updater"), and **Quit macPaper** ⌘Q. There is no popover: the item and the shortcut are the triggers on a Mac without a notch, when the notch panel is off, and in fullscreen while the notch panel is hidden. A `.macpaper` file opened from the Finder shows the panel under the item.
 
 ## Apply, finished
 
@@ -155,11 +172,11 @@ Favorites are documents (JSON), not images, kept in `~/Library/Application Suppo
 
 ## General settings
 
-Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off), the notch settings above, Show setup guide, and About: what macPaper does and where it writes (this Mac only; the only network calls of an official build are the license check, the trial registry and the update check, none in a source build), the lock-screen note, MIT, Copy Diagnostics (version, login state, licensing flavour, displays and their notches, the panel settings, the pin and clock state, the shuffle state, the applied documents).
+Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off), the panel settings above, Show setup guide, and About: what macPaper does and where it writes (this Mac only; the only network calls of an official build are the license check, the trial registry and the update check, none in a source build), the lock-screen note, MIT, Copy Diagnostics (version, login state, licensing flavour, displays and their notches, the panel settings, the pin and clock state, the shuffle state, the applied documents).
 
 ## Licensing
 
-Official builds follow [LICENSING.md](../../LICENSING.md) through the shared `packages/openapps-licensing`, like Hertz. **The core feature is generating and applying wallpapers.** When restricted (TrialEnded, TrialNeedsConnection, TrialClockBehind, CheckRequired, Revoked, the storage-error forms of TrialUnavailable): generating (a new or typed seed, an import), Shuffle (manual and scheduled), Apply and Export are off, and the panel and the popover show the license card in place of the generator, in LICENSING.md's words with the same actions as Hertz's card (Buy a license, Enter a key, Try again); Settings, favorites browsing and Quit keep working. Every action asks the projected entitlement at the click, never a value a view captured earlier, and again at every resumption after a wait — the image picker, a render, a save panel, each display's desktop call — so work started under the trial and finished after it commits nothing; a refused click says so in the status line. The star (favorites) stays under the card. A trial pill in the panel's header and the Settings title bar shows where the trial stands and opens Settings → License. The already applied wallpaper stays: macPaper never removes what it set, and keeping an already committed wallpaper is allowed while restricted — the pin hands the recorded, committed, owned file over again when macOS replaces it (a Space change, wake, unlock, a display change), and the fallback display keeps the side it has; nothing is rendered or newly applied, and a file the pin's manifest never listed as committed, one listed for another display, or one that is no longer macPaper's own regular file is refused. Builds from source have no licensing and everything on.
+Official builds follow [LICENSING.md](../../LICENSING.md) through the shared `packages/openapps-licensing`, like Hertz. **The core feature is generating and applying wallpapers.** When restricted (TrialEnded, TrialNeedsConnection, TrialClockBehind, CheckRequired, Revoked, the storage-error forms of TrialUnavailable): generating (a new or typed seed, an import), Shuffle (manual and scheduled), Apply and Export are off, and the panel shows the license card in place of the generator, in LICENSING.md's words with the same actions as Hertz's card (Buy a license, Enter a key, Try again); Settings, favorites browsing and Quit keep working. Every action asks the projected entitlement at the click, never a value a view captured earlier, and again at every resumption after a wait — the image picker, a render, a save panel, each display's desktop call — so work started under the trial and finished after it commits nothing; a refused click says so in the status line. The star (favorites) stays under the card. A trial pill in the panel's header and the Settings title bar shows where the trial stands and opens Settings → License. The already applied wallpaper stays: macPaper never removes what it set, and keeping an already committed wallpaper is allowed while restricted — the pin hands the recorded, committed, owned file over again when macOS replaces it (a Space change, wake, unlock, a display change), and the fallback display keeps the side it has; nothing is rendered or newly applied, and a file the pin's manifest never listed as committed, one listed for another display, or one that is no longer macPaper's own regular file is refused. Builds from source have no licensing and everything on.
 
 ## Defaults and recovery
 
@@ -167,7 +184,7 @@ Official builds follow [LICENSING.md](../../LICENSING.md) through the shared `pa
 | --- | --- |
 | Fresh install (no earlier preferences; in official builds both records positively absent) | Open at login on once (and, with the updater, automatic update checks), under its own flag; an upgrade or a setting the user turned off is left alone |
 | First launch | Nothing is applied on its own: the panel shows the first taste-set recipe (Mint Circuit · Moiré) as its starting document and the library holds the taste set; the desktop changes on the first edit (live apply), on a loaded recipe, or when shuffle is turned on. The pin has nothing recorded, so it does nothing |
-| No display has a notch | Host "the notch display" leaves the panel closed; the popover carries everything; Settings says so under Host display |
+| No display has a notch | Nothing hangs from a notch; the menu-bar item and the shortcut open the panel under the item; Settings says so under Open from the notch, and the setup guide's panel step says the panel lives in the menu bar |
 | The notch display is unplugged | The panel closes and comes back on the next notched display that appears; "every notched display" keeps one panel per notched display |
 | Fullscreen on the host display | See Hide in fullscreen; detection is from the window list (the front app owns a window covering the screen) on Space and app changes, without Screen Recording or Accessibility |
 | `setDesktopImageURL` fails (a screen went away, the file could not be written) | The action reports the error in the panel's status line and keeps the previous document; nothing is retried on its own |
@@ -177,9 +194,9 @@ Official builds follow [LICENSING.md](../../LICENSING.md) through the shared `pa
 | Export folder missing or unwritable | Export asks for a folder with a save panel instead |
 | Shuffle due while the Mac sleeps, or overdue at launch | Nothing fires at launch or on wake; the next shuffle is one interval after that moment. Missed shuffles are not caught up |
 | Login item registration fails | The toggle reverts and shows the error; Login Items can be opened directly |
-| Hotkey cannot be registered (taken by another app) | Settings says so beside the recorder; the panel still opens by hover, click or the menu bar |
+| Shortcut cannot be registered (taken by another app) | Settings says so beside the recorder; the panel still opens by hover, click or the menu-bar item |
 
-No permissions: no Accessibility, no Input Monitoring, no Screen Recording, no Location. Hover uses a tracking area on macPaper's own transparent window over the notch; the hotkey uses Carbon's `RegisterEventHotKey`; clicks outside use a global mouse-down monitor, which needs nothing; the pin reads `NSWorkspace.desktopImageURL(for:)`; the clock is a window on the desktop level that ignores the mouse; the theme is `AppleInterfaceThemeChangedNotification`. No telemetry; diagnostics are copied only on request and only to the pasteboard.
+No permissions: no Accessibility, no Input Monitoring, no Screen Recording, no Location. Hover uses a tracking area on macPaper's own transparent window over the notch; the shortcut uses Carbon's `RegisterEventHotKey`; clicks outside use a global mouse-down monitor, and the first-run glow a global mouse-moved monitor, neither of which needs anything; the pin reads `NSWorkspace.desktopImageURL(for:)`; the clock is a window on the desktop level that ignores the mouse; the theme is `AppleInterfaceThemeChangedNotification`. No telemetry; diagnostics are copied only on request and only to the pasteboard.
 
 ## Marketing only
 

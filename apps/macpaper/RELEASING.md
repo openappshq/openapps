@@ -102,7 +102,7 @@ registry by a per-app hash of the hardware UUID; a paid license checked with
 Dodo daily, with a week of offline grace; both records in the encrypted file
 store under `~/Library/Application Support/OpenApps/macpaper/records/`,
 never the Keychain. The core feature is generating and applying: while the
-license restricts it, the panel and the popover show one card in the
+license restricts it, the panel shows one card in the
 generator's place, Shuffle (manual and scheduled), Apply, Export, every
 edit and a new seed are off, and the wallpaper already applied stays (a
 display that took a fallback still keeps the side it has). Every edit goes
@@ -347,8 +347,9 @@ public update key (`SUPublicEDKey`); the app trusts nothing in a feed before
 its Ed25519 signature verifies, and nothing in a zip before its length,
 SHA-256 and signature do. **"Check for updates automatically" is on by
 default and "Download and install automatically" off** (RELEASES.md): a
-fresh install looks for updates and says when one is out — in the menu-bar
-popover ("macPaper X.Y.Z available — Install") and in Settings → Updates — but
+fresh install looks for updates and says when one is out — in the panel and
+the menu-bar item's menu ("macPaper X.Y.Z available — Install") and in
+Settings → Updates — but
 installs nothing on its own. Each default is written once, the first time
 the app runs with no earlier preferences (none of the keys the app writes to
 its defaults domain is present — a stored "off" counts as a preference) and

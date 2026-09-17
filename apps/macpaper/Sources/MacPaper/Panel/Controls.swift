@@ -4,7 +4,9 @@ import SwiftUI
 
 /// Set by the preview harness: views drawn by `ImageRenderer` cannot show
 /// materials, scroll views or AppKit-backed controls, so a few surfaces
-/// draw a flat stand-in instead. Never set in the running app.
+/// draw a flat stand-in instead. In the running app only the column's
+/// off-screen measurement sets it (`PanelMetrics.naturalHeight`), where
+/// the stand-ins take the same room as the controls.
 struct PreviewRenderingKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -13,6 +15,24 @@ extension EnvironmentValues {
     var previewRendering: Bool {
         get { self[PreviewRenderingKey.self] }
         set { self[PreviewRenderingKey.self] = newValue }
+    }
+}
+
+// MARK: - Lists
+
+/// A list of rows in the column: lazy, so a long library or history builds
+/// only the rows in the scroll viewport; a plain stack for the harness,
+/// whose renderer has no viewport.
+struct PanelList<Content: View>: View {
+    let rendering: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if rendering {
+            VStack(spacing: 0) { content() }
+        } else {
+            LazyVStack(spacing: 0) { content() }
+        }
     }
 }
 

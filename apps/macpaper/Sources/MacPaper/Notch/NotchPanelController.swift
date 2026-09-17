@@ -2,12 +2,16 @@ import AppKit
 import MacPaperCore
 import SwiftUI
 
-/// One display's notch panel: a transparent hover window over the notch
-/// (or the hot edge of a display without one) that reports the pointer and
-/// clicks, and the panel itself, a borderless non-activating `NSPanel` under
-/// the menu bar, centered on the notch. Every open or close goes through the
-/// core's `PanelStateMachine`; this class only owns the windows, the
-/// timers and the monitors the machine's effects ask for.
+/// One display's panel: the column itself, a borderless non-activating
+/// `NSPanel`, and — on a display that hosts the notch panel — a transparent
+/// hover window over the notch (or the hot edge of a display without one)
+/// that reports the pointer and clicks. The column hangs from whatever
+/// opened it (`PanelAnchor.resolve`): the notch for a hover or a click on
+/// it, the menu-bar item for a click on the item, and is placed by
+/// `NotchGeometry.panelFrame` inside the display's visible frame. Every
+/// open or close goes through the core's `PanelStateMachine`; this class
+/// only owns the windows, the timers and the monitors the machine's
+/// effects ask for.
 ///
 /// macOS caveats, and what is done about them:
 /// - Nothing reports "the pointer is over the notch": the hover window sits
@@ -22,17 +26,22 @@ import SwiftUI
 ///   window list on space and app changes (bounds need no permission).
 /// - The panel is `nonactivatingPanel`, so opening it never takes focus
 ///   from the app in front; a text field in it makes it key on click.
+/// - The column's height follows its content (`min(content, cap)`): the
+///   view reports its natural height as it lays out, and the window
+///   follows with its top edge fixed.
 final class NotchPanelController {
     let display: DisplayInfo
     private(set) var screen: NSScreen
     private let model: AppModel
     private let preferences: Preferences
-    private let onOpenPopover: () -> Void
     private let showSettings: () -> Void
     private let quit: () -> Void
     /// The menu-bar item's frame in screen coordinates, when it has one:
-    /// on a display without a notch the column opens under it.
+    /// a click on the item and the hotkey hang the column under it.
     private let statusItemFrame: () -> CGRect?
+    /// The licensing wiring's header (the trial pill), read at every
+    /// layout; nil draws nothing.
+    private let header: () -> AnyView?
 
     private(set) var machine: PanelStateMachine
     private let hoverWindow: NSPanel
@@ -45,20 +54,29 @@ final class NotchPanelController {
     private var outsideClickMonitor: Any?
     private var localClickMonitor: Any?
     private var escapeMonitor: Any?
+    /// The first-run glow under the notch; nil on a display without one
+    /// or once the hint is done.
+    private var hint: NotchHintController?
+    /// What the content last asked for; nil before the first layout.
+    private var naturalHeight: CGFloat?
 
     var isOpen: Bool { machine.isOpen }
 
-    /// The licensing wiring's header (the trial pill); nil draws nothing.
-    let header: (() -> AnyView)?
+    /// Whether this display hosts the notch panel: the hover zone is live
+    /// and the hotkey drops the column from the notch. A display that does
+    /// not still opens the column under the menu-bar item.
+    var hostsNotch: Bool {
+        didSet { if hostsNotch != oldValue { layoutHoverZone() } }
+    }
 
-    init(display: DisplayInfo, screen: NSScreen, model: AppModel, preferences: Preferences, header: (() -> AnyView)? = nil, statusItemFrame: @escaping () -> CGRect? = { nil }, onOpenPopover: @escaping () -> Void, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
+    init(display: DisplayInfo, screen: NSScreen, model: AppModel, preferences: Preferences, hostsNotch: Bool, header: @escaping () -> AnyView? = { nil }, statusItemFrame: @escaping () -> CGRect? = { nil }, hintFlags: (any FlagStore)? = nil, showSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.display = display
         self.header = header
         self.screen = screen
         self.model = model
         self.preferences = preferences
+        self.hostsNotch = hostsNotch
         self.statusItemFrame = statusItemFrame
-        self.onOpenPopover = onOpenPopover
         self.showSettings = showSettings
         self.quit = quit
         machine = PanelStateMachine(settings: preferences.panelSettings)
@@ -106,11 +124,10 @@ final class NotchPanelController {
         shade.animationBehavior = .none
         shade.contentView = NSHostingView(rootView: MenuBarShade())
 
-        let content = PanelContent(model: model, width: PanelMetrics.width(for: preferences.width), header: header?(), showSettings: showSettings, quit: quit)
+        let content = PanelContent(model: model, width: PanelMetrics.width(for: preferences.width), header: header(), showSettings: showSettings, quit: quit)
         hosting = NSHostingView(rootView: content)
         hosting.appearance = NSAppearance(named: .darkAqua)
         let container = PanelContainerView(hosting: hosting)
-        container.onContentHeightChange = { [weak self] in self?.contentGrew() }
         panel.contentView = container
 
         let zone = HoverZoneView(frame: .zero)
@@ -121,8 +138,10 @@ final class NotchPanelController {
         container.onEnter = { [weak self] in self?.handle(.pointerEnteredPanel) }
         container.onExit = { [weak self] in self?.handle(.pointerLeftPanel) }
 
+        if let hintFlags, let notch = ScreenCatalog.notch(of: screen), NotchHint.isArmed(store: hintFlags) {
+            hint = NotchHintController(screen: screen, notch: notch, flags: hintFlags)
+        }
         layoutHoverZone()
-        hoverWindow.orderFrontRegardless()
     }
 
     deinit {
@@ -132,6 +151,7 @@ final class NotchPanelController {
             hoverWindow.orderOut(nil)
             panel.orderOut(nil)
             shade.orderOut(nil)
+            hint?.tearDown()
         }
     }
 
@@ -145,17 +165,26 @@ final class NotchPanelController {
     func update(screen: NSScreen) {
         self.screen = screen
         layoutHoverZone()
-        if machine.isOpen { layoutPanel() }
+        if let notch = ScreenCatalog.notch(of: screen) {
+            hint?.update(screen: screen, notch: notch)
+        } else {
+            hint?.tearDown()
+            hint = nil
+        }
+        if machine.isOpen { layoutPanel(animated: false) }
     }
 
     func settingsChanged() {
         handle(.settingsChanged(preferences.panelSettings))
-        if machine.isOpen { layoutPanel() }
+        hint?.isEnabled = preferences.notchEnabled && hostsNotch
+        if machine.isOpen { layoutPanel(animated: false) }
     }
 
     func tearDown() {
         handle(.hostLost)
         hoverWindow.orderOut(nil)
+        hint?.tearDown()
+        hint = nil
     }
 
     private func perform(_ effect: PanelEffect) {
@@ -172,56 +201,73 @@ final class NotchPanelController {
             show()
         case .close:
             hide()
-        case .openPopover:
-            onOpenPopover()
         }
     }
 
     // MARK: - Windows
 
+    /// The hover zone is live only where this display hosts the notch
+    /// panel; a display used from the menu bar keeps its window ordered
+    /// out, so nothing at its top edge reacts.
     private func layoutHoverZone() {
         let zone = NotchGeometry.hoverZone(screenFrame: screen.frame, notch: ScreenCatalog.notch(of: screen))
         hoverWindow.setFrame(zone, display: false)
+        if hostsNotch {
+            hoverWindow.orderFrontRegardless()
+        } else {
+            hoverWindow.orderOut(nil)
+        }
+        hint?.isEnabled = preferences.notchEnabled && hostsNotch
     }
 
-    /// What the column hangs from on this screen: the notch, the menu-bar
-    /// item when it sits on this screen, else the top center.
+    /// Where the column hangs from now: from what opened it. Before the
+    /// first open (and for a re-layout), the notch where the panel may
+    /// show, else the item.
     var anchor: PanelAnchor {
-        let menuBar = ScreenCatalog.menuBarHeight(of: screen)
-        if let notch = ScreenCatalog.notch(of: screen) { return .notch(notch, menuBarHeight: menuBar) }
-        if let item = statusItemFrame(), screen.frame.intersects(item) { return .statusItem(item, menuBarHeight: menuBar) }
-        return .topCenter(menuBarHeight: menuBar)
+        let item = statusItemFrame().flatMap { screen.frame.intersects($0) ? $0 : nil }
+        return PanelAnchor.resolve(
+            opener: machine.openedBy ?? .hotkey, notch: ScreenCatalog.notch(of: screen), item: item,
+            notchPanelMayShow: hostsNotch && machine.canShow
+        )
     }
 
-    /// The column is a fixed height for the screen (most of it): sections
-    /// switch without the window jumping. The content scrolls inside.
+    /// The column's height for the content it has, up to the display's cap.
     private var columnHeight: CGFloat {
-        PanelLayout.columnHeight(screenHeight: screen.frame.height, topInset: NotchGeometry.topInset(for: anchor))
+        let cap = PanelLayout.heightCap(visibleHeight: screen.visibleFrame.height)
+        return PanelLayout.columnHeight(contentHeight: naturalHeight ?? cap, visibleHeight: screen.visibleFrame.height)
     }
 
-    /// The content wants another height: the column's height is the
-    /// screen's, so nothing moves; kept for a screen too short for the
-    /// cap, where the column follows the content down to it.
-    private func contentGrew() {
+    /// The content laid out at another natural height (a section switched,
+    /// a status line appeared): the window follows, its top edge fixed.
+    private func contentHeightChanged(_ natural: CGFloat) {
+        guard abs((naturalHeight ?? -1) - natural) > 0.5 else { return }
+        naturalHeight = natural
         guard machine.isOpen else { return }
-        let wanted = min(columnHeight, max(hosting.fittingSize.height, 0))
-        guard abs(wanted - panel.frame.height) > 0.5, wanted < columnHeight else { return }
-        layoutPanel()
+        let wanted = columnHeight
+        if abs(wanted - panel.frame.height) > 0.5 { layoutPanel(animated: true) }
     }
 
-    private func layoutPanel() {
+    private func layoutPanel(animated: Bool) {
         let anchor = anchor
         let height = columnHeight
         let width = PanelMetrics.width(for: preferences.width)
         hosting.rootView = PanelContent(
-            model: model, width: width, height: height, anchoredToNotch: anchor.isNotch, header: header?(),
-            showSettings: showSettings, quit: quit, dismiss: { [weak self] in self?.handle(.escape) }
+            model: model, width: width, height: height, anchoredToNotch: anchor.isNotch, header: header(),
+            showSettings: showSettings, quit: quit, dismiss: { [weak self] in self?.handle(.escape) },
+            onNaturalHeight: { [weak self] in self?.contentHeightChanged($0) }
         )
-        let frame = NotchGeometry.panelFrame(screenFrame: screen.frame, anchor: anchor, width: width, contentHeight: height)
-        panel.setFrame(frame, display: true)
-        if let strip = NotchGeometry.menuBarShadeFrame(screenFrame: screen.frame, anchor: anchor, panelFrame: frame) {
-            shade.setFrame(strip, display: true)
+        let frame = NotchGeometry.panelFrame(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, anchor: anchor, width: width, contentHeight: height)
+        let strip = NotchGeometry.menuBarShadeFrame(screenFrame: screen.frame, anchor: anchor, panelFrame: frame)
+        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Brand.Motion.standard
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            panel.setFrame(frame, display: true)
         }
+        if let strip { shade.setFrame(strip, display: true) }
     }
 
     private var shadesMenuBar: Bool {
@@ -231,7 +277,17 @@ final class NotchPanelController {
     private func show() {
         model.targetDisplay = display.id
         model.clearStatus()
-        layoutPanel()
+        hint?.panelOpened()
+        if let opener = machine.openedBy, opener == .hover || opener == .click, anchor.isNotch {
+            // The notch has been found: the hint's job is done.
+            hint?.markUsed()
+        }
+        // The content's natural height, measured before the window shows,
+        // so the column opens at its final size; the view's own report
+        // refines it afterwards.
+        let width = PanelMetrics.width(for: preferences.width)
+        naturalHeight = PanelMetrics.naturalHeight(of: PanelContent(model: model, width: width, header: header(), showSettings: {}, quit: {}))
+        layoutPanel(animated: false)
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let final = panel.frame
         let shades = shadesMenuBar
@@ -264,6 +320,7 @@ final class NotchPanelController {
     private func hide() {
         removeMonitors()
         if panel.isKeyWindow { panel.resignKey() }
+        hint?.panelClosed()
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if reduceMotion {
             panel.orderOut(nil)
@@ -321,6 +378,8 @@ final class NotchPanelController {
 struct PanelContent: View {
     let model: AppModel
     let width: CGFloat
+    /// The column's height; nil sizes to the content (the harness, and the
+    /// measurement the window takes before it shows).
     var height: CGFloat? = nil
     /// Squared top corners: the column meets the notch.
     var anchoredToNotch = true
@@ -328,10 +387,12 @@ struct PanelContent: View {
     let showSettings: () -> Void
     let quit: () -> Void
     var dismiss: () -> Void = {}
+    /// The content's natural height as it lays out (`WallpaperPanelView`).
+    var onNaturalHeight: ((CGFloat) -> Void)? = nil
 
     var body: some View {
         let shape = NotchPanelShape(squaredTop: anchoredToNotch)
-        WallpaperPanelView(model: model, width: width, height: height, header: header, showSettings: showSettings, quit: quit, dismiss: dismiss)
+        WallpaperPanelView(model: model, width: width, height: height, header: header, showSettings: showSettings, quit: quit, dismiss: dismiss, onNaturalHeight: onNaturalHeight)
             .background(PanelBackdrop(shape: shape))
             .clipShape(shape)
             .overlay(PanelRim(shape: shape))
@@ -426,12 +487,10 @@ final class HoverZoneView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-/// Holds the hosting view and reports the pointer entering and leaving,
-/// and the content wanting another height.
+/// Holds the hosting view and reports the pointer entering and leaving.
 final class PanelContainerView: NSView {
     var onEnter: () -> Void = {}
     var onExit: () -> Void = {}
-    var onContentHeightChange: () -> Void = {}
     private var tracking: NSTrackingArea?
     private let hosting: NSView
 
@@ -461,12 +520,4 @@ final class PanelContainerView: NSView {
 
     override func mouseEntered(with event: NSEvent) { onEnter() }
     override func mouseExited(with event: NSEvent) { onExit() }
-
-    /// SwiftUI resizes its hosting view's fitting size as the content
-    /// changes; when it no longer matches the window, the controller
-    /// re-frames the panel (which lays out again, and then matches).
-    override func layout() {
-        super.layout()
-        if abs(hosting.fittingSize.height - bounds.height) > 0.5 { onContentHeightChange() }
-    }
 }
