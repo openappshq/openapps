@@ -148,7 +148,10 @@ struct AppModelTests {
         defer { h.tearDown() }
         h.preferences.sameOnAllDisplays = true
         let before = h.model.draft
-        h.model.shuffle()
+        // A fixed seed: a random draw can exhaust the gate's attempts on the
+        // harness's tiny displays and shuffle nothing, which is not what this
+        // test is about (ShuffleEngineTests covers nothing-better).
+        h.model.shuffle(seed: 11)
         await h.settle()
         #expect(h.model.draft != before)
         #expect(h.model.appliedState.wallpaper(for: 1) == h.model.draft)
