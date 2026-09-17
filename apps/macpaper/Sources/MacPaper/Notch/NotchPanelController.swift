@@ -239,12 +239,18 @@ final class NotchPanelController {
 
     /// The content laid out at another natural height (a section switched,
     /// a status line appeared): the window follows, its top edge fixed.
+    /// Reported from inside a layout pass, so the frame change waits for
+    /// the next turn of the run loop.
     private func contentHeightChanged(_ natural: CGFloat) {
         guard abs((naturalHeight ?? -1) - natural) > 0.5 else { return }
         naturalHeight = natural
-        guard machine.isOpen else { return }
-        let wanted = columnHeight
-        if abs(wanted - panel.frame.height) > 0.5 { layoutPanel(animated: true) }
+        guard machine.isOpen, abs(columnHeight - panel.frame.height) > 0.5 else { return }
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.machine.isOpen, abs(self.columnHeight - self.panel.frame.height) > 0.5 else { return }
+                self.layoutPanel(animated: true)
+            }
+        }
     }
 
     private func layoutPanel(animated: Bool) {
