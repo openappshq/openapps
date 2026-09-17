@@ -130,7 +130,8 @@ final class AllNotesSession {
     /// The previewed note (the list's own selection); never moved by a
     /// checkbox.
     var selection: NoteID?
-    /// The checked notes: any checked puts the pane in selection mode.
+    /// The checked notes: any checked raises the selection bar at the
+    /// foot of the list.
     var selected = AllNotesSelection()
     /// The line under the split after a bulk action; nil for none.
     private(set) var notice: AllNotesNotice?
@@ -161,10 +162,10 @@ final class AllNotesSession {
 
 /// The sidebar (search with the count inside, Active / Archived, the list
 /// with a checkbox per row and drag-to-reorder, the license card while
-/// read-only) and the preview pane: the note's state, its actions as
-/// chips — or the bulk bar for the checked set — the pill, and the note
-/// drawn as its own paper on the window's ground
-/// (design/products/opennotes.md, "All Notes").
+/// read-only, and the selection bar docked at its foot while anything is
+/// checked) and the preview pane: the previewed note's state, its actions
+/// as chips, the pill, and the note drawn as its own paper on the
+/// window's ground (design/products/opennotes.md, "All Notes").
 struct AllNotesView: View {
     let model: AppModel
     let openNote: (NoteID) -> Void
@@ -212,7 +213,9 @@ struct AllNotesView: View {
     /// The checked notes on view, in list order.
     private var checked: [NoteID] { session.selected.ordered(in: visibleIDs) }
 
-    /// Selection mode: the pane's action row is the bulk bar.
+    /// Anything checked: the selection bar is up at the foot of the list.
+    /// The pane never changes with it — the previewed note keeps its own
+    /// actions, since the checked rows are on the left.
     private var selecting: Bool { !checked.isEmpty }
 
     private var selected: Note? {
@@ -313,6 +316,10 @@ struct AllNotesView: View {
 
     // MARK: - Sidebar
 
+    /// The head, the license card, the list, and — while anything is
+    /// checked — the selection bar docked at the foot, sliding up with
+    /// the first check and down with the last uncheck (the header count
+    /// fades in at the top at the same time).
     private var sidebar: some View {
         VStack(spacing: 0) {
             VStack(spacing: Brand.Space.s8) {
@@ -328,7 +335,6 @@ struct AllNotesView: View {
                 }
             }
             .padding(Brand.Space.s12)
-            .animation(.easeOut(duration: Brand.Motion.standard), value: selecting)
             // Why the notes are read-only, in LICENSING.md's words with the
             // way out, above the list it gates. Asked on every body.
             if model.license.restriction() != nil {
@@ -378,7 +384,15 @@ struct AllNotesView: View {
                 .background(Brand.canvas)
                 .accessibilityLabel(showsArchived ? "Archived notes" : "Active notes")
             }
+            if selecting {
+                selectionBar
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        // The bar slides in from under the column's foot, not over the
+        // window's rows below the split.
+        .clipped()
+        .animation(.easeOut(duration: Brand.Motion.standard), value: selecting)
     }
 
     private var searchField: some View {
@@ -545,20 +559,12 @@ struct AllNotesView: View {
 
     // MARK: - Preview
 
+    /// The previewed note's caption, actions and paper. The checked set
+    /// never shows here: its bar is at the foot of the list.
     private var preview: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: Brand.Space.s8) {
-                if selecting {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Brand.accentText)
-                        .accessibilityHidden(true)
-                    Text(AllNotesText.selectionCaption(checked.count, archived: showsArchived))
-                        .font(Brand.body(11, weight: 600))
-                        .tracking(0.8)
-                        .foregroundStyle(Brand.textSecondary)
-                        .lineLimit(1)
-                } else if let note = selected {
+                if let note = selected {
                     Circle()
                         .fill(model.appearance(of: note).swatch)
                         .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 1))
@@ -579,11 +585,7 @@ struct AllNotesView: View {
             .frame(height: 22)
             .padding(.horizontal, Brand.Space.s16)
             .padding(.top, Brand.Space.s12)
-            if selecting {
-                bulkBar
-                    .padding(.horizontal, Brand.Space.s16)
-                    .padding(.top, Brand.Space.s8)
-            } else if let note = selected {
+            if let note = selected {
                 actions(note)
                     .padding(.horizontal, Brand.Space.s16)
                     .padding(.top, Brand.Space.s8)
@@ -606,7 +608,6 @@ struct AllNotesView: View {
                 emptyState
             }
         }
-        .animation(.easeOut(duration: Brand.Motion.standard), value: selecting)
     }
 
     /// Open (Restore for an archived note) carries the accent; the rest are
@@ -647,50 +648,80 @@ struct AllNotesView: View {
         }
     }
 
-    // MARK: - Bulk bar
+    // MARK: - Selection bar
 
-    /// The checked set's actions in place of the note's: Archive (Restore
-    /// under Archived) with the accent, Pin / Unpin, Colour and Font (the
-    /// note's own choosers) for active notes, Export… and Reveal for any,
-    /// Delete… for archived, and Clear. Each acts on the checked notes in
+    /// Docked at the foot of the list, over a hairline, shaped like the
+    /// pane's head: a small caption with the count over the checked set's
+    /// actions as glyph-and-word chips, which wrap into a second row when
+    /// the column is narrow (`AllNotesBulkAction.bar` says which: Archive
+    /// with the accent — Restore under Archived — Pin / Unpin, Colour and
+    /// Font for active notes, Export… and Reveal for any, Delete… in red
+    /// under Archived, and Clear last). Each acts on the checked notes in
     /// list order; the store's refusals go to the footer. Read-only keeps
     /// only Export…, Reveal and Clear.
-    private var bulkBar: some View {
-        ViewThatFits(in: .horizontal) {
-            bulkRow(compactWrites: false, compactRest: false)
-            bulkRow(compactWrites: false, compactRest: true)
-            bulkRow(compactWrites: true, compactRest: true)
-        }
-    }
-
-    /// The writes keep their words longest: Export, Reveal and Clear go
-    /// to glyphs first when the pane narrows, Pin, Colour and Font after.
-    private func bulkRow(compactWrites: Bool, compactRest: Bool) -> some View {
+    private var selectionBar: some View {
         let ids = checked
-        let writable = !model.readOnly
         let allPinned = ids.allSatisfy { model.note($0)?.pinned == true }
-        return HStack(spacing: 6) {
-            if writable {
-                if showsArchived {
-                    Button("Restore") { perform(model.unarchive(ids)) }
-                        .buttonStyle(ChipButtonStyle(tone: .primary))
-                } else {
-                    Button("Archive") { perform(model.archive(ids)) }
-                        .buttonStyle(ChipButtonStyle(tone: .primary))
-                        .keyboardShortcut("a", modifiers: [.command, .shift])
-                        .help("Archive the checked notes (⌘⇧A)")
-                    chip(allPinned ? "Unpin" : "Pin", symbol: allPinned ? "pin.slash" : "pin", compact: compactWrites) { perform(model.setPinned(!allPinned, for: ids)) }
-                    colorChip(compact: compactWrites)
-                    fontChip(compact: compactWrites)
+        return VStack(spacing: 0) {
+            Divider()
+            VStack(alignment: .leading, spacing: Brand.Space.s8) {
+                HStack(spacing: Brand.Space.s8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Brand.accentText)
+                        .accessibilityHidden(true)
+                    Text(AllNotesText.selectedCaption(ids.count))
+                        .font(Brand.body(11, weight: 600))
+                        .tracking(0.8)
+                        .monospacedDigit()
+                        .foregroundStyle(Brand.textSecondary)
+                        .lineLimit(1)
+                }
+                .padding(.leading, 2)
+                FlowLayout(spacing: 6) {
+                    ForEach(AllNotesBulkAction.bar(archived: showsArchived, readOnly: model.readOnly, allPinned: allPinned)) { action in
+                        bulkChip(action, ids: ids)
+                    }
                 }
             }
-            Spacer(minLength: 0)
-            exportMenu(compact: compactRest, enabled: true) { exportMany(ids, $0) }
-            chip("Reveal in Finder", symbol: "folder", compact: compactRest) { model.revealInFinder(ids) }
-            if writable, showsArchived {
-                chip("Delete…", symbol: "trash", compact: compactRest, tone: .danger) { session.pendingDelete = ids }
-            }
-            chip("Clear", symbol: "xmark.circle", compact: compactRest) { session.clearSelection() }
+            // The list's rows are inset 8 pt; the chips' words then start
+            // where the rows' checkboxes do.
+            .padding(.horizontal, Brand.Space.s8)
+            .padding(.vertical, Brand.Space.s12)
+        }
+        .background(Brand.canvas)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Selection")
+    }
+
+    @ViewBuilder private func bulkChip(_ action: AllNotesBulkAction, ids: [NoteID]) -> some View {
+        switch action {
+        case .restore:
+            Button("Restore") { perform(model.unarchive(ids)) }
+                .buttonStyle(ChipButtonStyle(tone: .primary))
+        case .archive:
+            Button("Archive") { perform(model.archive(ids)) }
+                .buttonStyle(ChipButtonStyle(tone: .primary))
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .help("Archive the checked notes (⌘⇧A)")
+        case .pin:
+            chip(action.title, symbol: "pin", compact: false) { perform(model.setPinned(true, for: ids)) }
+        case .unpin:
+            chip(action.title, symbol: "pin.slash", compact: false) { perform(model.setPinned(false, for: ids)) }
+        case .colour:
+            colorChip(compact: false)
+        case .font:
+            fontChip(compact: false)
+        case .export:
+            exportMenu(compact: false, enabled: true) { exportMany(ids, $0) }
+        case .reveal:
+            chip(action.title, symbol: "folder", compact: false) { model.revealInFinder(ids) }
+                .help("Reveal in Finder")
+                .accessibilityLabel("Reveal in Finder")
+        case .delete:
+            chip(action.title, symbol: "trash", compact: false, tone: .danger) { session.pendingDelete = ids }
+        case .clear:
+            chip(action.title, symbol: "xmark.circle", compact: false) { session.clearSelection() }
                 .help("Clear the selection (Esc)")
         }
     }
@@ -738,7 +769,7 @@ struct AllNotesView: View {
         .buttonStyle(ChipButtonStyle(tone: .quiet))
         .help("Colour for the checked notes")
         .accessibilityLabel("Colour")
-        .popover(isPresented: $showsColors, arrowEdge: .bottom) {
+        .popover(isPresented: $showsColors, arrowEdge: .top) {
             ColorChooser(selected: commonColor, onPick: { color in
                 perform(model.setColor(color, for: checked))
             }, onCustom: {
@@ -770,7 +801,7 @@ struct AllNotesView: View {
         .buttonStyle(ChipButtonStyle(tone: .quiet))
         .help("Font for the checked notes")
         .accessibilityLabel("Font")
-        .popover(isPresented: $showsFonts, arrowEdge: .bottom) {
+        .popover(isPresented: $showsFonts, arrowEdge: .top) {
             FontChooser(
                 selection: commonTypeface ?? nil,
                 size: Int(look?.size ?? CGFloat(model.preferences.size)),
@@ -1038,11 +1069,24 @@ struct ChipButtonStyle: ButtonStyle {
 
 /// The round checkbox as an AppKit button: an `NSControl` in a list row
 /// takes its own click, so checking a note never moves the list's
-/// selection (the previewed note). Drawn here, not by a cell: the ring
-/// in the control border, filled with the accent when on, a dash for a
+/// selection (the previewed note). Drawn here, not by a cell: the SF
+/// Symbol for the state (`RoundCheckboxGlyph`), the ring in the control
+/// border, filled with the accent and a checkmark when on, a dash for a
 /// mixed header.
 struct RoundCheckbox: NSViewRepresentable {
-    enum State: Equatable { case off, on, mixed }
+    enum State: Equatable {
+        case off, on, mixed
+
+        /// The SF Symbol drawn for the state: a ring, a filled circle
+        /// with a checkmark, a filled circle with a dash.
+        var symbolName: String {
+            switch self {
+            case .off: "circle"
+            case .on: "checkmark.circle.fill"
+            case .mixed: "minus.circle.fill"
+            }
+        }
+    }
 
     let state: State
     let action: () -> Void
@@ -1079,79 +1123,116 @@ struct RoundCheckbox: NSViewRepresentable {
     final class BoxButton: NSButton {
         var boxState: State = .off
 
-        override var intrinsicContentSize: NSSize { NSSize(width: 16, height: 16) }
+        override var intrinsicContentSize: NSSize { NSSize(width: RoundCheckboxGlyph.side, height: RoundCheckboxGlyph.side) }
         override var acceptsFirstResponder: Bool { false }
 
         override func draw(_ dirtyRect: NSRect) {
-            RoundCheckboxShape.draw(state: boxState, in: bounds.insetBy(dx: 0.75, dy: 0.75), appearance: effectiveAppearance)
+            let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let image = RoundCheckboxGlyph.image(state: boxState, dark: dark)
+            image.draw(in: RoundCheckboxGlyph.frame(of: image, in: bounds), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
     }
 }
 
-/// The same box drawn by SwiftUI, for the harness (`ImageRenderer` draws
-/// no AppKit view).
+/// The same glyph for the harness (`ImageRenderer` draws no AppKit view):
+/// the very image the button draws, at its own size on the control's,
+/// so a render shows what the window shows.
 struct RoundCheckboxShape: View {
     let state: RoundCheckbox.State
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Canvas { context, size in
-            let dark = context.environment.colorScheme == .dark
-            Self.draw(state: state, in: CGRect(origin: .zero, size: size).insetBy(dx: 0.75, dy: 0.75), dark: dark, into: &context)
-        }
+        let image = RoundCheckboxGlyph.image(state: state, dark: colorScheme == .dark)
+        Image(nsImage: image)
+            .resizable()
+            .frame(width: image.size.width, height: image.size.height)
+            .frame(width: RoundCheckboxGlyph.side, height: RoundCheckboxGlyph.side)
+    }
+}
+
+/// The checkbox's picture: the state's SF Symbol, medium weight, coloured
+/// by palette — the ring in the control border, a filled circle in the
+/// accent with the mark in the accent's ink. 0.1.2 drew the mark as its
+/// own `NSBezierPath` with y up, but `NSButton` is flipped, so the tick's
+/// vertex landed at the top: an up-chevron. A symbol has no orientation
+/// to get wrong.
+enum RoundCheckboxGlyph {
+    /// The control's side in the row and the header.
+    static let side: CGFloat = 16
+    /// The symbol's point size: its circle spans about 15 pt, inside the
+    /// control, in an image a little larger with the symbol's margins.
+    static let pointSize: CGFloat = 15
+
+    /// The image at its own size, centred on a control's bounds.
+    static func frame(of image: NSImage, in bounds: CGRect) -> CGRect {
+        CGRect(x: bounds.midX - image.size.width / 2, y: bounds.midY - image.size.height / 2, width: image.size.width, height: image.size.height)
     }
 
-    static func draw(state: RoundCheckbox.State, in rect: CGRect, appearance: NSAppearance) {
-        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    static func image(state: RoundCheckbox.State, dark: Bool) -> NSImage {
         let accent = NSColor(hex: dark ? 0xFFA48A : 0xA53A20)
         let ring = NSColor(hex: 0x858585)
         let mark = NSColor(hex: dark ? 0x141414 : 0xFFFFFF)
-        let circle = NSBezierPath(ovalIn: rect)
-        circle.lineWidth = 1.5
-        if state == .off {
-            ring.setStroke()
-            circle.stroke()
-            return
+        // Palette order for a `.fill` symbol: the mark, then the circle.
+        let colors = state == .off ? [ring] : [mark, accent]
+        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium, scale: .medium)
+            .applying(NSImage.SymbolConfiguration(paletteColors: colors))
+        guard let image = NSImage(systemSymbolName: state.symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(configuration) else {
+            return NSImage(size: NSSize(width: side, height: side))
         }
-        accent.setFill()
-        circle.fill()
-        mark.setStroke()
-        let path = state == .on ? checkmark(in: rect, yUp: true) : dash(in: rect)
-        path.lineWidth = 1.8
-        path.lineCapStyle = .round
-        path.lineJoinStyle = .round
-        path.stroke()
+        return image
+    }
+}
+
+/// Views laid out left to right, wrapping to the next row when the
+/// width runs out — the selection bar's chips in a narrow column. Each
+/// row's items are centred on its height.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var rowSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(subviews, width: proposal.width ?? .infinity)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + CGFloat(max(rows.count - 1, 0)) * rowSpacing
+        return CGSize(width: proposal.width ?? width, height: height)
     }
 
-    static func draw(state: RoundCheckbox.State, in rect: CGRect, dark: Bool, into context: inout GraphicsContext) {
-        let accent = Color(nsColor: NSColor(hex: dark ? 0xFFA48A : 0xA53A20))
-        let ring = Color(nsColor: NSColor(hex: 0x858585))
-        let mark = Color(nsColor: NSColor(hex: dark ? 0x141414 : 0xFFFFFF))
-        let circle = Path(ellipseIn: rect)
-        if state == .off {
-            context.stroke(circle, with: .color(ring), lineWidth: 1.5)
-            return
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for (index, size) in row.items {
+                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + rowSpacing
         }
-        context.fill(circle, with: .color(accent))
-        let path = Path((state == .on ? checkmark(in: rect, yUp: false) : dash(in: rect)).cgPath)
-        context.stroke(path, with: .color(mark), style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
     }
 
-    /// The tick: its low point a third up from the bottom, which is
-    /// `minY` in AppKit (y up) and `maxY` in SwiftUI (y down).
-    private static func checkmark(in rect: CGRect, yUp: Bool) -> NSBezierPath {
-        func y(_ fraction: CGFloat) -> CGFloat { yUp ? rect.minY + rect.height * fraction : rect.maxY - rect.height * fraction }
-        let path = NSBezierPath()
-        path.move(to: CGPoint(x: rect.minX + rect.width * 0.28, y: y(0.5)))
-        path.line(to: CGPoint(x: rect.minX + rect.width * 0.45, y: y(0.32)))
-        path.line(to: CGPoint(x: rect.minX + rect.width * 0.74, y: y(0.7)))
-        return path
+    private struct Row {
+        var items: [(Int, CGSize)] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
     }
 
-    private static func dash(in rect: CGRect) -> NSBezierPath {
-        let path = NSBezierPath()
-        path.move(to: CGPoint(x: rect.minX + rect.width * 0.3, y: rect.midY))
-        path.line(to: CGPoint(x: rect.maxX - rect.width * 0.3, y: rect.midY))
-        return path
+    /// The subviews at their ideal sizes, cut into rows no wider than
+    /// `width`; an item wider than the row alone still gets its row.
+    private func rows(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            let next = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.items.isEmpty, next > width {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.items.append((index, size))
+        }
+        if !row.items.isEmpty { rows.append(row) }
+        return rows
     }
 }
 
@@ -1174,14 +1255,15 @@ enum AllNotesText {
         return note.pinned ? "PINNED · IN THE DECK" : "ACTIVE · IN THE DECK"
     }
 
-    /// The caption over the bulk bar.
-    static func selectionCaption(_ count: Int, archived: Bool) -> String {
-        "\(count) SELECTED · \(archived ? "ARCHIVED" : "ACTIVE")"
-    }
-
-    /// The sidebar's count once one row is checked.
+    /// The sidebar's head once one row is checked, beside the all / none
+    /// box.
     static func selected(_ count: Int, of visible: Int) -> String {
         "\(count) of \(visible) selected"
+    }
+
+    /// The caption over the selection bar's chips: what they act on.
+    static func selectedCaption(_ count: Int) -> String {
+        "\(count) SELECTED"
     }
 
     /// The footer after a bulk action the store refused for some notes:

@@ -71,6 +71,47 @@ struct AllNotesSelection: Equatable {
     }
 }
 
+/// The chips in the selection bar at the foot of the list, in order;
+/// pure, so the tests read the bar for a scope and a license without a
+/// window. Archive (Restore under Archived) leads, Clear is last, Delete…
+/// only under Archived; read-only keeps Export…, Reveal and Clear.
+enum AllNotesBulkAction: String, Identifiable, CaseIterable {
+    case archive, restore, pin, unpin, colour, font, export, reveal, delete, clear
+
+    var id: String { rawValue }
+
+    static func bar(archived: Bool, readOnly: Bool, allPinned: Bool) -> [AllNotesBulkAction] {
+        var actions: [AllNotesBulkAction] = []
+        if !readOnly {
+            if archived {
+                actions.append(.restore)
+            } else {
+                actions += [.archive, allPinned ? .unpin : .pin, .colour, .font]
+            }
+        }
+        actions += [.export, .reveal]
+        if !readOnly, archived { actions.append(.delete) }
+        actions.append(.clear)
+        return actions
+    }
+
+    /// The chip's word.
+    var title: String {
+        switch self {
+        case .archive: "Archive"
+        case .restore: "Restore"
+        case .pin: "Pin"
+        case .unpin: "Unpin"
+        case .colour: "Colour"
+        case .font: "Font"
+        case .export: "Export…"
+        case .reveal: "Reveal"
+        case .delete: "Delete…"
+        case .clear: "Clear"
+        }
+    }
+}
+
 /// What the line under the split says after a bulk action, until the next
 /// one or Clear: the notes the store refused with why, or the files that
 /// went to the Trash (with the way to them).

@@ -273,10 +273,13 @@ final class PreviewHarness {
                 try? FileManager.default.removeItem(at: stage.folder)
             }
             // Multi-select over the ten: the pointer on a row shows its
-            // box; three checked put the bulk bar in the pane; five
-            // checked with two the store refused show the footer; the
-            // same three under Archived offer Delete…; the Trash footer;
-            // then read-only, where the bar keeps Export, Reveal and Clear.
+            // box; three checked raise the selection bar at the foot of
+            // the list (the header says "3 of 10", the pane keeps the
+            // previewed note's own actions); the same at the window's
+            // narrowest, the bar wrapped; five checked with two the store
+            // refused show the footer; two under Archived offer Delete…;
+            // the Trash footer; then read-only, where the bar keeps
+            // Export, Reveal and Clear.
             let multi = allNotesModel(notes: 10)
             let multiIDs = multi.model.active.map(\.id)
             let hoverView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, hover: multiIDs[1])
@@ -286,14 +289,24 @@ final class PreviewHarness {
             let checkedSession = AllNotesSession()
             for id in multiIDs[1...3] { checkedSession.selected.toggle(id) }
             let checkedView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, session: checkedSession)
-                .frame(width: 800, height: 680)
+                .frame(width: 800, height: 760)
                 .background(Brand.canvas)
             if await !write(checkedView, scheme: scheme, appearance: appearance, to: "allnotes-selected-\(suffix).png") { failures += 1 }
+            // The window's minimum, over five notes so the column fits
+            // the frame without the list's scrolling.
+            let narrow = allNotesModel(notes: 5)
+            let narrowSession = AllNotesSession()
+            for id in narrow.model.active.map(\.id)[1...3] { narrowSession.selected.toggle(id) }
+            let narrowView = AllNotesView(model: narrow.model, openNote: { _ in }, export: { _, _ in }, session: narrowSession)
+                .frame(width: 640, height: 540)
+                .background(Brand.canvas)
+            if await !write(narrowView, scheme: scheme, appearance: appearance, to: "allnotes-selected-narrow-\(suffix).png") { failures += 1 }
+            try? FileManager.default.removeItem(at: narrow.folder)
             let skippedSession = AllNotesSession()
             for id in multiIDs[0...4] { skippedSession.selected.toggle(id) }
             skippedSession.show(.skipped(count: 2, of: 5, reasons: [StoreError.notDownloaded(NoteID("reading-list")).localizedDescription, StoreError.oversized(NoteID("ideas-for-the-talk")).localizedDescription]))
             let skippedView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, session: skippedSession)
-                .frame(width: 800, height: 680)
+                .frame(width: 800, height: 760)
                 .background(Brand.canvas)
             if await !write(skippedView, scheme: scheme, appearance: appearance, to: "allnotes-skipped-\(suffix).png") { failures += 1 }
             _ = multi.model.archive(Array(multiIDs[6...8]))
@@ -301,7 +314,7 @@ final class PreviewHarness {
             archivedSession.showsArchived = true
             for id in multi.model.archived.map(\.id).prefix(2) { archivedSession.selected.toggle(id) }
             let archivedView = AllNotesView(model: multi.model, openNote: { _ in }, export: { _, _ in }, session: archivedSession)
-                .frame(width: 800, height: 680)
+                .frame(width: 800, height: 760)
                 .background(Brand.canvas)
             if await !write(archivedView, scheme: scheme, appearance: appearance, to: "allnotes-archived-selected-\(suffix).png") { failures += 1 }
             let trashedSession = AllNotesSession()
@@ -311,6 +324,35 @@ final class PreviewHarness {
                 .frame(width: 800, height: 680)
                 .background(Brand.canvas)
             if await !write(trashedView, scheme: scheme, appearance: appearance, to: "allnotes-trashed-\(suffix).png") { failures += 1 }
+            // Twelve archived notes, every one checked: the header's box
+            // at all, Delete… in red in the bar (the 0.1.2 screenshot's
+            // stage).
+            let dozen = sampleModel(Self.samples + Self.moreSamples)
+            _ = dozen.model.archive(dozen.model.active.map(\.id))
+            let dozenSession = AllNotesSession()
+            dozenSession.showsArchived = true
+            dozenSession.selected.checkAll(dozen.model.archived.map(\.id))
+            let dozenView = AllNotesView(model: dozen.model, openNote: { _ in }, export: { _, _ in }, session: dozenSession)
+                .frame(width: 800, height: 900)
+                .background(Brand.canvas)
+            if await !write(dozenView, scheme: scheme, appearance: appearance, to: "allnotes-archived-twelve-\(suffix).png") { failures += 1 }
+            try? FileManager.default.removeItem(at: dozen.folder)
+            // The checkbox in its three states, the image the window's
+            // control draws: a ring, a checkmark, a dash — never a chevron.
+            let glyphs = HStack(spacing: Brand.Space.s16) {
+                ForEach([RoundCheckbox.State.off, .on, .mixed], id: \.self) { state in
+                    HStack(spacing: Brand.Space.s8) {
+                        RoundCheckboxShape(state: state)
+                        Text(state.symbolName).font(Brand.mono(11)).foregroundStyle(Brand.textSecondary)
+                    }
+                }
+            }
+            .padding(Brand.Space.s16)
+            .background(Brand.canvas)
+            if await !write(glyphs, scheme: scheme, appearance: appearance, to: "checkbox-glyphs-\(suffix).png") { failures += 1 }
+            // The same three from the AppKit control itself, drawn the way
+            // the window draws it (0.1.2's chevron was in this path).
+            if !writeCheckboxControls(appearance: appearance, dark: scheme == .dark, to: "checkbox-controls-\(suffix).png") { failures += 1 }
             let sheet = DeleteConfirmation(titles: multi.model.archived.map(\.title) + ["Packing", "Recipes to try", "Gift ideas", "Q4 plan notes"], onCancel: {}, onConfirm: {})
                 .padding(Brand.Space.s24)
                 .background(Brand.surface)
@@ -388,6 +430,12 @@ final class PreviewHarness {
         ("Deploy\n- [x] `git tag v0.1.1`\n- [ ] make-appcast.sh\n- [ ] verify-release.sh", .slate, .family("Menlo"), false, 7, -15 * 86_400),
         ("Letter\nDear **Ada**, the font this was written in lives on the other Mac.", .butter, .family("Bodoni Ornamental Twelve"), false, 8, -16 * 86_400),
         ("Ideas for the talk\nStart with the folder, not the app. Show the file in Finder first, then the deck, then the same note in Obsidian. The point is that nothing is locked in: the notes were always theirs.\n\n## Demo order\n1. hotkey\n2. edge\n3. All Notes\n4. iCloud Drive", .paper, nil, false, 9, -2 * 86_400),
+    ]
+
+    /// Two more after the ten, for the twelve-note All Notes stage.
+    private static let moreSamples: [Sample] = [
+        ("Packing\n- [ ] charger\n- [ ] passport\n- [x] the good headphones", .mint, nil, false, 10, -5 * 86_400),
+        ("Gift ideas\nA plant for Ada, the tea Sam liked.", .lilac, nil, false, 11, -6 * 86_400),
     ]
 
     /// Two notes for the automation stages, over their own folder: `=`
@@ -493,6 +541,49 @@ final class PreviewHarness {
             if let progress = model.checklistProgress(for: note.id) { content.progress[note.id] = progress }
         }
         return content
+    }
+
+    /// The row's checkbox as the window has it — `RoundCheckbox.BoxButton`,
+    /// an AppKit view — in its three states, drawn into a 2× bitmap with
+    /// no window (`displayIgnoringOpacity`), on the canvas.
+    private func writeCheckboxControls(appearance: NSAppearance.Name, dark: Bool, to name: String) -> Bool {
+        let states: [RoundCheckbox.State] = [.off, .on, .mixed]
+        let side = RoundCheckboxGlyph.side
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: Brand.Space.s16 * CGFloat(states.count + 1) + side * CGFloat(states.count), height: side + Brand.Space.s16 * 2))
+        container.appearance = NSAppearance(named: appearance)
+        for (index, state) in states.enumerated() {
+            let button = RoundCheckbox.BoxButton(frame: NSRect(x: Brand.Space.s16 + CGFloat(index) * (side + Brand.Space.s16), y: Brand.Space.s16, width: side, height: side))
+            button.isBordered = false
+            button.title = ""
+            button.boxState = state
+            container.addSubview(button)
+        }
+        let scale: CGFloat = 2
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(container.bounds.width * scale), pixelsHigh: Int(container.bounds.height * scale), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else {
+            print("PREVIEW_CAPTURE_FAILED \(name)")
+            return false
+        }
+        // The point size before the context, which takes its scale from it.
+        rep.size = container.bounds.size
+        guard let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            print("PREVIEW_CAPTURE_FAILED \(name)")
+            return false
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        NSColor(hex: dark ? 0x141414 : 0xFFFFFF).setFill()
+        container.bounds.fill()
+        container.displayIgnoringOpacity(container.bounds, in: context)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
+        do {
+            try data.write(to: outputDirectory.appendingPathComponent(name))
+            print("PREVIEW_WROTE \(name) \(rep.pixelsWide)x\(rep.pixelsHigh)")
+            return true
+        } catch {
+            print("PREVIEW_WRITE_FAILED \(name) \(error)")
+            return false
+        }
     }
 
     /// Draws the view with `ImageRenderer`, no window: the shared Mac's
