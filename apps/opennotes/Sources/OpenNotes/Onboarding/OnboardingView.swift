@@ -380,8 +380,9 @@ private struct TipsStep: View {
     }
 }
 
-/// A drawn screen with the deck's pill on its edge, so the window can
-/// point at something the user has not hovered yet.
+/// A drawn screen with the deck at rest on its edge — four papers' edges
+/// peeking out — so the window can point at something the user has not
+/// hovered yet.
 private struct EdgePreview: View {
     let side: DeckSide
 
@@ -389,27 +390,34 @@ private struct EdgePreview: View {
         ZStack(alignment: side == .right ? .trailing : .leading) {
             RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous)
                 .fill(Brand.surface)
-            VStack(spacing: 4) {
+            VStack(spacing: 2) {
                 ForEach([NoteColor.coral, .yellow, .mint, .sky], id: \.self) { color in
-                    Capsule().fill(Brand.tab(color)).frame(width: 4, height: 12)
+                    edge.fill(Brand.face(color))
+                        .overlay(edge.strokeBorder(Brand.textPrimary.opacity(0.25), lineWidth: 0.5))
+                        .frame(width: 5, height: 16)
+                        .shadow(color: .black.opacity(0.14), radius: 1.5, x: side == .right ? -0.5 : 0.5, y: 1)
                 }
             }
-            .frame(width: 12, height: 72)
-            .background(Color.black.opacity(0.62), in: UnevenRoundedRectangle(
-                topLeadingRadius: side == .right ? 6 : 0, bottomLeadingRadius: side == .right ? 6 : 0,
-                bottomTrailingRadius: side == .right ? 0 : 6, topTrailingRadius: side == .right ? 0 : 6, style: .continuous
-            ))
+            .padding(side == .right ? .leading : .trailing, 4)
             .overlay(alignment: side == .right ? .leading : .trailing) {
                 Image(systemName: side == .right ? "arrow.right" : "arrow.left")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Brand.accentSolid)
-                    .offset(x: side == .right ? -22 : 22)
+                    .offset(x: side == .right ? -18 : 18)
             }
         }
         .frame(height: 96)
         .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).strokeBorder(Brand.borderSubtle, lineWidth: 1))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("A screen with the OpenNotes pill on its \(side == .right ? "right" : "left") edge")
+        .accessibilityLabel("A screen with the OpenNotes deck on its \(side == .right ? "right" : "left") edge")
+    }
+
+    /// Rounded away from the edge, square against it, as the deck's papers are.
+    private var edge: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: side == .right ? 3 : 0, bottomLeadingRadius: side == .right ? 3 : 0,
+            bottomTrailingRadius: side == .right ? 0 : 3, topTrailingRadius: side == .right ? 0 : 3, style: .continuous
+        )
     }
 }
 

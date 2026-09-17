@@ -179,7 +179,7 @@ struct NoteAppearance: Hashable {
     var tab: Color { paper }
     /// The title read down the tab.
     var tabInk: Color { ink }
-    /// The pill's dash and the menu's swatch: the light paper in both.
+    /// All Notes' dash and the menu's swatch: the light paper in both.
     var swatch: Color { Color(nsColor: NSColor(hex: color.lightFace)) }
 
     func paperColor(dark: Bool) -> NSColor { NSColor(hex: color.face(dark: dark)) }

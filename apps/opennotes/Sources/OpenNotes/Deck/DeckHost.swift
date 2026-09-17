@@ -47,7 +47,7 @@ final class DeckHost {
         }
         // The license published a change: the machines take the new
         // read-only flag (the hotkey and `+` ask it again at the click
-        // regardless) and the decks re-render the lock, the pill and the
+        // regardless) and the decks re-render the lock, the `+` tab and the
         // footer's line.
         observeChanges({ [model] in _ = model.readOnly }, onChange: { [weak self] in
             guard let self else { return }
@@ -71,7 +71,7 @@ final class DeckHost {
     var stateDescription: String {
         controllers.values.map { controller in
             switch controller.state {
-            case .pill: "pill"
+            case .rest: "rest"
             case .fan: "fan"
             case .open(let id, let editing): "open \(id.rawValue)\(editing ? " (editing)" : "")"
             }
@@ -194,7 +194,7 @@ final class DeckHost {
     }
 }
 
-/// A transparent strip on one display's deck edge, the pill's width, that
+/// A transparent strip on one display's deck edge, the edge strip's width, that
 /// only reports the pointer entering it. It takes no clicks, no focus and
 /// no timer; it exists so "the display with the pointer" needs no polling.
 final class EdgeSentinel {
@@ -222,7 +222,7 @@ final class EdgeSentinel {
     }
 
     func update(screen: NSScreen, side: DeckSide) {
-        let width = DeckMetrics().pillWidth
+        let width = DeckMetrics().edgeWidth
         let frame = screen.visibleFrame
         let x = side == .right ? frame.maxX - width : frame.minX
         panel.setFrame(CGRect(x: x, y: frame.minY, width: width, height: frame.height), display: false)
