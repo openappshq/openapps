@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs OpenNotes 0.1.0 on your Mac.
+# Installs OpenNotes 0.1.1 on your Mac.
 #
 #   curl -fsSL https://openapps.space/install/opennotes | sh
 #
@@ -26,9 +26,9 @@ umask 022
 APP_ID='opennotes'
 APP_NAME='OpenNotes'
 BUNDLE_ID='com.openappshq.opennotes'
-VERSION='0.1.0'
-SHA256='f5835ec06deb903b276eabe7f1d222de9c8e4bc721c3613451151adbab494959'
-URL='https://github.com/openappshq/openapps/releases/download/opennotes-v0.1.0/OpenNotes-0.1.0.zip'
+VERSION='0.1.1'
+SHA256='065cd7f3b435f537603f2ef8c1b3c0154e79b8c2f8e9aff6db2b3b090c0a979e'
+URL='https://github.com/openappshq/openapps/releases/download/opennotes-v0.1.1/OpenNotes-0.1.1.zip'
 MINIMUM_MACOS=14
 
 work=''

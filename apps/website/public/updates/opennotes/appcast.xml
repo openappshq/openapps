@@ -6,21 +6,21 @@
         <description>OpenNotes releases</description>
         <language>en</language>
         <item>
-            <title>OpenNotes 0.1.0</title>
+            <title>OpenNotes 0.1.1</title>
             <openapps:app>opennotes</openapps:app>
             <openapps:channel>stable</openapps:channel>
-            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
-            <sparkle:version>1000</sparkle:version>
+            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+            <sparkle:version>1001</sparkle:version>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <openapps:publishedAt>2026-09-16T20:40:38Z</openapps:publishedAt>
-            <pubDate>Wed, 16 Sep 2026 20:40:38 +0000</pubDate>
-            <description><![CDATA[OpenNotes 0.1.0. Release notes: https://github.com/openappshq/openapps/releases/tag/opennotes-v0.1.0]]></description>
-            <openapps:sha256>f5835ec06deb903b276eabe7f1d222de9c8e4bc721c3613451151adbab494959</openapps:sha256>
-            <enclosure url="https://github.com/openappshq/openapps/releases/download/opennotes-v0.1.0/OpenNotes-0.1.0.zip" length="3072525" type="application/octet-stream" sparkle:edSignature="XawJ4EnWjbjOOxJ5G1on5IBURzF/VEw0/R5+A7nmj1GUBVOxc1QbDw33/UOlqkcQhlwfPgXc4XskynnwSmzPAw=="/>
+            <openapps:publishedAt>2026-09-17T00:46:52Z</openapps:publishedAt>
+            <pubDate>Thu, 17 Sep 2026 00:46:52 +0000</pubDate>
+            <description><![CDATA[OpenNotes 0.1.1. Release notes: https://github.com/openappshq/openapps/releases/tag/opennotes-v0.1.1]]></description>
+            <openapps:sha256>065cd7f3b435f537603f2ef8c1b3c0154e79b8c2f8e9aff6db2b3b090c0a979e</openapps:sha256>
+            <enclosure url="https://github.com/openappshq/openapps/releases/download/opennotes-v0.1.1/OpenNotes-0.1.1.zip" length="4119158" type="application/octet-stream" sparkle:edSignature="lfugLtAn5QUFytxSHQOsYhEE7rU4elYleOGcSX6EIQuaBMpXliInrEfTjmFBl7oDnWLxWj+hWCcH6vr80n9LCQ=="/>
         </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: YBipySnNWfp5cWnogHuANiwoB3KRBt1n7TS3ZZHGraJscBcxthCEfCSi7z6WswHWW4UgTrvjXvj8HKPUgyZ+BQ==
+edSignature: wue0u870p5wV0CyQnAjvoFJGQWVh2hFhFaSwyPXP5rN48nOnxdKa0XmoLq4w3Z83n879XaDphgEY90lyqdntCg==
 length: 1477
 -->
