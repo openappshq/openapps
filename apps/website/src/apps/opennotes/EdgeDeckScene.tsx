@@ -1,10 +1,11 @@
 /**
  * The idea, drawn: a Mac in a full-screen app, and OpenNotes's deck on the
  * right edge. Pure CSS, one 12-second loop: the pointer drifts to the edge,
- * the resting pill gives way to the fan of tabs, one tab is pressed and its
- * note slides out over the app, a checklist item gets ticked, then everything
- * goes back to the pill. Reduced motion shows the fan with the note out, the
- * state that says the most. Decorative; the copy beside it says what it shows.
+ * the resting paper edges widen into the fan of tabs, one tab is pressed and
+ * its note slides out over the app, a checklist item gets ticked, then the
+ * tabs fold back into their edges. Reduced motion shows the fan with the note
+ * out, the state that says the most. Decorative; the copy beside it says what
+ * it shows.
  */
 const notes = [
   { tone: "coral", label: "Standup" },
@@ -29,10 +30,11 @@ export default function EdgeDeckScene() {
           </div>
         </div>
         <span className="on-pointer" />
-        <div className="on-pill">
+        <div className="on-rest">
           {notes.map((note) => (
-            <span key={note.label} className={`on-dash is-${note.tone}`} />
+            <span key={note.label} className={`on-edge is-${note.tone}`} />
           ))}
+          <span className="on-edge-add" />
         </div>
         <div className="on-fan">
           {notes.map((note, index) => (

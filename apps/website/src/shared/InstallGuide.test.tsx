@@ -125,7 +125,7 @@ test("the last step says where the app shows up: the menu bar unless the catalog
     );
   }
   const opennotes = guideFor("opennotes");
-  expect(opennotes).toContain("It shows up as a pill on the edge of your screen.");
+  expect(opennotes).toContain("It shows up as paper edges on the edge of your screen.");
   expect(opennotes).not.toContain("menu bar");
 });
 

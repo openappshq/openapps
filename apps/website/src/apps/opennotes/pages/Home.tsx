@@ -52,11 +52,11 @@ const REQUIREMENTS = (
 const states: [string, string][] = [
   [
     "Rest",
-    "a thin pill on the right edge of the screen, one coloured dash per note. A few pixels wide, on every Space, over full-screen apps and Stage Manager; it never asks for your attention",
+    "the edge of every note's paper peeking a few pixels out of the screen edge, in its own colour, in the deck's order — no tray, nothing written on it. On every Space, over full-screen apps and Stage Manager; it never asks for your attention",
   ],
   [
     "Reach",
-    "move the pointer to the edge and the tabs fan out, a paper per note in its own colour, each leaning a little; what does not fit scrolls. Click one, or the + under them for a new note. Drag a tab up or down to reorder; drop text, a link or files on the deck and a note opens with them in it",
+    "move the pointer to the edge and the edges widen in place into the fan, a paper per note with its title, each leaning a little; what does not fit scrolls. Click one, or the + under them for a new note. Drag a tab up or down to reorder; drop text, a link or files on the deck and a note opens with them in it",
   ],
   [
     "Write",
@@ -151,6 +151,11 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
     icon: <Search size={20} />,
     title: "All Notes.",
     body: "One window for everything: search titles and bodies, filter Active or Archived, drag to reorder, open a note, pin or archive it, reveal it in Finder, or export it as .md or .txt.",
+  },
+  {
+    icon: <ListChecks size={20} />,
+    title: "Select many. Delete only to the Trash.",
+    body: "Check rows in All Notes (⇧-click a range, ⌘A for all on view) and archive, pin, recolour, change the font, export or reveal them at once, with one undo. Archived notes can go: Delete… asks first and moves the files to the Trash, where Finder can put them back. OpenNotes never deletes a file for good.",
   },
   {
     icon: <Workflow size={20} />,
@@ -264,7 +269,7 @@ export default function App() {
             <div className="hero-grid on-hero-grid">
               <div className="hero-intro">
                 <p>
-                  A deck of sticky notes docked to the edge of your screen. A thin pill at rest; a
+                  A deck of sticky notes docked to the edge of your screen. Paper edges at rest; a
                   fan when you reach for it; one note out to write, over anything, full-screen apps
                   included. Every note is a Markdown file in a folder you can see.
                 </p>

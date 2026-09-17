@@ -212,7 +212,7 @@ export const products: Product[] = [
     platform: "macOS",
     price: "$5",
     permissions: [],
-    arrival: "shows up as a pill on the edge of your screen",
+    arrival: "shows up as paper edges on the edge of your screen",
     icon: "/brand/opennotes/app-icon.svg",
     accent: "coral",
     wordmark: false,
@@ -224,7 +224,7 @@ export const products: Product[] = [
         entry: "Home",
         title: "OpenNotes · Sticky notes on the edge of your screen",
         description:
-          "A deck of sticky notes docked to the edge of your screen: a thin pill at rest, a fan when you reach for it, one note out to write. Visible over full-screen apps, captured from anywhere with a hotkey, kept as plain Markdown files in a folder you choose, on this Mac or in iCloud Drive. Any font, thirteen papers, sums on a line, links, Shortcuts. OpenNotes is an open-source Mac app. No permissions, no telemetry.",
+          "A deck of sticky notes docked to the edge of your screen: paper edges at rest, a fan when you reach for it, one note out to write. Visible over full-screen apps, captured from anywhere with a hotkey, kept as plain Markdown files in a folder you choose, on this Mac or in iCloud Drive. Any font, thirteen papers, sums on a line, links, Shortcuts. OpenNotes is an open-source Mac app. No permissions, no telemetry.",
         template: "src/apps/opennotes/template.html",
       },
       {

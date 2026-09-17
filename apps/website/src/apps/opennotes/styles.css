@@ -19,10 +19,11 @@ code {
 
 /* --- The edge-deck scene ---------------------------------------------------
    A screen on a raised key, showing a full-screen app (no menu bar: the canvas
-   goes to every edge). On the right edge, the deck: a pill at rest, tabs when
-   the pointer arrives, one note out. One 12-second loop, every part timed from
-   the same clock. Without animation (reduced motion, the still frames) the
-   parts sit in their open state: the fan out, the note out, the pill gone. */
+   goes to every edge). On the right edge, the deck: the notes' paper edges
+   at rest, tabs when the pointer arrives, one note out. One 12-second loop,
+   every part timed from the same clock. Without animation (reduced motion,
+   the still frames) the parts sit in their open state: the fan out, the
+   note out, the edges under the tabs. */
 .on-scene {
   --on-cycle: 12s;
   --on-ink: #141414;
@@ -103,28 +104,38 @@ code {
   filter: drop-shadow(0 1px 1px oklch(0 0 0 / 0.5));
   z-index: 3;
 }
-/* At rest: a pill on the edge, one dash per note. */
-.on-pill {
+/* At rest: the fan folded in — the edge of every note's paper peeking out of
+   the screen edge, in the fan's place, order and spacing, the neutral edge of
+   the + tab under them. No tray, nothing written on the edges. The tabs slide
+   out over these, so the rest is always there underneath. */
+.on-rest {
   position: absolute;
-  top: 30%;
+  top: 14%;
   right: 0;
-  width: 2.6%;
-  height: 40%;
-  border-radius: 999px 0 0 999px;
-  background: var(--on-glass);
+  width: 2%;
+  height: 72%;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 9%;
-  padding-block: 6%;
-  opacity: 0;
+  align-items: flex-end;
+  gap: 2.5%;
 }
-.on-dash {
+.on-edge {
   display: block;
-  width: 38%;
-  height: 12%;
-  border-radius: 999px;
+  width: 100%;
+  height: 20%;
+  border-radius: 6px 0 0 6px;
+  box-shadow:
+    inset 0.5px 0 0 oklch(0 0 0 / 0.25),
+    -1px 0 4px -1px oklch(0 0 0 / 0.35);
+}
+.on-edge-add {
+  width: 100%;
+  height: 7%;
+  border-radius: 6px 0 0 6px;
+  background: var(--on-paper);
+  box-shadow:
+    inset 0.5px 0 0 oklch(0 0 0 / 0.25),
+    -1px 0 4px -1px oklch(0 0 0 / 0.35);
 }
 /* The fan: tabs shingled down the edge, labelled. */
 .on-fan {
@@ -256,8 +267,9 @@ code {
   .on-pointer {
     animation: on-pointer var(--on-cycle) infinite;
   }
-  .on-pill {
-    animation: on-pill var(--on-cycle) infinite;
+  .on-edge-add {
+    /* The fan's own + tab takes its place while the fan is out. */
+    animation: on-edge-add var(--on-cycle) infinite;
   }
   .on-tab {
     animation: on-tab var(--on-cycle) infinite;
@@ -308,7 +320,7 @@ code {
       top: 58%;
     }
   }
-  @keyframes on-pill {
+  @keyframes on-edge-add {
     0%,
     16% {
       opacity: 1;
@@ -539,14 +551,16 @@ code {
   border-radius: 999px;
   background: oklch(1 0 0 / 0.16);
 }
-.on-frame .on-pill,
 .on-frame .on-fan,
 .on-frame .on-note {
   display: none;
 }
-.on-frame[data-state="rest"] .on-pill {
+.on-frame .on-rest {
   display: flex;
-  opacity: 1;
+}
+.on-frame[data-state="fan"] .on-edge-add,
+.on-frame[data-state="write"] .on-edge-add {
+  opacity: 0;
 }
 .on-frame[data-state="fan"] .on-fan,
 .on-frame[data-state="write"] .on-fan {
@@ -558,7 +572,8 @@ code {
   padding: 7% 4.5% 5%;
   gap: 0.7em;
 }
-.on-frame .on-tab {
+.on-frame .on-tab,
+.on-frame .on-edge {
   height: 18%;
 }
 .on-frame .on-note-title,
@@ -687,7 +702,8 @@ code {
   .on-frame,
   .on-note,
   .on-tab,
-  .on-pill {
+  .on-edge,
+  .on-edge-add {
     border: 1px solid CanvasText;
   }
 }
