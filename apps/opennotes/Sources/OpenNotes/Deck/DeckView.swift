@@ -675,19 +675,49 @@ private struct PaperEdge<Content: View>: View {
     }
 }
 
+/// Where `EdgeHoldTimer`'s ticks come from; tests replace the real timer
+/// with one driven by hand.
+protocol EdgeHoldTickScheduler {
+    func schedule(every interval: TimeInterval, _ tick: @escaping @MainActor () -> Void) -> any EdgeHoldTickToken
+}
+
+protocol EdgeHoldTickToken {
+    func cancel()
+}
+
+/// `Timer` on the main run loop, repeating.
+struct RunLoopTickScheduler: EdgeHoldTickScheduler {
+    private final class Token: EdgeHoldTickToken {
+        let timer: Timer
+        init(_ timer: Timer) { self.timer = timer }
+        func cancel() { timer.invalidate() }
+    }
+
+    func schedule(every interval: TimeInterval, _ tick: @escaping @MainActor () -> Void) -> any EdgeHoldTickToken {
+        Token(Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            MainActor.assumeIsolated { tick() }
+        })
+    }
+}
+
 /// The edge-hold timer: while a lifted tab is held at an end of the fan
 /// (`DeckEdgeHold` says when), the fan scrolls under it every
 /// `DeckAutoScroll.interval`. Owned by the deck view's state, so it lives
 /// as long as the deck does; ended with the drag.
 final class EdgeHoldTimer {
     private var hold = DeckEdgeHold()
-    private var timer: Timer?
+    private let scheduler: any EdgeHoldTickScheduler
+    private var token: (any EdgeHoldTickToken)?
     private var onScroll: (CGFloat) -> Void = { _ in }
+
+    init(scheduler: any EdgeHoldTickScheduler = RunLoopTickScheduler()) {
+        self.scheduler = scheduler
+    }
 
     var isHolding: Bool { hold.isHolding }
 
     deinit {
-        MainActor.assumeIsolated { timer?.invalidate() }
+        MainActor.assumeIsolated { token?.cancel() }
     }
 
     /// The lifted tab is now at this end (nil: at neither); `onScroll` is
@@ -696,10 +726,10 @@ final class EdgeHoldTimer {
         self.onScroll = onScroll
         switch hold.moved(to: direction) {
         case .start(let direction):
-            timer?.invalidate()
+            token?.cancel()
             let delta = DeckAutoScroll.delta(direction)
-            timer = Timer.scheduledTimer(withTimeInterval: DeckAutoScroll.interval, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.onScroll(delta) }
+            token = scheduler.schedule(every: DeckAutoScroll.interval) { [weak self] in
+                self?.onScroll(delta)
             }
         case .stop:
             stop()
@@ -714,8 +744,8 @@ final class EdgeHoldTimer {
     }
 
     private func stop() {
-        timer?.invalidate()
-        timer = nil
+        token?.cancel()
+        token = nil
     }
 }
 
