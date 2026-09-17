@@ -26,8 +26,8 @@ nonisolated public enum DeckTimer: Hashable, Sendable {
 
 /// What the deck looks like (design/products/opennotes.md, "The deck").
 nonisolated public enum DeckState: Hashable, Sendable {
-    /// The fan folded in: the edge of every tab peeking out of the screen
-    /// edge, nothing else.
+    /// A short stack of paper edges peeking out of the screen edge, one
+    /// per note, nothing else; reaching the edge grows it into the fan.
     case rest
     case fan
     /// One note slid out; `editing` once the keyboard focus is in it.
@@ -97,7 +97,7 @@ nonisolated public enum DeckEvent: Hashable, Sendable {
 nonisolated public enum DeckEffect: Hashable, Sendable {
     case startTimer(DeckTimer, TimeInterval)
     case cancelTimer(DeckTimer)
-    /// Fold the fan in to the tabs' edges.
+    /// Shrink the fan back into the stack of edges.
     case showRest
     case showFan
     /// Slide the note out; `focus` puts the caret in it (activating the app).
@@ -438,6 +438,15 @@ nonisolated public struct DeckMetrics: Hashable, Sendable {
     /// What shows of each tab at rest: the paper's edge peeking out of the
     /// screen edge.
     public var restWidth: CGFloat = 8
+    /// How tall each edge is at rest, while the stack fits `restMaxHeight`.
+    public var restEdgeHeight: CGFloat = 18
+    /// The least an edge compresses to as more notes come; past that the
+    /// stack overflows the cap and the last edges fade.
+    public var restEdgeMinHeight: CGFloat = 12
+    /// Between two edges at rest.
+    public var restGap: CGFloat = 4
+    /// The tallest the stack of edges gets: what does not fit fades.
+    public var restMaxHeight: CGFloat = 160
     /// How much of a fanned tab's tilt a tab at rest keeps.
     public var restTilt: CGFloat = 0.5
     /// How far past the screen edge a tab is drawn, so a tilted or inset
@@ -473,6 +482,16 @@ nonisolated public struct DeckMetrics: Hashable, Sendable {
 
     /// From one tab's top to the next's.
     public var tabStep: CGFloat { tabHeight + tabGap }
+
+    /// How tall each edge is at rest with this many notes: `restEdgeHeight`
+    /// while the stack fits `restMaxHeight`, compressed (in half points)
+    /// down to `restEdgeMinHeight` as more come, and no further.
+    public func restEdgeHeight(count: Int) -> CGFloat {
+        guard count > 1 else { return restEdgeHeight }
+        let fitting = (restMaxHeight + restGap) / CGFloat(count) - restGap
+        let halfPoints = (fitting * 2).rounded(.down) / 2
+        return min(restEdgeHeight, max(restEdgeMinHeight, halfPoints))
+    }
 }
 
 /// Where everything goes, in the panel's own coordinates (origin bottom
@@ -483,8 +502,8 @@ nonisolated public struct DeckLayout: Hashable, Sendable {
         public var id: NoteID
         /// Where the tab is now, the scroll applied: a tab past the fan's
         /// ends is still listed, and the fan's mask hides it. At rest the
-        /// frame is the tab's visible edge, `restWidth` wide; the fan
-        /// widens it in place.
+        /// frame is the note's paper edge in the stack, `restWidth` wide
+        /// and `restEdgeHeight(count:)` tall; the fan grows it from there.
         public var frame: CGRect
     }
 
@@ -493,9 +512,12 @@ nonisolated public struct DeckLayout: Hashable, Sendable {
     public var tabs: [Tab]
     /// The fan's window onto the tabs: what shows, and where the fades go.
     /// The whole panel width, so a lifted tab's shadow is not cut. At
-    /// rest the same window: the rest is the fan, folded in.
+    /// rest the stack's window: at most `restMaxHeight` tall, centred
+    /// where the fan's window is, so the stack grows into the fan in place.
     public var fan: CGRect
-    /// How far the tabs are scrolled up past the fan's top, clamped.
+    /// How far the tabs are scrolled up past the fan's top, clamped. At
+    /// rest the fan's scroll, kept for when the stack grows (the stack
+    /// itself shows from the first note).
     public var scroll: CGFloat
     /// The furthest the tabs can scroll: what does not fit the fan.
     public var maxScroll: CGFloat
@@ -509,10 +531,16 @@ nonisolated public struct DeckLayout: Hashable, Sendable {
     public var toast: CGRect?
     /// From one tab's top to the next's.
     public var tabStep: CGFloat
+    /// More tabs lie above the window's top: the top fade shows. In the
+    /// fan that is the scroll; the stack at rest never has more above.
+    public var fadesTop: Bool
+    /// More tabs lie below the window's bottom: the bottom fade shows. In
+    /// the fan that is the scroll; at rest, a stack past `restMaxHeight`.
+    public var fadesBottom: Bool
 
-    /// More tabs lie above the fan's top: the top fade shows.
+    /// The fan can scroll up: more tabs lie above its top.
     public var canScrollUp: Bool { scroll > 0 }
-    /// More tabs lie below the fan's bottom: the bottom fade shows.
+    /// The fan can scroll down: more tabs lie below its bottom.
     public var canScrollDown: Bool { scroll < maxScroll }
 }
 
@@ -522,13 +550,16 @@ nonisolated public enum DeckGeometry {
     /// Every active note gets a tab, `tabStep` apart; what does not fit
     /// between the margins, the `+` tab and the message block scrolls
     /// (`scroll`, clamped to `maxScroll`), the `+` tab staying put under
-    /// the fan. At rest the tabs sit exactly where the fan has them, only
-    /// `restWidth` wide: fanning out changes their width and nothing else.
+    /// the fan. At rest the same panel holds a short stack of edges in the
+    /// fan's window's place (`rest`), so the fan grows out of it in place.
     /// `toast` leaves room under the deck for the archive toast, `notice`
     /// for the taller line a refused drop shows there instead (the same
     /// rect, `toast`); either is taken from the fan's height first, so
     /// the message never covers the `+` tab on a fan that fills the screen.
     public static func layout(state: DeckState, side: DeckSide, visibleFrame: CGRect, notes: [NoteID], toast: Bool = false, notice: Bool = false, scroll requested: CGFloat = 0, metrics: DeckMetrics = DeckMetrics()) -> DeckLayout {
+        if state == .rest {
+            return rest(side: side, visibleFrame: visibleFrame, notes: notes, toast: toast, notice: notice, scroll: requested, metrics: metrics)
+        }
         let step = metrics.tabStep
         let count = notes.count
         let stackHeight = count == 0 ? 0 : metrics.tabHeight + CGFloat(count - 1) * step
@@ -541,14 +572,11 @@ nonisolated public enum DeckGeometry {
         let maxScroll = max(0, stackHeight - fanHeight)
         let scroll = min(max(requested, 0), maxScroll)
         let fanBlock = fanHeight + (count == 0 ? 0 : metrics.gap) + metrics.plusTabHeight
-        let tabWidth = state == .rest ? metrics.restWidth : metrics.tabWidth
+        let tabWidth = metrics.tabWidth
         var contentHeight: CGFloat
         var contentWidth: CGFloat
         switch state {
-        case .rest:
-            contentHeight = fanBlock
-            contentWidth = metrics.restWidth
-        case .fan:
+        case .rest, .fan:
             contentHeight = fanBlock
             contentWidth = metrics.tabWidth
         case .open:
@@ -596,7 +624,50 @@ nonisolated public enum DeckGeometry {
         if let messageHeight {
             toastRect = CGRect(x: edgeX(width: metrics.toastWidth), y: metrics.margin, width: metrics.toastWidth, height: messageHeight)
         }
-        return DeckLayout(panelFrame: panelFrame, tabs: tabs, fan: fan, scroll: scroll, maxScroll: maxScroll, plusTab: plusTab, note: note, toast: toastRect, tabStep: step)
+        return DeckLayout(
+            panelFrame: panelFrame, tabs: tabs, fan: fan, scroll: scroll, maxScroll: maxScroll, plusTab: plusTab, note: note, toast: toastRect, tabStep: step,
+            fadesTop: scroll > 0, fadesBottom: scroll < maxScroll
+        )
+    }
+
+    /// The rest: the fan's panel (so nothing about the window changes as
+    /// the deck grows or shrinks), holding a short stack of paper edges —
+    /// one per note, `restWidth` wide, `restEdgeHeight(count:)` tall,
+    /// `restGap` apart, in the fan's order — centred on the fan's window
+    /// and at most `restMaxHeight` tall, the last edges fading past that.
+    /// The `+` tab's edge sits under the stack (alone, where the fan's `+`
+    /// is, when there are no notes); a toast or notice goes under the `+`.
+    /// The scroll is the fan's, kept for when the stack grows.
+    private static func rest(side: DeckSide, visibleFrame: CGRect, notes: [NoteID], toast: Bool, notice: Bool, scroll: CGFloat, metrics: DeckMetrics) -> DeckLayout {
+        let fan = layout(state: .fan, side: side, visibleFrame: visibleFrame, notes: notes, toast: toast, notice: notice, scroll: scroll, metrics: metrics)
+        let count = notes.count
+        let width = metrics.restWidth
+        let edge = metrics.restEdgeHeight(count: count)
+        let step = edge + metrics.restGap
+        let stackHeight = count == 0 ? 0 : CGFloat(count) * edge + CGFloat(count - 1) * metrics.restGap
+        let window = min(stackHeight, metrics.restMaxHeight, fan.fan.height)
+        let panelWidth = fan.panelFrame.width
+        let x = side == .right ? panelWidth - width : 0
+        // The stack's centre is the fan window's: each edge grows towards
+        // its tab from here.
+        let stackTop = fan.fan.midY + window / 2
+        let stack = CGRect(x: 0, y: stackTop - window, width: panelWidth, height: window)
+        var tabs: [DeckLayout.Tab] = []
+        for (index, id) in notes.enumerated() {
+            let edgeTop = stackTop - CGFloat(index) * step
+            tabs.append(.init(id: id, frame: CGRect(x: x, y: edgeTop - edge, width: width, height: edge)))
+        }
+        let plusTab: CGRect
+        if count == 0 {
+            plusTab = CGRect(x: x, y: fan.plusTab.midY - edge / 2, width: width, height: edge)
+        } else {
+            plusTab = CGRect(x: x, y: stack.minY - metrics.restGap - edge, width: width, height: edge)
+        }
+        let toastRect = fan.toast.map { CGRect(x: $0.minX, y: plusTab.minY - metrics.gap - $0.height, width: $0.width, height: $0.height) }
+        return DeckLayout(
+            panelFrame: fan.panelFrame, tabs: tabs, fan: stack, scroll: fan.scroll, maxScroll: fan.maxScroll, plusTab: plusTab, note: nil, toast: toastRect, tabStep: fan.tabStep,
+            fadesTop: false, fadesBottom: stackHeight > window + 0.5
+        )
     }
 
     /// The scroll that keeps this note's tab wholly inside the fan, moving
@@ -699,7 +770,7 @@ nonisolated public struct DeckDrag: Hashable, Sendable {
 /// note's, else the last one used, brought into the fan once when a note
 /// opens or a move takes an open note's tab out of view — and otherwise
 /// left where the user put it. The fan showing reveals nothing: the rest
-/// is the fan folded in, so the fan opens at the scroll the rest showed.
+/// keeps the fan's scroll, so the fan opens where it was left.
 /// Pure; the controller owns the layout and the window.
 nonisolated public struct DeckScrollKeeper: Hashable, Sendable {
     /// How far the fan is scrolled (clamped at each `settle`).

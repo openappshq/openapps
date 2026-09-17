@@ -19,11 +19,11 @@ code {
 
 /* --- The edge-deck scene ---------------------------------------------------
    A screen on a raised key, showing a full-screen app (no menu bar: the canvas
-   goes to every edge). On the right edge, the deck: the notes' paper edges
-   at rest, tabs when the pointer arrives, one note out. One 12-second loop,
-   every part timed from the same clock. Without animation (reduced motion,
-   the still frames) the parts sit in their open state: the fan out, the
-   note out, the edges under the tabs. */
+   goes to every edge). On the right edge, the deck: a short stack of the
+   notes' paper edges at rest, tabs when the pointer arrives, one note out.
+   One 12-second loop, every part timed from the same clock. Without
+   animation (reduced motion, the still frames) the parts sit in their open
+   state: the fan out, the note out, the stack hidden under them. */
 .on-scene {
   --on-cycle: 12s;
   --on-ink: #141414;
@@ -104,34 +104,35 @@ code {
   filter: drop-shadow(0 1px 1px oklch(0 0 0 / 0.5));
   z-index: 3;
 }
-/* At rest: the fan folded in — the edge of every note's paper peeking out of
-   the screen edge, in the fan's place, order and spacing, the neutral edge of
-   the + tab under them. No tray, nothing written on the edges. The tabs slide
-   out over these, so the rest is always there underneath. */
+/* At rest: a short stack — one small edge of every note's paper peeking out
+   of the screen edge, in the fan's order, centred where the fan will be, the
+   neutral edge of the + tab under them. No tray, nothing written on the
+   edges, and well under a third of the screen. The stack fades as the tabs
+   grow out of it, and comes back as they fold in. */
 .on-rest {
   position: absolute;
-  top: 14%;
+  top: 38%;
   right: 0;
   width: 2%;
-  height: 72%;
+  height: 24%;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2.5%;
+  gap: 4%;
 }
 .on-edge {
   display: block;
   width: 100%;
-  height: 20%;
-  border-radius: 6px 0 0 6px;
+  height: 18%;
+  border-radius: 3px 0 0 3px;
   box-shadow:
     inset 0.5px 0 0 oklch(0 0 0 / 0.25),
     -1px 0 4px -1px oklch(0 0 0 / 0.35);
 }
 .on-edge-add {
   width: 100%;
-  height: 7%;
-  border-radius: 6px 0 0 6px;
+  height: 18%;
+  border-radius: 3px 0 0 3px;
   background: var(--on-paper);
   box-shadow:
     inset 0.5px 0 0 oklch(0 0 0 / 0.25),
@@ -263,13 +264,18 @@ code {
   background: var(--on-coral-paper);
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .on-scene .on-rest {
+    display: none;
+  }
+}
 @media (prefers-reduced-motion: no-preference) {
   .on-pointer {
     animation: on-pointer var(--on-cycle) infinite;
   }
-  .on-edge-add {
-    /* The fan's own + tab takes its place while the fan is out. */
-    animation: on-edge-add var(--on-cycle) infinite;
+  .on-rest {
+    /* The stack gives way to the tabs while the fan is out. */
+    animation: on-rest var(--on-cycle) infinite;
   }
   .on-tab {
     animation: on-tab var(--on-cycle) infinite;
@@ -320,7 +326,7 @@ code {
       top: 58%;
     }
   }
-  @keyframes on-edge-add {
+  @keyframes on-rest {
     0%,
     16% {
       opacity: 1;
@@ -558,9 +564,9 @@ code {
 .on-frame .on-rest {
   display: flex;
 }
-.on-frame[data-state="fan"] .on-edge-add,
-.on-frame[data-state="write"] .on-edge-add {
-  opacity: 0;
+.on-frame[data-state="fan"] .on-rest,
+.on-frame[data-state="write"] .on-rest {
+  display: none;
 }
 .on-frame[data-state="fan"] .on-fan,
 .on-frame[data-state="write"] .on-fan {

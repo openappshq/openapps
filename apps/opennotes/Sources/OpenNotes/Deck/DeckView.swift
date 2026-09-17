@@ -26,6 +26,10 @@ struct DeckContent {
     var staticDrag: DeckDrag?
     /// The preview harness: a tab shown hovered, with no pointer.
     var staticHover: NoteID?
+    /// The preview harness: one frame of the stack growing into the fan,
+    /// this far along (0 the rest's look, 1 the fan's), over a layout
+    /// blended the same way; nil draws the state as it is.
+    var staticGrowth: CGFloat?
     /// Text, a link or files are held over the deck and would make a note:
     /// the tabs' edges lift (at rest), or the `+` tab lights up, as the target.
     var dropTarget = false
@@ -76,21 +80,26 @@ struct DeckContent {
 
 /// The deck: the fan of tabs, the `+` tab, the open note and the archive
 /// toast, each placed by `DeckLayout` (AppKit coordinates, flipped here).
-/// At rest the same tabs, folded in: each one's edge peeking out of the
-/// screen edge, `restWidth` wide, in its place in the fan and at a share
-/// of its tilt, so fanning out is only the tabs widening. Every element
-/// animates between layouts. The tabs are separate papers, each at its
-/// own small tilt (`DeckTilt`), stacked in a fan that scrolls when they
-/// do not fit, fading at whichever end has more beyond it. A tab pressed
-/// and moved past the threshold lifts (straight, larger, a deeper shadow)
-/// and follows the pointer along the deck while the others slide out of
-/// its way (`DeckReorder` says where it may land); held at either end it
-/// scrolls the fan under itself (`DeckEdgeHold`); the drop asks the
-/// controller for the move.
+/// At rest the same tabs as a short stack of paper edges peeking out of
+/// the screen edge, each `restWidth` wide and a few points tall, at a
+/// share of its tilt, centred where the fan's window is; reaching the
+/// edge grows every edge into its tab with one spring (width, height,
+/// corners, tilt, the writing fading in), and leaving shrinks it back.
+/// Every element animates between layouts. The tabs are separate papers,
+/// each at its own small tilt (`DeckTilt`), stacked in a fan that scrolls
+/// when they do not fit, fading at whichever end has more beyond it. A
+/// tab pressed and moved past the threshold lifts (straight, larger, a
+/// deeper shadow) and follows the pointer along the deck while the others
+/// slide out of its way (`DeckReorder` says where it may land); held at
+/// either end it scrolls the fan under itself (`DeckEdgeHold`); the drop
+/// asks the controller for the move.
 struct DeckView: View {
     let content: DeckContent
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.previewRendering) private var previewRendering
+    /// The state drawn last: rest ↔ fan takes the grow spring, a note
+    /// opening or closing the standard ease.
+    @State private var shownState: DeckState?
     @State private var drag: DeckDrag?
     /// Where inside the lifted tab the pointer took it (from its centre).
     @State private var grab: CGFloat = 0
@@ -108,10 +117,24 @@ struct DeckView: View {
 
     private var height: CGFloat { content.layout.panelFrame.height }
     private var atRest: Bool { content.state == .rest }
+    /// How far the stack has grown into the fan, for the look that goes
+    /// with it: 0 at rest, 1 in the fan and with a note open; the harness
+    /// may hold a frame in between.
+    private var growth: CGFloat { content.staticGrowth ?? (atRest ? 0 : 1) }
     private static let lift = Animation.spring(response: 0.3, dampingFraction: 0.72)
     private static let tick = Animation.spring(response: 0.28, dampingFraction: 0.45)
+    /// The stack growing into the fan and shrinking back: one spring for
+    /// every edge's width, height, corners and tilt at once.
+    private static let grow = Animation.spring(response: 0.36, dampingFraction: 0.82)
     private static let space = "deck"
     private var metrics: DeckMetrics { DeckMetrics() }
+
+    /// The movement for this change of state: the grow spring between the
+    /// rest and the fan, the standard ease when a note opens or closes.
+    private var stateAnimation: Animation {
+        let opens = [shownState ?? content.state, content.state].contains { $0.openNote != nil }
+        return opens ? .easeOut(duration: Brand.Motion.standard) : Self.grow
+    }
 
     /// Which notes have every box ticked: a note going from not to done
     /// is the moment the tab ticks. A tab at rest shows no count, so
@@ -156,7 +179,8 @@ struct DeckView: View {
         }
         .frame(width: content.layout.panelFrame.width, height: height, alignment: .topLeading)
         .coordinateSpace(name: Self.space)
-        .animation(reduceMotion ? nil : .easeOut(duration: Brand.Motion.standard), value: content.state)
+        .animation(reduceMotion ? nil : stateAnimation, value: content.state)
+        .onChange(of: content.state, initial: true) { shownState = content.state }
         // The others slide into the gap, the lifted one settles: a spring;
         // a reorder that lands from elsewhere (All Notes, the keyboard)
         // takes the same movement. Reduce Motion makes them instant.
@@ -217,14 +241,15 @@ struct DeckView: View {
         return CGRect(x: fan.minX, y: height - fan.maxY, width: fan.width, height: fan.height)
     }
 
-    /// Opaque over the fan, fading out over `fadeLength` at an end that has
-    /// more tabs beyond it; nothing outside the fan, so a scrolled-away
-    /// tab is not drawn.
+    /// Opaque over the fan (the stack, at rest), fading out over
+    /// `fadeLength` at an end that has more tabs beyond it; nothing outside
+    /// the window, so a scrolled-away tab, or an edge past the stack's
+    /// cap, is not drawn.
     private var fanMask: some View {
         let rect = fanRect
         let fade = min(metrics.fadeLength, rect.height / 3)
-        let up = content.layout.canScrollUp
-        let down = content.layout.canScrollDown
+        let up = content.layout.fadesTop
+        let down = content.layout.fadesBottom
         var stops: [Gradient.Stop] = []
         stops.append(.init(color: up ? .clear : .black, location: 0))
         if up, rect.height > 0 { stops.append(.init(color: .black, location: fade / rect.height)) }
@@ -362,10 +387,10 @@ struct DeckView: View {
         // A note iCloud has not downloaded is only its file name: greyed.
         let downloading = note.map { $0.isDownloading && !$0.bodyIsLoaded } ?? false
         // Straight when open or lifted; otherwise the note's own lean, a
-        // share of it at rest.
+        // share of it at rest, the rest of it coming with the growth.
         let tilt = DeckTilt.tilt(for: tab.id)
         let straight = isOpen || lifted
-        let share: CGFloat = atRest ? metrics.restTilt : 1
+        let share: CGFloat = metrics.restTilt + (1 - metrics.restTilt) * growth
         // Out from the edge: the tilt's inset, a hover's lift (in the fan;
         // at rest the tab brightens instead), a lifted tab's, a tick's,
         // and at rest every edge's lift as a drop's target.
@@ -376,7 +401,7 @@ struct DeckView: View {
         let look = note.map { NoteAppearance.resolve($0, defaults: content.defaults) }
         let label = (note.map { ($0.pinned ? "Pinned note: " : "Note: ") + $0.title } ?? tab.id.rawValue) + (downloading ? ", downloading" : "")
         return TabCard(
-            note: note, look: look, title: note?.title ?? tab.id.rawValue, side: content.side, isOpen: isOpen, lifted: lifted, hovered: isHovered, atRest: atRest,
+            note: note, look: look, title: note?.title ?? tab.id.rawValue, side: content.side, isOpen: isOpen, lifted: lifted, hovered: isHovered, atRest: atRest, growth: growth,
             width: tab.frame.width, bleed: metrics.edgeBleed, height: tab.frame.height, progress: atRest ? nil : progress, ticked: isTicked
         )
         .rotationEffect(.degrees(straight ? 0 : tilt.degrees * share))
@@ -462,10 +487,10 @@ struct DeckView: View {
         edgeHold.moved(to: DeckAutoScroll.direction(for: drag, in: content.layout, metrics: metrics), onScroll: content.onScroll)
     }
 
-    /// The `+` tab: a neutral paper under the fan, its edge at rest like
-    /// the notes' (an empty deck at rest is this edge alone). With the fan
-    /// out it is the drop's target, ringed in coral; the lock while
-    /// read-only; the folder gone, a warning.
+    /// The `+` tab: a neutral paper under the fan, its edge at rest under
+    /// the stack like the notes' (an empty deck at rest is this edge
+    /// alone). With the fan out it is the drop's target, ringed in coral;
+    /// the lock while read-only; the folder gone, a warning.
     private var plusTab: some View {
         let rect = content.layout.plusTab
         let target = content.dropTarget && !atRest
@@ -478,7 +503,7 @@ struct DeckView: View {
                 Image(systemName: glyph)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(content.folderMissing ? Brand.dangerSolid : Brand.textPrimary)
-                    .opacity(atRest ? 0 : 1)
+                    .opacity(growth)
             }
         }
         .buttonStyle(.plain)
@@ -525,7 +550,9 @@ struct DeckView: View {
 /// at the tab's foot and a thin line of the note's ink along the inner
 /// edge, filled as far as the list has come; the last box done ticks the
 /// count once. At rest the paper alone, brightened a little under the
-/// pointer. Hover lifts a fanned tab a little, a drag lifts it more.
+/// pointer; what is written on it fades in with `growth` as the edge
+/// grows into the tab. Hover lifts a fanned tab a little, a drag lifts
+/// it more.
 private struct TabCard: View {
     let note: Note?
     let look: NoteAppearance?
@@ -535,6 +562,8 @@ private struct TabCard: View {
     let lifted: Bool
     let hovered: Bool
     let atRest: Bool
+    /// 0 at rest, 1 in the fan: the writing's opacity.
+    let growth: CGFloat
     /// What shows of the tab; `PaperEdge` draws it `bleed` wider.
     let width: CGFloat
     let bleed: CGFloat
@@ -566,8 +595,10 @@ private struct TabCard: View {
                 // The label runs the tab's length, laid out along it and then
                 // turned; the pin sits at the top, above it, the count at the
                 // foot, below it.
+                // Nothing to lay the label along on a short edge: the
+                // frames stay at zero until the tab grows tall enough.
                 let countLength: CGFloat = progress == nil ? 0 : 22
-                let labelLength = height - 16 - (note?.pinned == true ? 14 : 0) - countLength
+                let labelLength = max(0, height - 16 - (note?.pinned == true ? 14 : 0) - countLength)
                 let across = max(0, width - 12)
                 VStack(spacing: 2) {
                     if note?.pinned == true {
@@ -596,8 +627,8 @@ private struct TabCard: View {
                 .padding(side == .right ? .leading : .trailing, 4)
             }
             // The paper alone at rest: what is written on it fades in as
-            // the tab widens into the fan.
-            .opacity(atRest ? 0 : 1)
+            // the edge grows into the fan.
+            .opacity(growth)
         }
     }
 
@@ -627,16 +658,18 @@ private struct TabCard: View {
 
 /// A paper's edge against the screen: the tabs and the `+` tab are both
 /// this. Rounded on the side away from the edge and square against it,
-/// with continuous corners that follow the width — 6 pt at the rest
-/// width, 10 pt at the fan's — drawn `bleed` wider than `width` with the
+/// with continuous corners that follow the width and height (`radius`),
+/// drawn `bleed` wider than `width` with the
 /// extra past the screen edge, so a tilted, inset or lifted paper never
 /// shows the wallpaper between itself and the edge. Filled, hairlined,
-/// shadowed; the content sits on the visible part.
-private struct PaperEdge<Content: View>: View {
+/// shadowed; the content sits on the visible part. Animatable in its
+/// width and height, so the corners and the content's clip follow the
+/// paper through the grow, frame by frame.
+private struct PaperEdge<Content: View>: View, Animatable {
     let side: DeckSide
-    let width: CGFloat
+    var width: CGFloat
     let bleed: CGFloat
-    let height: CGFloat
+    var height: CGFloat
     let fill: Color
     let hairline: Color
     var hairlineWidth: CGFloat = 0.5
@@ -645,6 +678,14 @@ private struct PaperEdge<Content: View>: View {
     let shadowOpacity: Double
     let shadowRadius: CGFloat
     @ViewBuilder let content: Content
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(width, height) }
+        set {
+            width = newValue.first
+            height = newValue.second
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -664,7 +705,10 @@ private struct PaperEdge<Content: View>: View {
         .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: side == .right ? -1 : 1, y: 2)
     }
 
-    private var radius: CGFloat { min(10, max(6, width * 0.75)) }
+    /// 6 pt at the rest width, 10 pt at the fan's; never more than a
+    /// third of the height, so a compressed edge keeps its corners
+    /// instead of rounding into a capsule.
+    private var radius: CGFloat { min(10, max(6, width * 0.75), height / 3) }
 
     private var shape: UnevenRoundedRectangle {
         if side == .right {

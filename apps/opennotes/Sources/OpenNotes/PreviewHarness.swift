@@ -118,8 +118,9 @@ final class PreviewHarness {
         let one = seededModel(count: 1)
         let three = seededModel(count: 3)
         let twelve = seededModel(count: 12)
+        let thirty = seededModel(count: 30)
         let none = seededModel(count: 0)
-        defer { for folder in [one, three, twelve, none].compactMap({ $0?.store.folder }) { try? FileManager.default.removeItem(at: folder) } }
+        defer { for folder in [one, three, twelve, thirty, none].compactMap({ $0?.store.folder }) { try? FileManager.default.removeItem(at: folder) } }
         var failures = 0
         let notes = model.active
         let groceries = notes.first { $0.title == "Groceries" }?.id ?? notes[0].id
@@ -144,28 +145,28 @@ final class PreviewHarness {
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-\(name)-\(suffix).png") { failures += 1 }
             }
             setRestricted(false)
-            // At rest with one note, twelve (scrolled to the top, the fade
-            // below), none (the `+` tab's edge alone), and the five under
-            // the pointer: the third tab brightened.
-            if let one {
-                let stage = DeckStage(content: content(state: .rest, toast: false, model: one), side: preferences.side, dark: scheme == .dark)
-                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-rest-1-\(suffix).png") { failures += 1 }
-            }
-            if let twelve {
-                let stage = DeckStage(content: content(state: .rest, toast: false, model: twelve), side: preferences.side, dark: scheme == .dark)
-                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-rest-12-\(suffix).png") { failures += 1 }
-            }
-            if let none {
-                let stage = DeckStage(content: content(state: .rest, toast: false, model: none), side: preferences.side, dark: scheme == .dark)
-                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-rest-empty-\(suffix).png") { failures += 1 }
+            // At rest with one note, twelve (the edges compressed, the
+            // last fading past the stack's cap), thirty (the same cap),
+            // none (the `+` tab's edge alone), and the five under the
+            // pointer: the third edge brightened.
+            for (name, seeded) in [("1", one), ("12", twelve), ("30", thirty), ("empty", none)] {
+                guard let seeded else { continue }
+                let stage = DeckStage(content: content(state: .rest, toast: false, model: seeded), side: preferences.side, dark: scheme == .dark)
+                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-rest-\(name)-\(suffix).png") { failures += 1 }
             }
             var restHover = content(state: .rest, toast: false)
             restHover.staticHover = notes.count > 2 ? notes[2].id : notes[0].id
             if await !write(DeckStage(content: restHover, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-rest-hover-\(suffix).png") { failures += 1 }
-            // The rest beside the fan, the same tabs: the fan is the rest
-            // widened, nothing else moves.
+            // The rest beside the fan, the same tabs: the stack grows into
+            // the fan about the same centre.
             let pair = PairStage(left: DeckStage(content: content(state: .rest, toast: false), side: preferences.side, dark: scheme == .dark), right: DeckStage(content: content(state: .fan, toast: false), side: preferences.side, dark: scheme == .dark))
             if await !write(pair, scheme: scheme, appearance: appearance, to: "deck-rest-fan-\(suffix).png") { failures += 1 }
+            // Half way through the grow: every edge part way to its tab,
+            // the writing half in.
+            var growing = content(state: .fan, toast: false)
+            growing.layout = Self.blend(content(state: .rest, toast: false).layout, growing.layout, 0.5)
+            growing.staticGrowth = 0.5
+            if await !write(DeckStage(content: growing, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-grow-mid-\(suffix).png") { failures += 1 }
             // Text held over the deck at rest: every edge lifted as the
             // drop's target; then over the `+` tab with the fan out.
             var dropRest = content(state: .rest, toast: false)
@@ -474,6 +475,21 @@ final class PreviewHarness {
 
     /// The stage's screen: a 900 × 700 desktop.
     static let stageSize = CGSize(width: 900, height: 700)
+
+    /// A frame between two layouts of the same notes, `t` of the way from
+    /// `from` to `to`: what the grow's spring passes through.
+    private static func blend(_ from: DeckLayout, _ to: DeckLayout, _ t: CGFloat) -> DeckLayout {
+        func mix(_ a: CGRect, _ b: CGRect) -> CGRect {
+            CGRect(x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t, width: a.width + (b.width - a.width) * t, height: a.height + (b.height - a.height) * t)
+        }
+        var mid = to
+        for index in mid.tabs.indices {
+            if let start = from.tabs.first(where: { $0.id == mid.tabs[index].id }) { mid.tabs[index].frame = mix(start.frame, mid.tabs[index].frame) }
+        }
+        mid.fan = mix(from.fan, to.fan)
+        mid.plusTab = mix(from.plusTab, to.plusTab)
+        return mid
+    }
 
     private func content(state: DeckState, toast: Bool, notice: Bool = false, model: AppModel? = nil, scroll: CGFloat = 0) -> DeckContent {
         let model = model ?? self.model

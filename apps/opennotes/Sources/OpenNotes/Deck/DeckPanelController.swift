@@ -55,7 +55,7 @@ final class DeckPanelController {
     private var moving: NoteID?
     /// How far the fan is scrolled and which tab it keeps in view
     /// (`DeckScrollKeeper`): the open note's tab is revealed once when it
-    /// opens or is moved; the fan showing keeps the scroll the rest had.
+    /// opens or is moved; the rest keeps the fan's scroll for its return.
     private var keeper = DeckScrollKeeper()
     /// Something held over the deck (`DeckDrop`): the tabs lift as a
     /// target, or the deck says why a drop is refused.
@@ -407,8 +407,8 @@ final class DeckPanelController {
         let notice = refusal != nil
         layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: toast, notice: notice, scroll: keeper.scroll)
         // The open tab is brought into the fan once, when it opened or was
-        // moved; the user's own scrolling is otherwise kept, and the fan
-        // opens at the scroll the rest showed.
+        // moved; the user's own scrolling is otherwise kept through the
+        // rest, so the fan grows back open where it was left.
         if let revealed = keeper.settle(layout) {
             layout = DeckGeometry.layout(state: state, side: preferences.side, visibleFrame: screen.visibleFrame, notes: notes.map(\.id), toast: toast, notice: notice, scroll: revealed)
         }
@@ -531,7 +531,7 @@ final class DeckPanelController {
 
     /// The fan's column of tabs, the part the pointer and the wheel count
     /// as the deck (the fan itself spans the panel so shadows are not cut);
-    /// at rest the edge strip, where the tabs' edges are.
+    /// at rest the edge strip over the stack, where the edges are.
     private func fanHitRect(in layout: DeckLayout) -> CGRect {
         let metrics = DeckMetrics()
         let width = machine.state == .rest ? metrics.edgeWidth : metrics.tabWidth + metrics.tiltInset + 6
@@ -568,12 +568,20 @@ final class DeckPanelController {
         return result
     }
 
-    /// The strip the pointer reaches at the screen edge: `edgeWidth` over
-    /// the deck's whole height, whatever the state.
+    /// The strip the pointer reaches at the screen edge: `edgeWidth` wide.
+    /// At rest it runs the stack and the `+` edge plus the margin at each
+    /// end (the panel is the fan's height, but the deck is not); with the
+    /// fan out or a note open, the panel's whole height.
     private func edgeRect(in layout: DeckLayout) -> CGRect {
-        let width = DeckMetrics().edgeWidth
+        let metrics = DeckMetrics()
+        let width = metrics.edgeWidth
         let x = preferences.side == .right ? layout.panelFrame.width - width : 0
-        return CGRect(x: x, y: 0, width: width, height: layout.panelFrame.height)
+        guard machine.state == .rest else {
+            return CGRect(x: x, y: 0, width: width, height: layout.panelFrame.height)
+        }
+        let bottom = max(0, layout.plusTab.minY - metrics.margin)
+        let top = min(layout.panelFrame.height, max(layout.fan.maxY, layout.plusTab.maxY) + metrics.margin)
+        return CGRect(x: x, y: bottom, width: width, height: top - bottom)
     }
 
     private func moveWindow(to frame: CGRect) {

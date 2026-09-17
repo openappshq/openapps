@@ -52,11 +52,11 @@ const REQUIREMENTS = (
 const states: [string, string][] = [
   [
     "Rest",
-    "the edge of every note's paper peeking a few pixels out of the screen edge, in its own colour, in the deck's order — no tray, nothing written on it. On every Space, over full-screen apps and Stage Manager; it never asks for your attention",
+    "a short stack of your notes' paper edges peeking a few pixels out of the screen edge, one small edge per note in its own colour, in the deck's order — no tray, nothing written on it. On every Space, over full-screen apps and Stage Manager; it never asks for your attention",
   ],
   [
     "Reach",
-    "move the pointer to the edge and the edges widen in place into the fan, a paper per note with its title, each leaning a little; what does not fit scrolls. Click one, or the + under them for a new note. Drag a tab up or down to reorder; drop text, a link or files on the deck and a note opens with them in it",
+    "move the pointer to the edge and the stack grows in place into the fan, a paper per note with its title, each leaning a little; what does not fit scrolls. Click one, or the + under them for a new note. Drag a tab up or down to reorder; drop text, a link or files on the deck and a note opens with them in it",
   ],
   [
     "Write",
@@ -269,8 +269,8 @@ export default function App() {
             <div className="hero-grid on-hero-grid">
               <div className="hero-intro">
                 <p>
-                  A deck of sticky notes docked to the edge of your screen. Paper edges at rest; a
-                  fan when you reach for it; one note out to write, over anything, full-screen apps
+                  A deck of sticky notes docked to the edge of your screen. A small stack of paper
+                  edges at rest; a fan when you reach for it; one note out to write, over anything, full-screen apps
                   included. Every note is a Markdown file in a folder you can see.
                 </p>
                 <div className="hero-actions">
