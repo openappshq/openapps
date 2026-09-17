@@ -139,6 +139,13 @@ final class AllNotesTextTests: XCTestCase {
         XCTAssertEqual(AllNotesText.selected(0, of: 11), "0 of 11 selected")
     }
 
+    // MARK: - selectedCaption
+
+    @MainActor func testSelectedCaptionNamesTheCheckedCount() {
+        XCTAssertEqual(AllNotesText.selectedCaption(1), "1 SELECTED")
+        XCTAssertEqual(AllNotesText.selectedCaption(12), "12 SELECTED")
+    }
+
     // MARK: - skipped / trashed
 
     @MainActor func testSkippedWithNoReasonsIsJustTheCount() {
