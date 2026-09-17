@@ -106,12 +106,29 @@ enum AllNotesNotice: Equatable {
 /// Export… on the checked set: one file per note into the chosen folder,
 /// each named as the single-note export names it, and no two alike — a
 /// second "groceries.md" in the batch or already in the folder becomes
-/// "groceries-2.md". Pure: the controller writes what this plans.
+/// "groceries-2.md"; `plan` names, `write` creates.
 enum AllNotesExport {
     struct Plan: Equatable {
         let id: NoteID
         let name: String
         let data: Data
+    }
+
+    /// The files into the folder, each created exclusively (never over a
+    /// file that appeared since the plan looked): the notes written, and
+    /// the ones that could not be, with why.
+    static func write(_ notes: [Note], as format: ExportFormat, into folder: URL, fileManager: FileManager = .default) -> AppModel.BulkOutcome {
+        var outcome = AppModel.BulkOutcome()
+        let plans = plan(notes, as: format) { fileManager.fileExists(atPath: folder.appendingPathComponent($0).path) }
+        for plan in plans {
+            do {
+                try plan.data.write(to: folder.appendingPathComponent(plan.name), options: .withoutOverwriting)
+                outcome.done.append(plan.id)
+            } catch {
+                outcome.skipped.append(.init(id: plan.id, reason: "\(plan.name): \(error.localizedDescription)"))
+            }
+        }
+        return outcome
     }
 
     /// `taken` says whether a name is already in the folder.

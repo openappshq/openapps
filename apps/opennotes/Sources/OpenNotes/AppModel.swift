@@ -369,9 +369,22 @@ final class AppModel {
     /// The checked notes out of the deck, one toast and one Undo for the
     /// whole batch.
     func archive(_ ids: [NoteID]) -> BulkOutcome {
-        let outcome = bulk(ids) { archiveWithoutUndo($0) }
-        if let first = outcome.done.first, let note = store.note(first) {
-            undo.archived(outcome.done, title: note.title, at: now())
+        // `done` holds the ids the notes have now: a save that found an
+        // outside edit archived the conflict copy, and that is what undo
+        // restores.
+        var archived: [NoteID] = []
+        var outcome = bulk(ids) { id in
+            switch archiveWithoutUndo(id) {
+            case .success(let current):
+                archived.append(current)
+                return nil
+            case .failure(let problem):
+                return problem.message
+            }
+        }
+        outcome.done = archived
+        if let first = archived.first, let note = store.note(first) {
+            undo.archived(archived, title: note.title, at: now())
             scheduleUndoExpiry()
         }
         return outcome
@@ -495,20 +508,27 @@ final class AppModel {
     /// archived flag is written to the file.
     func archive(_ id: NoteID) {
         guard allowed(), let note = store.note(id) else { return }
-        guard archiveWithoutUndo(id) == nil else { return }
-        undo.archived(id, title: note.title, at: now())
+        guard case .success(let current) = archiveWithoutUndo(id) else { return }
+        undo.archived(current, title: note.title, at: now())
         scheduleUndoExpiry()
     }
 
+    /// Why an archive wrote nothing, for the footer.
+    private struct ArchiveProblem: Error {
+        let message: String
+    }
+
     /// The archive itself: saved first, the id resolved through any
-    /// redirect, then the flag written. Why the store refused, or nil.
-    /// The undo entry is the caller's: one per note from the deck, one
-    /// per batch from All Notes.
-    private func archiveWithoutUndo(_ id: NoteID) -> String? {
-        guard store.note(id) != nil else { return StoreError.noSuchNote(id).localizedDescription }
+    /// redirect (a save that found an outside edit archives the conflict
+    /// copy, and that id is the answer — what undo must restore), then
+    /// the flag written. The undo entry is the caller's: one per note
+    /// from the deck, one per batch from All Notes.
+    private func archiveWithoutUndo(_ id: NoteID) -> Result<NoteID, ArchiveProblem> {
+        guard store.note(id) != nil else { return .failure(ArchiveProblem(message: StoreError.noSuchNote(id).localizedDescription)) }
         let current = save(id) ?? id
-        if let problem = attempt({ try store.archive(current) }) { return problem }
-        return store.note(current)?.archived == true ? nil : "Couldn’t archive \(current.fileName)."
+        if let problem = attempt({ try store.archive(current) }) { return .failure(ArchiveProblem(message: problem)) }
+        guard store.note(current)?.archived == true else { return .failure(ArchiveProblem(message: "Couldn’t archive \(current.fileName).")) }
+        return .success(current)
     }
 
     /// The toast leaves on its own once the window has passed.

@@ -90,7 +90,8 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Export… on the checked set: a folder from the open panel, then one
-    /// file per note in it (`AllNotesExport.plan`: no name written twice).
+    /// file per note in it (`AllNotesExport.write`: no name written twice,
+    /// nothing written over).
     /// A note whose body is not here is skipped and said so in the
     /// footer, like any refused bulk action. Works while read-only.
     private func export(_ ids: [NoteID], as format: ExportFormat) {
@@ -111,15 +112,9 @@ final class AllNotesWindowController: NSObject, NSWindowDelegate {
             }
             notes.append(note)
         }
-        let plans = AllNotesExport.plan(notes, as: format) { FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
-        for plan in plans {
-            do {
-                try plan.data.write(to: folder.appendingPathComponent(plan.name), options: [.atomic, .withoutOverwriting])
-                outcome.done.append(plan.id)
-            } catch {
-                outcome.skipped.append(.init(id: plan.id, reason: "\(plan.name): \(error.localizedDescription)"))
-            }
-        }
+        let written = AllNotesExport.write(notes, as: format, into: folder)
+        outcome.done += written.done
+        outcome.skipped += written.skipped
         session.show(AllNotesNotice.refusals(in: outcome))
     }
 }
