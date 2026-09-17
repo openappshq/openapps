@@ -190,7 +190,7 @@ Rich text, images, fonts that aren't installed on the Mac (nothing is bundled be
 
 ## Marketing only
 
-At `/opennotes/`: the coral key in the headline, a drawn deck beside the three states, the install block with the one-line command and Copy, Buy, questions, the closing field.
+At `/opennotes/`: the coral key in the headline, a drawn deck beside the three states — at rest it is the paper edges (every note's own colour peeking out of the screen edge, no tray), never a slab or a pill —, the install block with the one-line command and Copy, Buy, questions, the closing field.
 
 ## References
 
