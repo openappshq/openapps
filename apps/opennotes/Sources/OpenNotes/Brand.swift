@@ -78,12 +78,6 @@ enum Brand {
         dynamic(light: color.lightFace, dark: color.darkFace)
     }
 
-    /// The pill's dash and the colour swatches: the light face in both
-    /// appearances (`NoteAppearance.swatch`).
-    static func tab(_ color: NoteColor) -> Color {
-        Color(nsColor: NSColor(hex: color.lightFace))
-    }
-
     /// The bar along a tab's outer edge: the colour's mid tone, the same
     /// in both appearances.
     static func bar(_ color: NoteColor) -> Color {

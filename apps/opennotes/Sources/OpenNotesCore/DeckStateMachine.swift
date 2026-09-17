@@ -3,7 +3,7 @@ import Foundation
 
 /// The deck's settings as the rules read them.
 nonisolated public struct DeckSettings: Hashable, Sendable {
-    /// How long the pointer rests on the edge before the pill fans out.
+    /// How long the pointer rests on the edge before the deck fans out.
     public var hoverOpenDelay: TimeInterval
     /// How long after the pointer has left the edge and the deck a fan collapses.
     public var hoverCloseDelay: TimeInterval
@@ -26,7 +26,9 @@ nonisolated public enum DeckTimer: Hashable, Sendable {
 
 /// What the deck looks like (design/products/opennotes.md, "The deck").
 nonisolated public enum DeckState: Hashable, Sendable {
-    case pill
+    /// The fan folded in: the edge of every tab peeking out of the screen
+    /// edge, nothing else.
+    case rest
     case fan
     /// One note slid out; `editing` once the keyboard focus is in it.
     case open(NoteID, editing: Bool)
@@ -51,7 +53,7 @@ nonisolated public enum DeckEvent: Hashable, Sendable {
     case plusClicked
     /// The global hotkey: a new note, focused, from anywhere.
     case hotkey
-    /// Text, a link or files let go over the pill or the fan: a new note
+    /// Text, a link or files let go over the deck at rest or the fan: a new note
     /// with what was dropped, focused — the hotkey's path, the controller
     /// supplying the text when the store answers `.createNote`. Refused
     /// while read-only the same way (the fan shows, nothing is made).
@@ -95,7 +97,8 @@ nonisolated public enum DeckEvent: Hashable, Sendable {
 nonisolated public enum DeckEffect: Hashable, Sendable {
     case startTimer(DeckTimer, TimeInterval)
     case cancelTimer(DeckTimer)
-    case showPill
+    /// Fold the fan in to the tabs' edges.
+    case showRest
     case showFan
     /// Slide the note out; `focus` puts the caret in it (activating the app).
     case openNote(NoteID, focus: Bool)
@@ -116,7 +119,7 @@ nonisolated public enum DeckEffect: Hashable, Sendable {
 }
 
 /// The deck's rules, pure: the controller owns the windows and timers and
-/// feeds events back. Hover fans the pill out after a delay and collapses
+/// feeds events back. Hover fans the deck out after a delay and collapses
 /// it after the pointer has left both the edge and the deck; only a click,
 /// the hotkey, a drop, ⌘W or All Notes opens a note; an open note closes only on
 /// Escape, a click outside, the hotkey, ⌘W or Archive, and closing always
@@ -124,7 +127,7 @@ nonisolated public enum DeckEffect: Hashable, Sendable {
 /// ⌥⌘↑ / ⌥⌘↓ ask for one `.reorder`, the write the All Notes list makes.
 nonisolated public struct DeckStateMachine: Hashable, Sendable {
     public private(set) var settings: DeckSettings
-    public private(set) var state: DeckState = .pill
+    public private(set) var state: DeckState = .rest
     public private(set) var pointerOnEdge = false
     public private(set) var pointerInDeck = false
     public private(set) var pendingOpen = false
@@ -150,7 +153,7 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
         case .pointerEnteredEdge:
             pointerOnEdge = true
             cancelClose(&effects)
-            if state == .pill, !pendingOpen {
+            if state == .rest, !pendingOpen {
                 pendingOpen = true
                 effects.append(.startTimer(.hoverOpen, settings.hoverOpenDelay))
             }
@@ -166,15 +169,15 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
             scheduleCloseIfFanned(&effects)
         case .timerFired(.hoverOpen):
             pendingOpen = false
-            if state == .pill, pointerOnEdge {
+            if state == .rest, pointerOnEdge {
                 state = .fan
                 effects.append(.showFan)
             }
         case .timerFired(.hoverClose):
             pendingClose = false
             if state == .fan, !pointerOnEdge, !pointerInDeck, dragging == nil {
-                state = .pill
-                effects.append(.showPill)
+                state = .rest
+                effects.append(.showRest)
             }
         case .tabClicked(let id):
             guard order.contains(id) else { break }
@@ -244,9 +247,9 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
                 rest(&effects)
             case .fan:
                 cancelClose(&effects)
-                state = .pill
-                effects.append(.showPill)
-            case .pill:
+                state = .rest
+                effects.append(.showRest)
+            case .rest:
                 cancelPendingOpen(&effects)
             }
         case .clickedOutside:
@@ -254,13 +257,13 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
             case .open(let id, _):
                 effects.append(.closeNote(id))
                 cancelClose(&effects)
-                state = .pill
-                effects.append(.showPill)
+                state = .rest
+                effects.append(.showRest)
             case .fan:
                 cancelClose(&effects)
-                state = .pill
-                effects.append(.showPill)
-            case .pill:
+                state = .rest
+                effects.append(.showRest)
+            case .rest:
                 break
             }
         case .closeRequested:
@@ -328,8 +331,8 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
             if case .open(let id, _) = state {
                 effects.append(.closeNote(id))
             }
-            state = .pill
-            effects.append(.showPill)
+            state = .rest
+            effects.append(.showRest)
         }
         return effects
     }
@@ -343,15 +346,15 @@ nonisolated public struct DeckStateMachine: Hashable, Sendable {
         effects.append(.reorder(reordered))
     }
 
-    /// After a note closes: the fan while the pointer is still here, else the pill.
+    /// After a note closes: the fan while the pointer is still here, else the rest.
     private mutating func rest(_ effects: inout [DeckEffect]) {
         if pointerOnEdge || pointerInDeck {
             state = .fan
             effects.append(.showFan)
         } else {
             cancelClose(&effects)
-            state = .pill
-            effects.append(.showPill)
+            state = .rest
+            effects.append(.showRest)
         }
     }
 
@@ -428,12 +431,18 @@ nonisolated public enum DeckDisplay: String, CaseIterable, Sendable, Codable {
 
 /// The deck's sizes (apps/opennotes/design/tokens.json, `deck/*`).
 nonisolated public struct DeckMetrics: Hashable, Sendable {
-    public var pillWidth: CGFloat = 14
-    public var pillMinHeight: CGFloat = 96
-    public var dashLength: CGFloat = 18
-    public var dashSpacing: CGFloat = 10
-    /// Dashes the pill shows before a dot stands for the rest.
-    public var pillMaxDashes = 8
+    /// The strip along the screen edge the pointer reaches to fan the
+    /// deck out: wider than what shows at rest, so the fan opens as the
+    /// pointer nears the edge.
+    public var edgeWidth: CGFloat = 14
+    /// What shows of each tab at rest: the paper's edge peeking out of the
+    /// screen edge.
+    public var restWidth: CGFloat = 8
+    /// How much of a fanned tab's tilt a tab at rest keeps.
+    public var restTilt: CGFloat = 0.5
+    /// How far past the screen edge a tab is drawn, so a tilted or inset
+    /// tab never shows the wallpaper between itself and the edge.
+    public var edgeBleed: CGFloat = 8
     public var tabWidth: CGFloat = 40
     public var tabHeight: CGFloat = 112
     /// Between two tabs: air enough for each to read as its own card.
@@ -473,22 +482,27 @@ nonisolated public struct DeckLayout: Hashable, Sendable {
     public struct Tab: Hashable, Sendable {
         public var id: NoteID
         /// Where the tab is now, the scroll applied: a tab past the fan's
-        /// ends is still listed, and the fan's mask hides it.
+        /// ends is still listed, and the fan's mask hides it. At rest the
+        /// frame is the tab's visible edge, `restWidth` wide; the fan
+        /// widens it in place.
         public var frame: CGRect
     }
 
     public var panelFrame: CGRect
-    public var pill: CGRect
     /// Every active note's tab, in deck order.
     public var tabs: [Tab]
     /// The fan's window onto the tabs: what shows, and where the fades go.
-    /// The whole panel width, so a lifted tab's shadow is not cut.
+    /// The whole panel width, so a lifted tab's shadow is not cut. At
+    /// rest the same window: the rest is the fan, folded in.
     public var fan: CGRect
     /// How far the tabs are scrolled up past the fan's top, clamped.
     public var scroll: CGFloat
     /// The furthest the tabs can scroll: what does not fit the fan.
     public var maxScroll: CGFloat
     public var plusTab: CGRect
+    /// The open note's card, its top at its tab's (held inside the panel
+    /// and the fan's window), so the card and its tab touch wherever the
+    /// fan is scrolled.
     public var note: CGRect?
     /// The archive toast ("Archived … · Undo") under the deck while one
     /// shows, or the taller notice a refused drop shows in its place.
@@ -506,28 +520,34 @@ nonisolated public enum DeckGeometry {
     /// The layout for a state. `visibleFrame` is the screen's, in AppKit
     /// coordinates; the deck is centred on it vertically and clamped inside.
     /// Every active note gets a tab, `tabStep` apart; what does not fit
-    /// between the margins and the `+` tab scrolls (`scroll`, clamped to
-    /// `maxScroll`), the `+` tab staying put under the fan. `toast` leaves
-    /// room under the deck for the archive toast, `notice` for the taller
-    /// line a refused drop shows there instead (the same rect, `toast`).
+    /// between the margins, the `+` tab and the message block scrolls
+    /// (`scroll`, clamped to `maxScroll`), the `+` tab staying put under
+    /// the fan. At rest the tabs sit exactly where the fan has them, only
+    /// `restWidth` wide: fanning out changes their width and nothing else.
+    /// `toast` leaves room under the deck for the archive toast, `notice`
+    /// for the taller line a refused drop shows there instead (the same
+    /// rect, `toast`); either is taken from the fan's height first, so
+    /// the message never covers the `+` tab on a fan that fills the screen.
     public static func layout(state: DeckState, side: DeckSide, visibleFrame: CGRect, notes: [NoteID], toast: Bool = false, notice: Bool = false, scroll requested: CGFloat = 0, metrics: DeckMetrics = DeckMetrics()) -> DeckLayout {
         let step = metrics.tabStep
         let count = notes.count
         let stackHeight = count == 0 ? 0 : metrics.tabHeight + CGFloat(count - 1) * step
-        // The fan takes what the screen leaves after the margins and the
-        // plus tab; the rest scrolls.
-        let available = max(0, visibleFrame.height - 2 * metrics.margin - metrics.plusTabHeight - metrics.gap)
+        let messageHeight: CGFloat? = notice ? metrics.noticeHeight : toast ? metrics.toastHeight : nil
+        let messageBlock = messageHeight.map { $0 + metrics.gap } ?? 0
+        // The fan takes what the screen leaves after the margins, the plus
+        // tab and the message; the rest scrolls.
+        let available = max(0, visibleFrame.height - 2 * metrics.margin - metrics.plusTabHeight - metrics.gap - messageBlock)
         let fanHeight = min(stackHeight, available)
         let maxScroll = max(0, stackHeight - fanHeight)
         let scroll = min(max(requested, 0), maxScroll)
         let fanBlock = fanHeight + (count == 0 ? 0 : metrics.gap) + metrics.plusTabHeight
-        let pillHeight = max(metrics.pillMinHeight, CGFloat(min(count, metrics.pillMaxDashes + 1)) * metrics.dashSpacing + 2 * metrics.dashSpacing)
+        let tabWidth = state == .rest ? metrics.restWidth : metrics.tabWidth
         var contentHeight: CGFloat
         var contentWidth: CGFloat
         switch state {
-        case .pill:
-            contentHeight = pillHeight
-            contentWidth = metrics.pillWidth
+        case .rest:
+            contentHeight = fanBlock
+            contentWidth = metrics.restWidth
         case .fan:
             contentHeight = fanBlock
             contentWidth = metrics.tabWidth
@@ -535,10 +555,9 @@ nonisolated public enum DeckGeometry {
             contentHeight = max(fanBlock, metrics.noteHeight)
             contentWidth = metrics.tabWidth + metrics.gap + metrics.noteWidth
         }
-        let messageHeight: CGFloat? = notice ? metrics.noticeHeight : toast ? metrics.toastHeight : nil
-        if let messageHeight {
+        if messageHeight != nil {
             contentWidth = max(contentWidth, metrics.toastWidth)
-            contentHeight += metrics.gap + messageHeight
+            contentHeight += messageBlock
         }
         let panelHeight = min(contentHeight + 2 * metrics.margin, visibleFrame.height)
         let panelWidth = contentWidth + metrics.margin
@@ -552,27 +571,32 @@ nonisolated public enum DeckGeometry {
             side == .right ? panelWidth - width : 0
         }
         let top = panelHeight - metrics.margin
-        let pill = CGRect(x: edgeX(width: metrics.pillWidth), y: top - pillHeight, width: metrics.pillWidth, height: pillHeight)
         let fan = CGRect(x: 0, y: top - fanHeight, width: panelWidth, height: fanHeight)
         var tabs: [DeckLayout.Tab] = []
         for (index, id) in notes.enumerated() {
             // Down from the fan's top by the tab's place in the stack, up
             // again by the scroll.
             let tabTop = top - CGFloat(index) * step + scroll
-            tabs.append(.init(id: id, frame: CGRect(x: edgeX(width: metrics.tabWidth), y: tabTop - metrics.tabHeight, width: metrics.tabWidth, height: metrics.tabHeight)))
+            tabs.append(.init(id: id, frame: CGRect(x: edgeX(width: tabWidth), y: tabTop - metrics.tabHeight, width: tabWidth, height: metrics.tabHeight)))
         }
         let plusY = fan.minY - (count == 0 ? 0 : metrics.gap) - metrics.plusTabHeight
-        let plusTab = CGRect(x: edgeX(width: metrics.tabWidth), y: plusY, width: metrics.tabWidth, height: metrics.plusTabHeight)
+        let plusTab = CGRect(x: edgeX(width: tabWidth), y: plusY, width: tabWidth, height: metrics.plusTabHeight)
         var note: CGRect?
-        if case .open = state {
+        if case .open(let id, _) = state {
             let noteX = side == .right ? edgeX(width: metrics.tabWidth) - metrics.gap - metrics.noteWidth : metrics.tabWidth + metrics.gap
-            note = CGRect(x: noteX, y: top - metrics.noteHeight, width: metrics.noteWidth, height: metrics.noteHeight)
+            // The card's top at its tab's, the tab's top held inside the
+            // fan's window (a tab scrolled away anchors the card at the
+            // fan's end), and the card held above the message and below
+            // the margin.
+            let tabTop = tabs.first { $0.id == id }.map { min(max($0.frame.maxY, fan.minY), fan.maxY) } ?? top
+            let noteTop = min(max(tabTop, metrics.margin + messageBlock + metrics.noteHeight), top)
+            note = CGRect(x: noteX, y: noteTop - metrics.noteHeight, width: metrics.noteWidth, height: metrics.noteHeight)
         }
         var toastRect: CGRect?
         if let messageHeight {
             toastRect = CGRect(x: edgeX(width: metrics.toastWidth), y: metrics.margin, width: metrics.toastWidth, height: messageHeight)
         }
-        return DeckLayout(panelFrame: panelFrame, pill: pill, tabs: tabs, fan: fan, scroll: scroll, maxScroll: maxScroll, plusTab: plusTab, note: note, toast: toastRect, tabStep: step)
+        return DeckLayout(panelFrame: panelFrame, tabs: tabs, fan: fan, scroll: scroll, maxScroll: maxScroll, plusTab: plusTab, note: note, toast: toastRect, tabStep: step)
     }
 
     /// The scroll that keeps this note's tab wholly inside the fan, moving
@@ -613,5 +637,73 @@ nonisolated public enum DeckTilt {
         let sign: CGFloat = (hash >> 16) & 1 == 0 ? 1 : -1
         let inset = CGFloat((hash >> 24) % 1000) / 999 * metrics.tiltInset
         return (degrees * sign, inset)
+    }
+}
+
+/// A lifted tab held at either end of the fan scrolls the fan under it
+/// (design/products/opennotes.md, "Overflow scrolls"): the direction for
+/// where the tab is, and the timer's pace. The view runs the timer; the
+/// rules for when it runs are `DeckEdgeHold`.
+nonisolated public enum DeckAutoScroll {
+    public enum Direction: Hashable, Sendable {
+        /// Towards the top: what lies above comes into view.
+        case up
+        case down
+    }
+
+    /// How often the fan moves while the tab is held at an end.
+    public static let interval: TimeInterval = 1 / 60
+    /// How far it moves each time: about three tabs a second.
+    public static let step: CGFloat = 6
+
+    /// Which way the fan scrolls for a lifted tab whose centre is here
+    /// (the fan's window and the centre in the same coordinates, y down):
+    /// up while the tab's top is within a quarter tab of the fan's top and
+    /// more lies above, down likewise at the bottom, else nil.
+    public static func direction(tabCenterY: CGFloat, fan: CGRect, canScrollUp: Bool, canScrollDown: Bool, metrics: DeckMetrics = DeckMetrics()) -> Direction? {
+        let edge = metrics.tabHeight / 4
+        if tabCenterY - metrics.tabHeight / 2 < fan.minY + edge, canScrollUp { return .up }
+        if tabCenterY + metrics.tabHeight / 2 > fan.maxY - edge, canScrollDown { return .down }
+        return nil
+    }
+
+    /// The scroll for one tick: positive moves the tabs up.
+    public static func delta(_ direction: Direction) -> CGFloat {
+        direction == .up ? -step : step
+    }
+}
+
+/// When the edge-hold timer runs: started as the lifted tab reaches an
+/// end with more beyond it, restarted the other way when it reaches the
+/// other end, stopped when it leaves the end, when the end has nothing
+/// more beyond it, or when the drag ends. Pure; the view owns the timer.
+nonisolated public struct DeckEdgeHold: Hashable, Sendable {
+    public enum Change: Hashable, Sendable {
+        /// Run the timer this way (in place of one running the other way).
+        case start(DeckAutoScroll.Direction)
+        case stop
+        case none
+    }
+
+    /// The direction the timer runs, while it does.
+    public private(set) var direction: DeckAutoScroll.Direction?
+
+    public init() {}
+
+    public var isHolding: Bool { direction != nil }
+
+    /// The lifted tab is now at this end (nil: at neither, or the fan
+    /// cannot scroll that way).
+    public mutating func moved(to next: DeckAutoScroll.Direction?) -> Change {
+        guard next != direction else { return .none }
+        direction = next
+        return next.map { .start($0) } ?? .stop
+    }
+
+    /// The tab was dropped, or the drag cancelled.
+    public mutating func ended() -> Change {
+        guard direction != nil else { return .none }
+        direction = nil
+        return .stop
     }
 }

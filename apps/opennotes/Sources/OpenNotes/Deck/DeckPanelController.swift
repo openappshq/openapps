@@ -60,8 +60,8 @@ final class DeckPanelController {
     /// Set when `keep` changed or the fan opened: the next render scrolls
     /// so the kept tab shows, and then leaves the scroll to the user.
     private var revealPending = false
-    /// Something held over the pill or the fan (`DeckDrop`): the pill
-    /// lights up as a target, or the deck says why a drop is refused.
+    /// Something held over the deck (`DeckDrop`): the tabs lift as a
+    /// target, or the deck says why a drop is refused.
     private var dropHover: DropHover = .none
     /// The dropped items' text, handed to `.createNote` when the machine
     /// answers the `.dropped` event; nil for the hotkey and `+`.
@@ -95,7 +95,7 @@ final class DeckPanelController {
         self.preferences = preferences
         self.showAllNotes = showAllNotes
         machine = DeckStateMachine(settings: DeckSettings(readOnly: model.readOnly), notes: model.deckOrder, pinned: model.pinnedIDs)
-        layout = DeckGeometry.layout(state: .pill, side: preferences.side, visibleFrame: screen.visibleFrame, notes: model.deckOrder)
+        layout = DeckGeometry.layout(state: .rest, side: preferences.side, visibleFrame: screen.visibleFrame, notes: model.deckOrder)
 
         panel = DeckPanel(contentRect: layout.panelFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false
@@ -115,7 +115,7 @@ final class DeckPanelController {
         // `settingsChanged` follows the setting from then on.
         ScreenSharing.apply(to: panel, surface: .deck, hidden: preferences.hideFromScreenSharing)
 
-        hosting = NSHostingView(rootView: DeckView(content: DeckContent(layout: layout, state: .pill, side: preferences.side, notes: [], openNote: nil, readOnly: false, readOnlyNotice: "", statusLine: "", pendingUndo: nil, folderMissing: false)))
+        hosting = NSHostingView(rootView: DeckView(content: DeckContent(layout: layout, state: .rest, side: preferences.side, notes: [], openNote: nil, readOnly: false, readOnlyNotice: "", statusLine: "", pendingUndo: nil, folderMissing: false)))
         container = DeckContainerView(hosting: hosting)
         container.onEdgeEnter = { [weak self] in self?.handle(.pointerEnteredEdge) }
         container.onEdgeExit = { [weak self] in self?.handle(.pointerLeftEdge) }
@@ -214,7 +214,7 @@ final class DeckPanelController {
 
     // MARK: - Dropping
 
-    /// Something draggable arrived over the pill or the fan. Items that
+    /// Something draggable arrived over the deck's tabs. Items that
     /// make no note (an image, an empty string) are not a target. The
     /// license is asked as the drag arrives, like the hotkey at its press:
     /// read-only, the deck refuses and says why while the drag hovers.
@@ -290,7 +290,7 @@ final class DeckPanelController {
         case .cancelTimer(let kind):
             timers[kind]?.invalidate()
             timers[kind] = nil
-        case .showPill, .showFan:
+        case .showRest, .showFan:
             removeMonitors()
             if panel.isKeyWindow { panel.resignKey() }
             model.clearConflictNotice()
@@ -519,9 +519,10 @@ final class DeckPanelController {
         container.edgeRect = edgeRect(in: layout)
         container.fanRect = fanHitRect(in: layout)
         container.deckRects = [container.fanRect, layout.plusTab] + [layout.note, layout.toast].compactMap { $0 }
-        // A drop lands on the pill, or on the fan and its `+` tab; the open
-        // note's text takes its own drops (the text view's), the margin none.
-        container.dropRects = state == .pill ? [layout.pill] : [container.fanRect, layout.plusTab]
+        // A drop lands on the tabs (their edges at rest) and the `+` tab;
+        // the open note's text takes its own drops (the text view's), the
+        // margin none.
+        container.dropRects = [container.fanRect, layout.plusTab]
         moveWindow(to: layout.panelFrame)
     }
 
@@ -539,10 +540,11 @@ final class DeckPanelController {
     }
 
     /// The fan's column of tabs, the part the pointer and the wheel count
-    /// as the deck (the fan itself spans the panel so shadows are not cut).
+    /// as the deck (the fan itself spans the panel so shadows are not cut);
+    /// at rest the edge strip, where the tabs' edges are.
     private func fanHitRect(in layout: DeckLayout) -> CGRect {
         let metrics = DeckMetrics()
-        let width = metrics.tabWidth + metrics.tiltInset + 6
+        let width = machine.state == .rest ? metrics.edgeWidth : metrics.tabWidth + metrics.tiltInset + 6
         let x = preferences.side == .right ? layout.panelFrame.width - width : 0
         return CGRect(x: x, y: layout.fan.minY, width: width, height: layout.fan.height)
     }
@@ -565,9 +567,10 @@ final class DeckPanelController {
     }
 
     /// The tabs' counts, from the model's cache: one parse per changed
-    /// note, dictionary lookups otherwise. The pill has no tabs to count.
+    /// note, dictionary lookups otherwise. Nothing at rest: the count is
+    /// the fan's.
     private func checklists(for notes: [Note], state: DeckState) -> [NoteID: MarkdownLite.ChecklistProgress] {
-        guard state != .pill else { return [:] }
+        guard state != .rest else { return [:] }
         var result: [NoteID: MarkdownLite.ChecklistProgress] = [:]
         for note in notes {
             if let progress = model.checklistProgress(for: note.id) { result[note.id] = progress }
@@ -575,10 +578,10 @@ final class DeckPanelController {
         return result
     }
 
-    /// The strip the pointer reaches at the screen edge: the pill's width
-    /// over the deck's whole height, whatever the state.
+    /// The strip the pointer reaches at the screen edge: `edgeWidth` over
+    /// the deck's whole height, whatever the state.
     private func edgeRect(in layout: DeckLayout) -> CGRect {
-        let width = DeckMetrics().pillWidth
+        let width = DeckMetrics().edgeWidth
         let x = preferences.side == .right ? layout.panelFrame.width - width : 0
         return CGRect(x: x, y: 0, width: width, height: layout.panelFrame.height)
     }
@@ -658,8 +661,8 @@ final class DeckContainerView: NSView {
     /// the deck has the keyboard, scroll the tabs.
     var fanRect: CGRect = .zero
     var onScroll: (CGFloat) -> Void = { _ in }
-    /// Where a drop makes a note: the pill, or the fan and its `+` tab
-    /// (`DeckDrop`). Elsewhere the drag passes as if the deck were not there.
+    /// Where a drop makes a note: the tabs and the `+` tab (`DeckDrop`).
+    /// Elsewhere the drag passes as if the deck were not there.
     var dropRects: [CGRect] = []
     /// The drag arrived over a drop rect with these items: the operation
     /// to offer (none refuses it).

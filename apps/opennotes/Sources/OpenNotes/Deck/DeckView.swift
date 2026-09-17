@@ -16,16 +16,18 @@ struct DeckContent {
     var folderMissing: Bool
     /// A new value puts the caret in the open note; nil leaves it.
     var focusToken: Int?
-    /// The pill at the top of the open note reads it on every body; the
-    /// footer's read-only line opens Settings → License through it.
+    /// The license pill at the top of the open note reads it on every
+    /// body; the footer's read-only line opens Settings → License through it.
     var license = LicenseStatus()
     /// A new value puts a lifted tab back where it was (Escape, the note
     /// leaving the deck); nil leaves the drag alone.
     var dragCancelToken = 0
     /// The preview harness: a tab shown lifted, mid-drag, with no pointer.
     var staticDrag: DeckDrag?
+    /// The preview harness: a tab shown hovered, with no pointer.
+    var staticHover: NoteID?
     /// Text, a link or files are held over the deck and would make a note:
-    /// the pill (or the `+` tab) lights up as the target.
+    /// the tabs' edges lift (at rest), or the `+` tab lights up, as the target.
     var dropTarget = false
     /// A drop is refused while read-only: the notice, shown under the deck
     /// in the toast's place while the drag hovers.
@@ -80,15 +82,19 @@ struct DeckDrag: Hashable {
     var centerY: CGFloat
 }
 
-/// The deck: the pill, the fan of tabs, the `+` tab, the open note and
-/// the archive toast, each placed by `DeckLayout` (AppKit coordinates,
-/// flipped here). Every element animates between layouts. The tabs are
-/// separate papers, each at its own small tilt (`DeckTilt`), stacked in
-/// a fan that scrolls when they do not fit, fading at whichever end has
-/// more beyond it. A tab pressed and moved past the threshold lifts
-/// (straight, larger, a deeper shadow) and follows the pointer along the
-/// deck while the others slide out of its way (`DeckReorder` says where
-/// it may land); the drop asks the controller for the move.
+/// The deck: the fan of tabs, the `+` tab, the open note and the archive
+/// toast, each placed by `DeckLayout` (AppKit coordinates, flipped here).
+/// At rest the same tabs, folded in: each one's edge peeking out of the
+/// screen edge, `restWidth` wide, in its place in the fan and at a share
+/// of its tilt, so fanning out is only the tabs widening. Every element
+/// animates between layouts. The tabs are separate papers, each at its
+/// own small tilt (`DeckTilt`), stacked in a fan that scrolls when they
+/// do not fit, fading at whichever end has more beyond it. A tab pressed
+/// and moved past the threshold lifts (straight, larger, a deeper shadow)
+/// and follows the pointer along the deck while the others slide out of
+/// its way (`DeckReorder` says where it may land); held at either end it
+/// scrolls the fan under itself (`DeckEdgeHold`); the drop asks the
+/// controller for the move.
 struct DeckView: View {
     let content: DeckContent
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -104,19 +110,23 @@ struct DeckView: View {
     @State private var scrollDragY: CGFloat?
     /// The tab whose checklist just completed: its count ticks once.
     @State private var ticked: NoteID?
+    /// The lifted tab held at an end of the fan: the timer that scrolls
+    /// the fan under it.
+    @State private var edgeHold = EdgeHoldTimer()
 
     private var height: CGFloat { content.layout.panelFrame.height }
+    private var atRest: Bool { content.state == .rest }
     private static let lift = Animation.spring(response: 0.3, dampingFraction: 0.72)
     private static let tick = Animation.spring(response: 0.28, dampingFraction: 0.45)
     private static let space = "deck"
     private var metrics: DeckMetrics { DeckMetrics() }
 
     /// Which notes have every box ticked: a note going from not to done
-    /// is the moment the tab ticks. The pill draws no tab, so nothing is
-    /// counted there (and nothing ticks when the fan next opens on a list
-    /// that was already done).
+    /// is the moment the tab ticks. A tab at rest shows no count, so
+    /// nothing is counted there (and nothing ticks when the fan next
+    /// opens on a list that was already done).
     private var completion: [NoteID: Bool] {
-        content.state == .pill ? [:] : content.progress.mapValues(\.isComplete)
+        atRest ? [:] : content.progress.mapValues(\.isComplete)
     }
 
     var body: some View {
@@ -124,20 +134,16 @@ struct DeckView: View {
         let progress = content.progress
         ZStack(alignment: .topLeading) {
             Color.clear
-            if content.state == .pill {
-                pill
-            } else {
-                fanBackground
-                ZStack(alignment: .topLeading) {
-                    Color.clear
-                    ForEach(placed, id: \.id) { placement in
-                        tabView(placement, progress: progress[placement.id])
-                    }
+            fanBackground
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                ForEach(placed, id: \.id) { placement in
+                    tabView(placement, progress: progress[placement.id])
                 }
-                .frame(width: content.layout.panelFrame.width, height: height, alignment: .topLeading)
-                .mask(alignment: .topLeading) { fanMask }
-                plusTab
             }
+            .frame(width: content.layout.panelFrame.width, height: height, alignment: .topLeading)
+            .mask(alignment: .topLeading) { fanMask }
+            plusTab
             if let noteRect = content.layout.note, let note = content.openNote {
                 NoteCard(note: note, content: content)
                     .frame(width: noteRect.width, height: noteRect.height)
@@ -179,12 +185,20 @@ struct DeckView: View {
             guard let current = drag else { return }
             cancelled = current.id
             drag = nil
+            edgeHold.end()
         }
         .onChange(of: content.notes.map(\.id)) {
             guard let current = drag, !content.notes.contains(where: { $0.id == current.id }) else { return }
             cancelled = current.id
             drag = nil
+            edgeHold.end()
         }
+        // The fan reached an end under the held tab (or can scroll again
+        // after the layout changed): the hold is judged afresh.
+        .onChange(of: [content.layout.canScrollUp, content.layout.canScrollDown]) {
+            if let current = drag { updateEdgeHold(for: current) }
+        }
+        .onDisappear { edgeHold.end() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("OpenNotes deck")
     }
@@ -193,13 +207,14 @@ struct DeckView: View {
         CGPoint(x: rect.midX, y: height - rect.midY)
     }
 
-    /// Rounded on the side away from the edge, square against it.
-    private func edgeShape(radius: CGFloat) -> UnevenRoundedRectangle {
-        if content.side == .right {
-            UnevenRoundedRectangle(topLeadingRadius: radius, bottomLeadingRadius: radius, bottomTrailingRadius: 0, topTrailingRadius: 0, style: .continuous)
-        } else {
-            UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: radius, topTrailingRadius: radius, style: .continuous)
-        }
+    /// The tab's paper as drawn: `bleed` wider than its frame, the extra
+    /// lying past the screen edge, so a tilted, inset or lifted tab never
+    /// shows the wallpaper between itself and the edge. Its centre, in
+    /// SwiftUI coordinates.
+    private func paperCenter(_ frame: CGRect) -> CGPoint {
+        let bleed = metrics.edgeBleed
+        let x = content.side == .right ? frame.midX + bleed / 2 : frame.midX - bleed / 2
+        return CGPoint(x: x, y: height - frame.midY)
     }
 
     // MARK: - The fan
@@ -309,36 +324,7 @@ struct DeckView: View {
         }
     }
 
-    // MARK: - Pill
-
-    private var pill: some View {
-        let rect = content.layout.pill
-        let dashes = Array(content.notes.prefix(metrics.pillMaxDashes))
-        let overflow = content.notes.count - dashes.count
-        // Held over as a drop's target: darker, ringed in coral.
-        let target = content.dropTarget
-        return ZStack {
-            edgeShape(radius: 7).fill(Color.black.opacity(target ? 0.82 : 0.62))
-            edgeShape(radius: 7).strokeBorder(target ? Brand.coral : Color.white.opacity(0.18), lineWidth: target ? 2 : 1)
-            VStack(spacing: 4) {
-                if content.folderMissing {
-                    Image(systemName: "exclamationmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Brand.coral)
-                } else if dashes.isEmpty {
-                    Circle().fill(Color.white.opacity(0.5)).frame(width: 4, height: 4)
-                }
-                ForEach(dashes) { note in
-                    Capsule().fill(Brand.tab(note.color)).frame(width: 4, height: 18)
-                }
-                if overflow > 0 {
-                    Circle().fill(Color.white.opacity(0.7)).frame(width: 4, height: 4)
-                }
-            }
-        }
-        .frame(width: rect.width, height: rect.height)
-        .position(center(rect))
-        .accessibilityLabel(content.folderMissing ? "OpenNotes: can’t find the notes folder" : "OpenNotes: \(content.notes.count) notes")
-        .accessibilityHint("Move the pointer to the edge to fan the deck out; drop text, a link or files here for a new note")
-    }
+    // MARK: - Notices
 
     /// A refused drop, while it hovers: the read-only line with its lock,
     /// where the archive toast goes.
@@ -370,49 +356,58 @@ struct DeckView: View {
 
     /// One tab: a press-and-release opens the note; a press moved past
     /// `DeckMetrics.dragThreshold` along the deck lifts it — never while
-    /// read-only — and the release drops it where the gap is. VoiceOver
-    /// gets the same as actions: the note, Move up and Move down.
+    /// read-only, never at rest (the fan opens under the pointer first) —
+    /// and the release drops it where the gap is. VoiceOver gets the same
+    /// as actions: the note, Move up and Move down.
     private func tabView(_ placement: Placement, progress: MarkdownLite.ChecklistProgress?) -> some View {
         let tab = placement.tab
         let note = content.notes.first { $0.id == tab.id }
         let isOpen = content.state.openNote == tab.id
         let lifted = placement.lifted
-        let isHovered = hovered == tab.id && !lifted
+        let isHovered = (hovered == tab.id || content.staticHover == tab.id) && !lifted
         let isTicked = ticked == tab.id
-        let canMove = !content.readOnly && order.count > 1
+        let canMove = !content.readOnly && order.count > 1 && !atRest
         // A note iCloud has not downloaded is only its file name: greyed.
         let downloading = note.map { $0.isDownloading && !$0.bodyIsLoaded } ?? false
-        // Straight when open or lifted; otherwise the note's own lean.
+        // Straight when open or lifted; otherwise the note's own lean, a
+        // share of it at rest.
         let tilt = DeckTilt.tilt(for: tab.id)
         let straight = isOpen || lifted
-        let inward: CGFloat = (straight ? 0 : tilt.inset) + (isHovered ? 3 : 0) + (lifted ? 4 : 0) + (isTicked ? 3 : 0)
+        let share: CGFloat = atRest ? metrics.restTilt : 1
+        // Out from the edge: the tilt's inset, a hover's lift (in the fan;
+        // at rest the tab brightens instead), a lifted tab's, a tick's,
+        // and at rest every edge's lift as a drop's target.
+        let inward: CGFloat = (straight ? 0 : tilt.inset * share) + (isHovered && !atRest ? 3 : 0) + (lifted ? 4 : 0) + (isTicked ? 3 : 0) + (atRest && content.dropTarget ? 4 : 0)
         let towardsScreen: CGFloat = content.side == .right ? -1 : 1
         // The tab is the note's paper in this appearance, its title in the
         // paper's ink and the note's own font.
         let look = note.map { NoteAppearance.resolve($0, defaults: content.defaults) }
         let label = (note.map { ($0.pinned ? "Pinned note: " : "Note: ") + $0.title } ?? tab.id.rawValue) + (downloading ? ", downloading" : "")
-        return TabCard(note: note, look: look, title: note?.title ?? tab.id.rawValue, side: content.side, isOpen: isOpen, lifted: lifted, hovered: isHovered, width: tab.frame.width, height: tab.frame.height, progress: progress, ticked: isTicked)
-            .rotationEffect(.degrees(straight ? 0 : tilt.degrees))
-            .scaleEffect(lifted ? 1.05 : 1, anchor: content.side == .right ? .trailing : .leading)
-            .position(center(placement.frame))
-            .offset(x: inward * towardsScreen)
-            .opacity(downloading ? 0.55 : 1)
-            .zIndex(lifted ? 1000 : isHovered ? 500 : Double(placement.slot))
-            .onHover { inside in
-                if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
+        return TabCard(
+            note: note, look: look, title: note?.title ?? tab.id.rawValue, side: content.side, isOpen: isOpen, lifted: lifted, hovered: isHovered, atRest: atRest,
+            width: tab.frame.width, bleed: metrics.edgeBleed, height: tab.frame.height, progress: atRest ? nil : progress, ticked: isTicked
+        )
+        .rotationEffect(.degrees(straight ? 0 : tilt.degrees * share))
+        .scaleEffect(lifted ? 1.05 : 1, anchor: content.side == .right ? .trailing : .leading)
+        .position(paperCenter(placement.frame))
+        .offset(x: inward * towardsScreen)
+        .opacity(downloading ? 0.55 : 1)
+        .zIndex(lifted ? 1000 : isHovered ? 500 : Double(placement.slot))
+        .onHover { inside in
+            if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
+        }
+        .gesture(tabGesture(for: tab, canMove: canMove))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(progress.map { "\(label), \($0.done) of \($0.total) done" } ?? label)
+        .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint(canMove ? "Drag along the deck to reorder" : "")
+        .accessibilityAction { content.onTab(tab.id) }
+        .accessibilityActions {
+            if canMove {
+                Button("Move up") { content.onMove(tab.id, -1) }
+                Button("Move down") { content.onMove(tab.id, 1) }
             }
-            .gesture(tabGesture(for: tab, canMove: canMove))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(progress.map { "\(label), \($0.done) of \($0.total) done" } ?? label)
-            .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
-            .accessibilityHint(canMove ? "Drag along the deck to reorder" : "")
-            .accessibilityAction { content.onTab(tab.id) }
-            .accessibilityActions {
-                if canMove {
-                    Button("Move up") { content.onMove(tab.id, -1) }
-                    Button("Move down") { content.onMove(tab.id, 1) }
-                }
-            }
+        }
     }
 
     /// In the deck's own space (the panel, y down), so a tab that moves
@@ -444,6 +439,7 @@ struct DeckView: View {
                 if let current = drag, current.id == id {
                     let target = projectedIndex(for: current)
                     withAnimation(reduceMotion ? nil : Self.lift) { drag = nil }
+                    edgeHold.end()
                     content.onTabDropped(target)
                     return
                 }
@@ -459,33 +455,42 @@ struct DeckView: View {
         } else {
             drag = moved
         }
-        let rect = fanRect
-        let edge = metrics.tabHeight / 4
-        if moved.centerY - metrics.tabHeight / 2 < rect.minY + edge, content.layout.canScrollUp {
-            content.onScroll(-8)
-        } else if moved.centerY + metrics.tabHeight / 2 > rect.maxY - edge, content.layout.canScrollDown {
-            content.onScroll(8)
-        }
+        updateEdgeHold(for: moved)
     }
 
+    /// Within a quarter tab of an end with more beyond it, the fan scrolls
+    /// under the held tab on a timer (`DeckAutoScroll`) until the tab
+    /// moves away, the end is reached, or the tab is dropped.
+    private func updateEdgeHold(for drag: DeckDrag) {
+        let direction = DeckAutoScroll.direction(tabCenterY: drag.centerY, fan: fanRect, canScrollUp: content.layout.canScrollUp, canScrollDown: content.layout.canScrollDown, metrics: metrics)
+        edgeHold.moved(to: direction, onScroll: content.onScroll)
+    }
+
+    /// The `+` tab: a neutral paper under the fan, its edge at rest like
+    /// the notes' (an empty deck at rest is this edge alone). With the fan
+    /// out it is the drop's target, ringed in coral; the lock while
+    /// read-only; the folder gone, a warning.
     private var plusTab: some View {
         let rect = content.layout.plusTab
-        // With the fan out, the `+` tab is the drop's target.
-        let target = content.dropTarget
+        let target = content.dropTarget && !atRest
+        let lift: CGFloat = atRest && content.dropTarget ? 4 : 0
+        let towardsScreen: CGFloat = content.side == .right ? -1 : 1
+        let glyph = content.folderMissing ? "exclamationmark" : content.readOnly ? "lock" : "plus"
+        let label = content.folderMissing ? "OpenNotes: can’t find the notes folder" : content.readOnly ? "Read-only" : "New note"
         return Button(action: content.onPlus) {
-            ZStack {
-                edgeShape(radius: 10).fill(target ? Brand.accentSubtle : Brand.canvas.opacity(0.92))
-                edgeShape(radius: 10).strokeBorder(target ? Brand.coral : Brand.borderSubtle, lineWidth: target ? 2 : 1)
-                Image(systemName: content.readOnly ? "lock" : "plus")
+            PaperEdge(side: content.side, width: rect.width, bleed: metrics.edgeBleed, height: rect.height, fill: target ? Brand.accentSubtle : content.folderMissing ? Brand.dangerSubtle : Brand.face(.paper), hairline: target ? Brand.coral : Brand.textPrimary.opacity(0.25), hairlineWidth: target ? 1.5 : 0.5, shadowOpacity: lift > 0 ? 0.22 : 0.14, shadowRadius: lift > 0 ? 6 : 4) {
+                Image(systemName: glyph)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Brand.textPrimary)
+                    .foregroundStyle(content.folderMissing ? Brand.dangerSolid : Brand.textPrimary)
+                    .opacity(atRest ? 0 : 1)
             }
         }
         .buttonStyle(.plain)
-        .frame(width: rect.width, height: rect.height)
-        .position(center(rect))
-        .help(content.readOnly ? content.readOnlyNotice : "New note")
-        .accessibilityLabel(content.readOnly ? "Read-only" : "New note")
+        .position(paperCenter(rect))
+        .offset(x: lift * towardsScreen)
+        .help(content.folderMissing ? label : content.readOnly ? content.readOnlyNotice : "New note")
+        .accessibilityLabel(label)
+        .accessibilityHint(atRest ? "Move the pointer to the edge to fan the deck out; drop text, a link or files here for a new note" : "")
         .contextMenu {
             Button("All Notes…", action: content.onAllNotes)
         }
@@ -515,14 +520,16 @@ struct DeckView: View {
     }
 }
 
-/// One tab as a paper card: the note's paper in this appearance with a hairline edge and a
-/// soft shadow, a bar of the note's colour along its outer edge, the pin
-/// when pinned, and the title along the tab — reading down on the right
-/// edge, up on the left — cut with an ellipsis. A note with a checklist
-/// shows its count (`3/7`) at the tab's foot and a thin line of the
-/// note's ink along the inner edge, filled as far as the list has come;
-/// the last box done ticks the count once. Hover lifts the tab a little,
-/// a drag lifts it more.
+/// One tab as a paper card: the note's paper in this appearance, a
+/// hairline in the ink's tone (a light rim on a dark paper) and a soft
+/// shadow, which does the separating — no border. In the fan: a bar of
+/// the note's colour along its outer edge, the pin when pinned, and the
+/// title along the tab — reading down on the right edge, up on the left —
+/// cut with an ellipsis. A note with a checklist shows its count (`3/7`)
+/// at the tab's foot and a thin line of the note's ink along the inner
+/// edge, filled as far as the list has come; the last box done ticks the
+/// count once. At rest the paper alone, brightened a little under the
+/// pointer. Hover lifts a fanned tab a little, a drag lifts it more.
 private struct TabCard: View {
     let note: Note?
     let look: NoteAppearance?
@@ -531,63 +538,71 @@ private struct TabCard: View {
     let isOpen: Bool
     let lifted: Bool
     let hovered: Bool
+    let atRest: Bool
+    /// What shows of the tab; `PaperEdge` draws it `bleed` wider.
     let width: CGFloat
+    let bleed: CGFloat
     let height: CGFloat
     var progress: MarkdownLite.ChecklistProgress?
     var ticked = false
 
-    /// The paper's ink for the appearance: the title, the pin, the count
-    /// and the checklist's line.
+    /// The paper's ink for the appearance: the title, the pin, the count,
+    /// the checklist's line and the hairline.
     private var ink: Color { look?.tabInk ?? Brand.textPrimary }
 
     var body: some View {
-        let shadowOpacity = lifted ? 0.3 : hovered ? 0.2 : 0.14
-        let shadowRadius: CGFloat = lifted ? 10 : hovered ? 6 : 4
-        ZStack {
-            shape.fill(look?.tab ?? Brand.surface)
-            // The colour bar, on the edge away from the screen's.
-            HStack(spacing: 0) {
-                if side == .right { bar } else { progressLine }
-                Spacer(minLength: 0)
-                if side == .left { bar } else { progressLine }
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 4)
-            shape.strokeBorder(Color.black.opacity(isOpen ? 0.45 : 0.16), lineWidth: isOpen ? 1.5 : 1)
-            // The label runs the tab's length, laid out along it and then
-            // turned; the pin sits at the top, above it, the count at the
-            // foot, below it.
-            let countLength: CGFloat = progress == nil ? 0 : 22
-            let labelLength = height - 16 - (note?.pinned == true ? 14 : 0) - countLength
-            VStack(spacing: 2) {
-                if note?.pinned == true {
-                    Image(systemName: "pin.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(ink.opacity(0.7))
+        let raised = lifted || (hovered && !atRest)
+        PaperEdge(
+            side: side, width: width, bleed: bleed, height: height,
+            fill: look?.tab ?? Brand.surface, hairline: ink.opacity(isOpen ? 0.5 : 0.25), hairlineWidth: isOpen ? 1 : 0.5,
+            highlight: atRest && hovered ? 0.18 : 0,
+            shadowOpacity: lifted ? 0.3 : raised ? 0.2 : 0.14, shadowRadius: lifted ? 10 : raised ? 6 : 4
+        ) {
+            ZStack {
+                // The colour bar, on the edge away from the screen's.
+                HStack(spacing: 0) {
+                    if side == .right { bar } else { progressLine }
+                    Spacer(minLength: 0)
+                    if side == .left { bar } else { progressLine }
                 }
-                Text(title)
-                    .font(look.map { Font($0.nsFont(size: 12.5, weight: 600)) } ?? Brand.body(12.5, weight: 600))
-                    .foregroundStyle(ink)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(width: labelLength, height: width - 12)
-                    .rotationEffect(.degrees(side == .right ? 90 : -90))
-                    .frame(width: width - 12, height: labelLength)
-                if let progress {
-                    Text(progress.label)
-                        .font(Brand.mono(9, medium: true))
-                        .foregroundStyle(progress.isComplete ? ink : ink.opacity(0.75))
+                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
+                // The label runs the tab's length, laid out along it and then
+                // turned; the pin sits at the top, above it, the count at the
+                // foot, below it.
+                let countLength: CGFloat = progress == nil ? 0 : 22
+                let labelLength = height - 16 - (note?.pinned == true ? 14 : 0) - countLength
+                let across = max(0, width - 12)
+                VStack(spacing: 2) {
+                    if note?.pinned == true {
+                        Image(systemName: "pin.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(ink.opacity(0.7))
+                    }
+                    Text(title)
+                        .font(look.map { Font($0.nsFont(size: 12.5, weight: 600)) } ?? Brand.body(12.5, weight: 600))
+                        .foregroundStyle(ink)
                         .lineLimit(1)
-                        .frame(width: countLength, height: width - 12)
+                        .truncationMode(.tail)
+                        .frame(width: labelLength, height: across)
                         .rotationEffect(.degrees(side == .right ? 90 : -90))
-                        .frame(width: width - 12, height: countLength)
-                        .scaleEffect(ticked ? 1.35 : 1)
+                        .frame(width: across, height: labelLength)
+                    if let progress {
+                        Text(progress.label)
+                            .font(Brand.mono(9, medium: true))
+                            .foregroundStyle(progress.isComplete ? ink : ink.opacity(0.75))
+                            .lineLimit(1)
+                            .frame(width: countLength, height: across)
+                            .rotationEffect(.degrees(side == .right ? 90 : -90))
+                            .frame(width: across, height: countLength)
+                            .scaleEffect(ticked ? 1.35 : 1)
+                    }
                 }
+                .padding(.top, 8)
+                .padding(side == .right ? .leading : .trailing, 4)
             }
-            .padding(.top, 8)
-            .padding(side == .right ? .leading : .trailing, 4)
+            // The paper alone at rest: what is written on it fades in as
+            // the tab widens into the fan.
+            .opacity(atRest ? 0 : 1)
         }
-        .frame(width: width, height: height)
-        .contentShape(shape)
-        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: side == .right ? -1 : 1, y: 2)
     }
 
     /// The checklist's line: a faint track the tab's length, the done
@@ -609,16 +624,102 @@ private struct TabCard: View {
         }
     }
 
+    private var bar: some View {
+        Capsule().fill(note.map { Brand.bar($0.color) } ?? Brand.borderControl).frame(width: 3)
+    }
+}
+
+/// A paper's edge against the screen: the tabs and the `+` tab are both
+/// this. Rounded on the side away from the edge and square against it,
+/// with continuous corners that follow the width — 6 pt at the rest
+/// width, 10 pt at the fan's — drawn `bleed` wider than `width` with the
+/// extra past the screen edge, so a tilted, inset or lifted paper never
+/// shows the wallpaper between itself and the edge. Filled, hairlined,
+/// shadowed; the content sits on the visible part.
+private struct PaperEdge<Content: View>: View {
+    let side: DeckSide
+    let width: CGFloat
+    let bleed: CGFloat
+    let height: CGFloat
+    let fill: Color
+    let hairline: Color
+    var hairlineWidth: CGFloat = 0.5
+    /// A white wash over the paper: brightened under the pointer at rest.
+    var highlight: Double = 0
+    let shadowOpacity: Double
+    let shadowRadius: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ZStack {
+            shape.fill(fill)
+            if highlight > 0 { shape.fill(Color.white.opacity(highlight)) }
+            // On the visible part, and cut to it: what is written on a
+            // tab is laid out for the fan's width and fades as the tab
+            // narrows.
+            content
+                .frame(width: width, height: height)
+                .clipped()
+                .padding(side == .right ? .trailing : .leading, bleed)
+            shape.strokeBorder(hairline, lineWidth: hairlineWidth)
+        }
+        .frame(width: width + bleed, height: height)
+        .contentShape(shape)
+        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: side == .right ? -1 : 1, y: 2)
+    }
+
+    private var radius: CGFloat { min(10, max(6, width * 0.75)) }
+
     private var shape: UnevenRoundedRectangle {
         if side == .right {
-            UnevenRoundedRectangle(topLeadingRadius: 10, bottomLeadingRadius: 10, bottomTrailingRadius: 0, topTrailingRadius: 0, style: .continuous)
+            UnevenRoundedRectangle(topLeadingRadius: radius, bottomLeadingRadius: radius, bottomTrailingRadius: 0, topTrailingRadius: 0, style: .continuous)
         } else {
-            UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: 10, topTrailingRadius: 10, style: .continuous)
+            UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: radius, topTrailingRadius: radius, style: .continuous)
+        }
+    }
+}
+
+/// The edge-hold timer: while a lifted tab is held at an end of the fan
+/// (`DeckEdgeHold` says when), the fan scrolls under it every
+/// `DeckAutoScroll.interval`. Owned by the deck view's state, so it lives
+/// as long as the deck does; ended with the drag.
+final class EdgeHoldTimer {
+    private var hold = DeckEdgeHold()
+    private var timer: Timer?
+    private var onScroll: (CGFloat) -> Void = { _ in }
+
+    var isHolding: Bool { hold.isHolding }
+
+    deinit {
+        MainActor.assumeIsolated { timer?.invalidate() }
+    }
+
+    /// The lifted tab is now at this end (nil: at neither); `onScroll` is
+    /// the deck's current scroll, taken afresh each time.
+    func moved(to direction: DeckAutoScroll.Direction?, onScroll: @escaping (CGFloat) -> Void) {
+        self.onScroll = onScroll
+        switch hold.moved(to: direction) {
+        case .start(let direction):
+            timer?.invalidate()
+            let delta = DeckAutoScroll.delta(direction)
+            timer = Timer.scheduledTimer(withTimeInterval: DeckAutoScroll.interval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onScroll(delta) }
+            }
+        case .stop:
+            stop()
+        case .none:
+            break
         }
     }
 
-    private var bar: some View {
-        Capsule().fill(note.map { Brand.bar($0.color) } ?? Brand.borderControl).frame(width: 3)
+    /// The tab was dropped, or the drag cancelled.
+    func end() {
+        if hold.ended() == .stop { stop() }
+    }
+
+    private func stop() {
+        timer?.invalidate()
+        timer = nil
     }
 }
 

@@ -5,7 +5,7 @@ import OpenNotesCore
 import ServiceManagement
 import SwiftUI
 
-/// Renders the deck (pill, fan, open, editing, read-only) on a drawn
+/// Renders the deck (rest, fan, open, editing, read-only) on a drawn
 /// desktop, All Notes (and read-only with the license card), the license
 /// card, the setup guide, Settings, the paper sheet (every preset with its
 /// ink), a custom-coloured note, three fonts (a serif family, a monospaced
@@ -115,9 +115,11 @@ final class PreviewHarness {
         // path: the welcome note is what `start()` plants there.
         let welcome = welcomeModel()
         defer { if let folder = welcome?.store.folder { try? FileManager.default.removeItem(at: folder) } }
+        let one = seededModel(count: 1)
         let three = seededModel(count: 3)
         let twelve = seededModel(count: 12)
-        defer { for folder in [three, twelve].compactMap({ $0?.store.folder }) { try? FileManager.default.removeItem(at: folder) } }
+        let none = seededModel(count: 0)
+        defer { for folder in [one, three, twelve, none].compactMap({ $0?.store.folder }) { try? FileManager.default.removeItem(at: folder) } }
         var failures = 0
         let notes = model.active
         let groceries = notes.first { $0.title == "Groceries" }?.id ?? notes[0].id
@@ -128,7 +130,7 @@ final class PreviewHarness {
             let suffix = appearance == .aqua ? "light" : "dark"
             let scheme: ColorScheme = appearance == .aqua ? .light : .dark
             let stages: [(String, DeckState, Bool, Bool)] = [
-                ("pill", .pill, false, false),
+                ("rest", .rest, false, false),
                 ("fan", .fan, false, false),
                 ("open", .open(groceries, editing: false), false, false),
                 ("editing", .open(groceries, editing: true), false, false),
@@ -142,18 +144,40 @@ final class PreviewHarness {
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-\(name)-\(suffix).png") { failures += 1 }
             }
             setRestricted(false)
-            // Text held over the pill: the pill lit as the drop's target;
-            // then over the `+` tab with the fan out.
-            var dropPill = content(state: .pill, toast: false)
-            dropPill.dropTarget = true
-            if await !write(DeckStage(content: dropPill, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-drop-target-\(suffix).png") { failures += 1 }
+            // At rest with one note, twelve (scrolled to the top, the fade
+            // below), none (the `+` tab's edge alone), and the five under
+            // the pointer: the third tab brightened.
+            if let one {
+                let stage = DeckStage(content: content(state: .rest, toast: false, model: one), side: preferences.side, dark: scheme == .dark)
+                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-rest-1-\(suffix).png") { failures += 1 }
+            }
+            if let twelve {
+                let stage = DeckStage(content: content(state: .rest, toast: false, model: twelve), side: preferences.side, dark: scheme == .dark)
+                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-rest-12-\(suffix).png") { failures += 1 }
+            }
+            if let none {
+                let stage = DeckStage(content: content(state: .rest, toast: false, model: none), side: preferences.side, dark: scheme == .dark)
+                if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-rest-empty-\(suffix).png") { failures += 1 }
+            }
+            var restHover = content(state: .rest, toast: false)
+            restHover.staticHover = notes.count > 2 ? notes[2].id : notes[0].id
+            if await !write(DeckStage(content: restHover, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-rest-hover-\(suffix).png") { failures += 1 }
+            // The rest beside the fan, the same tabs: the fan is the rest
+            // widened, nothing else moves.
+            let pair = PairStage(left: DeckStage(content: content(state: .rest, toast: false), side: preferences.side, dark: scheme == .dark), right: DeckStage(content: content(state: .fan, toast: false), side: preferences.side, dark: scheme == .dark))
+            if await !write(pair, scheme: scheme, appearance: appearance, to: "deck-rest-fan-\(suffix).png") { failures += 1 }
+            // Text held over the deck at rest: every edge lifted as the
+            // drop's target; then over the `+` tab with the fan out.
+            var dropRest = content(state: .rest, toast: false)
+            dropRest.dropTarget = true
+            if await !write(DeckStage(content: dropRest, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-drop-target-\(suffix).png") { failures += 1 }
             var dropFan = content(state: .fan, toast: false)
             dropFan.dropTarget = true
             if await !write(DeckStage(content: dropFan, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-drop-target-fan-\(suffix).png") { failures += 1 }
             // The same drag while read-only: refused, the license line
-            // under the pill.
+            // under the deck.
             setRestricted(true)
-            var dropRefused = content(state: .pill, toast: false, notice: true)
+            var dropRefused = content(state: .rest, toast: false, notice: true)
             dropRefused.dropRefusal = model.readOnlyNotice
             if await !write(DeckStage(content: dropRefused, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-drop-refused-\(suffix).png") { failures += 1 }
             setRestricted(false)
@@ -179,6 +203,24 @@ final class PreviewHarness {
                     let stage = DeckStage(content: content(state: .fan, toast: false, model: twelve, scroll: offset), side: preferences.side, dark: scheme == .dark)
                     if await !write(stage, scheme: scheme, appearance: appearance, to: "deck-fan-12-\(name)-\(suffix).png") { failures += 1 }
                 }
+                // The eighth note open with the fan scrolled to the middle:
+                // the card's top at its tab's, not the panel's.
+                let twelveNotes = twelve.active
+                let scrolledOpen = content(state: .open(twelveNotes[7].id, editing: false), toast: false, model: twelve, scroll: top.layout.maxScroll / 2)
+                if await !write(DeckStage(content: scrolledOpen, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-open-scrolled-\(suffix).png") { failures += 1 }
+                // A refused drop over a fan that fills the screen: the fan
+                // gives the notice its room, the `+` tab stays clear.
+                setRestricted(true)
+                var fullNotice = content(state: .fan, toast: false, notice: true, model: twelve)
+                fullNotice.dropRefusal = twelve.readOnlyNotice
+                if await !write(DeckStage(content: fullNotice, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-notice-full-\(suffix).png") { failures += 1 }
+                setRestricted(false)
+                // A tab lifted and held at the fan's bottom edge, where the
+                // fan scrolls under it.
+                var edgeDrag = content(state: .fan, toast: false, model: twelve)
+                let fan = edgeDrag.layout.fan
+                edgeDrag.staticDrag = DeckDrag(id: twelveNotes[3].id, centerY: edgeDrag.layout.panelFrame.height - fan.minY - DeckMetrics().tabHeight / 2 + 12)
+                if await !write(DeckStage(content: edgeDrag, side: preferences.side, dark: scheme == .dark), scheme: scheme, appearance: appearance, to: "deck-drag-edge-\(suffix).png") { failures += 1 }
             }
             // The welcome note, as the first launch into an empty folder
             // leaves it: open, every marker styled.
@@ -199,15 +241,17 @@ final class PreviewHarness {
             linksStage.chip = (label: "openapps.space", line: 2)
             if await !write(linksStage, scheme: scheme, appearance: appearance, to: "deck-links-\(suffix).png") { failures += 1 }
             setRestricted(true)
-            var refusalStage = DeckStage(content: content(state: .pill, toast: false), side: preferences.side, dark: scheme == .dark)
+            var refusalStage = DeckStage(content: content(state: .rest, toast: false), side: preferences.side, dark: scheme == .dark)
             refusalStage.refusal = RefusalCard(notice: model.readOnlyNotice, color: model.colorForNewNote, license: license)
             if await !write(refusalStage, scheme: scheme, appearance: appearance, to: "refusal-\(suffix).png") { failures += 1 }
             setRestricted(false)
             try? FileManager.default.removeItem(at: automation.folder)
-            // The left edge, once.
+            // The left edge, once: a note open, and the deck at rest.
             preferences.side = .left
             let left = DeckStage(content: content(state: .open(groceries, editing: true), toast: false), side: .left, dark: scheme == .dark)
             if await !write(left, scheme: scheme, appearance: appearance, to: "deck-left-\(suffix).png") { failures += 1 }
+            let restLeft = DeckStage(content: content(state: .rest, toast: false), side: .left, dark: scheme == .dark)
+            if await !write(restLeft, scheme: scheme, appearance: appearance, to: "deck-rest-left-\(suffix).png") { failures += 1 }
             preferences.side = .right
             // All Notes over the deck's notes; then over its own folders:
             // none, one, ten with every color and both faces, ten with a
@@ -357,8 +401,9 @@ final class PreviewHarness {
         return model
     }
 
-    /// A model over a temporary folder with this many notes, titles and
-    /// colours varied so the fan reads as a stack of different papers.
+    /// A model over a temporary folder with this many notes (none, for
+    /// the empty deck), titles and colours varied so the fan reads as a
+    /// stack of different papers.
     private func seededModel(count: Int) -> AppModel? {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("opennotes-preview-\(count)-\(UUID().uuidString)", isDirectory: true)
         guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
@@ -497,6 +542,22 @@ private struct FontsStage: View {
     }
 }
 
+/// Two stages side by side, each cut to the strip beside its edge: the
+/// rest and the fan over the same notes.
+private struct PairStage: View {
+    let left: DeckStage
+    let right: DeckStage
+
+    var body: some View {
+        HStack(spacing: Brand.Space.s24) {
+            left.frame(width: 220, alignment: .trailing).clipped()
+            right.frame(width: 220, alignment: .trailing).clipped()
+        }
+        .padding(Brand.Space.s24)
+        .background(Brand.canvas)
+    }
+}
+
 /// A drawn desktop with a document window behind, the deck docked to the
 /// edge: what the real deck looks like in place, over light and dark.
 /// For the automation stages: the hover chip over a line of the open
@@ -542,7 +603,7 @@ private struct DeckStage: View {
                     .offset(x: frame.minX + note.minX + 12, y: size.height - frame.maxY + (frame.height - note.maxY) + 18 + CGFloat(chip.line - 2) * 19)
             }
             if let refusal {
-                let x = side == .right ? frame.maxX - DeckMetrics().pillWidth - DeckMetrics().gap - RefusalCard.size.width : frame.minX + DeckMetrics().pillWidth + DeckMetrics().gap
+                let x = side == .right ? frame.maxX - DeckMetrics().restWidth - DeckMetrics().gap - RefusalCard.size.width : frame.minX + DeckMetrics().restWidth + DeckMetrics().gap
                 refusal.offset(x: x, y: (size.height - RefusalCard.size.height) / 2)
             }
         }
