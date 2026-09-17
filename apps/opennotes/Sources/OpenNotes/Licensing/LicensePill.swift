@@ -175,6 +175,9 @@ final class LicensePillAccessory: NSTitlebarAccessoryViewController {
 /// Asked on every body, so it appears and disappears with the projection.
 struct LicenseCard: View {
     let license: LicenseStatus
+    /// A line under the actions in the surface's own words (All Notes:
+    /// what waits for a license there, what works now).
+    var footnote: String? = nil
 
     var body: some View {
         if let card = license.restriction() {
@@ -200,6 +203,12 @@ struct LicenseCard: View {
                             .disabled(license.isBusy || (action == .buy && !license.canBuy))
                     }
                     Spacer(minLength: 0)
+                }
+                if let footnote {
+                    Text(footnote)
+                        .font(Brand.body(11))
+                        .foregroundStyle(Brand.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(Brand.Space.s12)

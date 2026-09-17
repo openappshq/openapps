@@ -53,10 +53,18 @@ nonisolated public enum StoreError: Error, LocalizedError, Hashable {
     case folderReplaced(URL)
     /// The system refused a file operation; the message names it.
     case io(String)
+    /// Delete is for archived notes only: an active note is never moved
+    /// to the Trash (design/products/opennotes.md, "Notes").
+    case notArchived(NoteID)
+    /// The note's file is an iCloud placeholder: there is nothing on this
+    /// Mac to move to the Trash. Opening the note downloads it.
+    case notDownloaded(NoteID)
 
     public var errorDescription: String? {
         switch self {
         case .readOnly: return "OpenNotes is read-only until it is licensed."
+        case .notArchived(let id): return "\(id.fileName) is in the deck; only an archived note can be deleted."
+        case .notDownloaded(let id): return "\(id.fileName) isn’t on this Mac yet; open it to download it first."
         case .folderMissing(let url): return "Can’t find the notes folder at \(url.path)."
         case .noSuchNote(let id): return "No note named \(id.rawValue)."
         case .entryChanged(let id): return "\(id.fileName) is no longer a file; the note was not written."
@@ -140,10 +148,12 @@ nonisolated public enum StoreInterleaving: Hashable, Sendable {
 /// created when the file is absent, or swapped in atomically and the
 /// displaced file checked to be the very inode that was verified — an
 /// outside edit that lands at any point is never lost: the file keeps it
-/// and the user's text becomes a new note beside it. The only removal the
-/// store makes is a provisional empty note's own file, unlinked by name
-/// only after the file open under that name proved to be the one the app
-/// wrote (design/products/opennotes.md, "Notes").
+/// and the user's text becomes a new note beside it. The only unlink the
+/// store makes is a provisional empty note's own file, by name, only
+/// after the file open under that name proved to be the one the app
+/// wrote; the only other removal is Delete on an archived note, which
+/// moves the file to the Trash (`trash(_:)`) (design/products/opennotes.md,
+/// "Notes").
 ///
 /// A folder in iCloud Drive is the same folder with three more things in
 /// it (ICloudDrive.swift): a `.icloud` placeholder stands for a file not
@@ -214,13 +224,17 @@ public final class NoteStore {
     /// a build without licensing, and a store on its own, is always allowed.
     public var access: () -> Bool = { true }
     /// The trial ended or a license is needed: creating, editing, renaming,
-    /// archiving, unarchiving and reordering are refused and no file is
-    /// written or removed — except the flush of text the user typed while
-    /// it was allowed (`accepted`), which is never lost. Reading,
-    /// rescanning and exporting still work. Derived from `access` at the
-    /// moment it is read.
+    /// archiving, unarchiving, reordering and deleting are refused and no
+    /// file is written or removed — except the flush of text the user
+    /// typed while it was allowed (`accepted`), which is never lost.
+    /// Reading, rescanning and exporting still work. Derived from `access`
+    /// at the moment it is read.
     public var readOnly: Bool { !access() }
     public var onEvent: (StoreEvent) -> Void = { _ in }
+    /// Moves a file to the Trash and returns where it went (`trash(_:)`):
+    /// the system's Trash through the file manager, a fake in tests. The
+    /// one call that takes a note's file out of the folder; never an unlink.
+    public var moveToTrash: (URL) throws -> URL?
     #if DEBUG
     /// Tests only: an outside writer run at a chosen point of a transaction.
     public var interleavingHook: ((StoreInterleaving) -> Void)?
@@ -273,6 +287,11 @@ public final class NoteStore {
         self.bodyBudget = max(bodyBudget, Self.maximumFileSize)
         self.ubiquity = ubiquity ?? FileManagerUbiquity(fileManager: fileManager)
         self.now = now
+        self.moveToTrash = { url in
+            var trashed: NSURL?
+            try fileManager.trashItem(at: url, resultingItemURL: &trashed)
+            return trashed as URL?
+        }
     }
 
     /// The default folder, `~/Documents/OpenNotes`.
@@ -1037,6 +1056,45 @@ public final class NoteStore {
 
     public func unarchive(_ id: NoteID) throws {
         try change(id) { $0.archived = false }
+    }
+
+    /// Delete on an archived note (design/products/opennotes.md, "Notes"):
+    /// the file goes to the Trash through `moveToTrash` — a move Finder
+    /// can put back, never an unlink — and the note leaves memory. Only an
+    /// archived note; a placeholder has nothing on this Mac to move
+    /// (`notDownloaded`); whatever is not a regular file under the name
+    /// is left where it is (`entryChanged`); a file already gone is only
+    /// forgotten. Refused while read-only, and while the folder no longer
+    /// leads where it did. Returns where the file went (nil when the
+    /// system did not say).
+    @discardableResult
+    public func trash(_ id: NoteID) throws -> URL? {
+        guard !readOnly else { throw StoreError.readOnly }
+        guard let note = notes[id] else { throw StoreError.noSuchNote(id) }
+        guard note.archived else { throw StoreError.notArchived(id) }
+        guard !placeholders.contains(id) else { throw StoreError.notDownloaded(id) }
+        guard folderIsStillItself() else { throw StoreError.folderReplaced(folder) }
+        let url = fileURL(for: id)
+        var destination: URL?
+        switch NoteFile.open(url) {
+        case .absent:
+            break
+        case .notRegular:
+            throw StoreError.entryChanged(id)
+        case .file(let fd, _):
+            NoteFile.close(fd)
+            do {
+                destination = try moveToTrash(url)
+            } catch {
+                throw StoreError.io("Couldn’t move \(id.fileName) to the Trash: \(error.localizedDescription)")
+            }
+        }
+        forget(id)
+        dirty.remove(id)
+        accepted.remove(id)
+        provisional.remove(id)
+        onEvent(.removed([id]))
+        return destination
     }
 
     /// The active notes in this order; `order` is rewritten for every note

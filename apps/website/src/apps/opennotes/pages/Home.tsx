@@ -145,7 +145,7 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
   {
     icon: <Archive size={20} />,
     title: "Archive, don't delete.",
-    body: "Done with a note? Archive it: it leaves the deck and stays in the folder and in search, with ten seconds to undo. Auto-archive can retire untouched notes after 7, 30 or 90 days. OpenNotes never deletes a file; that is the Finder's job.",
+    body: "Done with a note? Archive it: it leaves the deck and stays in the folder and in search, with ten seconds to undo. Auto-archive can retire untouched notes after 7, 30 or 90 days. Delete lives only under Archived, asks first, and moves the file to the Trash: OpenNotes never deletes a file for good.",
   },
   {
     icon: <Search size={20} />,
@@ -216,7 +216,7 @@ const questions = [
   ],
   [
     "What happens to a note I archive?",
-    "The file stays where it is with archived: true in its front matter. It leaves the deck, stays searchable in All Notes → Archived, and Restore brings it back. For ten seconds after archiving, an undo in the deck puts it straight back. OpenNotes never deletes a file for you.",
+    "The file stays where it is with archived: true in its front matter. It leaves the deck, stays searchable in All Notes → Archived, and Restore brings it back. For ten seconds after archiving, an undo in the deck puts it straight back. Delete… on an archived note asks first and moves the file to the Trash, where Finder can put it back; OpenNotes never deletes a file for good.",
   ],
   [
     "Can other apps make notes?",

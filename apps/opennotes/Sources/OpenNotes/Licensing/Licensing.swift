@@ -102,10 +102,10 @@ nonisolated enum GuideCopy {
 /// writing notes: while restricted the app is **read-only** — the deck
 /// stays visible and every note stays readable, searchable and exportable;
 /// creating a note, editing text, renaming, archiving, unarchiving,
-/// reordering and changing the notes folder are refused with this card (in
-/// All Notes) or its `notice` (the open note's footer). Settings, Export,
-/// Reveal in Finder and Quit always work; nothing the user wrote is hidden
-/// or changed.
+/// reordering, deleting an archived note and changing the notes folder
+/// are refused with this card (in All Notes) or its `notice` (the open
+/// note's footer). Settings, Export, Reveal in Finder and Quit always
+/// work; nothing the user wrote is hidden or changed.
 nonisolated struct LicenseRestriction: Equatable, Sendable {
     enum Action: Equatable, Sendable {
         /// Opens the website's OpenNotes page (`LicensingConfig.buyURL`).
