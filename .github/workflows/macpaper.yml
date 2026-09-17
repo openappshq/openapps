@@ -103,6 +103,7 @@ jobs:
     outputs:
       checks: ${{ steps.evidence.outputs.checks }}
       checks_run: ${{ steps.evidence.outputs.run }}
+      checks_ancestor: ${{ steps.evidence.outputs.ancestor }}
       flavours: ${{ steps.changes.outputs.flavours }}
       suite: ${{ steps.changes.outputs.suite }}
       flavour_suite: ${{ steps.changes.outputs.flavour_suite }}
@@ -124,10 +125,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if run="$(scripts/release/checks-passed.sh macpaper.yml "$GITHUB_SHA")"; then
-            echo "checks=passed" >> "$GITHUB_OUTPUT"
-            echo "run=$run" >> "$GITHUB_OUTPUT"
-            echo "The checks passed in run $run for $GITHUB_SHA: https://github.com/$GH_REPO/actions/runs/$run" | tee -a "$GITHUB_STEP_SUMMARY"
+          if result="$(scripts/release/checks-passed.sh macpaper.yml "$GITHUB_SHA")"; then
+            run="$(sed -n 1p <<< "$result")"
+            ancestor="$(sed -n 2p <<< "$result")"
+            { echo "checks=passed"; echo "run=$run"; echo "ancestor=$ancestor"; } >> "$GITHUB_OUTPUT"
+            if [ "$ancestor" != "$GITHUB_SHA" ]; then
+              echo "checks passed at $ancestor; $GITHUB_SHA differs only by feed files — run $run: https://github.com/$GH_REPO/actions/runs/$run" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "The checks passed in run $run for $GITHUB_SHA: https://github.com/$GH_REPO/actions/runs/$run" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
           else
             echo "checks=needed" >> "$GITHUB_OUTPUT"
             echo "No run of the checks passed for $GITHUB_SHA within a day: the source and official flavours run before the release." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -433,10 +439,15 @@ jobs:
         env:
           CHECKS: ${{ needs.preflight.outputs.checks }}
           CHECKS_RUN: ${{ needs.preflight.outputs.checks_run }}
+          CHECKS_ANCESTOR: ${{ needs.preflight.outputs.checks_ancestor }}
           REPO: ${{ github.repository }}
         run: |
           if [ "$CHECKS" = passed ]; then
-            echo "Checks: relied on run $CHECKS_RUN, which passed for $GITHUB_SHA — https://github.com/$REPO/actions/runs/$CHECKS_RUN" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$CHECKS_ANCESTOR" != "$GITHUB_SHA" ]; then
+              echo "checks passed at $CHECKS_ANCESTOR; $GITHUB_SHA differs only by feed files — run $CHECKS_RUN: https://github.com/$REPO/actions/runs/$CHECKS_RUN" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Checks: relied on run $CHECKS_RUN, which passed for $GITHUB_SHA — https://github.com/$REPO/actions/runs/$CHECKS_RUN" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
           else
             echo "Checks: ran in this workflow run for $GITHUB_SHA." | tee -a "$GITHUB_STEP_SUMMARY"
           fi

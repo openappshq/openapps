@@ -1,0 +1,12 @@
+# The paths an app's `feed` job commits to main (the workflows' "Commit the
+# feed to main" step): the served update feed and the install script, for
+# every app. One bash case pattern per line (matched as in changes.sh and
+# checks-passed.sh, where `*` already spans `/`); blank lines and lines
+# starting with `#` are ignored.
+#
+# A push or a dispatched commit that touches only these paths is the
+# pipeline's own release commit, or another app's — never a source change,
+# so it calls for no checks (changes.sh) and is safe evidence for a walk
+# back to an earlier passed run (checks-passed.sh).
+apps/website/public/install/*
+apps/website/public/updates/*

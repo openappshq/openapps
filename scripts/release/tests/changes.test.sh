@@ -30,6 +30,7 @@ expect "a publish with no passed run: both suites" macpaper --fallback "suite fl
 expect "a publish that relies on a passed run: nothing" macpaper --nothing -
 expect "an empty diff" macpaper "" -
 expect "docs only" macpaper "apps/macpaper/README.md RELEASES.md design/products/macpaper.md LICENSING.md" -
+expect "feed-only (the pipeline's own commit, or another app's): nothing to run" macpaper "apps/website/public/updates/macpaper/appcast.xml apps/website/public/install/macpaper apps/website/public/updates/opennotes/appcast.xml apps/website/public/install/opennotes" -
 expect "another app's sources" macpaper "apps/hertz/Sources/Hertz/App.swift" -
 expect "the app's sources: every leg, the floor included" macpaper "apps/macpaper/Sources/MacPaper/App.swift" "suite flavour_suite build_flavours bundle update_e2e any"
 expect "Package.swift counts as sources" macpaper "apps/macpaper/Package.swift" "suite flavour_suite build_flavours bundle update_e2e any"

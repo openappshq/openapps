@@ -45,6 +45,20 @@ case "$APP" in
     *) DIR="apps/$APP" ;;
 esac
 
+# A path the feed job commits (feed-paths.txt, shared with checks-passed.sh):
+# never a source change, and already outside every case below, but named
+# explicitly so a future pattern that would otherwise match stays inert.
+FEED_PATHS="$(dirname "${BASH_SOURCE[0]}")/feed-paths.txt"
+is_feed_path() {
+    local path="$1" pattern
+    while IFS= read -r pattern; do
+        [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+        # shellcheck disable=SC2053  # a glob from feed-paths.txt, matched on purpose
+        [[ "$path" == $pattern ]] && return 0
+    done < "$FEED_PATHS"
+    return 1
+}
+
 # other: the rest of the app's tree — a Tauri app's web front end and its
 # workspace packages, which its development build compiles.
 sources=false tests=false app_scripts=false other=false licensing=false updater=false scripts=false workflow=false
@@ -57,6 +71,7 @@ case "$MODE" in
             case "$path" in
                 *.md) continue ;;
             esac
+            is_feed_path "$path" && continue
             case "$path" in
                 "$DIR"/Sources/*|"$DIR"/Package.swift|"$DIR"/src-tauri/*) sources=true ;;
                 "$DIR"/Tests/*) tests=true ;;
