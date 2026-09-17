@@ -2,7 +2,7 @@
 # Says which parts of an app's checks a change calls for (RELEASES.md,
 # "Pipeline": the "what runs when" table is this script's rules).
 #
-#   git diff --name-only <base> <head> | scripts/release/changes.sh <app-id> --diff [flavours] [redo]
+#   git diff --name-only --no-renames <base> <head> | scripts/release/changes.sh <app-id> --diff [flavours] [redo]
 #   scripts/release/changes.sh <app-id> --all [flavours] [redo]        # everything: no base to diff against
 #   scripts/release/changes.sh <app-id> --fallback [flavours] [redo]   # a publish with no passed run: the suites
 #   scripts/release/changes.sh <app-id> --nothing [flavours]           # a publish that relies on a passed run

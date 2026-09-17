@@ -55,8 +55,11 @@ walkback="$(mktemp -d)"
 trap 'rm -rf "$walkback" "$fixtures"/walkback-*' EXIT
 
 # build_chain <dir> <kind>...: a fresh repo with an empty root commit, then
-# one commit per kind ("feed" touches the feed path, "other" a source
-# path). Prints every commit's sha, oldest first, the root included.
+# one commit per kind ("feed" touches the feed path, "other" a source path,
+# "rename" moves the "other" file — a prior commit must have created it —
+# into a feed path with no content change, so a plain `git diff` would
+# report only the destination). Prints every commit's sha, oldest first,
+# the root included.
 build_chain() {
     local dir="$1"; shift
     rm -rf "$dir" && mkdir -p "$dir"
@@ -71,6 +74,8 @@ build_chain() {
                   echo "$n" > "$dir/apps/website/public/updates/macpaper/appcast.xml" ;;
             other) mkdir -p "$dir/apps/macpaper/Sources"
                    echo "$n" > "$dir/apps/macpaper/Sources/Base.swift" ;;
+            rename) mkdir -p "$dir/apps/website/public/install/nested"
+                    git -C "$dir" mv apps/macpaper/Sources/Base.swift apps/website/public/install/nested/new ;;
         esac
         git -C "$dir" add -A
         git -C "$dir" -c user.email=t@t.test -c user.name=test commit -q -m "commit $n ($kind)"
@@ -132,6 +137,14 @@ limit=()
 while IFS= read -r sha; do limit+=("$sha"); done < <(build_chain "$walkback/walklimit" feed feed feed feed feed feed feed feed feed feed feed)
 evidence_case walkback-walklimit "${limit[0]}"
 expect_walk "the walk stops at 10 ancestors" walkback-walklimit "$walkback/walklimit" "${limit[11]}" 1
+
+# root -> other (the evidence: creates the source file) -> rename (moves it,
+# unchanged, into a feed path — a plain `git diff` would show only the new,
+# feed-looking path and hide that the old one was a source file).
+renamed=()
+while IFS= read -r sha; do renamed+=("$sha"); done < <(build_chain "$walkback/renamed" other rename)
+evidence_case walkback-renamed "${renamed[1]}"
+expect_walk "a rename from app source into a feed path is refused" walkback-renamed "$walkback/renamed" "${renamed[2]}" 1
 
 # last-run-failures.sh: what the branch's newest run left behind.
 last() {

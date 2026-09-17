@@ -18,8 +18,8 @@
 # that touched nothing the suites cover, is therefore passed over.
 #
 # When the commit itself has no such run, walks back over up to 10
-# first-parent ancestors while `git diff --name-only <ancestor> <sha>`
-# touches only the feed job's own paths (feed-paths.txt, shared with
+# first-parent ancestors while `git diff --name-only --no-renames <ancestor>
+# <sha>` touches only the feed job's own paths (feed-paths.txt, shared with
 # changes.sh) — the dispatch landed on the pipeline's own feed commit, or
 # another app's — and takes the first ancestor with its own passed run. Any
 # non-feed path in the diff (an ancestor's diff only grows going further
@@ -76,7 +76,9 @@ is_feed_path() {
 # (the base is not an ancestor here, or history is too shallow) is not.
 feed_only() {
     local base="$1" head="$2" diff path
-    diff="$(git diff --name-only "$base" "$head" --)" || return 1
+    # --no-renames: a rename shows only the new path by default, which would
+    # let a source file moved into a feed path hide the old, non-feed one.
+    diff="$(git diff --name-only --no-renames "$base" "$head" --)" || return 1
     while IFS= read -r path; do
         [[ -z "$path" ]] && continue
         is_feed_path "$path" || return 1

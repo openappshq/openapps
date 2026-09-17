@@ -169,7 +169,7 @@ jobs:
           if [ -z "$mode" ]; then
             # A new branch, or a force-push whose previous commit is gone, has no commit to diff against.
             if [ -n "$base" ] && ! printf '%s' "$base" | grep -Eq '^0+$' && git cat-file -e "$base^{commit}" 2>/dev/null; then
-              git diff --name-only "$base" "$GITHUB_SHA" | scripts/release/changes.sh openklack --diff "$FLAVOURS" "$REDO" | tee -a "$GITHUB_OUTPUT" "$PLAN"
+              git diff --name-only --no-renames "$base" "$GITHUB_SHA" | scripts/release/changes.sh openklack --diff "$FLAVOURS" "$REDO" | tee -a "$GITHUB_OUTPUT" "$PLAN"
             else
               mode=--all
             fi
