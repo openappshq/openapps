@@ -380,9 +380,9 @@ private struct TipsStep: View {
     }
 }
 
-/// A drawn screen with the deck at rest on its edge — four papers' edges
-/// peeking out — so the window can point at something the user has not
-/// hovered yet.
+/// A drawn screen with the deck at rest on its edge — a short stack of
+/// four papers' edges peeking out — so the window can point at something
+/// the user has not hovered yet.
 private struct EdgePreview: View {
     let side: DeckSide
 
@@ -390,11 +390,11 @@ private struct EdgePreview: View {
         ZStack(alignment: side == .right ? .trailing : .leading) {
             RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous)
                 .fill(Brand.surface)
-            VStack(spacing: 2) {
+            VStack(spacing: 1.5) {
                 ForEach([NoteColor.coral, .yellow, .mint, .sky], id: \.self) { color in
                     edge.fill(Brand.face(color))
                         .overlay(edge.strokeBorder(Brand.textPrimary.opacity(0.25), lineWidth: 0.5))
-                        .frame(width: 5, height: 16)
+                        .frame(width: 5, height: 6)
                         .shadow(color: .black.opacity(0.14), radius: 1.5, x: side == .right ? -0.5 : 0.5, y: 1)
                 }
             }
@@ -415,8 +415,8 @@ private struct EdgePreview: View {
     /// Rounded away from the edge, square against it, as the deck's papers are.
     private var edge: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
-            topLeadingRadius: side == .right ? 3 : 0, bottomLeadingRadius: side == .right ? 3 : 0,
-            bottomTrailingRadius: side == .right ? 0 : 3, topTrailingRadius: side == .right ? 0 : 3, style: .continuous
+            topLeadingRadius: side == .right ? 2 : 0, bottomLeadingRadius: side == .right ? 2 : 0,
+            bottomTrailingRadius: side == .right ? 0 : 2, topTrailingRadius: side == .right ? 0 : 2, style: .continuous
         )
     }
 }
