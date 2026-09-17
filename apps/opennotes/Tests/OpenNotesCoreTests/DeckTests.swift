@@ -590,3 +590,113 @@ final class RulesTests: XCTestCase {
         """)
     }
 }
+
+/// A tab lifted over a real layout: the hold is judged from the layout
+/// itself (the panel's y flipped), so the lift and every move share one
+/// rule.
+final class DeckAutoScrollLayoutTests: XCTestCase {
+    private let screen = CGRect(x: 0, y: 0, width: 1512, height: 944)
+    private let many = (0..<12).map { NoteID("n\($0)") }
+
+    /// A tab's centre in the panel's SwiftUI coordinates (y down).
+    private func centre(of index: Int, in layout: DeckLayout) -> CGFloat {
+        layout.panelFrame.height - layout.tabs[index].frame.midY
+    }
+
+    @MainActor func testATabLiftedAtTheFansBottomScrollsDownFromTheLift() {
+        let layout = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many)
+        // The last tab wholly inside the fan (its foot exactly a quarter
+        // tab above the fan's bottom on this screen), lifted 10 pt towards
+        // the end — the pointer's travel past the lift threshold.
+        let visible = layout.tabs.lastIndex { $0.frame.minY >= layout.fan.minY }!
+        let drag = DeckDrag(id: many[visible], centerY: centre(of: visible, in: layout) + 10)
+        XCTAssertEqual(DeckAutoScroll.direction(for: drag, in: layout), .down, "within a quarter tab of the bottom, with more below")
+        XCTAssertNil(DeckAutoScroll.direction(for: DeckDrag(id: many[visible], centerY: centre(of: visible, in: layout) - 10), in: layout), "lifted the other way: not at the end")
+        XCTAssertNil(DeckAutoScroll.direction(for: DeckDrag(id: many[0], centerY: centre(of: 0, in: layout)), in: layout), "the top tab: nothing above to scroll to")
+        XCTAssertNil(DeckAutoScroll.direction(for: DeckDrag(id: many[2], centerY: centre(of: 2, in: layout)), in: layout), "the middle: no hold")
+    }
+
+    @MainActor func testATabLiftedAtTheFansTopScrollsUpOnlyWhileMoreLiesAbove() {
+        let top = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many)
+        let bottom = DeckGeometry.layout(state: .fan, side: .right, visibleFrame: screen, notes: many, scroll: top.maxScroll)
+        let first = bottom.tabs.firstIndex { $0.frame.maxY <= bottom.fan.maxY }!
+        let drag = DeckDrag(id: many[first], centerY: centre(of: first, in: bottom) - 10)
+        XCTAssertEqual(DeckAutoScroll.direction(for: drag, in: bottom), .up)
+        XCTAssertNil(DeckAutoScroll.direction(for: drag, in: top), "the same place with nothing above: no hold")
+    }
+}
+
+/// What the fan is scrolled to and which tab it keeps in view: revealed
+/// once when a note opens or is moved, never when the fan shows — the
+/// fan opens at the scroll the rest showed.
+final class DeckScrollKeeperTests: XCTestCase {
+    private let screen = CGRect(x: 0, y: 0, width: 1512, height: 944)
+    private let many = (0..<12).map { NoteID("n\($0)") }
+
+    private func layout(_ state: DeckState, scroll: CGFloat) -> DeckLayout {
+        DeckGeometry.layout(state: state, side: .right, visibleFrame: screen, notes: many, scroll: scroll)
+    }
+
+    @MainActor func testOpeningANoteRevealsItsTabOnceAndThenLeavesTheScrollAlone() {
+        var keeper = DeckScrollKeeper()
+        keeper.handle(.openNote(many[11], focus: false))
+        XCTAssertEqual(keeper.keep, many[11])
+        XCTAssertTrue(keeper.revealPending)
+        let first = layout(.open(many[11], editing: false), scroll: keeper.scroll)
+        let revealed = keeper.settle(first)
+        XCTAssertEqual(revealed, first.maxScroll, "the last tab: scrolled to the bottom")
+        XCTAssertEqual(keeper.scroll, first.maxScroll)
+        XCTAssertFalse(keeper.revealPending)
+        // Settled again at that scroll: nothing moves.
+        XCTAssertNil(keeper.settle(layout(.open(many[11], editing: false), scroll: keeper.scroll)))
+    }
+
+    @MainActor func testShowingTheFanKeepsTheScrollTheRestShowed() {
+        var keeper = DeckScrollKeeper()
+        keeper.handle(.openNote(many[0], focus: false))
+        _ = keeper.settle(layout(.open(many[0], editing: false), scroll: 0))
+        // The note closes, the user scrolls the fan to the bottom, it
+        // folds in, then the pointer reaches the edge again.
+        keeper.handle(.closeNote(many[0]))
+        keeper.handle(.showFan)
+        let fan = layout(.fan, scroll: 0)
+        XCTAssertTrue(keeper.scroll(by: 10_000, maxScroll: fan.maxScroll))
+        XCTAssertEqual(keeper.scroll, fan.maxScroll, "clamped")
+        keeper.handle(.showRest)
+        XCTAssertNil(keeper.settle(layout(.rest, scroll: keeper.scroll)))
+        keeper.handle(.showFan)
+        XCTAssertFalse(keeper.revealPending, "the fan showing reveals nothing")
+        XCTAssertNil(keeper.settle(layout(.fan, scroll: keeper.scroll)))
+        XCTAssertEqual(keeper.scroll, fan.maxScroll, "the fan opens where the rest was, the kept tab still out of view")
+    }
+
+    @MainActor func testAMoveWithANoteOpenRevealsItsTabAgainAndWithoutOneDoesNot() {
+        var keeper = DeckScrollKeeper()
+        keeper.handle(.openNote(many[0], focus: false))
+        _ = keeper.settle(layout(.open(many[0], editing: false), scroll: 0))
+        _ = keeper.scroll(by: 10_000, maxScroll: layout(.open(many[0], editing: false), scroll: 0).maxScroll)
+        keeper.orderChanged(noteOpen: true)
+        XCTAssertEqual(keeper.settle(layout(.open(many[0], editing: false), scroll: keeper.scroll)), 0, "brought back to the top")
+        _ = keeper.scroll(by: 10_000, maxScroll: layout(.fan, scroll: 0).maxScroll)
+        keeper.orderChanged(noteOpen: false)
+        XCTAssertNil(keeper.settle(layout(.fan, scroll: keeper.scroll)), "no note open: the scroll is the user's")
+    }
+
+    @MainActor func testScrollingIsClampedAndANoOpWhenEverythingFits() {
+        var keeper = DeckScrollKeeper()
+        XCTAssertFalse(keeper.scroll(by: 40, maxScroll: 0), "three notes fit: nothing to scroll")
+        XCTAssertTrue(keeper.scroll(by: 40, maxScroll: 100))
+        XCTAssertFalse(keeper.scroll(by: -100, maxScroll: 100) && keeper.scroll != 0, "clamped at the top")
+        XCTAssertEqual(keeper.scroll, 0)
+        XCTAssertFalse(keeper.scroll(by: -1, maxScroll: 100), "already at the top: unchanged")
+    }
+
+    @MainActor func testTheKeptNoteFollowsARename() {
+        var keeper = DeckScrollKeeper()
+        keeper.handle(.openNote(NoteID("note-20260917-1030"), focus: true))
+        keeper.renamed(from: NoteID("note-20260917-1030"), to: NoteID("groceries"))
+        XCTAssertEqual(keeper.keep, NoteID("groceries"))
+        keeper.renamed(from: NoteID("other"), to: NoteID("elsewhere"))
+        XCTAssertEqual(keeper.keep, NoteID("groceries"))
+    }
+}
