@@ -26,7 +26,7 @@ on:
       - .github/rulesets/openreaction-release-tags.json
       - "!**/*.md"
   push:
-    branches: [main, pipeline-fast-checks]
+    branches: [main]
     tags: [openreaction-v*]
     paths:
       - apps/openreaction/**

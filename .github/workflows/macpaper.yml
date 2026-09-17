@@ -32,7 +32,7 @@ on:
       - .github/rulesets/macpaper-release-tags.json
       - "!**/*.md"
   push:
-    branches: [main, pipeline-fast-checks]
+    branches: [main]
     tags: [macpaper-v*]
     paths:
       - apps/macpaper/**

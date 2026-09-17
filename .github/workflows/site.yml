@@ -34,7 +34,7 @@ on:
       - .github/workflows/site.yml
       - "!**/*.md"
   push:
-    branches: [main, pipeline-fast-checks]
+    branches: [main]
     paths:
       - apps/website/**
       - apps/site-worker/**
