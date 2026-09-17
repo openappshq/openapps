@@ -159,6 +159,8 @@ A manual run (`workflow_dispatch`, the publish path) never repeats checks that p
 | Manual run, checks already passed | | | | | | | |
 | Manual run, no passed run | ✓ | ✓ | | | | | |
 
+What a fix during a release costs (OpenNotes 0.1.1, 2026-09-17, paid two full 35-minute cycles for one timing-sensitive window test): a push that touches only `Tests/**` runs the source and official suites, a few minutes in parallel; the publish dispatch that follows finds that run and runs no checks at all. A test that watches the clock or a window's timing belongs under `.heavy` if it cannot be made deterministic — never in the push path.
+
 The floor: a change under an app's `Sources` always runs that app's flavour suites — licensing wiring and enforcement, the keeper, the updater's wiring, the setup guide — in the official flavour, and the update end-to-end test stays on every change to the app's sources, scripts or the updater. Nothing that gates licensing or data safety leaves the push path.
 
 ### Test once, build the rest
@@ -167,7 +169,7 @@ Every app's `<App>Core` target is compiled the same in every flavour; only the a
 
 ### Heavy tests
 
-A test that renders at 4K or more, drives sheets, measures a budget in wall-clock time, or takes more than five seconds on its own is marked heavy: in Swift Testing `@Test("…", .heavy, .tags(.heavy))` with the `Heavy.swift` support file in the test target (`extension Trait where Self == ConditionTrait { static var heavy }` skips it while `OPENAPPS_HEAVY_TESTS=0`; the tag is for Xcode's filters); in XCTest, `try XCTSkipIf(ProcessInfo.processInfo.environment["OPENAPPS_HEAVY_TESTS"] == "0")` at the top of the test. The app workflows set `OPENAPPS_HEAVY_TESTS=0`; a local run and the nightly leave it unset. Today: macPaper's `presetsRead` (every preset through every context, 7.5 minutes in a debug build) and `fiveK` (three 5K renders, 5 minutes).
+A test that renders at 4K or more, drives sheets, measures a budget in wall-clock time, or takes more than five seconds on its own is marked heavy: in Swift Testing `@Test("…", .heavy, .tags(.heavy))` with the `Heavy.swift` support file in the test target (`extension Trait where Self == ConditionTrait { static var heavy }` skips it while `OPENAPPS_HEAVY_TESTS=0`; the tag is for Xcode's filters); in XCTest, `try XCTSkipIf(ProcessInfo.processInfo.environment["OPENAPPS_HEAVY_TESTS"] == "0")` at the top of the test. The app workflows set `OPENAPPS_HEAVY_TESTS=0`; a local run and the nightly leave it unset. Today: macPaper's `presetsRead` (every preset through every context, 7.5 minutes in a debug build), `fiveK` (three 5K renders, 5 minutes) and `shuffleNeverMakesABaseLayer` (forty documents through the quality gate, 4 minutes).
 
 `nightly.yml` runs every app's full suite in every flavour, heavy tests included, plus the packages and OpenKlack's feature sets, at 03:00 UTC and on demand. A failure opens the issue labelled `nightly`, or comments on the open one; close it when the run is green again. GitHub also e-mails the failure of a scheduled run.
 

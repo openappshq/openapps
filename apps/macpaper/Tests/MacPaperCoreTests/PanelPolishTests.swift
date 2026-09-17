@@ -147,7 +147,7 @@ struct PresetPaletteTests {
         }
     }
 
-    @Test("The panel lists the pixel-field families, then dither, mesh, pixelize and pattern; flat and gradient are the base layer; Shuffle never makes one")
+    @Test("The panel lists the pixel-field families, then dither, mesh, pixelize and pattern; flat and gradient are the base layer")
     func order() {
         #expect(GeneratorKind.panelOrder == [.field, .dither, .mesh, .pixelize, .pattern])
         #expect(GeneratorKind.baseLayers == [.solid, .gradient])
@@ -158,6 +158,13 @@ struct PresetPaletteTests {
             #expect(GeneratorChoice.panelOrder[index] == .family(family), "the families lead, in FieldFamily's own order")
         }
         #expect(GeneratorChoice.panelOrder.suffix(4).map(\.kind) == [.dither, .mesh, .pixelize, .pattern])
+    }
+
+    // Forty random documents through Shuffle's quality gate: minutes in a
+    // debug build, so heavy (RELEASES.md, "Pipeline"); the rule itself is
+    // `GeneratorKind.shuffleable` above.
+    @Test("Shuffle never makes a base layer", .heavy, .tags(.heavy))
+    func shuffleNeverMakesABaseLayer() {
         var generator = SeededGenerator(seed: 9)
         for _ in 0..<40 { #expect(!Wallpaper.random(using: &generator).generator.kind.isBaseLayer) }
     }
