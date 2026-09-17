@@ -565,7 +565,12 @@ jobs:
   # refuses unless the tag names exactly the commit the zip was built from
   # and the zip has exactly the digest the release job verified.
   publish:
-    if: github.repository == 'openappshq/openapps' && needs.release.outputs.publish == 'true'
+    # `!cancelled()` drops the implicit success() over every job upstream:
+    # the checks preflight skipped would otherwise skip this too. The
+    # release must have succeeded itself.
+    if: |
+      !cancelled() && github.repository == 'openappshq/openapps'
+      && needs.release.result == 'success' && needs.release.outputs.publish == 'true'
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -606,7 +611,9 @@ jobs:
   # No build runs here and no signing material is present; the feed was
   # signed by the release job and is only checked again here.
   feed:
-    if: github.repository == 'openappshq/openapps'
+    if: |
+      !cancelled() && github.repository == 'openappshq/openapps'
+      && needs.release.result == 'success' && needs.publish.result == 'success'
     needs: [release, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 45
