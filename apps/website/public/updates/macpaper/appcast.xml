@@ -6,21 +6,21 @@
         <description>macPaper releases</description>
         <language>en</language>
         <item>
-            <title>macPaper 0.2.1</title>
+            <title>macPaper 0.2.2</title>
             <openapps:app>macpaper</openapps:app>
             <openapps:channel>stable</openapps:channel>
-            <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
-            <sparkle:version>2001</sparkle:version>
+            <sparkle:shortVersionString>0.2.2</sparkle:shortVersionString>
+            <sparkle:version>2002</sparkle:version>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <openapps:publishedAt>2026-09-17T10:24:10Z</openapps:publishedAt>
-            <pubDate>Thu, 17 Sep 2026 10:24:10 +0000</pubDate>
-            <description><![CDATA[macPaper 0.2.1. Release notes: https://github.com/openappshq/openapps/releases/tag/macpaper-v0.2.1]]></description>
-            <openapps:sha256>6da751dfe19f209b13a3cdd2a5de38a8d2f188995f68a2632368be2477016a5f</openapps:sha256>
-            <enclosure url="https://github.com/openappshq/openapps/releases/download/macpaper-v0.2.1/macPaper-0.2.1.zip" length="6506341" type="application/octet-stream" sparkle:edSignature="ERXSAdWZHQHjHfyp2hnfKcJXPXI+Ljr4KaJrNAJP3enkRZ2kJBlbVZcqCV6wqMqK3+7wVUsV45XPS7ZHrRI4Cg=="/>
+            <openapps:publishedAt>2026-09-18T12:50:40Z</openapps:publishedAt>
+            <pubDate>Fri, 18 Sep 2026 12:50:40 +0000</pubDate>
+            <description><![CDATA[macPaper 0.2.2. Release notes: https://github.com/openappshq/openapps/releases/tag/macpaper-v0.2.2]]></description>
+            <openapps:sha256>d8523e6655e8c0378ce56f306b8f68d197ed1f562f47663d85667adbc953a3ba</openapps:sha256>
+            <enclosure url="https://github.com/openappshq/openapps/releases/download/macpaper-v0.2.2/macPaper-0.2.2.zip" length="6313982" type="application/octet-stream" sparkle:edSignature="Fjs4CL6dxvRmQ1Kn3knWAXn1abOc4Vg1/rqk5Dw++nxQ2u6qUSFQqdn5lE6wd1+Qh2IyXWSaxcwY57xbZArJBw=="/>
         </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: kLbLY97Vt5ZpNOf31L3BUPj9JAgsuhYMMUlt4kqR7tZIP6bi7LasgkqY/6KNEMSXwqQa9RU3QNGtBr0pjlQZCA==
+edSignature: +nOAkhQHpFrcPsRtuLn4W7/SfhJ77TROVeOosvXbIba6XpD9x2bWdEuehaHdbfD+aGGvVLC13vKV42Ih0q0bBA==
 length: 1468
 -->

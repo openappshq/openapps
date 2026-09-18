@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs macPaper 0.2.1 on your Mac.
+# Installs macPaper 0.2.2 on your Mac.
 #
 #   curl -fsSL https://openapps.space/install/macpaper | sh
 #
@@ -26,9 +26,9 @@ umask 022
 APP_ID='macpaper'
 APP_NAME='macPaper'
 BUNDLE_ID='com.openappshq.macpaper'
-VERSION='0.2.1'
-SHA256='6da751dfe19f209b13a3cdd2a5de38a8d2f188995f68a2632368be2477016a5f'
-URL='https://github.com/openappshq/openapps/releases/download/macpaper-v0.2.1/macPaper-0.2.1.zip'
+VERSION='0.2.2'
+SHA256='d8523e6655e8c0378ce56f306b8f68d197ed1f562f47663d85667adbc953a3ba'
+URL='https://github.com/openappshq/openapps/releases/download/macpaper-v0.2.2/macPaper-0.2.2.zip'
 MINIMUM_MACOS=14
 
 work=''
