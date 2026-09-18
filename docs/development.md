@@ -308,7 +308,7 @@ The scripts it runs are the ones you can run locally:
 | `release/publish-release.sh [--dry-run]` | Publishes the GitHub Release only once the tag provably names the built commit |
 | `release/verify-live.sh <version> <sha256>` | Fetches the public zip, feed and signature and checks digest, signature and version |
 | `release/test-update-locally.sh` | The whole thing locally with throwaway keys and a feed on `127.0.0.1`, including install-on-quit |
-| `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256>` | Sets the cask to a published release (the template's `0.0.0` takes any first version; never a downgrade or a rewrite); `packaging/homebrew/Casks/openklack.rb` is the template for the tap |
+| `packaging/homebrew/bump-cask.sh <cask.rb> <version> <sha256> [template.rb]` | Sets the cask to a published release (the template's `0.0.0` takes any first version; never a downgrade or a rewrite); with the app's own `packaging/homebrew/Casks/<app-id>.rb` as the fourth argument, also syncs the cask's `desc` from it |
 
 **Signing.** macOS ties Input Monitoring to the app's designated requirement, so every release is signed with the same self-signed certificate; a different identity would make an update look like a new app and lose the permission. The license and trial records are files the app owns, so they survive an identity change.
 The requirement is pinned in `release/designated-requirement.txt` as `identifier "com.openklack.desktop" and certificate leaf = H"<certificate SHA-1>"`, and a release whose signature does not produce exactly that fails before anything is published.

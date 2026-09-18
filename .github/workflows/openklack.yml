@@ -312,6 +312,19 @@ jobs:
           scripts/release/tests/checks-passed.test.sh
           scripts/release/tests/changes.test.sh
           packaging/homebrew/tests/bump-cask.test.sh
+      - name: Check the cask template
+        # bump-cask.sh must accept the template as a first release, refuse a
+        # rewrite, and carry the template's desc (the feed job passes it).
+        run: |
+          cask="$RUNNER_TEMP/openklack.rb"
+          cp packaging/homebrew/Casks/openklack.rb "$cask"
+          digest="$(printf 'a%.0s' $(seq 1 64))"
+          packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest"
+          grep -q '^  version "0.1.0"$' "$cask"
+          if packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$(printf 'b%.0s' $(seq 1 64))" 2>/dev/null; then echo "rewrite accepted"; exit 1; fi
+          sed -i.bak -E 's/^  desc "[^"]+"$/  desc "An older line of copy"/' "$cask"
+          packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest" packaging/homebrew/Casks/openklack.rb
+          diff <(grep '^  desc ' packaging/homebrew/Casks/openklack.rb) <(grep '^  desc ' "$cask")
 
   # Builds, signs, verifies and packages the release. Read-only token: it
   # never touches tags, releases, the feed or the tap.
@@ -659,7 +672,8 @@ jobs:
           git clone --depth 1 git@github.com:openappshq/homebrew-tap.git tap
           mkdir -p tap/Casks
           if [ ! -f tap/Casks/openklack.rb ]; then cp packaging/homebrew/Casks/openklack.rb tap/Casks/openklack.rb; fi
-          packaging/homebrew/bump-cask.sh tap/Casks/openklack.rb "$VERSION" "$SHA256"
+          # The template as the fourth argument: the cask's desc follows the repository's.
+          packaging/homebrew/bump-cask.sh tap/Casks/openklack.rb "$VERSION" "$SHA256" packaging/homebrew/Casks/openklack.rb
           cd tap
           git config user.name "openapps-release"
           git config user.email "release@openapps.space"
