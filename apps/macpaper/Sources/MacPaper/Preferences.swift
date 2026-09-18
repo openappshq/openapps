@@ -11,28 +11,11 @@ import Observation
 final class Preferences {
     @ObservationIgnored private let defaults: UserDefaults
 
-    var notchEnabled: Bool {
-        didSet { defaults.set(notchEnabled, forKey: PreferenceKey.notchEnabled) }
-    }
-    var hostDisplay: HostDisplay {
-        didSet { defaults.set(hostDisplay.rawValue, forKey: PreferenceKey.hostDisplay) }
-    }
-    var trigger: PanelTrigger {
-        didSet { defaults.set(trigger.rawValue, forKey: PreferenceKey.trigger) }
-    }
-    var direction: PanelDirection {
-        didSet { defaults.set(direction.rawValue, forKey: PreferenceKey.direction) }
-    }
     var width: PanelWidth {
         didSet { defaults.set(width.rawValue, forKey: PreferenceKey.width) }
     }
     var hideInFullscreen: Bool {
         didSet { defaults.set(hideInFullscreen, forKey: PreferenceKey.hideInFullscreen) }
-    }
-    /// How long the pointer rests on the notch before a hover opens, in
-    /// seconds; kept within `Preferences.hoverDelayRange`.
-    var hoverDelay: TimeInterval {
-        didSet { defaults.set(hoverDelay, forKey: PreferenceKey.hoverDelay) }
     }
     /// Nil is "no hotkey". Without a stored value the default depends on
     /// the install: ⌥⌘P on a fresh one, ⌃⌥⌘W where an earlier launch left
@@ -95,14 +78,8 @@ final class Preferences {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        notchEnabled = defaults.object(forKey: PreferenceKey.notchEnabled) as? Bool ?? true
-        hostDisplay = defaults.string(forKey: PreferenceKey.hostDisplay).flatMap(HostDisplay.init(rawValue:)) ?? .notchDisplay
-        trigger = defaults.string(forKey: PreferenceKey.trigger).flatMap(PanelTrigger.init(rawValue:)) ?? .both
-        direction = defaults.string(forKey: PreferenceKey.direction).flatMap(PanelDirection.init(rawValue:)) ?? .down
         width = defaults.string(forKey: PreferenceKey.width).flatMap(PanelWidth.init(rawValue:)) ?? .regular
         hideInFullscreen = defaults.object(forKey: PreferenceKey.hideInFullscreen) as? Bool ?? true
-        let storedDelay = defaults.object(forKey: PreferenceKey.hoverDelay) as? Double ?? PanelSettings.defaultHoverOpenDelay
-        hoverDelay = Self.hoverDelayRange.contains(storedDelay) ? storedDelay : PanelSettings.defaultHoverOpenDelay
         if let data = defaults.data(forKey: PreferenceKey.hotkey) {
             hotkey = data.isEmpty ? nil : try? JSONDecoder().decode(Hotkey.self, from: data)
         } else {
@@ -141,13 +118,5 @@ final class Preferences {
             // and a choice is earlier-launch evidence.
             defaults.set(Data(), forKey: PreferenceKey.hotkey)
         }
-    }
-
-    /// What the hover delay may be set to, in seconds.
-    static let hoverDelayRange: ClosedRange<TimeInterval> = 0.05...1.0
-
-    /// The panel rules' view of the settings.
-    var panelSettings: PanelSettings {
-        PanelSettings(isEnabled: notchEnabled, trigger: trigger, hideInFullscreen: hideInFullscreen, hoverOpenDelay: hoverDelay)
     }
 }

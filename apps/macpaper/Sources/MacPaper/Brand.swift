@@ -78,7 +78,7 @@ enum Brand {
         })
     }
 
-    // MARK: The notch column
+    // MARK: The panel column
 
     /// The column's colors are the core's `PanelTheme` (dark in both
     /// appearances, opaque; the tests assert their contrast), so the views

@@ -168,7 +168,7 @@ export const products: Product[] = [
     id: "macpaper",
     route: "/macpaper",
     name: "macPaper",
-    description: "Wallpapers your Mac makes itself, from the notch.",
+    description: "Wallpapers your Mac makes itself, from the menu bar.",
     platform: "macOS",
     price: "$5",
     permissions: [],
@@ -183,7 +183,7 @@ export const products: Product[] = [
         entry: "Home",
         title: "macPaper · Wallpapers your Mac makes itself",
         description:
-          "Gradients, meshes, patterns, dither and pixel art, light-and-dark and time-of-day pairs, made on your Mac at native pixels and set on every display from a panel that drops out of the notch. macPaper is an open-source Mac app. No permissions, no telemetry.",
+          "Gradients, meshes, patterns, dither and pixel art, light-and-dark and time-of-day pairs, made on your Mac at native pixels and set on every display from a panel in the menu bar. macPaper is an open-source Mac app. No permissions, no telemetry.",
         template: "src/apps/macpaper/template.html",
       },
       {

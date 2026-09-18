@@ -50,9 +50,9 @@ export default function MacPaperInstall({
         arrival={arrival}
       />
       <p className="mp-install-note">
-        macPaper lands in <code>/Applications</code> and opens from the notch, or in your menu bar
-        on a Mac without one; nothing to grant. Your {TRIAL_DAYS}-day trial starts then. macPaper
-        checks for updates itself and tells you; installing one is your call.
+        macPaper lands in <code>/Applications</code> and opens in your menu bar; nothing to grant.
+        Your {TRIAL_DAYS}-day trial starts then. macPaper checks for updates itself and tells you;
+        installing one is your call.
       </p>
     </div>
   );

@@ -102,14 +102,14 @@ struct OnboardingModelTests {
         #expect(opened == 1)
     }
 
-    @Test("The model exposes hasNotch and the shortcut from the closures it is given")
-    func notchAndShortcut() {
-        let withNotch = OnboardingModel(loginItem: LoginItem(flags: flags, service: InertLoginItemService()), license: license, defaults: flags, hasNotch: { true }, shortcut: { "⌥⌘P" })
-        #expect(withNotch.hasNotch && withNotch.shortcut == "⌥⌘P")
-        let withoutNotch = OnboardingModel(loginItem: LoginItem(flags: flags, service: InertLoginItemService()), license: license, defaults: flags, hasNotch: { false }, shortcut: { nil })
-        #expect(!withoutNotch.hasNotch && withoutNotch.shortcut == nil)
-        // The defaults: no notch, the default hotkey's own display string.
-        #expect(!makeModel().hasNotch && makeModel().shortcut == Hotkey.default.displayString)
+    @Test("The model exposes the shortcut from the closure it is given")
+    func shortcut() {
+        let withShortcut = OnboardingModel(loginItem: LoginItem(flags: flags, service: InertLoginItemService()), license: license, defaults: flags, shortcut: { "⌥⌘P" })
+        #expect(withShortcut.shortcut == "⌥⌘P")
+        let withoutShortcut = OnboardingModel(loginItem: LoginItem(flags: flags, service: InertLoginItemService()), license: license, defaults: flags, shortcut: { nil })
+        #expect(withoutShortcut.shortcut == nil)
+        // The default: the default hotkey's own display string.
+        #expect(makeModel().shortcut == Hotkey.default.displayString)
     }
 }
 
@@ -117,25 +117,15 @@ struct OnboardingModelTests {
 @Suite("Guide copy: the panel step")
 @MainActor
 struct PanelStepCopyTests {
-    @Test("With a notch, the line names the notch, the menu-bar icon and the shortcut")
-    func withNotch() {
-        let line = GuideCopy.panelLine(hasNotch: true, shortcut: "⌥⌘P")
-        #expect(line.contains("notch"))
+    @Test("The line names the menu-bar icon and the shortcut")
+    func withShortcut() {
+        let line = GuideCopy.panelLine(shortcut: "⌥⌘P")
         #expect(line.contains("menu bar icon"))
         #expect(line.contains("⌥⌘P"))
     }
 
-    @Test("Without a notch, the line says the Mac has none and still names the icon and the shortcut")
-    func withoutNotch() {
-        let line = GuideCopy.panelLine(hasNotch: false, shortcut: "⌥⌘P")
-        #expect(line.contains("no notch"))
-        #expect(line.contains("menu bar icon"))
-        #expect(line.contains("⌥⌘P"))
-    }
-
-    @Test("Without a shortcut, neither line mentions one")
+    @Test("Without a shortcut, the line does not mention one")
     func noShortcut() {
-        #expect(!GuideCopy.panelLine(hasNotch: true, shortcut: nil).contains("⌥⌘P"))
-        #expect(!GuideCopy.panelLine(hasNotch: false, shortcut: nil).contains("⌥⌘P"))
+        #expect(!GuideCopy.panelLine(shortcut: nil).contains("⌥⌘P"))
     }
 }

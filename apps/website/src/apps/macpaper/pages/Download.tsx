@@ -8,7 +8,7 @@ import "../styles.css";
 /* One concrete thing it did, the price, the licence. No hashtags, no
    adjectives, nothing a person would not actually say. */
 const SHARE_TEXT =
-  "My Mac makes its own wallpapers now, from the notch. macPaper, $5, open source.";
+  "My Mac makes its own wallpapers now, from the menu bar. macPaper, $5, open source.";
 
 /* Nothing to grant; the default line would say Apple Silicon. */
 const REQUIREMENTS = (

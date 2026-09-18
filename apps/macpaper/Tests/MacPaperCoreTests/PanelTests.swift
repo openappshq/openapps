@@ -2,8 +2,8 @@ import Foundation
 @testable import MacPaperCore
 import Testing
 
-@Suite("Notch geometry")
-struct NotchGeometryTests {
+@Suite("Screen notch")
+struct ScreenNotchTests {
     /// A 14" MacBook Pro: 1512×982 points, a 37-point menu bar with the
     /// notch, auxiliary areas of 630 points each side of a 252-point notch.
     static let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
@@ -11,34 +11,17 @@ struct NotchGeometryTests {
     static let right = CGRect(x: 882, y: 945, width: 630, height: 37)
 
     @Test("The notch is between the auxiliary areas, as tall as the top inset")
-    func notch() {
-        let notch = NotchGeometry.notchRect(screenFrame: Self.screen, topInset: 37, auxiliaryTopLeft: Self.left, auxiliaryTopRight: Self.right)
+    func rect() {
+        let notch = ScreenNotch.rect(screenFrame: Self.screen, topInset: 37, auxiliaryTopLeft: Self.left, auxiliaryTopRight: Self.right)
         #expect(notch == CGRect(x: 630, y: 945, width: 252, height: 37))
-        #expect(NotchGeometry.notchRect(screenFrame: Self.screen, topInset: 0, auxiliaryTopLeft: nil, auxiliaryTopRight: nil) == nil)
-        #expect(NotchGeometry.notchRect(screenFrame: Self.screen, topInset: 37, auxiliaryTopLeft: Self.left, auxiliaryTopRight: nil) == nil)
-        #expect(NotchGeometry.notchRect(screenFrame: Self.screen, topInset: 37, auxiliaryTopLeft: Self.right, auxiliaryTopRight: Self.left) == nil, "areas the wrong way round")
+        #expect(ScreenNotch.rect(screenFrame: Self.screen, topInset: 0, auxiliaryTopLeft: nil, auxiliaryTopRight: nil) == nil)
+        #expect(ScreenNotch.rect(screenFrame: Self.screen, topInset: 37, auxiliaryTopLeft: Self.left, auxiliaryTopRight: nil) == nil)
+        #expect(ScreenNotch.rect(screenFrame: Self.screen, topInset: 37, auxiliaryTopLeft: Self.right, auxiliaryTopRight: Self.left) == nil, "areas the wrong way round")
     }
+}
 
-    @Test("The hover zone is the notch, or a thin hot edge without one")
-    func hoverZone() {
-        let notch = CGRect(x: 630, y: 945, width: 252, height: 37)
-        #expect(NotchGeometry.hoverZone(screenFrame: Self.screen, notch: notch) == notch)
-        let external = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
-        #expect(NotchGeometry.hoverZone(screenFrame: external, notch: nil) == CGRect(x: 1512 + 1280 - 100, y: 1438, width: 200, height: 2))
-    }
-
-    @Test("Host display resolution")
-    func hosts() {
-        let notched = DisplayInfo(id: 1, name: "Built-in", pointSize: CGSize(width: 1512, height: 982), scale: 2, notchWidth: 252, isMain: false)
-        let external = DisplayInfo(id: 2, name: "External", pointSize: CGSize(width: 2560, height: 1440), scale: 1, isMain: true)
-        let second = DisplayInfo(id: 3, name: "Other", pointSize: CGSize(width: 1512, height: 982), scale: 2, notchWidth: 200)
-        #expect(HostDisplay.notchDisplay.hosts(among: [external, notched, second]) == [notched])
-        #expect(HostDisplay.notchDisplay.hosts(among: [external]).isEmpty)
-        #expect(HostDisplay.mainDisplay.hosts(among: [notched, external]) == [external])
-        #expect(HostDisplay.mainDisplay.hosts(among: [notched, second]) == [notched], "no main flagged: the first")
-        #expect(HostDisplay.everyNotchedDisplay.hosts(among: [external, notched, second]) == [notched, second])
-    }
-
+@Suite("Fullscreen")
+struct FullscreenHeuristicTests {
     @Test("Fullscreen: the frontmost app owns a normal-layer window covering the screen")
     func fullscreen() {
         let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
@@ -60,155 +43,60 @@ struct PanelStateMachineTests {
     typealias Event = PanelEvent
     typealias Effect = PanelEffect
 
-    @Test("Hover opens after the delay while the pointer stays, and closes after it leaves both")
-    func hover() {
-        var panel = PanelStateMachine(settings: PanelSettings(trigger: .both, hoverOpenDelay: 0.18, hoverCloseDelay: 0.4))
-        #expect(panel.handle(.pointerEnteredNotch) == [.startTimer(.hoverOpen, 0.18)])
-        #expect(panel.pendingOpen)
-        #expect(panel.handle(.timerFired(.hoverOpen)) == [.open])
-        #expect(panel.isOpen && panel.openedBy == .hover)
-        // Into the panel, out of the notch: stays.
-        #expect(panel.handle(.pointerEnteredPanel).isEmpty)
-        #expect(panel.handle(.pointerLeftNotch).isEmpty)
-        // Out of the panel too: the close timer.
-        #expect(panel.handle(.pointerLeftPanel) == [.startTimer(.hoverClose, 0.4)])
-        // Back before it fires: cancelled.
-        #expect(panel.handle(.pointerEnteredPanel) == [.cancelTimer(.hoverClose)])
-        #expect(panel.handle(.pointerLeftPanel) == [.startTimer(.hoverClose, 0.4)])
-        #expect(panel.handle(.timerFired(.hoverClose)) == [.close])
-        #expect(!panel.isOpen)
-    }
-
-    @Test("Leaving the notch before the delay cancels the open; a stale timer opens nothing")
-    func hoverCancelled() {
+    @Test("Toggle opens when closed, closes when open")
+    func toggle() {
         var panel = PanelStateMachine()
-        _ = panel.handle(.pointerEnteredNotch)
-        #expect(panel.handle(.pointerLeftNotch) == [.cancelTimer(.hoverOpen)])
-        #expect(panel.handle(.timerFired(.hoverOpen)).isEmpty)
-        #expect(!panel.isOpen)
-    }
-
-    @Test("Click opens at once, cancels a pending hover, and only click-outside, Escape, the hotkey or fullscreen close it")
-    func click() {
-        var panel = PanelStateMachine()
-        _ = panel.handle(.pointerEnteredNotch)
-        #expect(panel.handle(.notchClicked) == [.cancelTimer(.hoverOpen), .open])
-        #expect(panel.openedBy == .click)
-        // Hover leaving does not close a click-opened panel.
-        #expect(panel.handle(.pointerLeftNotch).isEmpty)
-        #expect(panel.handle(.pointerEnteredPanel).isEmpty && panel.handle(.pointerLeftPanel).isEmpty)
+        #expect(panel.handle(.toggle) == .open)
         #expect(panel.isOpen)
-        #expect(panel.handle(.clickedOutside) == [.close])
-        _ = panel.handle(.notchClicked)
-        #expect(panel.handle(.escape) == [.close])
-        _ = panel.handle(.notchClicked)
-        #expect(panel.handle(.hotkey) == [.close])
-        _ = panel.handle(.notchClicked)
-        #expect(panel.handle(.fullscreenChanged(true)) == [.close])
-        // A click on the notch while open closes too.
-        _ = panel.handle(.fullscreenChanged(false))
-        _ = panel.handle(.notchClicked)
-        #expect(panel.handle(.notchClicked) == [.close])
-    }
-
-    @Test("Triggers: hover-only ignores clicks, click-only ignores hover")
-    func triggers() {
-        var hoverOnly = PanelStateMachine(settings: PanelSettings(trigger: .hover))
-        #expect(hoverOnly.handle(.notchClicked).isEmpty)
-        #expect(hoverOnly.handle(.pointerEnteredNotch) == [.startTimer(.hoverOpen, 0.18)])
-        var clickOnly = PanelStateMachine(settings: PanelSettings(trigger: .click))
-        #expect(clickOnly.handle(.pointerEnteredNotch).isEmpty)
-        #expect(clickOnly.handle(.notchClicked) == [.open])
-        // Switching to click-only while a hover is pending cancels it.
-        var both = PanelStateMachine()
-        _ = both.handle(.pointerEnteredNotch)
-        #expect(both.handle(.settingsChanged(PanelSettings(trigger: .click))) == [.cancelTimer(.hoverOpen)])
-    }
-
-    @Test("Fullscreen hides the panel and blocks hover; the hotkey still opens it, under the item")
-    func fullscreen() {
-        var panel = PanelStateMachine()
-        #expect(panel.handle(.fullscreenChanged(true)).isEmpty)
-        #expect(panel.handle(.pointerEnteredNotch).isEmpty)
-        #expect(panel.handle(.notchClicked).isEmpty)
-        #expect(panel.handle(.hotkey) == [.open])
-        #expect(panel.openedBy == .hotkey)
-        #expect(panel.handle(.hotkey) == [.close])
-        #expect(panel.handle(.fullscreenChanged(false)).isEmpty)
-        #expect(panel.handle(.hotkey) == [.open])
-        #expect(panel.openedBy == .hotkey)
-        // With hiding off, fullscreen changes nothing.
-        var shown = PanelStateMachine(settings: PanelSettings(hideInFullscreen: false))
-        _ = shown.handle(.notchClicked)
-        #expect(shown.handle(.fullscreenChanged(true)).isEmpty)
-        #expect(shown.isOpen)
-        #expect(shown.handle(.hotkey) == [.close])
-        #expect(shown.handle(.hotkey) == [.open])
-    }
-
-    @Test("Turning the panel off closes it; hover and a click do nothing, but the hotkey still opens it")
-    func disabled() {
-        var panel = PanelStateMachine()
-        _ = panel.handle(.notchClicked)
-        #expect(panel.handle(.settingsChanged(PanelSettings(isEnabled: false))) == [.close])
-        #expect(panel.handle(.pointerEnteredNotch).isEmpty)
-        #expect(panel.handle(.notchClicked).isEmpty)
-        #expect(panel.handle(.hotkey) == [.open])
-        #expect(panel.openedBy == .hotkey)
-    }
-
-    @Test("The menu-bar item opens under itself whatever the notch settings say, and toggles")
-    func statusItem() {
-        var panel = PanelStateMachine(settings: PanelSettings(isEnabled: false))
-        #expect(panel.handle(.statusItemClicked) == [.open])
-        #expect(panel.isOpen && panel.openedBy == .statusItem)
-        #expect(panel.handle(.statusItemClicked) == [.close])
-        // Fullscreen hiding the notch panel does not stop the item either.
-        var fullscreen = PanelStateMachine()
-        _ = fullscreen.handle(.fullscreenChanged(true))
-        #expect(!fullscreen.canShow)
-        #expect(fullscreen.handle(.statusItemClicked) == [.open])
-        #expect(fullscreen.openedBy == .statusItem)
-    }
-
-    @Test("The hotkey opens the panel while it is off, and the default hover delay is 180 ms")
-    func hotkeyOpensWhileOff() {
-        var panel = PanelStateMachine()
+        #expect(panel.handle(.toggle) == .close)
         #expect(!panel.isOpen)
-        #expect(panel.handle(.hotkey) == [.open])
-        #expect(panel.openedBy == .hotkey)
-        #expect(PanelSettings.defaultHoverOpenDelay == 0.18)
     }
 
-    @Test("A settings change carries a new hover-open delay into the next hover")
-    func settingsChangedHoverDelay() {
-        var panel = PanelStateMachine()
-        _ = panel.handle(.settingsChanged(PanelSettings(hoverOpenDelay: 0.5)))
-        #expect(panel.handle(.pointerEnteredNotch) == [.startTimer(.hoverOpen, 0.5)])
+    @Test("Click outside, Escape and losing the host close only an open panel")
+    func closeOnlyWhenOpen() {
+        for event: Event in [.clickedOutside, .escape, .hostLost] {
+            var panel = PanelStateMachine()
+            #expect(panel.handle(event) == nil, "\(event) on a closed panel")
+            _ = panel.handle(.toggle)
+            #expect(panel.handle(event) == .close, "\(event) on an open panel")
+            #expect(!panel.isOpen)
+        }
     }
 
-    @Test("Losing the host resets everything")
-    func hostLost() {
-        var panel = PanelStateMachine()
-        _ = panel.handle(.pointerEnteredNotch)
-        _ = panel.handle(.timerFired(.hoverOpen))
-        _ = panel.handle(.pointerEnteredPanel)
-        _ = panel.handle(.pointerLeftNotch)
-        _ = panel.handle(.pointerLeftPanel)
-        #expect(panel.pendingClose)
-        #expect(panel.handle(.hostLost) == [.cancelTimer(.hoverClose), .close])
-        #expect(!panel.isOpen && !panel.pointerInNotch && !panel.pointerInPanel && !panel.pendingOpen && !panel.pendingClose)
+    @Test("Fullscreen with hide on closes an open panel; with hide off it stays")
+    func fullscreenHideOn() {
+        var panel = PanelStateMachine(hideInFullscreen: true)
+        _ = panel.handle(.toggle)
+        #expect(panel.handle(.fullscreenChanged(true)) == .close)
+        #expect(!panel.isOpen && !panel.canShow)
+        #expect(panel.handle(.fullscreenChanged(false)) == nil)
+        #expect(panel.canShow)
+
+        var shown = PanelStateMachine(hideInFullscreen: false)
+        _ = shown.handle(.toggle)
+        #expect(shown.handle(.fullscreenChanged(true)) == nil)
+        #expect(shown.isOpen && shown.canShow)
     }
 
-    @Test("A hover re-entering the notch cancels a pending close")
-    func reenter() {
+    @Test("Toggle still opens the panel over a fullscreen app")
+    func toggleWhileFullscreen() {
         var panel = PanelStateMachine()
-        _ = panel.handle(.pointerEnteredNotch)
-        _ = panel.handle(.timerFired(.hoverOpen))
-        #expect(panel.handle(.pointerLeftNotch) == [.startTimer(.hoverClose, 0.4)])
-        #expect(panel.handle(.pointerEnteredNotch) == [.cancelTimer(.hoverClose)])
-        #expect(panel.handle(.timerFired(.hoverClose)).isEmpty, "a timer that fires after being cancelled closes nothing")
+        _ = panel.handle(.fullscreenChanged(true))
+        #expect(!panel.canShow)
+        #expect(panel.handle(.toggle) == .open)
         #expect(panel.isOpen)
+    }
+
+    @Test("Settings turning hide-in-fullscreen on closes an open panel while fullscreen")
+    func settingsChangedWhileFullscreen() {
+        var panel = PanelStateMachine(hideInFullscreen: false)
+        _ = panel.handle(.toggle)
+        _ = panel.handle(.fullscreenChanged(true))
+        #expect(panel.isOpen)
+        #expect(panel.handle(.settingsChanged(hideInFullscreen: true)) == .close)
+        #expect(!panel.isOpen)
+        // Off again while still fullscreen: nothing to close.
+        #expect(panel.handle(.settingsChanged(hideInFullscreen: false)) == nil)
     }
 }
 
@@ -262,9 +150,10 @@ struct FirstRunTests {
         #expect(fresh.shouldTurnOn(isOn: false, storageIsFresh: true))
         #expect(fresh.isDecided)
         #expect(fresh.shouldTurnOn(isOn: false, storageIsFresh: true) == false, "decided once")
-        // Any preference, a stored false included, is an earlier launch.
+        // Any preference, a stored false included, is an earlier launch — a
+        // legacy key from an upgrade counts too.
         let upgraded = MemoryFlags()
-        upgraded.bools[PreferenceKey.notchEnabled] = false
+        upgraded.bools["notch.enabled"] = false
         #expect(FreshInstallDefault.loginItem(store: upgraded).hadPreferences)
         #expect(FreshInstallDefault.loginItem(store: upgraded).shouldTurnOn(isOn: false, storageIsFresh: true) == false)
         let stringy = MemoryFlags()
@@ -288,9 +177,9 @@ struct FirstRunTests {
         #expect(FreshInstallDefault.updateChecks(store: store).key == FreshInstallDefault.Key.updateChecksApplied)
     }
 
-    @Test("Every preference key counts as evidence")
+    @Test("Every preference key, current and legacy, counts as evidence")
     func evidence() {
-        for key in PreferenceKey.all {
+        for key in PreferenceKey.all + PreferenceKey.legacy {
             #expect(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(key), Comment(rawValue: key))
         }
         #expect(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(OnboardingLaunch.Key.shown))
@@ -300,41 +189,12 @@ struct FirstRunTests {
         OnboardingLaunch.markShown(store: store)
         #expect(!OnboardingLaunch.shouldShow(store: store))
     }
-}
 
-@Suite("Notch hint")
-struct NotchHintTests {
-    typealias MemoryFlags = FirstRunTests.MemoryFlags
-
-    @Test("Armed before any launch, and through the fifth; disarmed from the sixth")
-    func armedForTheFirstFiveLaunches() {
+    @Test("An upgrade with only legacy notch-trigger keys still counts as an earlier install")
+    func legacyKeysAloneAreEarlierInstall() {
         let store = MemoryFlags()
-        #expect(NotchHint.isArmed(store: store))
-        for launch in 1...NotchHint.launchesShown {
-            NotchHint.recordLaunch(store: store)
-            #expect(NotchHint.isArmed(store: store), "launch \(launch)")
-        }
-        NotchHint.recordLaunch(store: store)
-        #expect(!NotchHint.isArmed(store: store), "the sixth launch")
-    }
-
-    @Test("markUsed disarms the hint whatever the launch count")
-    func markUsedDisarms() {
-        let store = MemoryFlags()
-        NotchHint.markUsed(store: store)
-        #expect(!NotchHint.isArmed(store: store))
-        let midway = MemoryFlags()
-        NotchHint.recordLaunch(store: midway)
-        NotchHint.recordLaunch(store: midway)
-        NotchHint.markUsed(store: midway)
-        #expect(!NotchHint.isArmed(store: midway))
-    }
-
-    @Test("The hint's flags, and the hover delay, count as earlier-launch evidence")
-    func evidence() {
-        #expect(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(NotchHint.Key.launches))
-        #expect(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(NotchHint.Key.used))
-        #expect(FreshInstallDefault.Key.earlierPreferenceEvidence.contains(PreferenceKey.hoverDelay))
+        store.bools[PreferenceKey.legacy[0]] = true
+        #expect(FreshInstallDefault.loginItem(store: store).hadPreferences)
     }
 }
 
@@ -345,16 +205,16 @@ struct DiagnosticsTests {
         let snapshot = DiagnosticsSnapshot(
             appVersion: "0.1.0 (1000)", loginStatus: "on", licensing: "compiled out (source build)",
             displays: [DisplayInfo(id: 1, name: "Built-in Retina Display", pointSize: CGSize(width: 1512, height: 982), scale: 2, notchWidth: 252, isMain: true)],
-            panelSettings: PanelSettings(), hostDisplay: .notchDisplay, direction: .down, width: .regular, hotkey: .default, hotkeyProblem: nil,
+            width: .regular, hideInFullscreen: true, hotkey: .default, hotkeyProblem: nil,
             shuffle: .hour1, favoritesOnly: false, sameOnAllDisplays: true, favoritesCount: 2,
             applied: ["1": .starter], lastApplied: Date(timeIntervalSince1970: 0)
         )
         let text = snapshot.text(generatedAt: Date(timeIntervalSince1970: 0))
         #expect(text.hasPrefix("macPaper 0.1.0 (1000)\nGenerated: "))
         #expect(text.contains("Open at login: on\nLicensing: compiled out (source build)\n\nDisplays:\n- Built-in Retina Display (1) · 1512×982 pt @2x · 3024×1964 px · notch 252 pt · main\n"))
-        #expect(text.contains("Notch panel: on · host notchDisplay · opens on both · down · regular · hide in fullscreen on\nHotkey: ⌥⌘P\nShuffle: hour1 · favorites only off · same on all displays on\nFavorites: 2\n"))
+        #expect(text.contains("Panel: regular · hide in fullscreen on\nHotkey: ⌥⌘P\nShuffle: hour1 · favorites only off · same on all displays on\nFavorites: 2\n"))
         #expect(text.contains("Applied:\n- 1: {\"") && text.contains("\"composition\":\"none\""))
-        let empty = DiagnosticsSnapshot(appVersion: "dev", loginStatus: "off", licensing: "x", displays: [], panelSettings: PanelSettings(), hostDisplay: .mainDisplay, direction: .down, width: .compact, hotkey: nil, hotkeyProblem: "taken", shuffle: .off, favoritesOnly: true, sameOnAllDisplays: false, favoritesCount: 0, applied: [:], lastApplied: nil).text()
-        #expect(empty.contains("Displays:\n- none") && empty.contains("Hotkey: none (taken)") && empty.contains("Last applied: never") && empty.contains("Applied:\n- nothing yet"))
+        let empty = DiagnosticsSnapshot(appVersion: "dev", loginStatus: "off", licensing: "x", displays: [], width: .compact, hideInFullscreen: false, hotkey: nil, hotkeyProblem: "taken", shuffle: .off, favoritesOnly: true, sameOnAllDisplays: false, favoritesCount: 0, applied: [:], lastApplied: nil).text()
+        #expect(empty.contains("Displays:\n- none") && empty.contains("Panel: compact · hide in fullscreen off") && empty.contains("Hotkey: none (taken)") && empty.contains("Last applied: never") && empty.contains("Applied:\n- nothing yet"))
     }
 }

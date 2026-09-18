@@ -11,9 +11,10 @@ enum ScreenCatalog {
         NSScreen.screens.first { displayID(of: $0) == display }
     }
 
-    /// The notch rect of a screen in its own AppKit coordinates, nil without one.
+    /// The notch rect of a screen in its own AppKit coordinates, nil without
+    /// one: the wallpaper composes around it.
     static func notch(of screen: NSScreen) -> CGRect? {
-        NotchGeometry.notchRect(
+        ScreenNotch.rect(
             screenFrame: screen.frame, topInset: screen.safeAreaInsets.top,
             auxiliaryTopLeft: screen.auxiliaryTopLeftArea, auxiliaryTopRight: screen.auxiliaryTopRightArea
         )

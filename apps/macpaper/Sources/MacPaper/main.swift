@@ -3,7 +3,7 @@ import AppKit
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     #if DEBUG
-    // `MacPaper --preview <directory>`: renders the panel, the popover and
+    // `MacPaper --preview <directory>`: renders the panel, the guide and
     // settings to PNGs without a status item, a window, a login item or a
     // desktop change, then quits (PreviewHarness.swift).
     let arguments = CommandLine.arguments

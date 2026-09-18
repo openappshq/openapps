@@ -3,7 +3,7 @@ import MacPaperCore
 import SwiftUI
 
 /// Owns the long-lived objects: the model, preferences, the login item, the
-/// status item and its menu, the panels, the hotkey, the shuffle engine
+/// status item and its menu, the panel, the hotkey, the shuffle engine
 /// and the settings window. Menu-bar only: no Dock icon, no main window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var preferences: Preferences!
@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var loginItem: LoginItem!
     private(set) var licenseStatus: LicenseStatus!
     private var statusItem: StatusItemController?
-    private var notch: NotchHost?
+    private var panel: PanelHost?
     private var hotkeys: HotkeyCenter?
     private var shuffle: ShuffleEngine?
     private var settingsWindow: SettingsWindowController?
@@ -53,24 +53,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startUpdates()
         // Both fresh-install defaults have read their evidence by now (the
         // login item's at its creation, the updater's at its own): the
-        // launch count for the notch glow, itself earlier-launch evidence,
-        // may be written. The panels read it as they are made.
-        NotchHint.recordLaunch(store: UserDefaults.standard)
+        // defaulted shortcut, itself earlier-launch evidence, may be written.
         preferences.commitHotkeyDefault()
 
         let statusItem = StatusItemController(model: model, preferences: preferences, showSettings: { [weak self] in self?.showSettings() }, quit: { NSApp.terminate(nil) })
         self.statusItem = statusItem
-        let notch = NotchHost(
+        let panel = PanelHost(
             model: model, preferences: preferences,
             showSettings: { [weak self] in self?.showSettings() },
             quit: { NSApp.terminate(nil) }
         )
-        notch.header = { [weak self] in self?.panelHeader?() ?? AnyView(EmptyView()) }
-        notch.statusItemFrame = { [weak statusItem] in statusItem?.buttonFrame }
-        notch.statusItemWindow = { [weak statusItem] in statusItem?.buttonWindow }
-        self.notch = notch
-        statusItem.togglePanel = { [weak notch] in notch?.toggleFromStatusItem() }
-        statusItem.panelIsShown = { [weak notch] in notch?.isOpen ?? false }
+        panel.header = { [weak self] in self?.panelHeader?() ?? AnyView(EmptyView()) }
+        panel.statusItemFrame = { [weak statusItem] in statusItem?.buttonFrame }
+        panel.statusItemWindow = { [weak statusItem] in statusItem?.buttonWindow }
+        self.panel = panel
+        statusItem.togglePanel = { [weak panel] in panel?.toggle() }
+        statusItem.panelIsShown = { [weak panel] in panel?.isOpen ?? false }
 
         // Apply, finished: the pin, the theme swap, shared links, the clock.
         keeper = DesktopKeeper(model: model, preferences: preferences, desktop: WorkspaceDesktopApplier())
@@ -80,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let hotkeys = HotkeyCenter()
         self.hotkeys = hotkeys
-        hotkeys.onPressed = { [weak self] in self?.notch?.toggleFromHotkey() }
+        hotkeys.onPressed = { [weak self] in self?.panel?.toggle() }
         hotkeys.register(preferences.hotkey)
         observeChanges({ [preferences] in _ = preferences.hotkey }, onChange: { [weak self, preferences] in self?.hotkeys?.register(preferences.hotkey) })
 
@@ -143,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls where url.isFileURL {
             model.importRecipe(at: url)
         }
-        if urls.contains(where: \.isFileURL) { notch?.showFromStatusItem() }
+        if urls.contains(where: \.isFileURL) { panel?.show() }
     }
 }
 

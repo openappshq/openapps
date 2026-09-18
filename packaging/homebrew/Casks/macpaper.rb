@@ -9,7 +9,7 @@ cask "macpaper" do
 
   url "https://github.com/openappshq/openapps/releases/download/macpaper-v#{version}/macPaper-#{version}.zip"
   name "macPaper"
-  desc "Wallpapers your Mac makes itself, from the notch"
+  desc "Wallpapers your Mac makes itself, from the menu bar"
   homepage "https://openapps.space/macpaper/"
 
   # macPaper checks for updates itself; installing is opt-in. Homebrew shouldn’t fight it.

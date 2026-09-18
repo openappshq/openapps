@@ -1,13 +1,10 @@
 import MacPaperCore
 import SwiftUI
 
-/// "Where the panel lives": the setup guide's step that shows the notch
-/// hover zone — a looping animation of the pointer reaching the notch and
-/// the column dropping — and says the menu-bar icon and the shortcut open
-/// the same panel. On a Mac without a notch (or with the panel hosted on
-/// none) the step shows the pointer reaching the menu-bar icon instead
-/// and says those are the triggers (design/products/macpaper.md, "The
-/// panel", first run).
+/// "Where the panel lives": the setup guide's step that shows the menu-bar
+/// icon — a looping animation of the pointer reaching the icon and the
+/// column opening under it — and says the shortcut opens the same panel
+/// (design/products/macpaper.md, "The panel", first run).
 struct PanelStep: View {
     let model: OnboardingModel
 
@@ -15,18 +12,18 @@ struct PanelStep: View {
         VStack(alignment: .leading, spacing: Brand.Space.s24) {
             VStack(alignment: .leading, spacing: Brand.Space.s12) {
                 MonoLabel("The panel")
-                Text(model.hasNotch ? "It hangs from the notch." : "It lives in the menu bar.")
+                Text("It lives in the menu bar.")
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text(GuideCopy.panelLine(hasNotch: model.hasNotch, shortcut: model.shortcut))
+                Text(GuideCopy.panelLine(shortcut: model.shortcut))
                     .font(Brand.body(16))
                     .lineSpacing(4)
                     .foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            PanelDemo(hasNotch: model.hasNotch)
+            PanelDemo()
                 .frame(maxWidth: .infinity)
                 .frame(height: PanelDemo.height)
                 .cardSurface()
@@ -52,24 +49,18 @@ struct PanelStep: View {
 /// like the enum itself (the target's default is the main actor).
 nonisolated extension GuideCopy {
     /// What the panel step says under its heading.
-    static func panelLine(hasNotch: Bool, shortcut: String?) -> String {
-        if hasNotch {
-            let key = shortcut.map { ", and so does \($0)" } ?? ""
-            return "Rest the pointer on the notch, or click it, and the column drops from it. The menu bar icon opens the same panel\(key). On the first launches a glow under the notch marks the spot."
-        }
+    static func panelLine(shortcut: String?) -> String {
         let key = shortcut.map { ", or press \($0) from anywhere" } ?? ""
-        return "This Mac has no notch, so the panel opens under the menu bar icon: click it\(key)."
+        return "Click the menu bar icon\(key) and the column opens under it, with the wallpaper on your desktop and everything that changes it. Click the icon again, press Escape or click anywhere else to close it."
     }
 }
 
-/// A drawn display — the menu bar with its notch and the macPaper item,
-/// a desktop under it — on which the pointer travels to the trigger and
-/// the column drops, over and over. Drawn from the clock (`TimelineView`)
-/// so the loop never drifts and needs no timer; under Reduce Motion, and
-/// for the harness, the last frame holds still: the pointer on the
-/// trigger, the column open.
+/// A drawn display — the menu bar with the macPaper item, a desktop under
+/// it — on which the pointer travels to the icon and the column opens,
+/// over and over. Drawn from the clock (`TimelineView`) so the loop never
+/// drifts and needs no timer; under Reduce Motion, and for the harness,
+/// the last frame holds still: the pointer on the icon, the column open.
 struct PanelDemo: View {
-    let hasNotch: Bool
     static let height: CGFloat = 170
     /// One loop, in seconds.
     static let cycle: TimeInterval = 4.4
@@ -87,29 +78,27 @@ struct PanelDemo: View {
     }
 
     /// The loop's phases: the pointer travels (0–1.4 s), rests (to 1.7),
-    /// the column drops (to 2.0) and stays (to 3.5), then fades (to 3.9)
+    /// the column opens (to 2.0) and stays (to 3.5), then fades (to 3.9)
     /// and the pointer returns (to 4.4).
     private func frame(at t: TimeInterval) -> some View {
         let travel = Self.ease(Self.phase(t, 0, 1.4))
         let drop = Self.ease(Self.phase(t, 1.7, 2.0)) * (1 - Self.ease(Self.phase(t, 3.5, 3.9)))
-        let glow = min(Self.phase(t, 0.9, 1.3), 1 - Self.ease(Self.phase(t, 3.5, 3.9)))
         let back = Self.ease(Self.phase(t, 3.9, 4.4))
         return GeometryReader { proxy in
             let size = proxy.size
             let menuBar: CGFloat = 26
-            let notch = CGRect(x: size.width / 2 - 45, y: 0, width: 90, height: menuBar - 3)
             // The item's rect places the drawn icon, the pointer's target
             // and the column alike: the clock beside it has a fixed width.
             let item = CGRect(x: size.width - 12 - 34 - 10 - 20, y: 3, width: 20, height: 20)
-            let trigger = hasNotch ? CGPoint(x: notch.midX, y: notch.midY + 2) : CGPoint(x: item.midX, y: item.midY + 2)
+            let target = CGPoint(x: item.midX, y: item.midY + 2)
             let start = CGPoint(x: size.width * 0.28, y: size.height * 0.78)
             let pointer = CGPoint(
-                x: start.x + (trigger.x - start.x) * travel - (trigger.x - start.x) * back,
-                y: start.y + (trigger.y - start.y) * travel - (trigger.y - start.y) * back
+                x: start.x + (target.x - start.x) * travel - (target.x - start.x) * back,
+                y: start.y + (target.y - start.y) * travel - (target.y - start.y) * back
             )
             let columnWidth: CGFloat = 132
             let columnHeight = size.height - menuBar - 14
-            let columnX = hasNotch ? notch.midX - columnWidth / 2 : min(item.midX - columnWidth / 2, size.width - columnWidth - 8)
+            let columnX = min(item.midX - columnWidth / 2, size.width - columnWidth - 8)
             ZStack(alignment: .topLeading) {
                 // The desktop: a quiet mesh in the brand's tangerine.
                 LinearGradient(colors: [Color(nsColor: NSColor(hex: 0xFF7A2F)), Color(nsColor: NSColor(hex: 0xFFB48A)), Color(nsColor: NSColor(hex: 0x4A2114))], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -126,41 +115,29 @@ struct PanelDemo: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .frame(height: menuBar)
+                // The item, lit while the column hangs from it.
                 Image(nsImage: AppResources.menuBarImage()).renderingMode(.template)
                     .foregroundStyle(.white)
                     .frame(width: item.width, height: item.height)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(hasNotch ? 0 : 0.25 * drop)))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.25 * drop)))
                     .offset(x: item.minX, y: item.minY)
-                if hasNotch {
-                    // The glow under the notch, then the notch itself.
-                    NotchGlow()
-                        .frame(width: notch.width + 2 * PanelLayout.hintReach * 0.4, height: PanelLayout.hintDepth)
-                        .offset(x: notch.midX - (notch.width + 2 * PanelLayout.hintReach * 0.4) / 2, y: notch.maxY)
-                        .opacity(glow * (1 - drop))
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.black)
-                        .frame(width: notch.width, height: notch.height + 8)
-                        .offset(x: notch.minX, y: -8)
-                }
-                // The column: squared against the notch, rounded under the item.
-                MiniColumn(squaredTop: hasNotch)
+                // The column under the item.
+                MiniColumn()
                     .frame(width: columnWidth, height: columnHeight)
-                    .offset(x: columnX, y: (hasNotch ? notch.maxY : menuBar + 6) - columnHeight * (1 - drop) * 0.12)
+                    .offset(x: columnX, y: menuBar + 6 - columnHeight * (1 - drop) * 0.12)
                     .opacity(drop)
                 // The pointer.
                 Image(systemName: "cursorarrow")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.5), radius: 1.5, y: 1)
-                    // The arrow's tip, not the glyph's center, lands on the trigger.
+                    // The arrow's tip, not the glyph's center, lands on the icon.
                     .position(x: pointer.x + 6, y: pointer.y + 8)
             }
             .clipShape(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous))
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(hasNotch
-            ? "The pointer reaches the notch and the panel drops from it; the menu bar icon opens the same panel"
-            : "The pointer reaches the menu bar icon and the panel opens under it")
+        .accessibilityLabel("The pointer reaches the menu bar icon and the panel opens under it")
     }
 
     /// 0 before `from`, 1 after `to`, linear between.
@@ -176,12 +153,10 @@ struct PanelDemo: View {
 
 /// The column in miniature: the rail's dots and the pane's lines.
 private struct MiniColumn: View {
-    let squaredTop: Bool
-
     var body: some View {
-        NotchPanelShape(squaredTop: squaredTop)
+        PanelShape()
             .fill(Brand.Panel.ground)
-            .overlay(NotchPanelShape(squaredTop: squaredTop).strokeBorder(Brand.Panel.rim, lineWidth: 1))
+            .overlay(PanelShape().strokeBorder(Brand.Panel.rim, lineWidth: 1))
             .overlay(alignment: .topLeading) {
                 HStack(alignment: .top, spacing: 8) {
                     VStack(spacing: 6) {

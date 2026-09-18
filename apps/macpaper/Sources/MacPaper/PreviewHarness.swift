@@ -6,10 +6,10 @@ import ServiceManagement
 import SwiftUI
 
 /// Renders the panel (on a drawn display with its menu bar, over a
-/// wallpaper: from the notch, and under the menu-bar item on a notched
-/// and a plain display, capped and scrolled on a small one), the
-/// first-run glow, the guide's panel step, the restricted state and the
-/// settings window to PNGs, in light and dark appearance:
+/// wallpaper: under the menu-bar item on a notched and a plain display,
+/// capped and scrolled on a small one), the guide's panel step, the
+/// restricted state and the settings window to PNGs, in light and dark
+/// appearance:
 /// `MacPaper --preview <directory>`.
 /// Debug builds only; release binaries contain none of it.
 ///
@@ -164,14 +164,14 @@ final class PreviewHarness {
             await waitForPreview()
             for (backdropName, backdrop) in backdrops {
                 for width in PanelWidth.allCases {
-                    let stage = notchStage(backdrop: backdrop, width: width)
+                    let stage = builtInStage(backdrop: backdrop, width: width)
                     if await !write(stage, scheme: scheme, appearance: appearance, to: "panel-\(backdropName)-\(width.rawValue)-\(suffix).png") { failures += 1 }
                 }
             }
             // Every section, on the mesh backdrop at the regular width.
             for section in PanelSection.allCases {
                 model.panelSection = section
-                let stage = notchStage(backdrop: mesh)
+                let stage = builtInStage(backdrop: mesh)
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "section-\(section.rawValue)-\(suffix).png") { failures += 1 }
             }
             // The Parameters section for every generator.
@@ -179,7 +179,7 @@ final class PreviewHarness {
             for (name, document) in documents.dropFirst() {
                 model.load(document)
                 await waitForPreview()
-                let stage = notchStage(backdrop: mesh)
+                let stage = builtInStage(backdrop: mesh)
                 if await !write(stage, scheme: scheme, appearance: appearance, to: "parameters-\(name)-\(suffix).png") { failures += 1 }
             }
             // The dark side of the mesh, edited, under Effects.
@@ -188,24 +188,24 @@ final class PreviewHarness {
             model.materializeDarkSide()
             model.panelSection = .effects
             await waitForPreview()
-            if await !write(notchStage(backdrop: mesh), scheme: scheme, appearance: appearance, to: "effects-darkside-\(suffix).png") { failures += 1 }
+            if await !write(builtInStage(backdrop: mesh), scheme: scheme, appearance: appearance, to: "effects-darkside-\(suffix).png") { failures += 1 }
             model.editingSide = nil
             model.load(documents[0].1)
             model.panelSection = .library
             await waitForPreview()
-            // Opened from the menu-bar item: under the item, centered on it,
-            // on the notched display and on one without a notch; the column
-            // as tall as its content (the Library, here, reaches the cap).
+            // Under the item, centered on it, on the notched display and on
+            // one without a notch; the column as tall as its content (the
+            // Library, here, reaches the cap).
             let builtIn = FakeScreen.notched14
-            if await !write(builtIn.stage(backdrop: mesh, column: column(on: builtIn, anchor: .statusItem(builtIn.item))), scheme: scheme, appearance: appearance, to: "menubar-notch-1512-\(suffix).png") { failures += 1 }
+            if await !write(builtIn.stage(backdrop: mesh, column: column(on: builtIn)), scheme: scheme, appearance: appearance, to: "menubar-notch-1512-\(suffix).png") { failures += 1 }
             let external = PreviewHarness.displays[1]
             model.targetDisplay = external.id
             await waitForPreview()
             let plain = FakeScreen.plain(width: 1440, height: 900)
-            if await !write(plain.stage(backdrop: backdrops[3].1, column: column(on: plain, anchor: .statusItem(plain.item))), scheme: scheme, appearance: appearance, to: "menubar-plain-1440-\(suffix).png") { failures += 1 }
+            if await !write(plain.stage(backdrop: backdrops[3].1, column: column(on: plain)), scheme: scheme, appearance: appearance, to: "menubar-plain-1440-\(suffix).png") { failures += 1 }
             // A short section on the plain display: the column ends with its content.
             model.panelSection = .export
-            if await !write(plain.stage(backdrop: backdrops[3].1, column: column(on: plain, anchor: .statusItem(plain.item))), scheme: scheme, appearance: appearance, to: "menubar-plain-1440-export-\(suffix).png") { failures += 1 }
+            if await !write(plain.stage(backdrop: backdrops[3].1, column: column(on: plain)), scheme: scheme, appearance: appearance, to: "menubar-plain-1440-export-\(suffix).png") { failures += 1 }
             model.panelSection = .library
             // A small display: the column capped to the visible frame, the
             // Library scrolled inside it while the footer stays.
@@ -213,17 +213,13 @@ final class PreviewHarness {
             // Ten more recipes, so the library outgrows the column.
             let extras = TasteSet.recipes.prefix(10).compactMap { try? model.favorites.add($0.wallpaper, named: $0.name) }
             await waitForPreview()
-            if await !write(small.stage(backdrop: backdrops[1].1, column: column(on: small, anchor: .statusItem(small.item), scrolled: 300)), scheme: scheme, appearance: appearance, to: "small-1280-scrolled-\(suffix).png") { failures += 1 }
+            if await !write(small.stage(backdrop: backdrops[1].1, column: column(on: small, scrolled: 300)), scheme: scheme, appearance: appearance, to: "small-1280-scrolled-\(suffix).png") { failures += 1 }
             for extra in extras { model.removeFavorite(extra) }
-            // The first-run glow under the notch, the pointer near it.
-            if await !write(builtIn.stage(backdrop: mesh, column: nil, glow: true), scheme: scheme, appearance: appearance, to: "glow-hint-\(suffix).png") { failures += 1 }
-            // The setup guide's panel step, with and without a notch.
-            for hasNotch in [true, false] {
-                let flags = MemoryFlags()
-                OnboardingLaunch.markReached(.panel, store: flags)
-                let guide = OnboardingModel(loginItem: loginItem, license: license, defaults: flags, hasNotch: { hasNotch }, shortcut: { Hotkey.default.displayString })
-                if await !write(OnboardingView(model: guide), scheme: scheme, appearance: appearance, to: "guide-panel-\(hasNotch ? "notch" : "plain")-\(suffix).png") { failures += 1 }
-            }
+            // The setup guide's panel step.
+            let flags = MemoryFlags()
+            OnboardingLaunch.markReached(.panel, store: flags)
+            let guide = OnboardingModel(loginItem: loginItem, license: license, defaults: flags, shortcut: { Hotkey.default.displayString })
+            if await !write(OnboardingView(model: guide), scheme: scheme, appearance: appearance, to: "guide-panel-\(suffix).png") { failures += 1 }
             model.targetDisplay = 1
             await waitForPreview()
             // Restricted: the license card in the section's place.
@@ -233,7 +229,7 @@ final class PreviewHarness {
             )
             model.panelSection = .generators
             // With the pill in the header, as the licensing wiring fills the seam.
-            let restricted = notchStage(backdrop: mesh, header: AnyView(LicensePillHeader(license: license)))
+            let restricted = builtInStage(backdrop: mesh, header: AnyView(LicensePillHeader(license: license)))
             if await !write(restricted, scheme: scheme, appearance: appearance, to: "panel-restricted-\(suffix).png") { failures += 1 }
             license.bind(access: { true }, restriction: { nil }, canBuy: false)
             model.panelSection = .library
@@ -246,24 +242,24 @@ final class PreviewHarness {
         return failures == 0
     }
 
-    /// The built-in display with the column dropping from its notch, as
+    /// The built-in display with the column under its menu-bar item, as
     /// tall as its content up to the cap.
-    private func notchStage(backdrop: CGImage?, width: PanelWidth = .regular, header: AnyView? = nil) -> some View {
+    private func builtInStage(backdrop: CGImage?, width: PanelWidth = .regular, header: AnyView? = nil) -> some View {
         let screen = FakeScreen.notched14
-        return screen.stage(backdrop: backdrop, column: column(on: screen, anchor: .notch(screen.notch!), width: width, header: header))
+        return screen.stage(backdrop: backdrop, column: column(on: screen, width: width, header: header))
     }
 
     /// The column placed on a pretend display by the real geometry: its
     /// natural height measured off-screen, the frame from
-    /// `NotchGeometry.panelFrame`, and, for the harness's renderer, how far
-    /// the section is shown scrolled.
-    private func column(on screen: FakeScreen, anchor: PanelAnchor, width: PanelWidth = .regular, header: AnyView? = nil, scrolled: CGFloat = 0) -> PlacedColumn {
+    /// `PanelGeometry.panelFrame` under the item, and, for the harness's
+    /// renderer, how far the section is shown scrolled.
+    private func column(on screen: FakeScreen, width: PanelWidth = .regular, header: AnyView? = nil, scrolled: CGFloat = 0) -> PlacedColumn {
         let points = PanelMetrics.width(for: width)
-        var content = PanelContent(model: model, width: points, anchoredToNotch: anchor.isNotch, header: header, showSettings: {}, quit: {})
+        var content = PanelContent(model: model, width: points, header: header, showSettings: {}, quit: {})
         let natural = PanelMetrics.naturalHeight(of: content)
-        let frame = NotchGeometry.panelFrame(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, anchor: anchor, width: points, contentHeight: natural)
+        let frame = PanelGeometry.panelFrame(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, item: screen.item, width: points, contentHeight: natural)
         content.height = frame.height
-        return PlacedColumn(content: content, frame: frame, shade: NotchGeometry.menuBarShadeFrame(screenFrame: screen.frame, anchor: anchor, panelFrame: frame), scrolled: scrolled)
+        return PlacedColumn(content: content, frame: frame, scrolled: scrolled)
     }
 
     /// The model renders previews off the main actor; the stage waits for
@@ -310,19 +306,18 @@ final class PreviewHarness {
 struct PlacedColumn {
     let content: PanelContent
     let frame: CGRect
-    /// The menu-bar shade over a notch-anchored column.
-    let shade: CGRect?
     /// How far the section is shown scrolled.
     let scrolled: CGFloat
 }
 
 /// A pretend display for the harness: its frame and visible frame as
-/// `NSScreen` would report them (AppKit coordinates), its notch and the
-/// menu-bar item's frame. No Dock: the visible frame is the screen less
-/// the menu bar.
+/// `NSScreen` would report them (AppKit coordinates), its notch (drawn,
+/// nothing more) and the menu-bar item's frame. No Dock: the visible
+/// frame is the screen less the menu bar.
 struct FakeScreen {
     let frame: CGRect
     let menuBarHeight: CGFloat
+    /// The cutout the drawn menu bar shows on a notched display.
     let notch: CGRect?
     /// The macPaper item, 140 points from the right edge.
     let item: CGRect
@@ -341,11 +336,9 @@ struct FakeScreen {
     }
 
     /// The display drawn over a desktop: the menu bar (its notch, the
-    /// item), the column where the geometry puts it, the shade over the
-    /// menu-bar row for a notch-anchored column, and, for the hint, the
-    /// glow under the notch with the pointer near it.
-    func stage(backdrop: CGImage?, column: PlacedColumn?, glow: Bool = false) -> some View {
-        DisplayStage(screen: self, backdrop: backdrop, column: column, glow: glow)
+    /// item) and the column where the geometry puts it.
+    func stage(backdrop: CGImage?, column: PlacedColumn?) -> some View {
+        DisplayStage(screen: self, backdrop: backdrop, column: column)
     }
 }
 
@@ -355,7 +348,6 @@ private struct DisplayStage: View {
     let screen: FakeScreen
     let backdrop: CGImage?
     let column: PlacedColumn?
-    let glow: Bool
 
     /// AppKit to the stage's top-left coordinates.
     private func flipped(_ rect: CGRect) -> CGRect {
@@ -373,9 +365,6 @@ private struct DisplayStage: View {
             // The menu-bar row: translucent, dark over a wallpaper with a
             // notch (the built-in display), light on the plain one.
             Rectangle().fill(notched ? Color.black.opacity(0.12) : Color.white.opacity(0.7)).frame(height: screen.menuBarHeight)
-            if let column, let shade = column.shade {
-                MenuBarShade().frame(width: shade.width, height: shade.height).offset(x: flipped(shade).minX, y: flipped(shade).minY)
-            }
             HStack(spacing: 14) {
                 Image(systemName: "apple.logo").font(.system(size: 14, weight: .semibold))
                 Text("Finder").font(.system(size: 13, weight: .semibold))
@@ -395,23 +384,11 @@ private struct DisplayStage: View {
             Image(nsImage: AppResources.menuBarImage()).renderingMode(.template)
                 .foregroundStyle(notched ? .white : .black)
                 .frame(width: item.width, height: item.height)
-                .background((notched ? Color.white : Color.black).opacity(column?.content.anchoredToNotch == false ? 0.18 : 0), in: RoundedRectangle(cornerRadius: 4))
+                .background((notched ? Color.white : Color.black).opacity(column == nil ? 0 : 0.18), in: RoundedRectangle(cornerRadius: 4))
                 .offset(x: item.minX, y: item.minY)
             if let notch = screen.notch {
                 let rect = flipped(notch)
-                if glow {
-                    let frame = flipped(NotchGeometry.hintGlowFrame(screenFrame: screen.frame, notch: notch))
-                    NotchGlow().frame(width: frame.width, height: frame.height).offset(x: frame.minX, y: frame.minY)
-                }
                 Rectangle().fill(Color.black).frame(width: rect.width, height: rect.height).offset(x: rect.minX, y: rect.minY)
-                if glow {
-                    // The pointer, 60 points under the notch's edge: within reach.
-                    Image(systemName: "cursorarrow")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.5), radius: 1.5, y: 1)
-                        .offset(x: rect.midX + 40, y: rect.maxY + 60)
-                }
             }
             if let column {
                 let frame = flipped(column.frame)
