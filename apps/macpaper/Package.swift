@@ -66,15 +66,14 @@ let package = Package(
     targets: [
         // The wallpaper document and its generators, pixelize, PNG and SVG
         // export, favorites, the shuffle planner, per-display apply through
-        // `DesktopApplier`, the render cache, the notch geometry, the panel
+        // `DesktopApplier`, the render cache, the panel geometry, the panel
         // state machine and the first-run flags. No UI, no AppKit windows,
         // nothing that touches the live desktop: the real applier is
         // injected by the app only.
         .target(
             name: "MacPaperCore"
         ),
-        // The menu-bar app: status item and popover, the notch panel,
-        // settings, the hotkey, the login item, the setup guide, licensing,
+        // The menu-bar app: the status item and its panel, settings, the hotkey, the login item, the setup guide, licensing,
         // the updater, the debug preview harness.
         .executableTarget(
             name: "MacPaper",

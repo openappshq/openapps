@@ -34,6 +34,19 @@ public struct DisplayInfo: Hashable, Identifiable, Sendable {
     public var hasNotch: Bool { notchWidth != nil }
 }
 
+/// A screen's notch, from what `NSScreen` reports: the frame,
+/// `safeAreaInsets.top` and the two auxiliary top areas beside the cutout.
+/// The wallpaper composes around it (`Composition`); nothing opens from it.
+public enum ScreenNotch {
+    /// The notch rect in the screen's AppKit coordinates (origin
+    /// bottom-left): between the auxiliary areas, as tall as the top
+    /// inset. Nil when the screen has no notch (no auxiliary areas).
+    public static func rect(screenFrame: CGRect, topInset: CGFloat, auxiliaryTopLeft: CGRect?, auxiliaryTopRight: CGRect?) -> CGRect? {
+        guard let left = auxiliaryTopLeft, let right = auxiliaryTopRight, topInset > 0, right.minX > left.maxX else { return nil }
+        return CGRect(x: left.maxX, y: screenFrame.maxY - topInset, width: right.minX - left.maxX, height: topInset)
+    }
+}
+
 /// Sets a display's desktop picture, and says which file it shows. The
 /// app's applier calls `NSWorkspace.shared.setDesktopImageURL` and
 /// `desktopImageURL(for:)`; tests and the preview harness use a fake, so

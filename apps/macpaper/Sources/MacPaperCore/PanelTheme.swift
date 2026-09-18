@@ -19,8 +19,8 @@ public enum Contrast {
     }
 }
 
-/// The notch panel's colors. The column hangs from the notch, so it is a
-/// piece of the same black in both appearances: the dark tokens of
+/// The panel's colors. The column is a piece of the same black in both
+/// appearances: the dark tokens of
 /// design/tokens.json (neutral/950 ground, neutral/850 surface, neutral/0
 /// and neutral/400 text, the tangerine/300 accent with neutral/950 on it),
 /// opaque, so what the wallpaper shows never reaches a label. Every text
@@ -44,8 +44,6 @@ public enum PanelTheme {
     public static let rimAlpha = 0.7
     /// The ground is opaque: a backdrop composited under it is the ground.
     public static let groundAlpha = 1.0
-    /// The menu-bar row above a notch-anchored column is shaded this much.
-    public static let menuBarShadeAlpha = 0.42
 
     /// The pairs the panel draws text and controls with, each with the
     /// ratio it must reach.
@@ -100,16 +98,10 @@ public enum PanelLayout {
     public static let segmentSpacing: CGFloat = 2
     public static let segmentInset: CGFloat = 2
     /// The margin the column keeps inside the display's visible frame:
-    /// under the menu bar (where it is not on the notch), at the bottom,
-    /// and at the left and right edges.
+    /// under the menu bar, at the bottom, and at the left and right edges.
     public static let edgeMargin: CGFloat = 8
     /// The column is never taller than this, whatever the display.
     public static let maximumHeight: CGFloat = 920
-    /// How close the pointer comes to the notch, in points on every side,
-    /// before the first-run glow shows.
-    public static let hintReach: CGFloat = 80
-    /// How far under the notch the glow reaches.
-    public static let hintDepth: CGFloat = 40
 
     /// The width a segmented control takes so that its widest label fits on
     /// one line in every segment: every segment as wide as the widest

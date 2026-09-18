@@ -40,8 +40,8 @@
 # (OpenApps/macpaper-updatetest; the variant never touches the real app's).
 # Needs OpenSSL 3 (`openssl` on PATH, Homebrew's openssl@3, or OPENSSL),
 # python3, and a logged-in GUI session (the app is a real menu bar app while
-# it runs: a status item and a transparent hover window over the notch; it
-# applies nothing to any desktop, and asks for no permission).
+# it runs: a status item; it applies nothing to any desktop, and asks for
+# no permission).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

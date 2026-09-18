@@ -22,14 +22,10 @@ extension UserDefaults: FlagStore {
 /// at launch means an earlier launch happened; the app's `Preferences`
 /// reads and writes the same names.
 public enum PreferenceKey {
-    public static let notchEnabled = "notch.enabled"
-    public static let hostDisplay = "notch.hostDisplay"
-    public static let trigger = "notch.trigger"
-    public static let direction = "notch.direction"
+    /// The panel's keys keep the `notch.` prefix earlier versions stored
+    /// them under, so an upgraded install keeps its settings.
     public static let width = "notch.width"
     public static let hideInFullscreen = "notch.hideInFullscreen"
-    /// How long the pointer rests on the notch before a hover opens, in seconds.
-    public static let hoverDelay = "notch.hoverDelay"
     public static let hotkey = "notch.hotkey"
     public static let shuffleInterval = "shuffle.interval"
     public static let favoritesOnly = "shuffle.favoritesOnly"
@@ -43,9 +39,17 @@ public enum PreferenceKey {
     public static let pins = "shuffle.pins"
 
     public static let all: [String] = [
-        notchEnabled, hostDisplay, trigger, direction, width, hideInFullscreen, hoverDelay, hotkey,
+        width, hideInFullscreen, hotkey,
         shuffleInterval, favoritesOnly, sameOnAllDisplays, exportFolder,
         keepApplied, clockStyle, clockPosition, clockSize, pins,
+    ]
+
+    /// Keys versions up to 0.2.1 wrote and nothing reads any more (the
+    /// notch trigger's settings and its first-run glow). Left in place on
+    /// an upgrade; still evidence of an earlier launch.
+    public static let legacy: [String] = [
+        "notch.enabled", "notch.hostDisplay", "notch.trigger", "notch.direction", "notch.hoverDelay",
+        "notchHint.launches", "notchHint.used",
     ]
 }
 
@@ -62,8 +66,7 @@ public enum GuideStep: Int, CaseIterable, Comparable, Sendable {
     /// "Starts with your Mac": the login item, from its real state.
     case loginItem = 2
     case tips = 3
-    /// "Where the panel lives": the notch hover zone and the panel dropping
-    /// from it, or the menu-bar item on a Mac without a notch.
+    /// "Where the panel lives": the menu-bar item and the shortcut.
     case panel = 4
 
     /// The steps as the guide walks them.
@@ -113,42 +116,6 @@ public enum OnboardingLaunch {
     }
 }
 
-/// The glow under the notch that shows where the panel is triggered, for
-/// the first launches only: it pulses when the pointer comes within
-/// `PanelLayout.hintReach` of the notch, on the first `launchesShown`
-/// launches, and never again once the notch has opened the panel once
-/// (by hover or by click). The flags live beside the first-run flags.
-public enum NotchHint {
-    public enum Key {
-        /// How many launches have counted so far.
-        public static let launches = "notchHint.launches"
-        /// The notch opened the panel once: the hint is done.
-        public static let used = "notchHint.used"
-    }
-
-    /// The hint shows on this many launches.
-    public static let launchesShown = 5
-
-    /// Counts a launch; called once per launch, after the fresh-install
-    /// evidence has been read (the count is evidence of an earlier launch)
-    /// and before `isArmed` is asked.
-    public static func recordLaunch(store: any FlagStore) {
-        store.set(store.integer(forKey: Key.launches) + 1, forKey: Key.launches)
-    }
-
-    /// The panel opened from the notch: nothing left to show.
-    public static func markUsed(store: any FlagStore) {
-        store.set(true, forKey: Key.used)
-    }
-
-    /// Whether the glow is armed this launch: the notch has never opened
-    /// the panel, and this launch (counted already) is one of the first
-    /// `launchesShown`. An uncounted launch (0) counts as the first.
-    public static func isArmed(store: any FlagStore) -> Bool {
-        !store.bool(forKey: Key.used) && store.integer(forKey: Key.launches) <= launchesShown
-    }
-}
-
 /// A setting official builds turn on once, on a demonstrably fresh install:
 /// no preferences from an earlier launch (of any version), and neither a
 /// trial nor a license record in the record store, both positively absent.
@@ -165,14 +132,15 @@ public struct FreshInstallDefault {
         public static let updateChecksApplied = "updates.checkDefaultApplied"
 
         /// Every preference the app writes to its standard defaults domain
-        /// (the updater's included): any one present at launch, whatever its
-        /// value, is an earlier launch's preferences, and the install is not
-        /// fresh. A stored `false` toggle is a choice, so presence is what
-        /// counts. The list is by hand; add a key here when the app starts
-        /// writing a new one.
+        /// (the updater's included), and every one an earlier version
+        /// wrote: any one present at launch, whatever its value, is an
+        /// earlier launch's preferences, and the install is not fresh. A
+        /// stored `false` toggle is a choice, so presence is what counts.
+        /// The list is by hand; add a key here when the app starts writing
+        /// a new one, and move it to `PreferenceKey.legacy` when it stops.
         public static let earlierPreferenceEvidence: [String] =
-            [OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step, NotchHint.Key.launches, NotchHint.Key.used, loginItemApplied, updateChecksApplied]
-            + PreferenceKey.all
+            [OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step, loginItemApplied, updateChecksApplied]
+            + PreferenceKey.all + PreferenceKey.legacy
             + ["OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck"]
     }
 

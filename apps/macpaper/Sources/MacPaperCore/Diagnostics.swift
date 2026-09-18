@@ -8,10 +8,8 @@ public struct DiagnosticsSnapshot: Sendable {
     public var loginStatus: String
     public var licensing: String
     public var displays: [DisplayInfo]
-    public var panelSettings: PanelSettings
-    public var hostDisplay: HostDisplay
-    public var direction: PanelDirection
     public var width: PanelWidth
+    public var hideInFullscreen: Bool
     public var hotkey: Hotkey?
     public var hotkeyProblem: String?
     public var shuffle: ShuffleInterval
@@ -22,8 +20,8 @@ public struct DiagnosticsSnapshot: Sendable {
     public var lastApplied: Date?
 
     public init(
-        appVersion: String, loginStatus: String, licensing: String, displays: [DisplayInfo], panelSettings: PanelSettings,
-        hostDisplay: HostDisplay, direction: PanelDirection, width: PanelWidth, hotkey: Hotkey?, hotkeyProblem: String?,
+        appVersion: String, loginStatus: String, licensing: String, displays: [DisplayInfo],
+        width: PanelWidth, hideInFullscreen: Bool, hotkey: Hotkey?, hotkeyProblem: String?,
         shuffle: ShuffleInterval, favoritesOnly: Bool, sameOnAllDisplays: Bool, favoritesCount: Int,
         applied: [String: Wallpaper], lastApplied: Date?
     ) {
@@ -31,10 +29,8 @@ public struct DiagnosticsSnapshot: Sendable {
         self.loginStatus = loginStatus
         self.licensing = licensing
         self.displays = displays
-        self.panelSettings = panelSettings
-        self.hostDisplay = hostDisplay
-        self.direction = direction
         self.width = width
+        self.hideInFullscreen = hideInFullscreen
         self.hotkey = hotkey
         self.hotkeyProblem = hotkeyProblem
         self.shuffle = shuffle
@@ -62,7 +58,7 @@ public struct DiagnosticsSnapshot: Sendable {
             lines.append("- " + parts.joined(separator: " · "))
         }
         lines.append("")
-        lines.append("Notch panel: \(panelSettings.isEnabled ? "on" : "off") · host \(hostDisplay.rawValue) · opens on \(panelSettings.trigger.rawValue) · \(direction.rawValue) · \(width.rawValue) · hide in fullscreen \(panelSettings.hideInFullscreen ? "on" : "off")")
+        lines.append("Panel: \(width.rawValue) · hide in fullscreen \(hideInFullscreen ? "on" : "off")")
         lines.append("Hotkey: \(hotkey?.displayString ?? "none")" + (hotkeyProblem.map { " (\($0))" } ?? ""))
         lines.append("Shuffle: \(shuffle.rawValue) · favorites only \(favoritesOnly ? "on" : "off") · same on all displays \(sameOnAllDisplays ? "on" : "off")")
         lines.append("Favorites: \(favoritesCount)")

@@ -2,10 +2,8 @@ import MacPaperCore
 import SwiftUI
 
 /// The column: an icon rail on the left and, beside it, the section it
-/// points at. One column, wherever it opens from (the notch, the menu-bar
-/// item). Dark in both appearances and opaque (`PanelTheme`): it hangs
-/// from the notch, so it is a piece of the same black, and no wallpaper
-/// reaches a label. Every change reaches the desktop on its own (live
+/// points at, under the menu-bar item. Dark in both appearances and
+/// opaque (`PanelTheme`), so no wallpaper reaches a label. Every change reaches the desktop on its own (live
 /// apply), so there is no Apply: the header says where changes land, the
 /// rail carries Shuffle and Collapse, the footer the seed. While the
 /// license restricts the feature, the license card takes the place of

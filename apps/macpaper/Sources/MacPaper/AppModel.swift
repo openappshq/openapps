@@ -245,8 +245,7 @@ final class AppModel {
     @ObservationIgnored var liveApplyDelay: Duration = .milliseconds(150)
     /// Where live applies land; the panel's header control.
     var reach: ApplyReach
-    /// The section the column shows; kept across opens and shared by the
-    /// notch panel and the popover.
+    /// The section the column shows; kept across opens.
     var panelSection: PanelSection = .library
 
     /// Changes the draft while the license allows generating, asked at the

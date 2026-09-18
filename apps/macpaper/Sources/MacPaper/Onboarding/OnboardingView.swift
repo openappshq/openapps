@@ -114,9 +114,7 @@ private struct WelcomeStep: View {
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text(model.hasNotch
-                    ? "Hover or click the notch, or click the menu-bar icon, to make a wallpaper and put it on your desktop."
-                    : "Click the menu-bar icon to make a wallpaper and put it on your desktop.")
+                Text("Click the menu-bar icon to make a wallpaper and put it on your desktop.")
                     .font(Brand.body(16))
                     .foregroundStyle(Brand.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -170,7 +168,7 @@ private struct PermissionsStep: View {
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text("macPaper draws every wallpaper itself and sets it the way the Wallpaper settings pane does. The notch hover is a tracking area on its own window and the hotkey is a system hotkey. None of that needs a permission, so macOS won’t ask for one.")
+                Text("macPaper draws every wallpaper itself and sets it the way the Wallpaper settings pane does. The panel is a window under the menu-bar icon and the hotkey is a system hotkey. None of that needs a permission, so macOS won’t ask for one.")
                     .font(Brand.body(16))
                     .lineSpacing(4)
                     .foregroundStyle(Brand.textSecondary)
@@ -232,8 +230,8 @@ private struct LoginItemStep: View {
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
                 Text(model.loginItem.isOn
-                    ? "The notch panel, the hotkey and a scheduled shuffle only work while macPaper runs. It opens at login and stays in the menu bar; there is nothing else it does in the background."
-                    : "The notch panel, the hotkey and a scheduled shuffle only work while macPaper runs. Turn this on and it opens at login and stays in the menu bar; there is nothing else it does in the background.")
+                    ? "The panel, the hotkey and a scheduled shuffle only work while macPaper runs. It opens at login and stays in the menu bar; there is nothing else it does in the background."
+                    : "The panel, the hotkey and a scheduled shuffle only work while macPaper runs. Turn this on and it opens at login and stays in the menu bar; there is nothing else it does in the background.")
                     .font(Brand.body(16))
                     .lineSpacing(4)
                     .foregroundStyle(Brand.textSecondary)
@@ -275,15 +273,13 @@ private struct TipsStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Brand.Space.s24) {
-            NotchPreview()
+            MenuBarPreview()
             VStack(alignment: .leading, spacing: Brand.Space.s12) {
                 Text("You’re all set.")
                     .font(Brand.display(40))
                     .foregroundStyle(Brand.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                tip("rectangle.topthird.inset.filled", model.hasNotch
-                    ? "The panel drops from the notch on hover or click, and opens under the menu-bar icon from a click on it\(model.shortcut.map { " or \($0)" } ?? ""). Settings → General picks which display hosts the notch panel, the hover delay, its width, whether it hides in fullscreen, and the shortcut."
-                    : "The panel opens under the menu-bar icon from a click on it\(model.shortcut.map { " or \($0)" } ?? ""). Settings → General sets its width, whether it hides in fullscreen, and the shortcut; the notch settings apply once a notched display is connected.")
+                tip("rectangle.topthird.inset.filled", "The panel opens under the menu-bar icon from a click on it\(model.shortcut.map { " or \($0)" } ?? ""). Settings → General sets its width, whether it hides in fullscreen, and the shortcut.")
                 tip("dice", "Every wallpaper is a document with a seed. The dice picks another; click the seed to type one back in and get the exact same wallpaper, on any Mac.")
                 tip("rectangle.on.rectangle", "With “Same on all displays” off, each display keeps its own wallpaper: Apply offers this display or all of them, and Shuffle gives every display a different one. A favorite is the document, so it renders again at any display’s size.")
                 if Licensing.isCompiledIn {
@@ -326,40 +322,28 @@ private struct TipsStep: View {
     }
 }
 
-/// A drawn menu bar with its notch and the macPaper item in it, so the
-/// window can point at something the user has not clicked yet.
-private struct NotchPreview: View {
+/// A drawn menu bar with the macPaper item in it, so the window can point
+/// at something the user has not clicked yet.
+private struct MenuBarPreview: View {
     var body: some View {
-        ZStack {
-            HStack(spacing: Brand.Space.s12) {
-                Image(systemName: "apple.logo").font(.system(size: 12, weight: .semibold))
-                Text("Finder").font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Image(systemName: "wifi").font(.system(size: 12))
-                Image(nsImage: AppResources.menuBarImage())
-                    .renderingMode(.template)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Brand.accentSubtle))
-                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Brand.accentSolid, lineWidth: 1))
-                Text("Tue 9:41").font(.system(size: 12))
-            }
-            .padding(.horizontal, Brand.Space.s12)
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Brand.textPrimary)
-                .frame(width: 120, height: 22)
-                .offset(y: -4)
-                .overlay(alignment: .top) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Brand.accentSolid)
-                        .offset(y: 20)
-                }
+        HStack(spacing: Brand.Space.s12) {
+            Image(systemName: "apple.logo").font(.system(size: 12, weight: .semibold))
+            Text("Finder").font(.system(size: 12, weight: .semibold))
+            Spacer()
+            Image(systemName: "wifi").font(.system(size: 12))
+            Image(nsImage: AppResources.menuBarImage())
+                .renderingMode(.template)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Brand.accentSubtle))
+                .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Brand.accentSolid, lineWidth: 1))
+            Text("Tue 9:41").font(.system(size: 12))
         }
+        .padding(.horizontal, Brand.Space.s12)
         .foregroundStyle(Brand.textPrimary)
         .frame(height: 30)
         .background(RoundedRectangle(cornerRadius: Brand.Radius.control, style: .continuous).fill(Brand.surface))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("The menu bar, with the notch in the middle and the macPaper item on the right")
+        .accessibilityLabel("The menu bar, with the macPaper item on the right")
     }
 }

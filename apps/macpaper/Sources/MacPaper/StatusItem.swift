@@ -2,10 +2,10 @@ import AppKit
 import MacPaperCore
 import SwiftUI
 
-/// The menu-bar item: a click opens the panel under it (`NotchHost`), on
-/// whichever display the item is on, notch or not; a right click (or a
-/// Control-click) opens a plain menu whose first item is **Show panel**
-/// with the shortcut (design/products/macpaper.md, "Menu bar").
+/// The menu-bar item: a click opens the panel under it (`PanelHost`), on
+/// whichever display the item is on; a right click (or a Control-click)
+/// opens a plain menu whose first item is **Show panel** with the shortcut
+/// (design/products/macpaper.md, "Menu bar").
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let model: AppModel
     private let preferences: Preferences
