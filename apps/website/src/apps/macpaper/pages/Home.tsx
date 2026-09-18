@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { enter } from "@openapps/ui/transitions";
-import NotchScene from "../NotchScene";
+import PanelScene from "../PanelScene";
 import PaperGallery from "../PaperGallery";
 import MacPaperInstall from "../MacPaperInstall";
 import KeyToken from "../../../shared/KeyToken";
@@ -139,8 +139,8 @@ const features: { icon: ReactNode; title: string; body: ReactNode }[] = [
   },
   {
     icon: <SlidersHorizontal size={20} />,
-    title: "The notch, your way.",
-    body: "Open on hover, on click, or both; choose which display hosts it and how wide it is; hide it in full screen. The same panel opens from the menu bar icon or with ⌥⌘P, and on a Mac without a notch it hangs from the icon.",
+    title: "One click in the menu bar.",
+    body: "Click the icon, or press ⌥⌘P from anywhere, and the panel opens under it on whatever display the icon is on, as tall as its content. Pick how wide it is and whether it hides in full screen; the icon again, Escape or a click outside closes it.",
   },
   {
     icon: <LockKeyhole size={20} />,
@@ -156,7 +156,7 @@ const questions = [
   ],
   [
     "Do I need a Mac with a notch?",
-    "No. On a Mac without one, macPaper lives in the menu bar and the same panel opens from there, and notch-aware compositions paint a pill where the notch would be. On a notched Mac you can still turn the notch panel off and use the menu bar instead.",
+    "No. macPaper lives in the menu bar on every Mac. The notch only matters to the wallpaper: on a Mac with one, a mesh can emerge from the cutout or a pattern part around it, and on a Mac without one the same compositions paint a pill where it would be.",
   ],
   [
     "How do licenses and trials work?",
@@ -227,21 +227,21 @@ export default function App() {
               <HqBadge />
             </div>
             <motion.h1 {...enter} id="hero-title">
-              Wallpapers, from the <KeyToken>notch</KeyToken>.
+              Wallpapers, from the <KeyToken>menu bar</KeyToken>.
             </motion.h1>
             <div className="hero-grid mp-hero-grid">
               <div className="hero-intro">
                 <p>
                   Gradients, meshes, patterns, dither and pixel art, light-and-dark and time-of-day
                   pairs, made on your Mac at each display's own pixels and set from a panel that
-                  drops out of the notch. Stills that macOS keeps showing after the app quits.
+                  opens under its menu bar icon. Stills that macOS keeps showing after the app quits.
                 </p>
                 <div className="hero-actions">
                   <BuyButtons app="macpaper" requirements={REQUIREMENTS} />
                 </div>
               </div>
               <div className="mp-hero-stage">
-                <NotchScene />
+                <PanelScene />
               </div>
             </div>
           </div>
@@ -279,7 +279,7 @@ export default function App() {
             <div className="section-heading reveal">
               <div>
                 <Legend index="02">The Mac app</Legend>
-                <h2 id="app-title">From the notch. Or the menu bar.</h2>
+                <h2 id="app-title">Lives in the menu bar.</h2>
               </div>
             </div>
             <div className="feature-grid reveal-group">

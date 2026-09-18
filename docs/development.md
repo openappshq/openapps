@@ -33,7 +33,7 @@ apps/
       pages/                  Lazy-loaded page entries
     src/apps/openreaction/     OpenReaction marketing and emoji demo
     src/apps/hertz/            Hertz marketing and the drawn dashboard
-    src/apps/macpaper/         macPaper marketing and the notch scene
+    src/apps/macpaper/         macPaper marketing and the panel scene
     src/apps/opennotes/        OpenNotes marketing and the edge-deck scene
   site-worker/                Cloudflare Worker: serves the site, runs /api/trial on D1
   openklack-desktop/           OpenKlack's Tauri app and native input/audio
@@ -162,7 +162,7 @@ The menu-bar system monitor lives in `apps/hertz` and is plain SwiftPM: `swift b
 
 ## macPaper
 
-The notch wallpaper maker lives in `apps/macpaper` and is plain SwiftPM: `swift build`, `swift test`, `scripts/bundle.sh`; see [its README](../apps/macpaper/README.md). It asks macOS for no permissions. It is unreleased: the release workflow (`.github/workflows/macpaper.yml`), the cask template and the install script are in place, the catalog entry and website page arrive with the first licensed release. Licensing and the updater follow the other Swift apps: compiled out of a source build, in with `OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1` after `scripts/generate-licensing-config.sh` has written the (gitignored) configuration; a third flavour, `OPENAPPS_OFFICIAL=1 MACPAPER_UPDATE_TEST=1` (never with licensing), is the update-test variant `scripts/update-e2e.sh` builds and drives — its own bundle id and Application Support folder, no login item, no guide. All three flavours have their own tests and the checks job runs them; see [RELEASING.md](../apps/macpaper/RELEASING.md). The debug build's `--preview <directory>` renders the notch panel, the popover and Settings to PNGs without a status item, a window or a desktop change: on a shared Mac that is the way to look at the UI, never `open` or `swift run`. The [product contract](../design/products/macpaper.md) records approved behavior.
+The menu-bar wallpaper maker lives in `apps/macpaper` and is plain SwiftPM: `swift build`, `swift test`, `scripts/bundle.sh`; see [its README](../apps/macpaper/README.md). It asks macOS for no permissions. It is unreleased: the release workflow (`.github/workflows/macpaper.yml`), the cask template and the install script are in place, the catalog entry and website page arrive with the first licensed release. Licensing and the updater follow the other Swift apps: compiled out of a source build, in with `OPENAPPS_LICENSING=1 OPENAPPS_OFFICIAL=1` after `scripts/generate-licensing-config.sh` has written the (gitignored) configuration; a third flavour, `OPENAPPS_OFFICIAL=1 MACPAPER_UPDATE_TEST=1` (never with licensing), is the update-test variant `scripts/update-e2e.sh` builds and drives — its own bundle id and Application Support folder, no login item, no guide. All three flavours have their own tests and the checks job runs them; see [RELEASING.md](../apps/macpaper/RELEASING.md). The debug build's `--preview <directory>` renders the panel, the setup guide's panel step and Settings to PNGs without a status item, a window or a desktop change: on a shared Mac that is the way to look at the UI, never `open` or `swift run`. The [product contract](../design/products/macpaper.md) records approved behavior.
 
 ## OpenNotes
 

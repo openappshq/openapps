@@ -5,7 +5,7 @@ code {
 }
 
 /* --- Hero ------------------------------------------------------------------
-   The lead and the actions on the left, the notch scene on the right: the idea
+   The lead and the actions on the left, the panel scene on the right: the idea
    in one picture beside the sentence that says it. */
 .mp-hero-grid {
   display: grid;
@@ -17,10 +17,11 @@ code {
   min-width: 0;
 }
 
-/* --- The notch scene -------------------------------------------------------
+/* --- The panel scene -------------------------------------------------------
    A screen on a raised key. The wallpapers are three layers that crossfade;
-   the panel drops from under the menu bar, presses two swatches, and goes back
-   up. One 12-second loop, every part timed from the same clock. */
+   the menu-bar icon lights, the panel drops from under it, presses two
+   swatches, and goes back up. One 12-second loop, every part timed from the
+   same clock. */
 .mp-scene {
   --mp-cycle: 12s;
   --mp-ink: #141414;
@@ -70,15 +71,42 @@ code {
   position: absolute;
   inset: 0 0 auto;
   height: 9%;
+  padding-inline: 3%;
   background: var(--mp-glass);
   display: flex;
-  justify-content: center;
+  align-items: center;
+  gap: 3%;
 }
-.mp-notch {
-  width: 27%;
-  height: 100%;
-  border-radius: 0 0 9px 9px;
-  background: var(--mp-ink);
+/* The app menus on the left, the macPaper icon and the clock on the right. */
+.mp-menubar-item {
+  height: 22%;
+  width: 7%;
+  border-radius: 2px;
+  background: oklch(0 0 0 / 0.45);
+}
+.mp-menubar-item:first-child {
+  width: 3.5%;
+}
+.mp-menubar-icon {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  height: 68%;
+  aspect-ratio: 1;
+  border-radius: 3px;
+  /* Lit, as a menu-bar item is while its window is open; the loop dims it
+     while the panel is up. */
+  background: oklch(0 0 0 / 0.14);
+}
+.mp-menubar-icon img {
+  width: 62%;
+  height: 62%;
+}
+.mp-menubar-clock {
+  height: 22%;
+  width: 9%;
+  border-radius: 2px;
+  background: oklch(0 0 0 / 0.45);
 }
 .mp-dock {
   position: absolute;
@@ -95,12 +123,11 @@ code {
 }
 .mp-panel {
   position: absolute;
-  top: 9%;
-  left: 50%;
+  top: 10.5%;
+  right: 2.5%;
   width: 52%;
-  translate: -50% 0;
   padding: 5% 4% 4%;
-  border-radius: 0 0 14px 14px;
+  border-radius: 14px;
   background: var(--mp-glass);
   color: var(--mp-glass-ink);
   -webkit-backdrop-filter: blur(14px);
@@ -180,6 +207,9 @@ code {
   .mp-panel {
     animation: mp-drop var(--mp-cycle) infinite;
   }
+  .mp-menubar-icon {
+    animation: mp-icon var(--mp-cycle) infinite;
+  }
   .mp-wall-mesh {
     animation: mp-wall-second var(--mp-cycle) linear infinite;
   }
@@ -197,17 +227,35 @@ code {
   @keyframes mp-drop {
     0%,
     6% {
-      translate: -50% -104%;
+      translate: 0 -4%;
+      opacity: 0;
       animation-timing-function: var(--ease-spring);
     }
     12%,
     80% {
-      translate: -50% 0;
+      translate: 0 0;
+      opacity: 1;
       animation-timing-function: var(--ease-out);
     }
     86%,
     100% {
-      translate: -50% -104%;
+      translate: 0 -4%;
+      opacity: 0;
+    }
+  }
+  /* The icon lights as the panel opens under it, like a menu-bar item does. */
+  @keyframes mp-icon {
+    0%,
+    5% {
+      background: oklch(0 0 0 / 0);
+    }
+    7%,
+    82% {
+      background: oklch(0 0 0 / 0.14);
+    }
+    86%,
+    100% {
+      background: oklch(0 0 0 / 0);
     }
   }
   @keyframes mp-wall-second {

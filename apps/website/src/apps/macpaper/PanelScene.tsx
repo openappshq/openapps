@@ -1,13 +1,14 @@
 /**
- * The idea, drawn: a Mac's screen, and macPaper's panel dropping out of the
- * notch to change the wallpaper behind it. Pure CSS: the panel drops, two
- * swatches get pressed and the wallpaper crossfades each time, the panel goes
- * back up, and the loop starts over. Reduced motion shows the panel open on the
- * first wallpaper. Decorative; the copy beside it says what it shows.
+ * The idea, drawn: a Mac's screen, and macPaper's panel opening under its
+ * menu-bar icon to change the wallpaper behind it. Pure CSS: the icon lights,
+ * the panel drops, two swatches get pressed and the wallpaper crossfades each
+ * time, the panel goes back up, and the loop starts over. Reduced motion shows
+ * the panel open on the first wallpaper. Decorative; the copy beside it says
+ * what it shows.
  */
 const wallpapers = ["gradient", "mesh", "pattern"] as const;
 
-export default function NotchScene() {
+export default function PanelScene() {
   return (
     <div className="mp-scene" aria-hidden="true">
       <div className="mp-screen">
@@ -36,7 +37,13 @@ export default function NotchScene() {
           </div>
         </div>
         <div className="mp-menubar">
-          <span className="mp-notch" />
+          <span className="mp-menubar-item" />
+          <span className="mp-menubar-item" />
+          <span className="mp-menubar-item" />
+          <span className="mp-menubar-icon">
+            <img src="/brand/macpaper/symbol-ink.svg" alt="" width="12" height="12" />
+          </span>
+          <span className="mp-menubar-clock" />
         </div>
         <div className="mp-dock">
           <span />

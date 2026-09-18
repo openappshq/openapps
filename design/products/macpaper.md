@@ -1,16 +1,16 @@
 # macPaper
 
-A wallpaper maker that lives in the notch: click or hover the notch and a column drops down with the current wallpaper, the library of looks, a generator to change it, its parameters and effects, Shuffle and Export. Every change lands on the desktop as it is made. Every wallpaper is made on the Mac from a few parameters and a seed; nothing is downloaded and nothing is uploaded. macPaper makes **stills** that macOS keeps showing after the app quits — light/dark and time-of-day pairs included — and keeps them applied.
+A wallpaper maker that lives in the menu bar: click its icon (or press ⌥⌘P) and a column opens under it with the current wallpaper, the library of looks, a generator to change it, its parameters and effects, Shuffle and Export. Every change lands on the desktop as it is made. Every wallpaper is made on the Mac from a few parameters and a seed; nothing is downloaded and nothing is uploaded. macPaper makes **stills** that macOS keeps showing after the app quits — light/dark and time-of-day pairs included — and keeps them applied.
 Open source under MIT; the official build is paid on the same terms as every OpenApps HQ app ([LICENSING.md](../../LICENSING.md): 3-day in-app trial, no signup, one license for 3 Macs). Installed with Homebrew; the official build checks a signed feed for updates once a day and installs one only when the user says so ([RELEASES.md](../../RELEASES.md)).
 
-Inspired by the idea of a notch-based wallpaper maker; written from scratch, with no code, copy, name or asset from any other product. Scope decided 2026-09-16 by the user from the macPaper roadmap (three scouts of what wallpaper apps ship and users ask for): the whole roadmap is v1, except what a spike ruled out ("Not built" below).
+Inspired by the idea of a notch-based wallpaper maker; written from scratch, with no code, copy, name or asset from any other product. Scope decided 2026-09-16 by the user from the macPaper roadmap (three scouts of what wallpaper apps ship and users ask for): the whole roadmap is v1, except what a spike ruled out ("Not built" below). The notch trigger itself (hover or click on the cutout, its settings, its first-run glow) shipped in 0.1–0.2.1 and was removed on 2026-09-18 by the user's decision ("the menubar icon is enough"); the wallpaper's notch-aware composition stays.
 
 ## Identity
 
 Signature color: tangerine (`tangerine/300` tile face, `tangerine/500` shade, `tangerine/700` / `tangerine/300` accent in light / dark); the mark is a display outline with the notch as a filled tab and one horizon line inside.
 The color is the app's, not a state: success stays green, danger red, warning HQ yellow, so a tangerine control is always an action or the brand.
 Type follows the shared system: Bricolage Grotesque for the panel's heading and the settings window's headings, Instrument Sans for interface text, IBM Plex Mono with tabular digits for seeds, sizes and labels.
-Surfaces are glass cards (Liquid Glass on macOS 26, the system material before, opaque under Reduce Transparency, a visible rim under Increase Contrast), as in Hertz and OpenReaction — the settings window and the setup guide. The notch panel is the exception: a column that hangs from the notch, a piece of the same black in both appearances and opaque (`PanelTheme` in the core: neutral/950 ground, neutral/850 rows, neutral/0 and neutral/400 text, the tangerine/300 accent), with the neutral/700 rim, squared off at the top where it meets the notch. Nothing of the wallpaper reaches a label, so every text pair reads at AA over any desktop; a test asserts the pairs and the preview harness proves it over a saturated mesh, grey, near-black and near-white.
+Surfaces are glass cards (Liquid Glass on macOS 26, the system material before, opaque under Reduce Transparency, a visible rim under Increase Contrast), as in Hertz and OpenReaction — the settings window and the setup guide. The panel is the exception: a column under the menu-bar icon, a piece of the same black in both appearances and opaque (`PanelTheme` in the core: neutral/950 ground, neutral/850 rows, neutral/0 and neutral/400 text, the tangerine/300 accent), with the neutral/700 rim, rounded all round. Nothing of the wallpaper reaches a label, so every text pair reads at AA over any desktop; a test asserts the pairs and the preview harness proves it over a saturated mesh, grey, near-black and near-white.
 
 ## Primary task
 
@@ -70,14 +70,12 @@ A favorite is a document, so it keeps its pair and its frames.
 
 ## The panel
 
-One column, wherever it opens from. Where it opens decides where it hangs (`PanelAnchor.resolve`, `NotchGeometry.panelFrame`; every rule below is pure geometry over the display's `frame` and `visibleFrame`, and the tests run it on a 1512×982 notched display, a 1440×900 and a 1280×800 display without one, a secondary display with its own menu bar, and the left and right edges):
+One column, opened by the menu-bar item and the shortcut alike, placed under the item by `PanelGeometry.panelFrame` — pure geometry over the display's `frame` and `visibleFrame`, and the tests run it on a 1512×982 notched display, a 1440×900 and a 1280×800 display without one, a secondary display with its own menu bar, and the left and right edges:
 
-| Opened by | Placement |
+| Rule | Placement |
 | --- | --- |
-| The notch (hover or click), on the display that hosts the notch panel | Centered on the notch, its top squared against it, its bottom corners rounded; the menu-bar row beside the notch is shaded in the column's width by a click-through strip under the menu bar's own window, so the row reads as part of the column through the bar's translucency while its items are never tinted and keep every click |
-| The menu-bar item, on any display, notch or not | Under the item like every menu-bar app's window: centered on the item, an 8-point margin under the menu bar (the visible frame's top), rounded all round. Never above the menu bar, never off an edge: the column stays inside the display's visible frame with an 8-point margin on every side, so an item near the right edge gets the column slid left to fit |
-| The shortcut | From the notch where the notch panel may show (on, the pointer's display hosts it or the first host does, not hidden by fullscreen); otherwise under the menu-bar item on its display |
-| The hot edge of a display without a notch (hover or click at the top center, a 2-point strip 200 points wide so no menu-bar item is covered) | From the top center, a margin under the menu bar |
+| Under the item, on whatever display the item is on, notch or not | Like every menu-bar app's window: centered on the item, an 8-point margin under the menu bar (the visible frame's top), rounded all round. Never above the menu bar, never off an edge: the column stays inside the display's visible frame with an 8-point margin on every side, so an item near the right edge gets the column slid left to fit |
+| No item frame on the display (the item hidden by a crowded menu bar) | Centered at the top of the visible frame, the same margin under the menu bar |
 
 Height: **`min(content, visibleFrame.height − 16)`, at most 920 points** — as tall as its content when the content is short (Export, Parameters), capped by the display when it is not (Library, Palette). In a capped column the sections column scrolls; the header, the preview, the rail and the footer stay put. The Library and History lists are lazy, so a library of many recipes builds only the rows in view. The content's height is measured before the window shows, so the column opens at its final size, and it follows the content while open (a section switched, a status line shown) with its top edge fixed, animated over the standard duration.
 
@@ -101,29 +99,23 @@ Its width is the setting below, unless a segmented control needs more: every seg
 
 | Setting (Settings → General) | Values | Default |
 | --- | --- | --- |
-| Open from the notch | on / off, with a line saying where the zone is ("Rest the pointer on the notch — the cutout at the top of the display — or click it. The menu bar icon opens the same panel."), or that no display has a notch right now. Off: the menu-bar item and the shortcut open the panel | on |
-| Host display | the notch display / the main display / every notched display | the notch display |
-| Open on | hover / click / both | both |
-| Hover delay | 0.05–1 s in steps of 0.05, a slider with its readout; off while Open on is click | 0.18 s |
-| Direction | down (v1 renders down only; left, right are stored for a later release) | down |
 | Width | compact / regular / wide (360 / 440 / 560 pt, each grown to fit the widest control's labels) | regular |
-| Hide in fullscreen | on / off | on |
+| Hide in fullscreen | on / off: on, an open panel closes when the app in front goes fullscreen; the item and the shortcut still open it there | on |
 | Show panel (the shortcut) | any key with at least one modifier, or none; shown in the menu-bar item's menu | ⌥⌘P on a fresh install; an install upgraded from 0.2 keeps ⌃⌥⌘W (its default then), written once at the first launch that finds no stored shortcut, after the fresh-install evidence has been read |
+
+The keys stay under the `notch.` prefix earlier versions stored them under (`notch.width`, `notch.hideInFullscreen`, `notch.hotkey`), so an upgrade keeps its settings; the keys of the removed trigger (`notch.enabled`, `notch.hostDisplay`, `notch.trigger`, `notch.direction`, `notch.hoverDelay`, `notchHint.launches`, `notchHint.used`) are left in place and still count as earlier-launch evidence (`PreferenceKey.legacy`).
 
 Behavior:
 
-- Hover opens after the hover delay over the notch and closes 400 ms after the pointer leaves the panel and the notch; a click opens at once and then only a click outside, Escape, the shortcut, the item, Collapse or Hide in fullscreen closes it. A click on the menu-bar item is never a click outside: its mouse-up toggles, so a second click on the item closes and does not reopen. Opening by click while a hover-open is pending cancels the pending open. A hover-opened panel that the pointer enters stays as long as the pointer is inside.
-- The menu-bar item toggles the panel under itself whatever the notch settings say; a click while a panel is open on another display closes that one first.
-- The shortcut toggles: closes an open panel, else opens one from the notch where the notch panel may show, else under the menu-bar item.
-- In fullscreen (Hide in fullscreen on) the panel closes and the notch does nothing until the space leaves fullscreen; the item and the shortcut still open the panel, under the item.
+- The menu-bar item and the shortcut toggle: a click on the item or ⌥⌘P opens the panel under the item, a second click or press closes it. A click on the menu-bar item is never a click outside: its mouse-up toggles, so a second click on the item closes and does not reopen. Only a click outside, Escape, the item, the shortcut, Collapse or Hide in fullscreen closes it.
+- In fullscreen (Hide in fullscreen on) an open panel closes when the space in front goes fullscreen; the item and the shortcut still open the panel there, under the item.
 - Reduce Motion: no drop animation, the panel appears in place, and its height changes without animating; the standard drop takes 180 ms otherwise.
 - The panel never takes key focus from the app in front unless the user types in it (the seed field, a color field); Escape then returns focus.
-- The column's content is the section the rail points at (above); the section is kept across opens, however the column is opened. Collapse on the rail closes the column the way Escape does.
+- The column's content is the section the rail points at (above); the section is kept across opens. Collapse on the rail closes the column the way Escape does.
 
-### Finding the notch (first run)
+### Finding the panel (first run)
 
-- The setup guide's second step, **"Where the panel lives"**, right after the welcome: a drawn display with a looping animation of the pointer reaching the notch, the glow lighting under it and the column dropping, and the words that the menu-bar icon opens the same panel, and so does the shortcut. On a Mac without a notch (no connected display has one) the step says the panel lives in the menu bar — the icon and the shortcut are the triggers — and the animation reaches the icon instead. Reduce Motion holds the last frame.
-- **The glow.** For the first five launches, or until the notch has opened the panel once (by hover or click), a soft tangerine glow — a bright seam under the notch's edge and a fall-off over 40 points — fades in and pulses whenever the pointer comes within 80 points of the notch, and fades out when it leaves, the panel opens, or the notch panel is off. A click-through window at the menu bar's level; the pointer is read by a global mouse-moved monitor (no permission: only keyboard monitors need one) that exists only while the glow is armed and is removed the moment the notch opens the panel. Reduce Motion: the glow shows without pulsing. Two flags beside the first-run flags (`notchHint.launches`, counted after the fresh-install evidence has been read; `notchHint.used`), both earlier-launch evidence.
+- The setup guide's second step, **"Where the panel lives"**, right after the welcome: a drawn display with a looping animation of the pointer reaching the menu-bar icon and the column opening under it, and the words that the shortcut opens the same panel, and that the icon again, Escape or a click anywhere else closes it. Reduce Motion holds the last frame.
 - The menu-bar item's tooltip says "click for the panel, right-click for the menu".
 
 ### Notch-aware composition
@@ -132,7 +124,7 @@ A document may compose around the notch of the display it is applied to: **Emerg
 
 ## Menu bar
 
-A template symbol (the mark) with no readout. A click opens the panel under the item (above), on whatever display the item is on; a right click or Control-click opens a plain menu: **Show panel** / **Hide panel** with the shortcut as set (first), **Settings…** ⌘, then, in official builds, the update line while an update asks for something (RELEASES.md, "In-app updater"), and **Quit macPaper** ⌘Q. There is no popover: the item and the shortcut are the triggers on a Mac without a notch, when the notch panel is off, and in fullscreen while the notch panel is hidden. A `.macpaper` file opened from the Finder shows the panel under the item.
+A template symbol (the mark) with no readout. A click opens the panel under the item (above), on whatever display the item is on; a right click or Control-click opens a plain menu: **Show panel** / **Hide panel** with the shortcut as set (first), **Settings…** ⌘, then, in official builds, the update line while an update asks for something (RELEASES.md, "In-app updater"), and **Quit macPaper** ⌘Q. The item and the shortcut are the only triggers. A `.macpaper` file opened from the Finder shows the panel under the item.
 
 ## Apply, finished
 
@@ -172,7 +164,7 @@ Favorites are documents (JSON), not images, kept in `~/Library/Application Suppo
 
 ## General settings
 
-Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off), the panel settings above, Show setup guide, and About: what macPaper does and where it writes (this Mac only; the only network calls of an official build are the license check, the trial registry and the update check, none in a source build), the lock-screen note, MIT, Copy Diagnostics (version, login state, licensing flavour, displays and their notches, the panel settings, the pin and clock state, the shuffle state, the applied documents).
+Open at login (on once on a fresh install, `SMAppService`, approval state shown; the user can turn it off), the panel settings above, Show setup guide, and About: what macPaper does and where it writes (this Mac only; the only network calls of an official build are the license check, the trial registry and the update check, none in a source build), the lock-screen note, MIT, Copy Diagnostics (version, login state, licensing flavour, displays and their notches, the panel's width and fullscreen setting, the shortcut, the pin and clock state, the shuffle state, the applied documents).
 
 ## Licensing
 
@@ -184,9 +176,8 @@ Official builds follow [LICENSING.md](../../LICENSING.md) through the shared `pa
 | --- | --- |
 | Fresh install (no earlier preferences; in official builds both records positively absent) | Open at login on once (and, with the updater, automatic update checks), under its own flag; an upgrade or a setting the user turned off is left alone |
 | First launch | Nothing is applied on its own: the panel shows the first taste-set recipe (Mint Circuit · Moiré) as its starting document and the library holds the taste set; the desktop changes on the first edit (live apply), on a loaded recipe, or when shuffle is turned on. The pin has nothing recorded, so it does nothing |
-| No display has a notch | Nothing hangs from a notch; the menu-bar item and the shortcut open the panel under the item; Settings says so under Open from the notch, and the setup guide's panel step says the panel lives in the menu bar |
-| The notch display is unplugged | The panel closes and comes back on the next notched display that appears; "every notched display" keeps one panel per notched display |
-| Fullscreen on the host display | See Hide in fullscreen; detection is from the window list (the front app owns a window covering the screen) on Space and app changes, without Screen Recording or Accessibility |
+| The item's display is unplugged | The panel closes; the next click on the item opens it on the display the item is on now |
+| Fullscreen on the item's display | See Hide in fullscreen; detection is from the window list (the front app owns a window covering the screen) on Space and app changes, without Screen Recording or Accessibility |
 | `setDesktopImageURL` fails (a screen went away, the file could not be written) | The action reports the error in the panel's status line and keeps the previous document; nothing is retried on its own |
 | An imported image cannot be decoded | Pixelize and Dither keep their previous source and say why beside Import |
 | A favorite's imported image is gone from `imports/` | The panel says "Image missing — import it again" beside Import and renders the background color; the favorite is kept |
@@ -194,13 +185,13 @@ Official builds follow [LICENSING.md](../../LICENSING.md) through the shared `pa
 | Export folder missing or unwritable | Export asks for a folder with a save panel instead |
 | Shuffle due while the Mac sleeps, or overdue at launch | Nothing fires at launch or on wake; the next shuffle is one interval after that moment. Missed shuffles are not caught up |
 | Login item registration fails | The toggle reverts and shows the error; Login Items can be opened directly |
-| Shortcut cannot be registered (taken by another app) | Settings says so beside the recorder; the panel still opens by hover, click or the menu-bar item |
+| Shortcut cannot be registered (taken by another app) | Settings says so beside the recorder; the panel still opens from the menu-bar item |
 
-No permissions: no Accessibility, no Input Monitoring, no Screen Recording, no Location. Hover uses a tracking area on macPaper's own transparent window over the notch; the shortcut uses Carbon's `RegisterEventHotKey`; clicks outside use a global mouse-down monitor, and the first-run glow a global mouse-moved monitor, neither of which needs anything; the pin reads `NSWorkspace.desktopImageURL(for:)`; the clock is a window on the desktop level that ignores the mouse; the theme is `AppleInterfaceThemeChangedNotification`. No telemetry; diagnostics are copied only on request and only to the pasteboard.
+No permissions: no Accessibility, no Input Monitoring, no Screen Recording, no Location. The shortcut uses Carbon's `RegisterEventHotKey`; clicks outside use a global mouse-down monitor, which needs nothing; the pin reads `NSWorkspace.desktopImageURL(for:)`; the clock is a window on the desktop level that ignores the mouse; the theme is `AppleInterfaceThemeChangedNotification`. No telemetry; diagnostics are copied only on request and only to the pasteboard.
 
 ## Marketing only
 
-At `/macpaper/`: the tangerine key in the headline, a drawn notch panel over a mesh gradient, feature articles (generators and the dither lab, pairs that macOS keeps switching, the notch, apply-finished: pin, native pixels, true black; seeds and sharing; the clock and the screen saver), the install block, Buy, questions, the closing field. Never claim motion, Now Playing or a separate lock screen. The catalog entry, Buy and the thanks page ship with the first licensed release.
+At `/macpaper/`: the tangerine key in the headline, a drawn panel opening from the menu bar over a mesh gradient, feature articles (generators and the dither lab, pairs that macOS keeps switching, the notch-aware composition, the panel from the menu bar, apply-finished: pin, native pixels, true black; seeds and sharing; the clock and the screen saver), the install block, Buy, questions, the closing field. Never claim motion, Now Playing or a separate lock screen. The catalog entry, Buy and the thanks page ship with the first licensed release.
 
 ## References
 
