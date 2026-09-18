@@ -387,14 +387,19 @@ jobs:
           scripts/release/tests/checks-passed.test.sh
           scripts/release/tests/changes.test.sh
       - name: Check the cask template
-        # bump-cask.sh must accept the template as a first release and refuse a rewrite.
+        # bump-cask.sh must accept the template as a first release, refuse a
+        # rewrite, and carry the template's desc (the feed job passes it).
         run: |
+          packaging/homebrew/tests/bump-cask.test.sh
           cask="$RUNNER_TEMP/macpaper.rb"
           cp packaging/homebrew/Casks/macpaper.rb "$cask"
           digest="$(printf 'a%.0s' $(seq 1 64))"
           packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest"
           grep -q '^  version "0.1.0"$' "$cask"
           if packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$(printf 'b%.0s' $(seq 1 64))" 2>/dev/null; then echo "rewrite accepted"; exit 1; fi
+          sed -i.bak -E 's/^  desc "[^"]+"$/  desc "An older line of copy"/' "$cask"
+          packaging/homebrew/bump-cask.sh "$cask" 0.1.0 "$digest" packaging/homebrew/Casks/macpaper.rb
+          diff <(grep '^  desc ' packaging/homebrew/Casks/macpaper.rb) <(grep '^  desc ' "$cask")
 
   # Builds, signs, verifies and packages the release. Read-only token: it
   # never touches tags, releases, the feed or the tap.
@@ -745,7 +750,8 @@ jobs:
           git clone --depth 1 git@github.com:openappshq/homebrew-tap.git "$RUNNER_TEMP/tap"
           mkdir -p "$RUNNER_TEMP/tap/Casks"
           if [ ! -f "$RUNNER_TEMP/tap/Casks/macpaper.rb" ]; then cp packaging/homebrew/Casks/macpaper.rb "$RUNNER_TEMP/tap/Casks/macpaper.rb"; fi
-          packaging/homebrew/bump-cask.sh "$RUNNER_TEMP/tap/Casks/macpaper.rb" "$VERSION" "$SHA256"
+          # The template as the fourth argument: the cask's desc follows the repository's.
+          packaging/homebrew/bump-cask.sh "$RUNNER_TEMP/tap/Casks/macpaper.rb" "$VERSION" "$SHA256" packaging/homebrew/Casks/macpaper.rb
           cd "$RUNNER_TEMP/tap"
           git config user.name "openapps-release"
           git config user.email "release@openapps.space"
