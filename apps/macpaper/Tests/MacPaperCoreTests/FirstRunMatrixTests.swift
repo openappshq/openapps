@@ -125,7 +125,7 @@ struct FreshInstallDefaultMatrixTests {
     @Test("A stored false toggle is an earlier preference, whatever its value")
     func aStoredFalseToggleIsAnEarlierPreference() {
         forEachDefault { make, _, name in
-            for toggle in [PreferenceKey.notchEnabled, PreferenceKey.favoritesOnly, "OpenAppsUpdater.checkAutomatically"] {
+            for toggle in [PreferenceKey.legacy[0], PreferenceKey.favoritesOnly, "OpenAppsUpdater.checkAutomatically"] {
                 let store = MemoryFlags()
                 store.set(false, forKey: toggle)
                 let sut = make(store)
@@ -153,12 +153,12 @@ struct FreshInstallDefaultMatrixTests {
 
     @Test("The evidence list names every preference the app writes")
     func theEvidenceListNamesEveryPreferenceTheAppWrites() {
-        // Preferences.swift's keys (PreferenceKey.all), OnboardingLaunch's,
-        // the notch hint's, both defaults' flags and the updater's
+        // Preferences.swift's keys (PreferenceKey.all), the legacy notch
+        // keys an upgrade may still carry (PreferenceKey.legacy),
+        // OnboardingLaunch's, both defaults' flags and the updater's
         // (Updater.Key in packages/openapps-updater).
-        let expected = Set(PreferenceKey.all).union([
+        let expected = Set(PreferenceKey.all).union(PreferenceKey.legacy).union([
             OnboardingLaunch.Key.shown, OnboardingLaunch.Key.step,
-            NotchHint.Key.launches, NotchHint.Key.used,
             FreshInstallDefault.Key.loginItemApplied, FreshInstallDefault.Key.updateChecksApplied,
             "OpenAppsUpdater.checkAutomatically", "OpenAppsUpdater.installAutomatically", "OpenAppsUpdater.lastCheck",
         ])

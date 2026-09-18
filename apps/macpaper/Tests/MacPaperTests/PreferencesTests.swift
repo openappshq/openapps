@@ -5,26 +5,24 @@ import Testing
 
 @MainActor
 struct PreferencesTests {
-    @Test("Defaults are the contract's: on, the notch display, hover or click, down, regular, hide in fullscreen, 0.18s hover delay, ⌥⌘P, shuffle off, same on all displays, kept, clock off")
+    @Test("Defaults are the contract's: regular, hide in fullscreen, ⌥⌘P (a fresh install), shuffle off, same on all displays, kept, clock off")
     func defaults() throws {
         let temporary = try TemporaryDefaults()
         defer { temporary.remove() }
         let preferences = Preferences(defaults: temporary.defaults)
-        #expect(preferences.notchEnabled)
-        #expect(preferences.hostDisplay == .notchDisplay)
-        #expect(preferences.trigger == .both)
-        #expect(preferences.direction == .down)
         #expect(preferences.width == .regular)
         #expect(preferences.hideInFullscreen)
-        #expect(preferences.hoverDelay == 0.18)
         #expect(preferences.hotkey == .default)
+        #expect(preferences.hotkeyDefaultPending)
         #expect(preferences.shuffleInterval == .off)
         #expect(!preferences.favoritesOnly)
         #expect(preferences.sameOnAllDisplays)
         #expect(preferences.exportFolder.lastPathComponent == "macPaper")
-        #expect(preferences.panelSettings == PanelSettings())
         #expect(preferences.keepApplied && preferences.clockStyle == .off && preferences.clockPosition == .bottomRight && preferences.clockSize == .medium)
     }
+
+    // The hotkey default's fresh/upgrade/stored/cleared/commit-once matrix
+    // is PanelOpenersTests.shortcutDefaultFollowsTheInstall.
 
     @Test("Every setting round-trips through its key, and a cleared hotkey stays cleared")
     func roundTrip() throws {
@@ -32,13 +30,8 @@ struct PreferencesTests {
         defer { temporary.remove() }
         let defaults = temporary.defaults
         let preferences = Preferences(defaults: defaults)
-        preferences.notchEnabled = false
-        preferences.hostDisplay = .everyNotchedDisplay
-        preferences.trigger = .hover
-        preferences.direction = .left
         preferences.width = .wide
         preferences.hideInFullscreen = false
-        preferences.hoverDelay = 0.6
         preferences.hotkey = Hotkey(keyCode: 49, modifiers: [.command, .shift])
         preferences.shuffleInterval = .hours3
         preferences.favoritesOnly = true
@@ -51,15 +44,12 @@ struct PreferencesTests {
         preferences.pins = [.seed, .palette]
         let reloaded = Preferences(defaults: defaults)
         #expect(!reloaded.keepApplied && reloaded.clockStyle == .analog && reloaded.clockPosition == .topLeft && reloaded.clockSize == .large)
-        #expect(!reloaded.notchEnabled && reloaded.hostDisplay == .everyNotchedDisplay && reloaded.trigger == .hover)
-        #expect(reloaded.direction == .left && reloaded.width == .wide && !reloaded.hideInFullscreen)
-        #expect(reloaded.hoverDelay == 0.6)
-        #expect(defaults.double(forKey: PreferenceKey.hoverDelay) == 0.6)
+        #expect(reloaded.width == .wide && !reloaded.hideInFullscreen)
         #expect(reloaded.hotkey == Hotkey(keyCode: 49, modifiers: [.command, .shift]))
+        #expect(!reloaded.hotkeyDefaultPending, "a stored hotkey is never a pending default")
         #expect(reloaded.shuffleInterval == .hours3 && reloaded.favoritesOnly && !reloaded.sameOnAllDisplays)
         #expect(reloaded.exportFolder.path == "/tmp/exports")
         #expect(reloaded.pins == [.seed, .palette])
-        #expect(reloaded.panelSettings == PanelSettings(isEnabled: false, trigger: .hover, hideInFullscreen: false, hoverOpenDelay: 0.6))
         reloaded.hotkey = nil
         #expect(Preferences(defaults: defaults).hotkey == nil, "not the default again")
         #expect(defaults.hasValue(forKey: PreferenceKey.hotkey), "a cleared hotkey is a choice, and evidence")
@@ -73,18 +63,11 @@ struct PreferencesTests {
         let temporary = try TemporaryDefaults()
         defer { temporary.remove() }
         let defaults = temporary.defaults
-        defaults.set("sideways", forKey: PreferenceKey.direction)
+        defaults.set("sideways", forKey: PreferenceKey.width)
         defaults.set(Data("junk".utf8), forKey: PreferenceKey.hotkey)
-        defaults.set(3.0, forKey: PreferenceKey.hoverDelay)
         let preferences = Preferences(defaults: defaults)
-        #expect(preferences.direction == .down)
+        #expect(preferences.width == .regular)
         #expect(preferences.hotkey == nil)
-        #expect(preferences.hoverDelay == 0.18, "outside Preferences.hoverDelayRange: the default")
-        let tooLow = try TemporaryDefaults()
-        defer { tooLow.remove() }
-        tooLow.defaults.set(0.01, forKey: PreferenceKey.hoverDelay)
-        #expect(Preferences(defaults: tooLow.defaults).hoverDelay == 0.18)
-        #expect(Preferences.hoverDelayRange == 0.05...1.0)
     }
 
     @Test("A pins file from an earlier panel build, stored under its old names, decodes to the new parameter keys")
